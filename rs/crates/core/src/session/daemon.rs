@@ -1229,6 +1229,14 @@ impl Daemon {
                     tracing::debug!("write to {uid} failed: {e}");
                 }
             }
+            // Same no-ack story as `Write`. The bracketing decision is made HERE rather
+            // than client-side because the terminal mode lives in this process's screen
+            // mirror — see `ClientMsg::Paste`.
+            ClientMsg::Paste { uid, text } => {
+                if let Err(e) = self.registry.paste(&uid, &text) {
+                    tracing::debug!("paste to {uid} failed: {e}");
+                }
+            }
             ClientMsg::Resize { uid, cols, rows } => {
                 self.registry.resize(&uid, cols, rows);
             }

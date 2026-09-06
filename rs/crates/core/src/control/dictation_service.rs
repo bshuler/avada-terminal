@@ -185,9 +185,15 @@ pub fn stop_and_deliver(shared: &Shared, pane_id: &str, uid: &str) -> Result<Del
     // The recording is already consumed by this point, so a failed write means the user's
     // speech is simply gone. Saying so is the only useful thing left to do — reporting a
     // successful delivery would leave them looking for words that were never typed.
+    // `paste`, not `write`. A minute of speech is well past the tty's 1024-byte input
+    // queue, so the pane's program receives it in several reads no matter what we do, and
+    // a TUI is entitled to treat each read as a separate event. This is not theoretical:
+    // a 1277-character dictation arrived as its last 254 characters, the first 1023 gone,
+    // with every log line on the way reporting success. Bracketing (when the program asked
+    // for it) makes the split invisible to the reader.
     shared
         .sessions
-        .write(uid, &text)
+        .paste(uid, &text)
         .map_err(|e| format!("the pane did not accept the transcript: {e}"))?;
     let mut submitted = false;
     if want_submit {

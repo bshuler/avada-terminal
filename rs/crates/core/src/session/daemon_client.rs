@@ -745,6 +745,22 @@ impl DaemonSessionManager {
         })
     }
 
+    /// Paste a block of text — the daemon-backed half of `SessionManager::paste`.
+    ///
+    /// The text goes over *unprepared*: the daemon decides whether to bracket it, because
+    /// the terminal mode is only known where the screen mirror is fed. Same visibility
+    /// limits as [`write`](Self::write) — a dead daemon is an error, a wedged one is not.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn paste(&self, uid: &str, text: &str) -> io::Result<()> {
+        if !self.is_connected() {
+            return Err(Self::gone());
+        }
+        self.send(&ClientMsg::Paste {
+            uid: uid.to_string(),
+            text: text.to_string(),
+        })
+    }
+
     /// Resize the pane. `true` once the request is on the wire to a session the daemon has
     /// *confirmed*; `false` when it was dropped and the caller must try again.
     ///

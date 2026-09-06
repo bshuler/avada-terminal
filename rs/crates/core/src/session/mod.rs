@@ -27,6 +27,7 @@ pub mod env;
 pub mod handoff;
 pub mod openurl;
 pub mod osc133;
+pub mod paste;
 pub mod proto;
 pub mod pty;
 pub mod replay;

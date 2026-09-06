@@ -57,6 +57,18 @@ impl Screen {
         self.parser.advance(&mut self.term, bytes);
     }
 
+    /// Whether the program on the other end has **bracketed paste** mode on (DECSET 2004).
+    ///
+    /// The headless mirror is fed the same bytes the GUI grid is, so it sees the same mode
+    /// switches — which is what lets a daemon-backed pane prepare a paste correctly without
+    /// a renderer anywhere in the process. Callers must `sync_screen()` first; a mode read
+    /// off a stale mirror is the one way this can answer for a program that has since exited.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn bracketed_paste(&self) -> bool {
+        use alacritty_terminal::term::TermMode;
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     /// Current grid dimensions `(cols, rows)` — what remote clients must emulate at.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn dims(&self) -> (u16, u16) {

@@ -221,6 +221,14 @@ pub enum ClientMsg {
     Create(SpawnSpec),
     /// Write input bytes (as a UTF-8 string, mirroring `SessionRegistry::write`).
     Write { uid: String, data: String },
+    /// Paste a block of text (mirroring `SessionRegistry::paste`).
+    ///
+    /// Distinct from [`Write`](Self::Write) because the bracketing decision depends on the
+    /// session's terminal mode, which lives in the *daemon's* screen mirror. Asking for the
+    /// mode and then sending prepared bytes would be two round-trips with a race in the
+    /// middle (the program can leave bracketed-paste mode between them); this lets the
+    /// daemon read the mode and write the bytes under one message.
+    Paste { uid: String, text: String },
     /// Resize a session's grid.
     Resize { uid: String, cols: u16, rows: u16 },
     /// Kill one session (silent — the natural-exit event is suppressed).
@@ -537,6 +545,10 @@ mod tests {
             ClientMsg::Write {
                 uid: "s1".into(),
                 data: "ls\n".into(),
+            },
+            ClientMsg::Paste {
+                uid: "s1".into(),
+                text: "two\nlines".into(),
             },
             ClientMsg::Resize {
                 uid: "s1".into(),

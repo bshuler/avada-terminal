@@ -2054,14 +2054,15 @@ fn alt_scroll_arrows(delta_lines: i32, app_cursor: bool) -> Vec<u8> {
 ///    mode (DECSET 2004 — modern PSReadLine / PowerShell 7). Then the shell inserts it as one
 ///    literal paste (caret at the end, no premature execution). Old shells (Windows PowerShell 5.1)
 ///    don't set the mode, so the CR-normalized text is sent bare — still the correct Enter handling.
-#[tracing::instrument(level = "debug", ret)]
+///
+/// The rules themselves live in [`hyperpanes_core::session::paste::prepare_paste`], because
+/// the GUI is not the only thing that pastes into a pane: dictation delivers a transcript
+/// through the session layer with no widget in the picture, and it was the one bulk-text
+/// path that had its own idea of how to do it — a minute of speech reached the pane split
+/// across tty reads, and all but the last read was dropped by the receiving TUI. One
+/// definition, so there is nowhere for a second one to drift.
 fn prepare_paste(text: &str, bracketed: bool) -> String {
-    let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
-    if bracketed {
-        format!("\u{1b}[200~{normalized}\u{1b}[201~")
-    } else {
-        normalized
-    }
+    hyperpanes_core::session::paste::prepare_paste(text, bracketed)
 }
 
 /// One row of a multi-row TUI input, see [`TerminalPane::hard_input_rows`].

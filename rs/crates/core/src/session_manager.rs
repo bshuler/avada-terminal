@@ -743,6 +743,35 @@ impl SessionRegistry {
         pty.write(data.as_bytes()).map(|_| ())
     }
 
+    /// Write a **block of text** to the pane's pty as a paste rather than as keystrokes.
+    ///
+    /// The difference matters past ~1 KB: the tty's input queue is bounded, so the program
+    /// receives a long write in several reads whatever we do, and a TUI is free to treat
+    /// those reads as separate events. Bracketing the payload (when the program asked for
+    /// bracketed paste, DECSET 2004) makes the split irrelevant — the reader buffers until
+    /// the closing marker. A dictated transcript that skipped this arrived as its last read
+    /// only, with the first 1023 characters gone and no error anywhere.
+    ///
+    /// Reads the mode off the headless screen mirror, which is fed the same bytes the GUI
+    /// grid is, so this is correct with no renderer in the process.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn paste(&self, uid: &str, text: &str) -> io::Result<()> {
+        let bracketed = self.bracketed_paste(uid).unwrap_or(false);
+        self.write(uid, &crate::session::paste::prepare_paste(text, bracketed))
+    }
+
+    /// Whether the program in `uid` has bracketed-paste mode on, or `None` for an unknown uid.
+    /// Brings the lazily-fed screen mirror up to date first — the mode lives in the same VTE
+    /// state the mirror parses, so a stale mirror answers for the wrong program.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn bracketed_paste(&self, uid: &str) -> Option<bool> {
+        let map = self.sessions.lock().unwrap();
+        map.get(uid).map(|s| {
+            s.shared.sync_screen();
+            s.shared.screen.lock().unwrap().bracketed_paste()
+        })
+    }
+
     /// The pty handle and shared state for `uid`, cloned out from under the registry lock.
     #[tracing::instrument(level = "debug", skip(self))]
     fn handles(&self, uid: &str) -> Option<(Arc<dyn Pty>, Arc<Shared>)> {
@@ -1089,6 +1118,20 @@ impl SessionManager {
         match self {
             SessionManager::InProcess(r) => r.write(uid, data),
             SessionManager::Daemon(d) => d.write(uid, data),
+        }
+    }
+
+    /// Write a block of text as a **paste** — see [`SessionRegistry::paste`].
+    ///
+    /// Use this, not [`Self::write`], for anything longer than a keystroke or two: a
+    /// clipboard, a file drop, a dictated transcript. The daemon backend does the
+    /// preparation daemon-side (one message, and the mode is read where the screen mirror
+    /// actually lives) rather than round-tripping the mode out and the bytes back.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn paste(&self, uid: &str, text: &str) -> io::Result<()> {
+        match self {
+            SessionManager::InProcess(r) => r.paste(uid, text),
+            SessionManager::Daemon(d) => d.paste(uid, text),
         }
     }
 
