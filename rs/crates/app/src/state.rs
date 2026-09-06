@@ -1517,6 +1517,10 @@ pub struct State {
     /// than tracking `files_scroll_y` as a binding, so an ordinary frame — and every scroll the
     /// human does with the wheel — leaves the viewport exactly where they left it.
     pub files_scroll_seq: i32,
+    /// When the last reveal asked to be scrolled to, or `None` once that has been honoured
+    /// for long enough. While it is live the pump re-asserts the scroll every frame — see
+    /// [`State::scroll_files_to_selection`] for why one assertion is not enough.
+    pub files_scroll_hold: Option<Instant>,
     // ---- left panel: Git mode (J) ----
     /// The working tree the panel last read, rooted at the same project the explorer is
     /// rooted at. A stored projection for the same reason `files_rows` is one: reading it
@@ -1753,6 +1757,7 @@ impl State {
             files_target_col: None,
             files_scroll_y: 0.0,
             files_scroll_seq: 0,
+            files_scroll_hold: None,
             git: crate::gitpanel::GitStatus::none(),
             git_commit: None,
             git_sel: None,
@@ -5060,6 +5065,17 @@ impl State {
         if let Some(y) = crate::filetree::scroll_offset_for(&self.files_rows, &sel) {
             self.files_scroll_y = y;
             self.files_scroll_seq = self.files_scroll_seq.wrapping_add(1);
+            // One bump is not enough, for two reasons that both come down to the view not
+            // being ready on the frame that asks. When the reveal is what OPENS the panel,
+            // the explorer's subtree does not exist yet on this frame; it is instantiated
+            // with the bumped sequence already in place, so its `changed` watcher has
+            // nothing to notice and never fires. And even with the panel already in FILES,
+            // the new rows and the new sequence reach the view in the same change batch, so
+            // the watcher's clamp reads a ListView that has not been laid out against the
+            // model yet — a viewport height of zero clamps the target straight back to the
+            // top. Holding the request open for a few frames lets it land on one where the
+            // list both exists and has measured itself.
+            self.files_scroll_hold = Some(Instant::now());
             self.dirty = true;
         }
     }

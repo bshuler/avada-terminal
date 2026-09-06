@@ -737,6 +737,12 @@ pub const LEFT_MODE_GIT_ICON: i32 = -2;
 /// deliberate resize reaches the shell before it can be noticed.
 const PTY_RESIZE_SETTLE: Duration = Duration::from_millis(300);
 
+/// How long a reveal keeps re-asserting its scroll target at the explorer
+/// (see [`State::scroll_files_to_selection`]). Long enough to outlast the panel being
+/// instantiated and the ListView measuring its new model; short enough that the human
+/// cannot scroll away inside it and be dragged back.
+const FILES_SCROLL_HOLD: Duration = Duration::from_millis(250);
+
 /// Push any pane whose grid has finished moving to its session, and nothing sooner.
 ///
 /// Runs every tick — NOT from [`resync`], which only runs on a dirty state and would leave a
@@ -1520,6 +1526,12 @@ pub fn resync(
                 sync_model(&ui.lp_files, file_rows);
                 // Ship the reveal's scroll target. The sequence number is what the view
                 // watches, so writing both every tick is inert until a reveal bumps it.
+                // A reveal keeps the bump coming for a short window (the pump's tick owns
+                // the clock), because the frame that asks for the scroll is usually one on
+                // which the list cannot honour it — see `State::scroll_files_to_selection`.
+                if state.files_scroll_hold.is_some() {
+                    state.files_scroll_seq = state.files_scroll_seq.wrapping_add(1);
+                }
                 lp.set_files_scroll_y(state.files_scroll_y);
                 lp.set_files_scroll_seq(state.files_scroll_seq);
             }
@@ -1959,6 +1971,17 @@ pub fn pump(
     // content repaint, an animation step, or the live prefs preview all count; a bare cursor
     // blink does not (handled in the per-pane loop below).
     let mut active = false;
+
+    // ---- a reveal's scroll, held open for a few frames ----
+    // The clock lives here rather than in `resync` so that closing the panel mid-window ends
+    // the hold like any other frame does, instead of leaving the pump dirty forever.
+    if let Some(since) = state.files_scroll_hold {
+        if Instant::now().duration_since(since) < FILES_SCROLL_HOLD {
+            state.dirty = true;
+        } else {
+            state.files_scroll_hold = None;
+        }
+    }
 
     // ---- resync models when state changed ----
     if state.dirty {
