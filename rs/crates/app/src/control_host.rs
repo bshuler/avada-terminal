@@ -220,7 +220,8 @@ impl ControlHost {
     /// handler has returned, not underneath it.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn request_restart(&self, scope: u8) {
-        self.pending_restart.set(scope.max(self.pending_restart.get()));
+        self.pending_restart
+            .set(scope.max(self.pending_restart.get()));
     }
 
     /// Take (and clear) a pending `restartApp` request: 0 = none, 1 = gui, 2 = full.
@@ -473,7 +474,7 @@ impl ControlHost {
         };
         let pane_id = self.pane_id_for(uid);
         if !shared.dictation.is_recording(&pane_id) {
-            return match shared.dictation.start(&pane_id) {
+            return match dictation_service::start_dictation(&shared, &pane_id, uid) {
                 Ok(recorder) => format!("Recording ({recorder}) — click the mic again to stop"),
                 Err(e) => e,
             };
@@ -1226,9 +1227,7 @@ impl ControlHost {
         let drop_windows: Vec<i64> = self.prev_windows.borrow_mut().drain(..).collect();
         let carried = model.publish_replace(&drop_windows, tree, &last_published);
         for id in &carried {
-            tracing::info!(
-                "control pane {id} carried over the GUI republish (not yet adopted)"
-            );
+            tracing::info!("control pane {id} carried over the GUI republish (not yet adopted)");
         }
 
         // Did the structure (which panes exist, or which tab is active) change since last publish?

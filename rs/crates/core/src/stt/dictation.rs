@@ -11,14 +11,15 @@ use super::archive;
 use super::backend::{
     clean_transcript, detect_recorder, detect_transcriber, Recorder, StopKind, Transcriber,
 };
-use super::native::{self, NativeCapture};
+use super::live::{self, Live};
+use super::native::{self, NativeCapture, Tap};
 use super::SttSettings;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// How long a stopped recorder is given to finalize its file before it is killed. Well
@@ -53,6 +54,25 @@ struct Recording {
     capture: Capture,
     wav: PathBuf,
     started: Instant,
+    /// The driver typing words into the pane while they are still being spoken, if this
+    /// recording has one. `None` for a process recorder (there is no tap to read), for a
+    /// caller that wants no live text, and for an install whose model is not yet
+    /// downloaded — in every one of those cases the dictation behaves exactly as it did
+    /// before live typing existed.
+    live: Option<Live>,
+}
+
+/// What a caller must supply to get live typing.
+///
+/// The sink is a closure and not a channel because the thing on the other end is a pty:
+/// there is no queue worth having between "the recognizer revised a word" and "take four
+/// characters back", and a buffered edit is a wrong edit by the time it is applied.
+pub struct LiveOptions {
+    /// Applied to the assembled live text before it is compared with the pane's contents.
+    /// Must be the same shaping the final transcript gets — see [`live::Config::clean`].
+    pub clean: fn(&str) -> String,
+    /// Where each change goes. Called from the driver thread.
+    pub sink: Box<dyn FnMut(live::Edit) + Send>,
 }
 
 /// Every pane's dictation state. One instance per process, shared behind an `Arc`.
@@ -78,6 +98,11 @@ pub struct Transcript {
     /// Where the recording and this text were kept, so the caller can point the user at
     /// their own words. `None` only when the archive could not be written.
     pub kept: Option<PathBuf>,
+    /// What live typing already put into the pane, so the caller can correct it into
+    /// [`Self::text`] rather than typing the whole transcript a second time. Empty when
+    /// this dictation had no live typing, which is the case that behaves as it always
+    /// did: nothing on screen until the end, then all of it.
+    pub typed_live: String,
 }
 
 impl Dictation {
@@ -126,6 +151,23 @@ impl Dictation {
     /// nobody can stop.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn start(&self, pane_id: &str, settings: &SttSettings) -> Result<&'static str, String> {
+        self.start_live(pane_id, settings, None)
+    }
+
+    /// As [`Self::start`], but also typing the words into the pane as they are spoken.
+    ///
+    /// `opts` is a request, not a guarantee. Live typing needs three things at once — the
+    /// in-process recorder (only it has a tap), the setting on, and a model already on
+    /// disk — and when any of them is missing the recording starts anyway with no live
+    /// text. That asymmetry is deliberate: the recording is the product, and nothing
+    /// about a convenience laid over it may be able to prevent one.
+    #[tracing::instrument(level = "debug", ret, skip(self, opts))]
+    pub fn start_live(
+        &self,
+        pane_id: &str,
+        settings: &SttSettings,
+        opts: Option<LiveOptions>,
+    ) -> Result<&'static str, String> {
         let mut live = self.live.lock().unwrap();
         if live.contains_key(pane_id) {
             return Ok("already-recording");
@@ -169,8 +211,30 @@ impl Dictation {
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
 
+        let mut tapped: Option<Arc<Tap>> = None;
+        // Asked for, possible, and paid for only if all three hold. `cached_model` is the
+        // one that surprises: live transcription cannot wait on a 142 MB download while
+        // someone is already talking, so the first-ever dictation on a machine is one with
+        // no live text — and the `prefetch` above is what makes it the only one.
+        let want_live = opts.is_some() && settings.live_typing && recorder == Recorder::Native;
+        let model = want_live
+            .then(|| super::whisper::cached_model(settings))
+            .flatten();
+
         let capture = if recorder == Recorder::Native {
-            Capture::Native(native::start(&wav, MAX_RECORD)?)
+            match model.as_ref() {
+                Some(_) => {
+                    let tap = Tap::new();
+                    let c = Capture::Native(native::start_with_tap(
+                        &wav,
+                        MAX_RECORD,
+                        Some(Arc::clone(&tap)),
+                    )?);
+                    tapped = Some(tap);
+                    c
+                }
+                None => Capture::Native(native::start(&wav, MAX_RECORD)?),
+            }
         } else {
             let mut cmd = recorder
                 .build_command(&wav)
@@ -190,12 +254,35 @@ impl Dictation {
             }
         };
 
+        // After the microphone is open, so a model that will not load costs the user a log
+        // line and not a recording. Everything below this point is allowed to fail.
+        let driver = match (tapped, model, opts) {
+            (Some(tap), Some(model), Some(opts)) => {
+                match Live::start(
+                    tap,
+                    live::Config {
+                        model,
+                        clean: opts.clean,
+                    },
+                    opts.sink,
+                ) {
+                    Ok(l) => Some(l),
+                    Err(e) => {
+                        tracing::warn!(pane = %pane_id, error = %e, "live typing unavailable; recording anyway");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         live.insert(
             pane_id.to_string(),
             Recording {
                 capture,
                 wav,
                 started: Instant::now(),
+                live: driver,
             },
         );
         Ok(recorder.name())
@@ -204,9 +291,12 @@ impl Dictation {
     /// Stop `pane_id`'s recording and transcribe it. Blocking.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn stop(&self, pane_id: &str, settings: &SttSettings) -> Result<Transcript, String> {
-        let Some(rec) = self.live.lock().unwrap().remove(pane_id) else {
+        let Some(mut rec) = self.live.lock().unwrap().remove(pane_id) else {
             return Err(format!("pane is not recording: {pane_id}"));
         };
+        // Stopped and joined before anything else, so that no pass still in flight can
+        // type over the correction the caller is about to make.
+        let typed_live = rec.live.take().map(Live::finish).unwrap_or_default();
         let wav = rec.wav.clone();
         let elapsed = rec.started.elapsed();
         finish_recording(rec);
@@ -253,6 +343,7 @@ impl Dictation {
         match result {
             Ok(t) => Ok(Transcript {
                 kept: kept.map(|k| k.text),
+                typed_live,
                 ..t
             }),
             // The error is what the user sees, so it is where the path has to go — being
@@ -381,6 +472,7 @@ fn transcribe(wav: &Path, elapsed: Duration, settings: &SttSettings) -> Result<T
             text,
             backend,
             kept: None,
+            typed_live: String::new(),
         });
     }
     // Unreachable from detection now that the in-process engine is the floor; what is
@@ -406,6 +498,7 @@ fn transcribe(wav: &Path, elapsed: Duration, settings: &SttSettings) -> Result<T
         text,
         backend,
         kept: None,
+        typed_live: String::new(),
     })
 }
 
@@ -483,7 +576,9 @@ mod tests {
     #[ignore = "needs HP_STT_WAV and runs the real model"]
     fn a_real_recording_survives_the_whole_dictation_path() {
         let src = std::env::var("HP_STT_WAV").expect("set HP_STT_WAV to a spoken wav file");
-        let src_seconds = wav_size(Path::new(&src)).1.expect("HP_STT_WAV is not a readable wav");
+        let src_seconds = wav_size(Path::new(&src))
+            .1
+            .expect("HP_STT_WAV is not a readable wav");
 
         let dir = temp_dir("real");
         let d = Dictation::new(dir.clone());
@@ -505,7 +600,9 @@ mod tests {
         let audio = kept.with_extension("wav");
         // The whole recording is kept, not a fragment of it: this is what the user is
         // meant to be able to go back to.
-        let kept_seconds = wav_size(&audio).1.expect("kept audio is not a readable wav");
+        let kept_seconds = wav_size(&audio)
+            .1
+            .expect("kept audio is not a readable wav");
         assert!(
             (kept_seconds - src_seconds).abs() < 0.05,
             "kept {kept_seconds}s of a {src_seconds}s recording"

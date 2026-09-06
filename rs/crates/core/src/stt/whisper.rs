@@ -137,6 +137,20 @@ pub fn ready(settings: &super::SttSettings) -> bool {
     }
 }
 
+/// The model to transcribe with, but only if it is already on disk.
+///
+/// Live transcription cannot wait for a 142 MB download — the person is already talking —
+/// so it asks for a model it can load *now* and simply does without one when the answer
+/// is no. The final transcript still fetches, so the first-ever dictation is one with no
+/// live text and the whole of it delivered at the end, exactly as before.
+#[tracing::instrument(level = "debug", ret)]
+pub fn cached_model(settings: &super::SttSettings) -> Option<PathBuf> {
+    match choose(settings) {
+        Choice::File(p) => p.is_file().then_some(p),
+        Choice::Builtin(m) => m.is_cached().then(|| m.path()),
+    }
+}
+
 // =========================== fetching ===========================
 
 /// Bytes written so far by the in-flight download, and its expected total. Zero total
@@ -334,44 +348,104 @@ pub fn transcribe(wav: &Path, settings: &super::SttSettings) -> Result<String, S
     run(&model, &audio)
 }
 
+// =========================== the loaded model ===========================
+
+/// One transcribed span of audio, and where in that audio it sat.
+///
+/// The timestamps are what makes streaming possible at all: they are how a live pass
+/// tells the part of its window that is finished from the part still being spoken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Segment {
+    pub text: String,
+    /// Milliseconds from the start of the audio handed to [`Engine::transcribe`].
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// A model loaded and kept, so it can transcribe more than once.
+///
+/// The one-shot path loads a model, uses it, and drops it, which is exactly right for a
+/// dictation transcribed once at the end. Live transcription runs a pass every second or
+/// two, and re-loading 142 MB of weights per pass would cost an order of magnitude more
+/// than the inference does — so the context is loaded once and every pass borrows it.
+pub struct Engine {
+    /// Whether the loaded weights can be asked to pick a language.
+    multilingual: bool,
+    /// whisper's per-decode scratch. It owns a handle on the context, so keeping it is
+    /// what keeps the weights resident. Behind a mutex because `full` takes `&mut`.
+    state: Mutex<whisper_rs::WhisperState>,
+}
+
+impl Engine {
+    /// Load `model` into memory. Seconds on a cold page cache; the whole reason this type
+    /// exists is that a caller can pay it once.
+    #[tracing::instrument(level = "debug")]
+    pub fn load(model: &Path) -> Result<Self, String> {
+        // whisper.cpp writes its model-load banner straight to stderr. Route it into the
+        // (unconfigured, hence silent) logging hooks so a dictation does not spray the
+        // app's log with tensor dimensions. Idempotent; safe to call per load.
+        whisper_rs::install_logging_hooks();
+
+        let ctx = WhisperContext::new_with_params(model, WhisperContextParameters::default())
+            .map_err(|e| format!("loading the speech model {}: {e}", model.display()))?;
+        let multilingual = ctx.is_multilingual();
+        let state = ctx
+            .create_state()
+            .map_err(|e| format!("starting the speech model: {e}"))?;
+        Ok(Engine {
+            multilingual,
+            state: Mutex::new(state),
+        })
+    }
+
+    /// Transcribe mono 16 kHz `audio`. Blocking, and the whole cost of a dictation.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn transcribe(&self, audio: &[f32]) -> Result<Vec<Segment>, String> {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_n_threads(threads());
+        params.set_translate(false);
+        // The `.en` models have no language to choose; a multilingual one the user
+        // supplied gets whisper's own detection rather than a hard-coded English.
+        params.set_language(if self.multilingual { None } else { Some("en") });
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .full(params, audio)
+            .map_err(|e| format!("transcribing: {e}"))?;
+        Ok(state
+            .as_iter()
+            .filter_map(|s| {
+                Some(Segment {
+                    text: s.to_str_lossy().ok()?.trim().to_string(),
+                    start_ms: cs_to_ms(s.start_timestamp()),
+                    end_ms: cs_to_ms(s.end_timestamp()),
+                })
+            })
+            .collect())
+    }
+}
+
+/// whisper reports segment times in centiseconds, and will occasionally report a negative
+/// one for a segment it placed before the window it was given. Clamped, because every
+/// consumer of these numbers uses them to index into a sample buffer.
+#[tracing::instrument(level = "debug", ret)]
+fn cs_to_ms(cs: i64) -> u64 {
+    cs.max(0) as u64 * 10
+}
+
+/// Transcribe `audio` once with a model loaded for the purpose, as newline-joined
+/// segments — deliberately the shape the command-line transcribers print, so
+/// `clean_transcript` stays the single place that knows what to strip.
 #[tracing::instrument(level = "debug", ret)]
 fn run(model: &Path, audio: &[f32]) -> Result<String, String> {
-    // whisper.cpp writes its model-load banner straight to stderr. Route it into the
-    // (unconfigured, hence silent) logging hooks so a dictation does not spray the app's
-    // log with tensor dimensions. Idempotent; safe to call per transcription.
-    whisper_rs::install_logging_hooks();
-
-    let ctx = WhisperContext::new_with_params(model, WhisperContextParameters::default())
-        .map_err(|e| format!("loading the speech model {}: {e}", model.display()))?;
-    let mut state = ctx
-        .create_state()
-        .map_err(|e| format!("starting the speech model: {e}"))?;
-
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_n_threads(threads());
-    params.set_translate(false);
-    // The `.en` models have no language to choose; a multilingual one the user supplied
-    // gets whisper's own detection rather than a hard-coded English.
-    params.set_language(if ctx.is_multilingual() {
-        None
-    } else {
-        Some("en")
-    });
-    params.set_print_special(false);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-
-    state
-        .full(params, audio)
-        .map_err(|e| format!("transcribing: {e}"))?;
-
     let mut out = String::new();
-    for segment in state.as_iter() {
-        if let Ok(text) = segment.to_str_lossy() {
-            out.push_str(text.trim());
-            out.push('\n');
-        }
+    for segment in Engine::load(model)?.transcribe(audio)? {
+        out.push_str(&segment.text);
+        out.push('\n');
     }
     Ok(out)
 }

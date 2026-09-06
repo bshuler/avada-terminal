@@ -35,6 +35,7 @@
 pub mod archive;
 pub mod backend;
 pub mod dictation;
+pub mod live;
 pub mod native;
 pub mod whisper;
 
@@ -42,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Per-installation dictation settings, persisted to `stt.json`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SttSettings {
     /// Custom recorder command, e.g. `["ffmpeg", "-f", "avfoundation", "-i", ":default", "{wav}"]`.
@@ -65,6 +66,34 @@ pub struct SttSettings {
     /// reliable enough to send a prompt no human has read back.
     #[serde(default)]
     pub submit: bool,
+    /// Type the words into the pane as they are spoken, instead of only at the end.
+    ///
+    /// On by default: seeing the text arrive is the only feedback that the microphone is
+    /// working, and without it a five-minute dictation is five minutes of hoping. It
+    /// costs a resident Whisper model for the length of the recording and a stream of
+    /// keystrokes into the pane, both of which are why it is a setting at all — turned
+    /// off, a dictation behaves exactly as it did before this existed: silence, then the
+    /// whole transcript at the end.
+    #[serde(default = "on")]
+    pub live_typing: bool,
+}
+
+/// `serde`'s default for a `bool` is `false`, and [`SttSettings::live_typing`] is not.
+#[tracing::instrument(level = "debug", ret)]
+fn on() -> bool {
+    true
+}
+
+impl Default for SttSettings {
+    fn default() -> Self {
+        Self {
+            record_template: None,
+            transcribe_template: None,
+            model: None,
+            submit: false,
+            live_typing: on(),
+        }
+    }
 }
 
 /// Read settings from `path`, falling back to [`SttSettings::default`] on a missing or
@@ -116,6 +145,7 @@ mod tests {
             transcribe_template: Some(vec!["whisper-cli".into(), "-f".into(), "{wav}".into()]),
             model: Some("/models/ggml-base.en.bin".into()),
             submit: true,
+            live_typing: false,
         };
         save(&p, &s).unwrap();
         assert_eq!(load(&p), s);
@@ -134,5 +164,14 @@ mod tests {
     fn dictation_never_submits_unless_asked() {
         // A misheard word in a prompt that was already sent is not recoverable.
         assert!(!SttSettings::default().submit);
+    }
+
+    #[test]
+    fn live_typing_is_on_for_an_install_that_has_never_heard_of_it() {
+        // Both paths to a default matter: a fresh struct, and an stt.json written before
+        // the field existed. The second is every existing install.
+        assert!(SttSettings::default().live_typing);
+        let old: SttSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.live_typing);
     }
 }

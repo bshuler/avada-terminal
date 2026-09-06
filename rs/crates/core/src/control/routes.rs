@@ -130,7 +130,10 @@ fn authorize(shared: &Arc<Shared>, headers: &HeaderMap) -> Result<TokenInfo, Res
         .resolve(token.as_deref(), now_ms())
         .ok_or_else(|| {
             // The token value is a secret: log only whether one was presented at all.
-            tracing::warn!(bearer_present = token.is_some(), "request rejected: unauthorized");
+            tracing::warn!(
+                bearer_present = token.is_some(),
+                "request rejected: unauthorized"
+            );
             jstatus(401, json!({ "error": "unauthorized" }))
         })
 }
@@ -1762,7 +1765,11 @@ async fn dictation_command(
             shared.dictation.cancel(&found.pane_id);
             jstatus(200, json!({ "ok": true, "paneId": found.pane_id }))
         }
-        "startDictation" => match shared.dictation.start(&found.pane_id) {
+        "startDictation" => match crate::control::dictation_service::start_dictation(
+            shared,
+            &found.pane_id,
+            &found.uid,
+        ) {
             Ok(recorder) => jstatus(
                 200,
                 json!({ "ok": true, "paneId": found.pane_id, "recorder": recorder }),

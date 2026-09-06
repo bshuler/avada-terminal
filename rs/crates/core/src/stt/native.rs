@@ -19,6 +19,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -33,6 +34,47 @@ type Writer = hound::WavWriter<std::io::BufWriter<std::fs::File>>;
 /// Shared with the audio callback. `None` once the capture has been finalized, so a
 /// callback that lands after the stream is torn down writes nowhere instead of panicking.
 type SharedWriter = Arc<Mutex<Option<Writer>>>;
+
+/// How much un-drained audio the tap below will hold: a minute at [`OUT_RATE`], about
+/// 2 MB. A consumer that keeps up never comes near it; one that has died must not grow it
+/// without bound while the recording runs on, because the recording is the thing that
+/// actually matters.
+const TAP_CAPACITY: usize = OUT_RATE as usize * 60;
+
+/// A live copy of what the microphone is capturing, for a consumer that wants the audio
+/// while it is still being spoken.
+///
+/// Deliberately a second sink rather than a reader of the half-written WAV: a WAV's header
+/// carries the length of the audio after it, so a file still being recorded into is
+/// exactly the file `hound` refuses to open. The tap hands out the same mono 16 kHz
+/// samples the writer just received, and holds nothing the consumer has already taken.
+#[derive(Default)]
+pub struct Tap {
+    buf: Mutex<Vec<i16>>,
+    /// Samples the callback had to throw away because nobody was draining. Counted rather
+    /// than silently absorbed: it is the difference between "the live text is behind" and
+    /// "the live text is missing a sentence", and only one of those is worth a log line.
+    dropped: AtomicU64,
+}
+
+impl Tap {
+    #[tracing::instrument(level = "debug")]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Take every sample captured since the last call.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn drain(&self) -> Vec<i16> {
+        std::mem::take(&mut *self.buf.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Samples dropped for want of a consumer, over the life of this tap.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
 
 /// Is there a microphone this process can open?
 ///
@@ -92,6 +134,20 @@ impl Drop for NativeCapture {
 /// a silent empty file discovered a minute later.
 #[tracing::instrument(level = "debug")]
 pub fn start(wav: &Path, max: Duration) -> Result<NativeCapture, String> {
+    start_with_tap(wav, max, None)
+}
+
+/// As [`start`], but also copying every captured sample into `tap` as it arrives.
+///
+/// The tap is what live transcription reads. Split from `start` rather than folded into
+/// it so that a caller who does not want live text — and every existing one — pays
+/// nothing at all: no second buffer, no second lock in the audio callback.
+#[tracing::instrument(level = "debug", skip(tap))]
+pub fn start_with_tap(
+    wav: &Path,
+    max: Duration,
+    tap: Option<Arc<Tap>>,
+) -> Result<NativeCapture, String> {
     let wav: PathBuf = wav.to_path_buf();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
@@ -100,7 +156,7 @@ pub fn start(wav: &Path, max: Duration) -> Result<NativeCapture, String> {
         .name("hyperpanes-mic".to_string())
         .spawn(move || {
             let late = ready_tx.clone();
-            let r = capture(&wav, max, stop_rx, ready_tx);
+            let r = capture(&wav, max, stop_rx, ready_tx, tap);
             // Only lands if the failure came before the stream started; once `capture`
             // has reported readiness the receiver is gone and this send is a no-op.
             if let Err(e) = &r {
@@ -127,12 +183,13 @@ pub fn start(wav: &Path, max: Duration) -> Result<NativeCapture, String> {
 }
 
 /// The whole life of one capture, on the recorder thread.
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", ret, skip(tap))]
 fn capture(
     wav: &Path,
     max: Duration,
     stop_rx: Receiver<()>,
     ready: Sender<Result<(), String>>,
+    tap: Option<Arc<Tap>>,
 ) -> Result<(), String> {
     let device = cpal::default_host()
         .default_input_device()
@@ -155,7 +212,7 @@ fn capture(
         hound::WavWriter::create(wav, spec).map_err(|e| format!("wav: {e}"))?,
     )));
 
-    let stream = build_stream(&device, &config, format, channels, src_rate, &writer)?;
+    let stream = build_stream(&device, &config, format, channels, src_rate, &writer, tap)?;
     stream.play().map_err(|e| format!("microphone: {e}"))?;
     let _ = ready.send(Ok(()));
 
@@ -186,10 +243,11 @@ fn build_stream(
     channels: usize,
     src_rate: u32,
     writer: &SharedWriter,
+    tap: Option<Arc<Tap>>,
 ) -> Result<cpal::Stream, String> {
     macro_rules! s {
         ($t:ty) => {
-            input_stream::<$t>(device, config, channels, src_rate, writer)
+            input_stream::<$t>(device, config, channels, src_rate, writer, tap.clone())
         };
     }
     match format {
@@ -216,6 +274,7 @@ fn input_stream<T>(
     channels: usize,
     src_rate: u32,
     writer: &SharedWriter,
+    tap: Option<Arc<Tap>>,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
@@ -232,6 +291,13 @@ where
                     Err(e) => e.into_inner(),
                 };
                 let Some(w) = guard.as_mut() else { return };
+                // Locked once for the whole callback, not once per sample: the samples
+                // arrive in blocks of hundreds, and a lock per sample inside an audio
+                // callback is how a recording starts glitching.
+                let mut live = tap
+                    .as_ref()
+                    .map(|t| t.buf.lock().unwrap_or_else(|e| e.into_inner()));
+                let mut dropped = 0u64;
                 for frame in data.chunks(channels) {
                     let mono = downmix(frame);
                     // Nearest-neighbour resample, phase-accumulated so it is exact over
@@ -242,6 +308,21 @@ where
                     while phase >= src_rate {
                         phase -= src_rate;
                         let _ = w.write_sample(mono);
+                        // The file first, the tap second, and the tap never able to fail
+                        // the file: a live view that falls behind loses live samples, and
+                        // the recording it is a view of stays whole.
+                        if let Some(b) = live.as_mut() {
+                            if b.len() < TAP_CAPACITY {
+                                b.push(mono);
+                            } else {
+                                dropped += 1;
+                            }
+                        }
+                    }
+                }
+                if dropped > 0 {
+                    if let Some(t) = tap.as_ref() {
+                        t.dropped.fetch_add(dropped, Ordering::Relaxed);
                     }
                 }
             },

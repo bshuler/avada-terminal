@@ -8,14 +8,23 @@
 //! no work at all.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::control::input::SUBMIT_DELAY_MS;
 use crate::control::server::Shared;
 use crate::permissions::{self, Grant, Right};
-use crate::stt::dictation::{Dictation, Transcript};
+use crate::stt::dictation::{Dictation, LiveOptions, Transcript};
+use crate::stt::live::{Edit, Typed};
 use crate::stt::{self, SttSettings};
+
+/// What one backspace is, on the wire.
+///
+/// DEL (0x7f), not BS (0x08): DEL is what the Backspace key sends on macOS and on every
+/// terminal whose `erase` is the default, and it is what readline, Ink and the shells all
+/// treat as "rub out the character behind the cursor". BS moves the cursor left in some
+/// of them and deletes in others, which is the worst of both.
+const BACKSPACE: &str = "\u{7f}";
 
 /// A point-in-time snapshot for `/state`'s `dictation` field.
 pub struct DictationStatus {
@@ -94,6 +103,16 @@ impl DictationService {
 
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn start(&self, pane_id: &str) -> Result<&'static str, String> {
+        self.start_live(pane_id, None)
+    }
+
+    /// As [`Self::start`], but typing the words into the pane as they are spoken.
+    #[tracing::instrument(level = "debug", ret, skip(self, opts))]
+    pub fn start_live(
+        &self,
+        pane_id: &str,
+        opts: Option<LiveOptions>,
+    ) -> Result<&'static str, String> {
         // Raise the OS's own consent dialog from the feature that needs it, at the moment it
         // needs it — macOS shows each one once ever, so a mic prompt spent on a settings list
         // is one dictation never gets. Where the OS has no dialog this is a status read.
@@ -103,7 +122,8 @@ impl DictationService {
                 Right::Microphone.label()
             ));
         }
-        self.dictation.start(pane_id, &self.settings_snapshot())
+        self.dictation
+            .start_live(pane_id, &self.settings_snapshot(), opts)
     }
 
     /// Take the user to the OS's microphone setting.
@@ -148,6 +168,69 @@ impl DictationService {
     }
 }
 
+/// Start `pane_id` recording, typing what is heard into `uid`'s pty as it is heard.
+///
+/// The counterpart of [`stop_and_deliver`], and it exists for the same reason: the sink
+/// needs the session table and the pane's uid, which the `stt` layer knows nothing about.
+/// Both of the app's mic buttons go through here so that live typing cannot be on in one
+/// of them and off in the other.
+#[tracing::instrument(level = "debug", ret, skip(shared))]
+pub fn start_dictation(
+    shared: &Arc<Shared>,
+    pane_id: &str,
+    uid: &str,
+) -> Result<&'static str, String> {
+    let sunk = Arc::clone(shared);
+    let target = uid.to_string();
+    shared.dictation.start_live(
+        pane_id,
+        Some(LiveOptions {
+            clean: clean_for_pane,
+            // Failures are swallowed on purpose. A pane that has gone away, or a program
+            // that has closed its input, must not take the recording down with it — the
+            // words are still going into the WAV, and the transcript at the end is still
+            // going to be delivered or reported.
+            sink: Box::new(move |edit| {
+                let _ = apply(&sunk, &target, &edit);
+            }),
+        }),
+    )
+}
+
+/// Bring a pane from what it currently holds to what an [`Edit`] says it should.
+///
+/// The backspaces go out as a plain write and the text as a paste, and that split is the
+/// point. A backspace has to arrive as a *keystroke* — inside a bracketed paste it is
+/// literal content, and a TUI that honours bracketed paste would insert it rather than
+/// erase with it. The insert, meanwhile, wants to be a paste for the reason the batch
+/// delivery does: it can be longer than the tty's 1024-byte input queue.
+#[tracing::instrument(level = "debug", ret, skip(shared))]
+fn apply(shared: &Shared, uid: &str, edit: &Edit) -> Result<(), String> {
+    if edit.backspaces > 0 {
+        shared
+            .sessions
+            .write(uid, &BACKSPACE.repeat(edit.backspaces))
+            .map_err(|e| format!("the pane did not accept a correction: {e}"))?;
+    }
+    if !edit.insert.is_empty() {
+        shared
+            .sessions
+            .paste(uid, &edit.insert)
+            .map_err(|e| format!("the pane did not accept the transcript: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The shaping every word gets on its way into a pane, live or final.
+///
+/// One function, used by both, because the stop-time reconcile diffs one against the
+/// other: any difference between the two cleanings would show up in the pane as a burst
+/// of backspaces correcting text that was already right.
+#[tracing::instrument(level = "debug", ret)]
+fn clean_for_pane(raw: &str) -> String {
+    sanitize_for_pane(&crate::stt::backend::clean_transcript(raw))
+}
+
 /// What a finished dictation put into a pane.
 pub struct Delivered {
     pub text: String,
@@ -168,7 +251,16 @@ pub struct Delivered {
 pub fn stop_and_deliver(shared: &Shared, pane_id: &str, uid: &str) -> Result<Delivered, String> {
     let transcript = shared.dictation.stop(pane_id)?;
     let text = sanitize_for_pane(&transcript.text);
+    // Not "type the transcript" but "correct the pane into the transcript". With no live
+    // typing the pane holds nothing, the edit is the whole text with no backspaces, and
+    // this is exactly the delivery it always was. With live typing the pane already holds
+    // most of it, and only the tail the recognizer got wrong is taken back.
+    let mut typed = Typed::already(&transcript.typed_live);
+    let edit = typed.update(&text);
     if text.is_empty() {
+        // Nothing was said — but something may already have been typed, and leaving a
+        // stray hallucinated word in someone's prompt is worse than the empty result.
+        let _ = apply(shared, uid, &edit);
         return Err("no speech in the recording".to_string());
     }
     let want_submit = shared.dictation.submit_after_insert();
@@ -179,6 +271,8 @@ pub fn stop_and_deliver(shared: &Shared, pane_id: &str, uid: &str) -> Result<Del
         pane = %pane_id,
         transcript_chars = transcript.text.len(),
         delivered_chars = text.len(),
+        typed_live_chars = transcript.typed_live.len(),
+        backspaces = edit.backspaces,
         submit = want_submit,
         "delivering dictation to the pane"
     );
@@ -191,10 +285,7 @@ pub fn stop_and_deliver(shared: &Shared, pane_id: &str, uid: &str) -> Result<Del
     // a 1277-character dictation arrived as its last 254 characters, the first 1023 gone,
     // with every log line on the way reporting success. Bracketing (when the program asked
     // for it) makes the split invisible to the reader.
-    shared
-        .sessions
-        .paste(uid, &text)
-        .map_err(|e| format!("the pane did not accept the transcript: {e}"))?;
+    apply(shared, uid, &edit)?;
     let mut submitted = false;
     if want_submit {
         // A separate, later write — exactly as `/panes/{id}/input` does it — so a
