@@ -504,6 +504,41 @@ fn pane_item(
     }
 }
 
+/// Inset a layout tile by the inter-pane gap → the pane box that is actually drawn.
+fn pane_box(x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    (
+        x + PANE_GAP,
+        y + PANE_GAP,
+        (w - 2.0 * PANE_GAP).max(1.0),
+        (h - 2.0 * PANE_GAP).max(1.0),
+    )
+}
+
+/// Size `p`'s grid to what a pane box of `gw`×`gh` logical px can hold, restarting the pty
+/// debounce clock if that moved. Returns the grid, for callers that also need to derive the
+/// hit-test surface from it.
+///
+/// Pixel geometry (`rect`, `surf`, `visible`) stays the CALLER's business on purpose: a
+/// background tab has to size its grids without claiming any of the drawn area.
+fn fit_grid(p: &mut PaneState, gw: f32, gh: f32, scale: f32, now: Instant) -> (usize, usize) {
+    // size the grid to the terminal body (frame chrome removed) so cells match. Each pane
+    // uses its OWN font cell metrics (per-pane zoom), so panes can differ in cols/rows.
+    let tw = (gw - PANE_CHROME_W).max(1.0);
+    let th = (gh - PANE_CHROME_H).max(1.0);
+    let (cols, rows) = cells_for_px(tw * scale, th * scale, p.font.cell_w, p.font.cell_h);
+    if (cols, rows) != p.applied {
+        p.pane.resize(cols, rows);
+        p.applied = (cols, rows);
+        // Restart the debounce clock: the pty is told only once this has stopped moving
+        // (see `flush_pty_resizes`). The LOCAL grid reflows right now, which is lossless.
+        p.pty_since = now;
+        // The grid rewrapped — recompute any open search so its highlights track the
+        // reflowed text instead of drifting against stale match coordinates.
+        p.pane.search_reflow();
+    }
+    (cols, rows)
+}
+
 /// Recompute the active tab's pane rects (and reflow any pane whose pixel size
 /// changed). Honors zoom (solo the zoomed pane full-area).
 #[tracing::instrument(level = "debug", ret, skip(state))]
@@ -524,18 +559,10 @@ fn relayout_active(state: &mut State, area: (f32, f32), scale: f32) {
 
     let now = Instant::now();
     let place = |p: &mut PaneState, x: f32, y: f32, w: f32, h: f32| {
-        // Inset each pane within its tile → the inter-pane gap + edge margin.
-        let gx = x + PANE_GAP;
-        let gy = y + PANE_GAP;
-        let gw = (w - 2.0 * PANE_GAP).max(1.0);
-        let gh = (h - 2.0 * PANE_GAP).max(1.0);
+        let (gx, gy, gw, gh) = pane_box(x, y, w, h);
         p.rect = (gx, gy, gw, gh);
         p.visible = true;
-        // size the grid to the terminal body (frame chrome removed) so cells match. Each pane
-        // uses its OWN font cell metrics (per-pane zoom), so panes can differ in cols/rows.
-        let tw = (gw - PANE_CHROME_W).max(1.0);
-        let th = (gh - PANE_CHROME_H).max(1.0);
-        let (cols, rows) = cells_for_px(tw * scale, th * scale, p.font.cell_w, p.font.cell_h);
+        let (cols, rows) = fit_grid(p, gw, gh, scale, now);
         // The selection / link / search-highlight hit-test surface, set authoritatively here
         // every tick. Slint's `geometry-changed` is unreliable: it doesn't fire for a pane
         // created already at its final size (a freshly *launched* pane stays at surf (0,0), which
@@ -556,16 +583,6 @@ fn relayout_active(state: &mut State, area: (f32, f32), scale: f32) {
             (cols as f32 * p.font.cell_w as f32 / scale).max(1.0),
             (rows as f32 * p.font.cell_h as f32 / scale).max(1.0),
         );
-        if (cols, rows) != p.applied {
-            p.pane.resize(cols, rows);
-            p.applied = (cols, rows);
-            // Restart the debounce clock: the pty is told only once this has stopped moving
-            // (see `flush_pty_resizes`). The LOCAL grid reflows right now, which is lossless.
-            p.pty_since = now;
-            // The grid rewrapped — recompute any open search so its highlights track the
-            // reflowed text instead of drifting against stale match coordinates.
-            p.pane.search_reflow();
-        }
     };
 
     // Fullscreen wins over zoom: solo the focused pane, full-area.
@@ -595,6 +612,60 @@ fn relayout_active(state: &mut State, area: (f32, f32), scale: f32) {
         } else {
             p.rect = (x, y, w, h);
             p.visible = false;
+        }
+    }
+}
+
+/// Size the grids of every tab that is NOT the active one, to the geometry each would get
+/// if it were shown right now.
+///
+/// A pane is born at [`State::spawn_cells`], which can only guess: it copies the focused
+/// pane of the *active* tab, or falls back to 80x24 when there is nothing to copy. That is
+/// honest about the pty that was just spawned, but it is not the size of the tab the pane
+/// actually landed in — and `relayout_active` only ever touches `state.tabs[state.active]`,
+/// so a pane restored (or attached) into a background tab kept its birth grid until the human
+/// happened to visit that tab. A workspace restored with a 194x50 window would leave such a
+/// pane painting into an 80x24 corner of its box, with the rest of the pane blank.
+///
+/// This is a SIZE-ONLY pass: it never sets `rect`, `surf` or `visible`, because a background
+/// tab draws nothing and those belong to whoever draws. `relayout_active` stays authoritative
+/// for the tab on screen (it alone knows about fullscreen and the focused-pane solo).
+///
+/// It also removes a papercut that predates the bug: a window resized while a tab was in the
+/// background used to reflow that tab the instant it was shown, costing its shell a
+/// SIGWINCH-driven erase 300ms later. The size is now already correct when it appears.
+#[tracing::instrument(level = "debug", skip(state))]
+fn relayout_background(state: &mut State, area: (f32, f32), scale: f32) {
+    let (aw, ah) = area;
+    let active = state.active;
+    let now = Instant::now();
+    for (i, tab) in state.tabs.iter_mut().enumerate() {
+        if i == active {
+            continue;
+        }
+        let n = tab.panes.len();
+        if n == 0 {
+            continue;
+        }
+        // A zoomed background tab will fill its area with the one pane, so size it that way.
+        // An out-of-range index is stale bookkeeping rather than a zoom — fall through to the
+        // tiles instead of leaving every pane in the tab unsized.
+        if let Some(z) = tab.zoomed.filter(|z| *z < n) {
+            let (_, _, gw, gh) = pane_box(0.0, 0.0, aw, ah);
+            fit_grid(&mut tab.panes[z], gw, gh, scale, now);
+            continue;
+        }
+        let eff = effective_layout(tab.layout, n);
+        let tiles = compute_tiles(eff, n, &tab.sizes, tab.main_fraction, tab.focused as i32);
+        for t in &tiles {
+            // Same rule as the active pass: a tile the layout hides gets no grid of its own.
+            if !t.visible {
+                continue;
+            }
+            let w = (t.rect.w * aw as f64) as f32;
+            let h = (t.rect.h * ah as f64) as f32;
+            let (_, _, gw, gh) = pane_box(0.0, 0.0, w, h);
+            fit_grid(&mut tab.panes[t.index], gw, gh, scale, now);
         }
     }
 }
@@ -715,6 +786,7 @@ pub fn resync(
     mgr: &SessionManager,
 ) {
     relayout_active(state, area, scale);
+    relayout_background(state, area, scale);
 
     // tab strip
     let active = state.active;
