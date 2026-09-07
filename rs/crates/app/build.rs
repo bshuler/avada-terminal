@@ -128,7 +128,13 @@ fn main() {
     let mut libs: HashMap<String, PathBuf> = HashMap::new();
     libs.insert("widgets".to_string(), widget.clone());
 
-    let cfg = slint_build::CompilerConfiguration::new().with_library_paths(libs);
+    // Element debug info is what lets a test find a real control in the built tree and
+    // click it (`src/uitest.rs`). Dev builds only: it costs binary size, and a release
+    // build is never the thing under test.
+    let debug_info = std::env::var("PROFILE").as_deref() != Ok("release");
+    let cfg = slint_build::CompilerConfiguration::new()
+        .with_library_paths(libs)
+        .with_debug_info(debug_info);
     slint_build::compile_with_config("ui/app.slint", cfg).expect("slint compile failed");
 
     // The WHOLE ui/ tree, not a hand-kept list of it. `app.slint` imports fifteen other

@@ -730,6 +730,9 @@ export global LeftPanelAdapter {
     callback git-context(string, length, length);
     // Re-run `git status` (nothing watches the repository).
     callback git-refresh();
+    // Open a pane with the working tree's whole diff against HEAD. One file's diff is
+    // reached through the row's own context menu, the same way the commit view does it.
+    callback git-diff();
     // ---- mode 2, commit view: ONE commit, in place of the working tree ----
     // Reached by clicking a hash in a pane's output. A commit is immutable, so unlike the
     // working tree there is nothing here to refresh — only a way back out.

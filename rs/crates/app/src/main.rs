@@ -50,6 +50,7 @@ mod ssh;
 mod state;
 mod tetris;
 mod theme;
+mod uitest;
 mod update;
 mod viewpane;
 mod window;

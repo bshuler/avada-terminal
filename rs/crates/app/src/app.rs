@@ -4327,6 +4327,17 @@ impl App {
             let id = win.id;
             win.app
                 .global::<crate::LeftPanelAdapter>()
+                .on_git_diff(move || {
+                    if let Some(w) = app.window_by_id(id) {
+                        app.run_command(&w, Command::GitDiff(None));
+                    }
+                });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::LeftPanelAdapter>()
                 .on_git_commit_close(move || {
                     if let Some(w) = app.window_by_id(id) {
                         app.run_command(&w, Command::GitCommitClose);

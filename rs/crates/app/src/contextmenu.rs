@@ -496,6 +496,25 @@ pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMe
                 b.sep();
             }
         }
+    } else if let Some(root) = state.git.root.as_ref() {
+        // The working tree gets the same verb against HEAD. Gated on the file actually
+        // being one git is tracking a change to: an untracked file has nothing in HEAD to
+        // diff against, so the row would open a pane that prints nothing.
+        if let Some(rel) = path
+            .strip_prefix(root)
+            .ok()
+            .map(|r| r.to_string_lossy().into_owned())
+        {
+            if state
+                .git
+                .rows
+                .iter()
+                .any(|r| r.path == rel && r.section != crate::gitpanel::Section::Untracked)
+            {
+                b.item("Show Diff", Command::GitDiff(Some(rel)));
+                b.sep();
+            }
+        }
     }
 
     // Asked before any row is built, because two rows depend on the answer and the OS is

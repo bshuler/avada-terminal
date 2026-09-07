@@ -287,6 +287,14 @@ component ModeButton inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
+
+    // The strip is glyphs only, so without this it is a row of unnamed boxes to a screen
+    // reader and to a test. `tab` rather than `button` because that is what the strip is:
+    // one of several views, exactly one of them selected.
+    accessible-role: tab;
+    accessible-label: root.mode-row.label;
+    accessible-checked: root.active;
+    accessible-action-default => { root.clicked(); }
 }
 
 // A floppy-disk "save" glyph (stroked body + shutter + label) for the LIBRARY header.
@@ -874,6 +882,14 @@ component SectionHead inherits Rectangle {
         clicked => { root.toggled(); }
     }
 
+    // The label alone does not say the head is pressable, and the chevron is a bare Path.
+    // The tooltip is already the sentence naming the action, so it is the label; `expanded`
+    // is what makes the collapsed state legible rather than guessable.
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-expanded: root.open;
+    accessible-action-default => { root.toggled(); }
+
     HorizontalLayout {
         spacing: 4px;
 
@@ -914,6 +930,9 @@ component SectionHead inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => { root.acted(); }
                 }
+                accessible-role: button;
+                accessible-label: root.action-tip;
+                accessible-action-default => { root.acted(); }
             }
         }
     }
@@ -1005,6 +1024,13 @@ component HeadButton inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
+
+    // The glyph is a drawn Path with no text anywhere, so without this the button is
+    // invisible to a screen reader and nameless to a test. The tooltip is already the
+    // sentence that says what pressing it does, so it is the label.
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-action-default => { root.clicked(); }
 }
 
 // One row of the FILES tree. Indent is `depth`, so the flattening in Rust is the whole
@@ -1602,6 +1628,17 @@ export component LeftPanel inherits Rectangle {
                     tip: "Re-run git status";
                     glyph: 1;
                     clicked => { LeftPanelAdapter.git-refresh(); }
+                }
+            }
+            // Only when there is something to show. `git diff HEAD` on a clean tree opens a
+            // pane that prints nothing, which reads as the button being broken.
+            if LeftPanelAdapter.git-staged.length > 0
+                || LeftPanelAdapter.git-changed.length > 0 : VerticalLayout {
+                alignment: center;
+                HeadButton {
+                    tip: "Open a pane with the working tree's whole diff";
+                    glyph: 3;
+                    clicked => { LeftPanelAdapter.git-diff(); }
                 }
             }
         }
