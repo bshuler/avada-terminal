@@ -115,6 +115,45 @@ component ViewRowView inherits Rectangle {
         : ta.has-hover && root.item.activatable ? Theme.text.with-alpha(0.07)
         : transparent;
 
+    // What a screen reader — or a test — can call this row.
+    //
+    // The row *is* the control: `ta` covers it, and a click here opens a file, walks
+    // into a directory, or extends the selection. Everything visible in it, though, is
+    // a child Text, which Slint auto-labels — so the row looked named while the element
+    // the click actually lands on announced nothing at all.
+    //
+    // `text` holds the raw source line for every role that has one (prose keeps it
+    // beside the parsed `md`), so a single binding covers listings, headings, code,
+    // notices and paragraphs alike. The exceptions are the three rows that draw no
+    // text of their own.
+    property <string> a11y: root.item.role == 15 ? ""
+        : root.item.role == 10 ? "Horizontal rule"
+        : root.item.role == 12 ? "Diagram"
+        // Two identical lines of a file are two different rows, and the viewer already
+        // prints the number that tells them apart.
+        : root.item.role == 3 || root.item.role > 16
+            ? "Line " + root.item.detail + ": " + root.item.text
+        : root.item.text;
+
+    accessible-role: list-item;
+    accessible-label: root.a11y;
+    // The dim trailing column — a size and an age in a listing. It elaborates the name
+    // rather than being part of it, which is the whole distinction between a
+    // description and a label.
+    accessible-description: root.item.role <= 2 ? root.item.detail : "";
+    // Selection is a range here, not a cursor, so every row is a candidate and the
+    // highlight is the only thing that says which ones are in it.
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    // The same fork the click takes: an openable row opens, an inert one selects.
+    accessible-action-default => {
+        if (root.item.activatable) {
+            root.activate();
+        } else {
+            root.select(false);
+        }
+    }
+
     ta := TouchArea {
         // A row you can open reads as a link; a row you can only select reads as
         // text, which is exactly what it now is.
@@ -543,6 +582,11 @@ export component ViewPane inherits Rectangle {
         border-width: 1px;
         border-color: Theme.border;
         tt := Text {
+            // The pane's own confirmation — "Copied 12 lines". Auto-labelled as every
+            // Text is, but that name was reaching nobody: the toast appears and fades
+            // without focus ever moving to it, so unless it declares itself live there
+            // is no moment at which anything would read it out.
+            accessible-live-region: polite;
             x: 8px;
             y: 0;
             height: parent.height;

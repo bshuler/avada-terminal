@@ -1912,3 +1912,324 @@ fn the_project_menu_removes_the_project_it_names() {
     });
 }
 
+
+// ===== the view panes =====
+//
+// The Family B pane body: the file browser, the file viewer and the markdown preview,
+// all three rendered by one `ViewRowView` per row. Every gesture this pane has — open a
+// file, walk into a directory, select a range of lines — arrives through that row, and
+// until now the row was anonymous: the name was drawn by a child `Text`, which Slint
+// auto-labels, so the surface looked named while the element carrying the `TouchArea`
+// said nothing.
+
+/// A single view pane, laid out large enough that its `ListView` really instantiates the
+/// rows (it only builds the visible ones, so a pane too short to show row 3 is a pane
+/// where row 3 cannot be found — which would be a test artefact, not a defect).
+///
+/// `kind` 2 is the file browser, 3 the viewer, 4 the markdown preview; the rows decide
+/// what is actually drawn, so this only has to be in Family B's range.
+fn install_view_pane(
+    w: &crate::AppWindow,
+    kind: i32,
+    title: &str,
+    rows: Vec<crate::PaneViewRow>,
+    sel: (i32, i32),
+    toast: &str,
+) {
+    w.set_panes(
+        std::rc::Rc::new(slint::VecModel::from(vec![crate::PaneItem {
+            title: "the pane".into(),
+            x: 8.0,
+            y: 40.0,
+            w: 600.0,
+            h: 500.0,
+            visible: true,
+            focused: true,
+            kind,
+            view_title: title.into(),
+            view_rows: std::rc::Rc::new(slint::VecModel::from(rows)).into(),
+            view_sel_lo: sel.0,
+            view_sel_hi: sel.1,
+            toast: toast.into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+}
+
+/// A listing row: `role` 1 is a directory, 2 a file, and `activatable` is decided
+/// Rust-side rather than re-derived from the role.
+fn listing(role: i32, text: &str, detail: &str, activatable: bool) -> crate::PaneViewRow {
+    crate::PaneViewRow {
+        role,
+        text: text.into(),
+        detail: detail.into(),
+        activatable,
+        ..Default::default()
+    }
+}
+
+/// A verbatim line of a file: `detail` is the line number the viewer prints in its gutter.
+fn line(n: i32, text: &str) -> crate::PaneViewRow {
+    crate::PaneViewRow {
+        role: 3,
+        text: text.into(),
+        detail: n.to_string().into(),
+        activatable: false,
+        ..Default::default()
+    }
+}
+
+/// The row is a list item with a name, and the size/age column is a description rather
+/// than part of that name — otherwise every file in the browser would be called something
+/// no caller could predict and no reader could index.
+#[test]
+fn a_listing_row_is_a_named_selectable_list_item() {
+    ui(|| {
+        let w = window();
+        install_view_pane(
+            &w,
+            2,
+            "code/hyperpanes",
+            vec![
+                listing(1, "src", "", true),
+                listing(2, "README.md", "2.1 kB · 3d", false),
+            ],
+            (-1, -1),
+            "",
+        );
+
+        let file = only(&w, "README.md", AccessibleRole::ListItem);
+        assert_eq!(
+            file.accessible_description().as_deref(),
+            Some("2.1 kB · 3d"),
+            "the trailing column elaborates the name; it is not part of it"
+        );
+        assert_eq!(
+            file.accessible_item_selectable(),
+            Some(true),
+            "every row is a candidate for the range selection"
+        );
+        assert_eq!(file.accessible_item_selected(), Some(false));
+        // The directory is a row of its own, addressable by the name it draws.
+        only(&w, "src", AccessibleRole::ListItem);
+    });
+}
+
+/// Opening the wrong file is the same class of defect as closing the wrong pane: the
+/// callback carries a row index, so "it opens" and "it opens the row you clicked" are
+/// different claims.
+#[test]
+fn clicking_a_listing_row_opens_the_row_it_names() {
+    ui(|| {
+        let w = window();
+        install_view_pane(
+            &w,
+            2,
+            "code/hyperpanes",
+            vec![
+                listing(1, "src", "", true),
+                listing(1, "scripts", "", true),
+                listing(2, "README.md", "2.1 kB · 3d", false),
+            ],
+            (-1, -1),
+            "",
+        );
+
+        let saw = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        {
+            let saw = saw.clone();
+            w.on_pane_view_activate(move |pane, row| saw.borrow_mut().push((pane, row)));
+        }
+
+        click(&w, &only(&w, "scripts", AccessibleRole::ListItem));
+        assert_eq!(
+            *saw.borrow(),
+            vec![(0, 1)],
+            "the second row of the first pane, not merely some row of some pane"
+        );
+    });
+}
+
+/// A line of a file cannot be opened, so a plain click on it selects instead. Same row,
+/// same gesture, different verb — decided by `activatable`, which is why the row has to
+/// be the thing that reports it.
+#[test]
+fn clicking_an_inert_line_selects_it_rather_than_opening_it() {
+    ui(|| {
+        let w = window();
+        install_view_pane(
+            &w,
+            3,
+            "src/main.rs",
+            vec![line(1, "fn main() {"), line(2, "    run();"), line(3, "}")],
+            (-1, -1),
+            "",
+        );
+
+        let opened = std::rc::Rc::new(std::cell::Cell::new(false));
+        let picked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        {
+            let opened = opened.clone();
+            w.on_pane_view_activate(move |_, _| opened.set(true));
+            let picked = picked.clone();
+            w.on_pane_view_select(move |pane, row, ext| picked.borrow_mut().push((pane, row, ext)));
+        }
+
+        click(&w, &only(&w, "Line 2:     run();", AccessibleRole::ListItem));
+        assert_eq!(*picked.borrow(), vec![(0, 1, false)], "a plain click selects");
+        assert!(!opened.get(), "an inert row must not claim to open anything");
+    });
+}
+
+/// Two identical lines of a file are two different rows. The viewer already prints the
+/// number that tells them apart, so the name says it too — otherwise the second `foo` is
+/// unreachable and the first one answers for both.
+#[test]
+fn the_viewer_numbers_its_lines_so_two_identical_ones_stay_distinct() {
+    ui(|| {
+        let w = window();
+        install_view_pane(
+            &w,
+            3,
+            "src/main.rs",
+            vec![line(1, "    }"), line(2, "}"), line(3, "    }")],
+            (-1, -1),
+            "",
+        );
+
+        let picked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        {
+            let picked = picked.clone();
+            w.on_pane_view_select(move |_, row, _| picked.borrow_mut().push(row));
+        }
+
+        // Both exist, and each resolves to exactly one row.
+        click(&w, &only(&w, "Line 1:     }", AccessibleRole::ListItem));
+        click(&w, &only(&w, "Line 3:     }", AccessibleRole::ListItem));
+        assert_eq!(
+            *picked.borrow(),
+            vec![0, 2],
+            "identical text, different rows — the number is what separates them"
+        );
+    });
+}
+
+/// The selection is a range decided Rust-side and painted here. A highlight is invisible
+/// to anything that cannot see, so the rows in the range have to say they are in it.
+#[test]
+fn the_selected_range_says_which_rows_are_in_it() {
+    ui(|| {
+        let w = window();
+        install_view_pane(
+            &w,
+            3,
+            "src/main.rs",
+            vec![line(1, "one"), line(2, "two"), line(3, "three"), line(4, "four")],
+            (1, 2),
+            "",
+        );
+
+        let in_range: Vec<bool> = ["one", "two", "three", "four"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let row = only(&w, &format!("Line {}: {t}", i + 1), AccessibleRole::ListItem);
+                row.accessible_item_selected() == Some(true)
+            })
+            .collect();
+        assert_eq!(
+            in_range,
+            vec![false, true, true, false],
+            "rows 1 and 2 inclusive, matching sel-lo/sel-hi"
+        );
+    });
+}
+
+/// The pane's transient confirmation. It appears and fades without focus ever moving to
+/// it, so a name alone reaches nobody — it has to declare itself live, or a copy from a
+/// view pane confirms itself only to people who can see the corner it appears in.
+#[test]
+fn the_pane_toast_announces_itself_when_it_appears() {
+    ui(|| {
+        let w = window();
+        install_view_pane(
+            &w,
+            3,
+            "src/main.rs",
+            vec![line(1, "one")],
+            (-1, -1),
+            "Copied 12 lines",
+        );
+
+        let toast = only(&w, "Copied 12 lines", AccessibleRole::Text);
+        assert_eq!(
+            toast.accessible_live_region(),
+            Some(i_slint_backend_testing::AccessibleLiveness::Polite),
+            "a message nothing focuses has to interrupt on its own or not at all"
+        );
+    });
+}
+
+/// No toast, no toast element — an empty confirmation left in the tree would be read out
+/// as an empty announcement every time the pane redrew.
+#[test]
+fn a_quiet_pane_shows_no_toast_at_all() {
+    ui(|| {
+        let w = window();
+        install_view_pane(&w, 3, "src/main.rs", vec![line(1, "one")], (-1, -1), "");
+        assert!(
+            by_label(&w, "Copied 12 lines").is_empty(),
+            "the toast is conditional on having something to say"
+        );
+    });
+}
+
+/// A markdown preview's rows are prose, not filenames, and prose keeps its raw source in
+/// `text` beside the parsed `md` — which is what lets one binding name every role. The
+/// rows that draw no text of their own say what they are instead of nothing.
+#[test]
+fn the_markdown_preview_names_its_blocks_including_the_wordless_ones() {
+    ui(|| {
+        let w = window();
+        let md = |role: i32, text: &str| crate::PaneViewRow {
+            role,
+            text: text.into(),
+            activatable: false,
+            ..Default::default()
+        };
+        install_view_pane(
+            &w,
+            4,
+            "README.md",
+            vec![
+                md(4, "Hyperpanes"),
+                md(16, "A terminal multiplexer."),
+                md(10, ""),
+                md(12, ""),
+            ],
+            (-1, -1),
+            "",
+        );
+
+        only(&w, "Hyperpanes", AccessibleRole::ListItem);
+        only(&w, "A terminal multiplexer.", AccessibleRole::ListItem);
+        only(&w, "Horizontal rule", AccessibleRole::ListItem);
+        only(&w, "Diagram", AccessibleRole::ListItem);
+    });
+}
+
+/// The breadcrumb says which file or folder the pane is showing. The pane header above it
+/// carries the pane's own label, so this line is the target, and the two must not be
+/// confused for one another.
+#[test]
+fn the_breadcrumb_names_the_target_not_the_pane() {
+    ui(|| {
+        let w = window();
+        install_view_pane(&w, 3, "src/main.rs", vec![line(1, "one")], (-1, -1), "");
+
+        only(&w, "src/main.rs", AccessibleRole::Text);
+        // …and it is not the pane's own title, which the header draws separately.
+        assert!(!by_label(&w, "the pane").is_empty());
+    });
+}
