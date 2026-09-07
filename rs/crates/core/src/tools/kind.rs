@@ -40,6 +40,11 @@ pub enum PaneKind {
     FileBrowser,
     FileViewer,
     Markdown,
+    /// A source file, tokenised and coloured. Distinct from [`PaneKind::FileViewer`]
+    /// only in how the same lines are drawn — which is exactly why it is a separate
+    /// kind rather than a flag on the viewer: `rows_for` dispatches on the kind, and a
+    /// pane the user explicitly opened as a plain viewer must stay one.
+    Code,
     /// Web content. Gated behind the internal-browser decision; see the plan's Q2.
     Browser,
 }
@@ -54,6 +59,24 @@ impl PaneKind {
     #[tracing::instrument(level = "debug", ret)]
     pub fn is_pty(&self) -> bool {
         matches!(self, PaneKind::Terminal | PaneKind::Tool(_))
+    }
+
+    /// Whether this pane draws a projected row model instead of a terminal surface —
+    /// the Family B views.
+    ///
+    /// The inverse of [`is_pty`](Self::is_pty) *today*, and deliberately not written
+    /// as one: [`PaneKind::Browser`] is neither, and the day a kind arrives that is
+    /// neither either, the two predicates have to be able to disagree. It exists at
+    /// all because the Slint side used to ask this question as `kind >= 2 && kind <= 4`
+    /// — a range that silently swallowed `Browser` the moment a sixth kind was added.
+    /// Deciding it once on the producing side is the same rule `ViewRow::path` and the
+    /// left panel's `blocked` flag follow.
+    #[tracing::instrument(level = "debug", ret)]
+    pub fn is_view(&self) -> bool {
+        matches!(
+            self,
+            PaneKind::FileBrowser | PaneKind::FileViewer | PaneKind::Markdown | PaneKind::Code
+        )
     }
 
     /// The registry entry, when this is a tool we know about.
@@ -85,6 +108,7 @@ impl PaneKind {
             PaneKind::FileBrowser => Some(format!("{VIEW_PREFIX}files")),
             PaneKind::FileViewer => Some(format!("{VIEW_PREFIX}file")),
             PaneKind::Markdown => Some(format!("{VIEW_PREFIX}markdown")),
+            PaneKind::Code => Some(format!("{VIEW_PREFIX}code")),
             PaneKind::Browser => Some(format!("{VIEW_PREFIX}browser")),
         }
     }
@@ -103,6 +127,7 @@ impl PaneKind {
                 "files" => PaneKind::FileBrowser,
                 "file" => PaneKind::FileViewer,
                 "markdown" => PaneKind::Markdown,
+                "code" => PaneKind::Code,
                 "browser" => PaneKind::Browser,
                 _ => PaneKind::Terminal,
             };
@@ -122,6 +147,7 @@ impl PaneKind {
             PaneKind::FileViewer => 3,
             PaneKind::Markdown => 4,
             PaneKind::Browser => 5,
+            PaneKind::Code => 6,
         }
     }
 
@@ -143,6 +169,7 @@ impl PaneKind {
             PaneKind::FileBrowser => "Files".to_string(),
             PaneKind::FileViewer => "Viewer".to_string(),
             PaneKind::Markdown => "Markdown".to_string(),
+            PaneKind::Code => "Code".to_string(),
             PaneKind::Browser => "Browser".to_string(),
         }
     }
@@ -181,6 +208,37 @@ impl PaneKind {
 mod tests {
     use super::*;
 
+    /// Every kind, once. The three tests below used to hand-list the variants each,
+    /// so a new one joined the enum and quietly escaped all three at the same time —
+    /// which is the whole failure mode `_every_variant_is_in_all` now makes impossible.
+    fn all_kinds() -> Vec<PaneKind> {
+        vec![
+            PaneKind::Terminal,
+            PaneKind::Tool("claude".into()),
+            PaneKind::FileBrowser,
+            PaneKind::FileViewer,
+            PaneKind::Markdown,
+            PaneKind::Code,
+            PaneKind::Browser,
+        ]
+    }
+
+    /// Not a test — a compile error. Adding a variant to [`PaneKind`] stops the build
+    /// here until it has been added to `all_kinds` above, so the coverage below can
+    /// never drift behind the enum.
+    #[allow(dead_code)]
+    fn _every_variant_is_in_all(k: &PaneKind) -> usize {
+        match k {
+            PaneKind::Terminal => 0,
+            PaneKind::Tool(_) => 1,
+            PaneKind::FileBrowser => 2,
+            PaneKind::FileViewer => 3,
+            PaneKind::Markdown => 4,
+            PaneKind::Code => 5,
+            PaneKind::Browser => 6,
+        }
+    }
+
     #[test]
     fn terminal_writes_nothing() {
         assert_eq!(PaneKind::Terminal.as_meta_value(), None);
@@ -190,14 +248,7 @@ mod tests {
 
     #[test]
     fn every_kind_round_trips() {
-        let kinds = [
-            PaneKind::Tool("claude".into()),
-            PaneKind::FileBrowser,
-            PaneKind::FileViewer,
-            PaneKind::Markdown,
-            PaneKind::Browser,
-        ];
-        for k in kinds {
+        for k in all_kinds().into_iter().filter(|k| *k != PaneKind::Terminal) {
             let v = k.as_meta_value().expect("non-default kinds are written");
             assert_eq!(
                 PaneKind::from_meta_value(&v),
@@ -237,26 +288,32 @@ mod tests {
     fn only_terminals_and_tools_are_pty_backed() {
         assert!(PaneKind::Terminal.is_pty());
         assert!(PaneKind::Tool("claude".into()).is_pty());
+        for k in all_kinds().into_iter().filter(|k| !k.is_pty()) {
+            assert!(!k.is_pty(), "{k:?} must not mint a session uid");
+        }
+        // Said the other way round, so neither predicate can drift into being the
+        // other's negation by accident: a view is never PTY-backed, and `Browser` is
+        // neither — the case the `kind >= 2 && kind <= 4` range used to get wrong.
+        for k in all_kinds() {
+            assert!(
+                !(k.is_pty() && k.is_view()),
+                "{k:?} cannot be both a terminal and a projected view"
+            );
+        }
+        assert!(!PaneKind::Browser.is_pty() && !PaneKind::Browser.is_view());
         for k in [
             PaneKind::FileBrowser,
             PaneKind::FileViewer,
             PaneKind::Markdown,
-            PaneKind::Browser,
+            PaneKind::Code,
         ] {
-            assert!(!k.is_pty(), "{k:?} must not mint a session uid");
+            assert!(k.is_view(), "{k:?} draws a projected row model");
         }
     }
 
     #[test]
     fn ui_kinds_are_distinct() {
-        let all = [
-            PaneKind::Terminal,
-            PaneKind::Tool("claude".into()),
-            PaneKind::FileBrowser,
-            PaneKind::FileViewer,
-            PaneKind::Markdown,
-            PaneKind::Browser,
-        ];
+        let all = all_kinds();
         let mut seen: Vec<i32> = all.iter().map(|k| k.ui_kind()).collect();
         let n = seen.len();
         seen.sort_unstable();

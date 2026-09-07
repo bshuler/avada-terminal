@@ -96,6 +96,8 @@ pub mod pane_mark {
     pub const MARKDOWN: i32 = -4;
     /// The internal browser view — a globe.
     pub const BROWSER: i32 = -5;
+    /// The highlighted source view — `</>`.
+    pub const CODE: i32 = -6;
 }
 
 /// The mark one pane row carries, in the namespace `PaneMark` in `ui/leftpanel.slint`
@@ -114,6 +116,7 @@ pub fn pane_mark_kind(kind: &PaneKind) -> i32 {
         PaneKind::FileViewer => pane_mark::FILE_VIEWER,
         PaneKind::Markdown => pane_mark::MARKDOWN,
         PaneKind::Browser => pane_mark::BROWSER,
+        PaneKind::Code => pane_mark::CODE,
         // `ui_icon` answers 0 for a plain shell AND for a tool id with no mark in this
         // build; both are PTY panes, so both get the prompt rather than a gap.
         PaneKind::Terminal | PaneKind::Tool(_) => match kind.ui_icon() {

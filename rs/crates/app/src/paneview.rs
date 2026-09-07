@@ -346,6 +346,7 @@ fn pane_item(
     font_px: f32,
     kind: &PaneKind,
     live: i32,
+    palette: usize,
 ) -> PaneItem {
     let (x, y, w, h) = ps.rect;
     // Project the clickable-path hover overlay (if any) into the model row.
@@ -402,13 +403,13 @@ fn pane_item(
     // markdown preview. Gated on the kind rather than computed unconditionally
     // because `model_for` stats the target, and this runs once per pane per tick —
     // a terminal pane must not pay a syscall for a view it does not have.
-    let is_view = matches!(
-        kind,
-        PaneKind::FileBrowser | PaneKind::FileViewer | PaneKind::Markdown
-    );
+    // `is_view` is the kind's own answer now, not a list repeated here: the ranged
+    // check this replaced (`kind >= 2 && kind <= 4` in the .slint) already had Browser
+    // on the wrong side of it, and a fourth view kind would have joined it there.
+    let is_view = kind.is_view();
     let (view_rows, view_title): (ModelRc<PaneViewRow>, SharedString) = if is_view {
         (
-            crate::viewpane::model_for(&ps.uid, kind, ps.cwd.as_deref()),
+            crate::viewpane::model_for(&ps.uid, kind, ps.cwd.as_deref(), palette),
             crate::viewpane::view_title(kind, ps.cwd.as_deref()).into(),
         )
     } else {
@@ -489,6 +490,7 @@ fn pane_item(
         // `ui_icon`/`ui_name` return 0/"" for a plain terminal and for a tool id this
         // build does not know, so an unknown kind shows no mark rather than a wrong one.
         kind: kind.ui_kind(),
+        is_view,
         tool_icon: kind.ui_icon(),
         tool_name: kind.ui_name().into(),
         agent_live: live,
@@ -821,6 +823,14 @@ pub fn resync(
         .collect();
     sync_model(&ui.layouts, layouts);
 
+    // Appearance controls reflect the DRAFT while Preferences is open (so edits preview
+    // without touching the live panes), else the committed settings. Read before the panes
+    // rather than beside the other appearance controls further down, because a source pane's
+    // syntax colours are baked into its rows: `view_ui` is an input to the projection, so a
+    // palette previewed in Preferences recolours the code too.
+    let (_view_font, view_palette, view_theme, view_ui, view_px, view_frame, view_dot) =
+        state.appearance_view();
+
     // panes
     let show_frame = state.settings.show_frame;
     let show_dot = state.settings.show_dot;
@@ -849,6 +859,7 @@ pub fn resync(
                 p.font_px,
                 &tool_row[i].0,
                 tool_row[i].1,
+                view_ui,
             )
         })
         .collect();
@@ -1002,11 +1013,6 @@ pub fn resync(
     // The query display is a controller-owned mirror (the key router edits
     // state.palette_query while the palette is open — no focused TextInput).
     app.set_palette_query(state.palette_query.as_str().into());
-
-    // Appearance controls reflect the DRAFT while Preferences is open (so edits preview
-    // without touching the live panes), else the committed settings.
-    let (_view_font, view_palette, view_theme, view_ui, view_px, view_frame, view_dot) =
-        state.appearance_view();
 
     // The shell palette follows the DRAFT, not the committed setting: a window's own chrome
     // has nowhere to be previewed except in the window, so picking a palette recolours the
@@ -2098,6 +2104,9 @@ pub fn pump(
         .iter()
         .map(|p| (state.effective_kind(p), state.liveness_ui(&p.uid)))
         .collect();
+    // The palette the projection was built against — see the same read in `resync`.
+    // Taken before the mutable tab borrow below, which would otherwise block it.
+    let view_ui = state.appearance_view().3;
     let tab = &mut state.tabs[active_idx];
     let n = tab.panes.len();
     let mut rendered = 0usize;
@@ -2194,6 +2203,7 @@ pub fn pump(
                     ps.font_px,
                     &tool_row[i].0,
                     tool_row[i].1,
+                    view_ui,
                 ),
             );
         }

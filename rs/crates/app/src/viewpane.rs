@@ -29,6 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hyperpanes_core::tools::PaneKind;
 use slint::{ModelRc, VecModel};
 
+use crate::theme;
 use crate::{DiagLabel, DiagNode, PaneCell, PaneDiagram, PaneViewRow};
 
 /// How a row is drawn. The `.slint` side switches on this and nothing else — it
@@ -75,6 +76,10 @@ pub mod role {
     /// opposite things: prose wraps and carries inline markup, a viewer line is
     /// verbatim and elides so that row N stays line N.
     pub const PROSE: i32 = 16;
+    /// A line of a source file, coloured. Distinct from [`LINE`] only in carrying
+    /// [`super::ViewRow::markup`]: the text is the same verbatim line, and the row
+    /// must keep the same fixed height so that row N is still line N.
+    pub const SOURCE: i32 = 17;
 }
 
 /// One cell of a markdown table.
@@ -115,6 +120,11 @@ pub struct ViewRow {
     pub check: i32,
     /// [`role::TABLE_HEAD`] and [`role::TABLE_ROW`] only, one entry per column.
     pub cells: Vec<TableCell>,
+    /// [`role::SOURCE`] only: `text` again as the markdown markup that carries its
+    /// syntax colours (see [`crate::highlight`]). A separate field rather than a
+    /// replacement for `text`, because everything else about the row — copying, the
+    /// accessible label, the selection — wants the raw source line.
+    pub markup: String,
 }
 
 impl Default for ViewRow {
@@ -138,6 +148,7 @@ impl ViewRow {
             marker: String::new(),
             check: -1,
             cells: Vec::new(),
+            markup: String::new(),
         }
     }
 
@@ -160,9 +171,13 @@ impl ViewRow {
     pub fn copy_text(&self) -> String {
         match self.role {
             // Listing rows and the plain viewer: the text is already what was drawn.
-            role::PARENT | role::DIR | role::FILE | role::LINE | role::CODE | role::NOTICE => {
-                self.text.clone()
-            }
+            role::PARENT
+            | role::DIR
+            | role::FILE
+            | role::LINE
+            | role::SOURCE
+            | role::CODE
+            | role::NOTICE => self.text.clone(),
             // Headings arrive with their `#` markers already stripped by `heading()`,
             // and the count is not recoverable (`####` and deeper all render as H3),
             // so they are copied as the words they showed.
@@ -225,7 +240,7 @@ pub const MAX_ENTRIES: usize = 2_000;
 /// Returns a single [`role::NOTICE`] row rather than an empty model on every
 /// failure path — an empty pane looks broken, a pane that says *why* does not.
 #[tracing::instrument(level = "debug", ret)]
-pub fn rows_for(kind: &PaneKind, target: Option<&str>) -> Vec<ViewRow> {
+pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<ViewRow> {
     let Some(t) = target.filter(|t| !t.is_empty()) else {
         return vec![ViewRow::inert(role::NOTICE, "No path set for this pane")];
     };
@@ -234,6 +249,7 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>) -> Vec<ViewRow> {
         PaneKind::FileBrowser => list_dir(&path),
         PaneKind::FileViewer => read_lines(&path),
         PaneKind::Markdown => markdown_blocks(&path),
+        PaneKind::Code => highlight_lines(&path, palette),
         // Family A, or a kind this build does not know: nothing to project.
         _ => Vec::new(),
     }
@@ -265,10 +281,7 @@ pub fn resolve_local_href(target: &Path, href: &str) -> Option<PathBuf> {
 /// header has room for. "" when there is no target.
 #[tracing::instrument(level = "debug", ret)]
 pub fn view_title(kind: &PaneKind, target: Option<&str>) -> String {
-    if !matches!(
-        kind,
-        PaneKind::FileBrowser | PaneKind::FileViewer | PaneKind::Markdown
-    ) {
+    if !kind.is_view() {
         return String::new();
     }
     match target.filter(|t| !t.is_empty()) {
@@ -425,6 +438,58 @@ pub fn read_lines(file: &Path) -> Vec<ViewRow> {
             ..ViewRow::default()
         });
     }
+    if rows.is_empty() {
+        rows.push(ViewRow::inert(role::NOTICE, "Empty file"));
+    } else if total > MAX_LINES {
+        rows.push(ViewRow::inert(
+            role::NOTICE,
+            format!("… {} more lines not shown", total - MAX_LINES),
+        ));
+    }
+    rows
+}
+
+/// A source file's lines, numbered like [`read_lines`] and coloured.
+///
+/// Whole-file rather than per-line because a block comment, a triple-quoted string
+/// and a template literal all outlive the line that opened them — see
+/// [`crate::highlight::markup_lines`]. The palette is an argument rather than a
+/// lookup because the colours are baked into the markup: a theme change has to
+/// re-project, which is why it is part of the cache [`Fingerprint`].
+#[tracing::instrument(level = "debug", ret)]
+pub fn highlight_lines(file: &Path, palette: usize) -> Vec<ViewRow> {
+    let text = match read_text(file) {
+        Ok(t) => t,
+        Err(row) => return vec![row],
+    };
+    let ext = file
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let total = text.lines().count();
+    let shown: Vec<String> = text.lines().take(MAX_LINES).map(clip).collect();
+    let refs: Vec<&str> = shown.iter().map(String::as_str).collect();
+    // `kind_for_file` already asked `is_source`, so this is `Some` unless the file was
+    // renamed underneath the pane — in which case an uncoloured viewer is the right
+    // answer, not an error.
+    let pal = theme::ui_palette(palette);
+    let markup = crate::highlight::markup_lines(&refs, &ext, &pal).unwrap_or_else(|| {
+        refs.iter()
+            .map(|l| crate::highlight::plain_markup(l, &pal))
+            .collect()
+    });
+    let mut rows: Vec<ViewRow> = shown
+        .into_iter()
+        .zip(markup)
+        .enumerate()
+        .map(|(i, (line, markup))| ViewRow {
+            role: role::SOURCE,
+            text: line,
+            markup,
+            detail: (i + 1).to_string(),
+            ..ViewRow::default()
+        })
+        .collect();
     if rows.is_empty() {
         rows.push(ViewRow::inert(role::NOTICE, "Empty file"));
     } else if total > MAX_LINES {
@@ -1087,10 +1152,14 @@ struct Fingerprint {
     target: String,
     mtime: u64,
     len: u64,
+    /// Only a source pane reads it, but every pane carries it: the syntax colours are
+    /// baked into each row's markup, so a palette change is a content change. Without
+    /// this the viewer would keep the old theme's ink until the file was next touched.
+    palette: usize,
 }
 
 #[tracing::instrument(level = "debug")]
-fn fingerprint(kind: &PaneKind, target: Option<&str>) -> Fingerprint {
+fn fingerprint(kind: &PaneKind, target: Option<&str>, palette: usize) -> Fingerprint {
     let target = target.unwrap_or_default().to_string();
     let (mtime, len) = fs::metadata(&target)
         .ok()
@@ -1111,6 +1180,7 @@ fn fingerprint(kind: &PaneKind, target: Option<&str>) -> Fingerprint {
         target,
         mtime,
         len,
+        palette,
     }
 }
 
@@ -1219,8 +1289,13 @@ fn markdown_text(src: &str) -> slint::StyledText {
 }
 
 #[tracing::instrument(level = "debug", ret)]
-pub fn model_for(uid: &str, kind: &PaneKind, target: Option<&str>) -> ModelRc<PaneViewRow> {
-    let fp = fingerprint(kind, target);
+pub fn model_for(
+    uid: &str,
+    kind: &PaneKind,
+    target: Option<&str>,
+    palette: usize,
+) -> ModelRc<PaneViewRow> {
+    let fp = fingerprint(kind, target, palette);
     VIEW_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if let Some(have) = c.get(uid) {
@@ -1228,7 +1303,7 @@ pub fn model_for(uid: &str, kind: &PaneKind, target: Option<&str>) -> ModelRc<Pa
                 return have.model.clone();
             }
         }
-        let rows = rows_for(kind, target);
+        let rows = rows_for(kind, target, palette);
         // Built once and cloned: a `PaneDiagram` holds two `ModelRc`s, and minting
         // a fresh empty pair for each of 5,000 plain rows is 10,000 allocations to
         // say "no diagram here".
@@ -1250,7 +1325,12 @@ pub fn model_for(uid: &str, kind: &PaneKind, target: Option<&str>) -> ModelRc<Pa
                         Some(d) => diagram_model(d),
                         None => blank.clone(),
                     },
-                    md: if flows(r.role) {
+                    // A source row's markup is already markdown — built by `highlight`,
+                    // escaped so it round-trips — so it takes the same channel prose does.
+                    // `text` stays the raw line for copy, selection and the a11y label.
+                    md: if !r.markup.is_empty() {
+                        markdown_text(&r.markup)
+                    } else if flows(r.role) {
                         markdown_text(&r.text)
                     } else {
                         no_md.clone()
@@ -1420,6 +1500,9 @@ pub fn kind_for_file(path: &Path) -> PaneKind {
         .unwrap_or_default();
     match ext.as_str() {
         "md" | "markdown" | "mdown" | "mkd" => PaneKind::Markdown,
+        // Anything the highlighter has a grammar for opens coloured; everything else
+        // keeps the plain viewer, which is still the honest answer for a `.log`.
+        e if crate::highlight::is_source(e) => PaneKind::Code,
         _ => PaneKind::FileViewer,
     }
 }
@@ -1864,13 +1947,13 @@ mod tests {
         let target = f.display().to_string();
         let uid = "view-1";
 
-        let first = model_for(uid, &PaneKind::FileViewer, Some(&target));
+        let first = model_for(uid, &PaneKind::FileViewer, Some(&target), 0);
         assert_eq!(first.row_count(), 1);
         let g1 = generation(uid).expect("projected");
 
         // Same fingerprint → no rebuild at all, which is what makes this safe to
         // call from the per-frame pump.
-        let again = model_for(uid, &PaneKind::FileViewer, Some(&target));
+        let again = model_for(uid, &PaneKind::FileViewer, Some(&target), 0);
         assert_eq!(again.row_count(), 1);
         assert_eq!(
             generation(uid),
@@ -1881,7 +1964,7 @@ mod tests {
         // Rewrite with a different length: the fingerprint moves even if the
         // filesystem's mtime resolution would not have caught the edit.
         fs::write(&f, "one\ntwo\n").unwrap();
-        let third = model_for(uid, &PaneKind::FileViewer, Some(&target));
+        let third = model_for(uid, &PaneKind::FileViewer, Some(&target), 0);
         assert_eq!(third.row_count(), 2);
         assert_ne!(generation(uid), Some(g1), "an edit must reproject");
 
@@ -1946,7 +2029,7 @@ mod tests {
         let f = write(&d, "a.txt", "one\ntwo\nthree\nfour\n");
         let target = f.display().to_string();
         let uid = "view-sel";
-        model_for(uid, &PaneKind::FileViewer, Some(&target));
+        model_for(uid, &PaneKind::FileViewer, Some(&target), 0);
         assert_eq!(row_count(uid), 4);
         assert_eq!(selected_range(uid), None);
 
@@ -1989,7 +2072,7 @@ mod tests {
         select_all(uid);
         assert!(selected_range(uid).is_some());
         fs::write(&f, "one\n").unwrap();
-        model_for(uid, &PaneKind::FileViewer, Some(&target));
+        model_for(uid, &PaneKind::FileViewer, Some(&target), 0);
         assert_eq!(
             selected_range(uid),
             None,
@@ -2004,21 +2087,91 @@ mod tests {
         let d = scratch("kinds");
         let f = write(&d, "a.txt", "x\n");
         let t = f.display().to_string();
-        assert!(rows_for(&PaneKind::Terminal, Some(&t)).is_empty());
-        assert!(rows_for(&PaneKind::Tool("claude".into()), Some(&t)).is_empty());
-        assert!(!rows_for(&PaneKind::FileViewer, Some(&t)).is_empty());
+        assert!(rows_for(&PaneKind::Terminal, Some(&t), 0).is_empty());
+        assert!(rows_for(&PaneKind::Tool("claude".into()), Some(&t), 0).is_empty());
+        assert!(!rows_for(&PaneKind::FileViewer, Some(&t), 0).is_empty());
         // No target is a notice, not a panic and not an empty pane.
-        let none = rows_for(&PaneKind::FileBrowser, None);
+        let none = rows_for(&PaneKind::FileBrowser, None, 0);
         assert_eq!(none[0].role, role::NOTICE);
         assert_eq!(none[0].text, "No path set for this pane");
     }
 
     #[test]
-    fn a_file_opens_as_markdown_only_for_a_markdown_extension() {
+    fn a_file_opens_in_the_pane_that_can_read_it() {
+        // Markdown first: it is the only extension that renders as prose.
         assert_eq!(kind_for_file(Path::new("/a/README.md")), PaneKind::Markdown);
         assert_eq!(kind_for_file(Path::new("/a/README.MD")), PaneKind::Markdown);
-        assert_eq!(kind_for_file(Path::new("/a/main.rs")), PaneKind::FileViewer);
+        // Then anything `highlight` has a syntax for, whatever its case.
+        assert_eq!(kind_for_file(Path::new("/a/main.rs")), PaneKind::Code);
+        assert_eq!(kind_for_file(Path::new("/a/App.TSX")), PaneKind::Code);
+        assert_eq!(kind_for_file(Path::new("/a/q.sql")), PaneKind::Code);
+        // And everything else falls back to the plain viewer, including a file with no
+        // extension at all — guessing a language from a shebang is a bigger promise than
+        // this pane makes.
         assert_eq!(kind_for_file(Path::new("/a/LICENSE")), PaneKind::FileViewer);
+        assert_eq!(kind_for_file(Path::new("/a/notes.txt")), PaneKind::FileViewer);
+    }
+
+    /// The source viewer end to end, from a real file on disk to the rows the pane draws.
+    /// Every row has to keep its line verbatim — `text` is what a copy yields and what the
+    /// screen reader announces — while `markup` carries the same line with colour, and the
+    /// two must describe the same bytes or the pane is lying about the file.
+    #[test]
+    fn a_source_file_reads_back_line_for_line_with_colour_beside_it() {
+        let dir = std::env::temp_dir().join(format!("hp-src-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sample.rs");
+        let src = "fn main() {\n    let x = 1; // one\n}\n";
+        std::fs::write(&file, src).unwrap();
+
+        let rows = rows_for(&PaneKind::Code, file.to_str(), 0);
+        assert_eq!(rows.len(), 3, "one row per line, so row N is line N");
+        for (i, (row, line)) in rows.iter().zip(src.lines()).enumerate() {
+            assert_eq!(row.role, role::SOURCE);
+            assert_eq!(row.text, line, "line {} lost its bytes", i + 1);
+            assert_eq!(row.detail, (i + 1).to_string(), "wrong gutter number");
+            assert!(
+                row.markup.contains("<font color="),
+                "line {} came through uncoloured: {:?}",
+                i + 1,
+                row.markup
+            );
+        }
+
+        // The colours are baked into the markup, so they cannot be re-themed by the
+        // `.slint`; the palette is part of what `rows_for` is asked for, and a different
+        // palette has to produce different ink. `Fingerprint` carries it for this reason.
+        let latte = rows_for(&PaneKind::Code, file.to_str(), 3);
+        assert_eq!(latte.len(), rows.len());
+        assert_eq!(latte[0].text, rows[0].text, "the source itself must not move");
+        assert_ne!(
+            latte[0].markup, rows[0].markup,
+            "a palette switch has to re-ink the source"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file whose extension `highlight` has no syntax for can still be routed to `Code`
+    /// by a rename under a live pane. That must degrade to plain rows, not to an error row
+    /// and not to a panic — the file is still perfectly readable without colour.
+    #[test]
+    fn an_unknown_extension_still_renders_as_source_just_without_colour() {
+        let dir = std::env::temp_dir().join(format!("hp-src-x-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sample.zzz");
+        std::fs::write(&file, "alpha\nbeta\n").unwrap();
+
+        let rows = rows_for(&PaneKind::Code, file.to_str(), 0);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].role, role::SOURCE);
+        assert_eq!(rows[0].text, "alpha");
+        // Uncoloured, but present: the row draws `markup`, so an empty one would be a
+        // blank line where the file's text should be.
+        assert_eq!(rows[0].markup, "alpha");
+        assert!(!rows[0].markup.contains("<font"), "no syntax means no ink");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

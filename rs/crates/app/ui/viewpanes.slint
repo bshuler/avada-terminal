@@ -11,6 +11,11 @@
 import { Theme } from "theme.slint";
 import { PaneViewRow } from "types.slint";
 import { ListView } from "std-widgets.slint";
+// Registers the family "JetBrains Mono" so a source row can ask for it by name. The
+// same file `prefs::BUNDLED_FONTS` extracts for the terminal, imported again here
+// because the terminal's font goes through our own texture renderer, not Slint's —
+// there is no shared handle between the two.
+import "../assets/fonts/JetBrainsMono-Regular.ttf";
 
 // The leading mark for a listing row. Drawn geometry, never a font glyph — the
 // same rule the menu icons follow (a missing codepoint renders as a hollow box on
@@ -501,26 +506,63 @@ component ViewRowView inherits Rectangle {
     // --- 3 (and anything unknown): a verbatim line, with the viewer's line
     // number. Verbatim is the point: row N has to stay line N, so this one
     // elides where prose wraps, and its `*`s are asterisks, not emphasis.
-    if root.item.role == 3 || root.item.role > 16 : HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 8px;
-        spacing: 8px;
+    // --- 17: a source line, syntax-coloured. The same shape as role 3, because the
+    // gutter numbers of the two have to form one column, but the body is a
+    // `StyledText` carrying the markup `highlight::markup_lines` built, and it is
+    // monospaced: a proportional font would throw away every alignment the file
+    // itself is relying on. `StyledText` has no `overflow`, so the clip is the
+    // wrapper's job — a long line must not grow the row, or row N stops being line N.
+    if root.item.role == 17 : Rectangle {
+        clip: true;
+        HorizontalLayout {
+            padding-left: 6px * root.zoom;
+            padding-right: 8px * root.zoom;
+            spacing: 8px * root.zoom;
+            Text {
+                width: 34px * root.zoom;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                text: root.item.detail;
+                color: Theme.faint;
+                font-size: 10px * root.zoom;
+            }
+            src := StyledText {
+                vertical-alignment: center;
+                // `md`, not `text`: `text` stays the raw line, for copy and the
+                // accessible label. See `viewpane::ViewRow::markup`.
+                text: root.item.md;
+                default-color: Theme.text;
+                default-font-family: "JetBrains Mono";
+                default-font-size: 12px * root.zoom;
+            }
+            // The source line takes its natural width and this eats the rest. A
+            // `horizontal-stretch` on the text would have been shorter, but then the
+            // element's width would be the pane's rather than the glyphs' — and the
+            // glyphs' width is the only thing a test can measure the font by.
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    if root.item.role == 3 || root.item.role > 17 : HorizontalLayout {
+        padding-left: 6px * root.zoom;
+        padding-right: 8px * root.zoom;
+        spacing: 8px * root.zoom;
         Text {
             // A fixed gutter so the numbers form a column instead of ragging with
             // their digit count.
-            width: 34px;
+            width: 34px * root.zoom;
             horizontal-alignment: right;
             vertical-alignment: center;
             text: root.item.detail;
             color: Theme.faint;
-            font-size: 10px;
+            font-size: 10px * root.zoom;
         }
         Text {
             horizontal-stretch: 1;
             vertical-alignment: center;
             text: root.item.text;
             color: Theme.text;
-            font-size: 12px;
+            font-size: 12px * root.zoom;
             overflow: elide;
         }
     }

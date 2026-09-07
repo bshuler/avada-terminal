@@ -212,3 +212,9 @@ assets = [
 # window-server connection — so these run in CI and never steal focus on a dev machine.
 [dev-dependencies]
 i-slint-backend-testing = { git = "https://github.com/slint-ui/slint", rev = "9463a107aeb5f5021c162e82c55977c5333229ae", features = ["internal"] }
+# Test-only, for one assertion that cannot be made any other way: `StyledText::paragraphs`
+# is `pub(crate)`, so from outside Slint there is no way to read back what
+# `from_markdown` parsed — and the whole `highlight` module rests on the claim that its
+# markup reproduces the source line byte for byte. `get_raw_text` is the public function
+# that answers it. Same pinned rev as `slint` itself, so cargo unifies the two.
+i-slint-core = { git = "https://github.com/slint-ui/slint", rev = "9463a107aeb5f5021c162e82c55977c5333229ae" }

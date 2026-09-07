@@ -175,6 +175,12 @@ export struct PaneItem {
     // The `PaneKind` discriminator as an int (`PaneKind::ui_kind`): 0 = plain terminal,
     // 1 = a registered tool, 2.. = the non-PTY views. Drives which chrome the header draws.
     kind: int,
+    // Whether this pane draws a projected row model instead of a terminal surface
+    // (`PaneKind::is_view`). Decided in Rust rather than as a range test on `kind` here: the
+    // range this replaced read `kind >= 2 && kind <= 4`, which already excluded nothing by
+    // accident only because Browser happened to be 5 — the next view kind added would have
+    // been drawn as a terminal with no way to see why.
+    is-view: bool,
     // Icon kind for the tool mark, allocated from `TOOL_ICON_BASE` and drawn by `Icon`.
     // 0 = no mark (a plain terminal, or a tool id this build does not know). Geometry, never
     // a font glyph — see the drawn-geometry rule at the top of this file.
@@ -191,7 +197,7 @@ export struct PaneItem {
     // the frame/halo, so branding never overrides the user's palette.
     tool-brand: color,
     // ---- Family B (non-PTY) views: the file browser / viewer / markdown preview ----
-    // The projected rows for a `kind >= 2` pane, already parsed and styled-by-role
+    // The projected rows for an `is-view` pane, already parsed and styled-by-role
     // Rust-side. Empty for every PTY-backed pane, which renders its surface instead.
     view-rows: [PaneViewRow],
     // The view's header line (the target's last two path components). "" = not a view.

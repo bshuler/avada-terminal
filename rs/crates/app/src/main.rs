@@ -35,6 +35,7 @@ mod filedrop;
 mod filetree;
 mod gitpanel;
 mod glow;
+mod highlight;
 mod history_scan;
 mod keybindings;
 mod leftpanel;

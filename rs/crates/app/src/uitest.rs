@@ -1961,6 +1961,7 @@ fn install_view_pane_at(
             visible: true,
             focused: true,
             kind,
+            is_view: view_flag(kind),
             view_title: title.into(),
             view_rows: std::rc::Rc::new(slint::VecModel::from(rows)).into(),
             view_sel_lo: sel.0,
@@ -1971,6 +1972,52 @@ fn install_view_pane_at(
         }]))
         .into(),
     );
+}
+
+/// The `is-view` flag `paneview::pane_item` sends beside `kind`. Two projections of one
+/// enum, so they can disagree; the projection is the thing under test, which is why the
+/// tests set both rather than letting the helper infer a view from the row roles.
+/// [`the_is_view_flag_matches_the_kind_it_claims`] is what keeps this list honest.
+fn view_flag(kind: i32) -> bool {
+    matches!(kind, 2 | 3 | 4 | 6)
+}
+
+/// `PaneItem::is-view` replaced a `kind >= 2 && kind <= 4` range test in the `.slint`, and
+/// that range was already wrong — `Browser` sat at 5 only by luck of ordering. This walks
+/// the real enum so the flag and the kind can never drift apart again.
+#[test]
+fn the_is_view_flag_matches_the_kind_it_claims() {
+    use hyperpanes_core::tools::PaneKind;
+
+    // An exhaustive match over the enum: a variant added without a line in `all` below
+    // fails to compile here rather than quietly skipping the assertion.
+    fn _covered(k: &PaneKind) -> i32 {
+        match k {
+            PaneKind::Terminal => 0,
+            PaneKind::Tool(_) => 1,
+            PaneKind::FileBrowser => 2,
+            PaneKind::FileViewer => 3,
+            PaneKind::Markdown => 4,
+            PaneKind::Browser => 5,
+            PaneKind::Code => 6,
+        }
+    }
+    let all = [
+        PaneKind::Terminal,
+        PaneKind::Tool("claude".into()),
+        PaneKind::FileBrowser,
+        PaneKind::FileViewer,
+        PaneKind::Markdown,
+        PaneKind::Browser,
+        PaneKind::Code,
+    ];
+    for k in all {
+        assert_eq!(
+            view_flag(k.ui_kind()),
+            k.is_view(),
+            "{k:?} draws as the wrong family"
+        );
+    }
 }
 
 /// A listing row: `role` 1 is a directory, 2 a file, and `activatable` is decided
@@ -2402,6 +2449,162 @@ fn an_unsized_pane_renders_unzoomed_rather_than_invisible() {
         assert!(
             row_height(&w, "README.md") > 0.0,
             "an out-of-range font size means unzoomed, not collapsed"
+        );
+    });
+}
+
+// ===== the source viewer (role 17) =====
+//
+// A `.rs`/`.ts`/`.py` file opens in `PaneKind::Code`, whose rows carry both the raw line
+// (`text`, for copy and the accessible label) and the same line as markdown markup
+// (`md`, built by `src/highlight.rs`, carrying a `<font color>` per token). The row must
+// stay exactly as tall as a plain viewer row — row N is line N — so the coloured text
+// cannot be measured by the row's height the way prose is. It is reached by element id
+// instead: `StyledText` is not auto-labelled the way `Text` is.
+
+/// A coloured source line. `markup` is what the highlighter emits; `text` stays verbatim.
+fn source(n: i32, text: &str, markup: &str) -> crate::PaneViewRow {
+    crate::PaneViewRow {
+        role: 17,
+        text: text.into(),
+        detail: n.to_string().into(),
+        md: slint::StyledText::from_markdown(markup)
+            .expect("the highlighter's markup has to parse, or the colour is silently lost"),
+        ..Default::default()
+    }
+}
+
+/// The `StyledText` a source row draws its line in. Empty on every other role.
+fn source_texts(w: &crate::AppWindow) -> Vec<ElementHandle> {
+    ElementHandle::find_by_element_id(w, "ViewRowView::src").collect()
+}
+
+/// Role 17 used to fall through `role > 16` into the plain-line branch, which draws
+/// `text` in a `Text` — the file would have opened with every colour thrown away and no
+/// error anywhere. The two branches are distinguishable because only one of them builds
+/// the named `StyledText`.
+#[test]
+fn a_source_row_draws_the_coloured_line_and_a_plain_one_does_not() {
+    ui(|| {
+        let w = window();
+        let row = || source(1, "fn main() {", "<font color=\"#89b4fa\">fn</font> main");
+
+        install_view_pane_at(&w, 6, "src/main.rs", vec![row()], (-1, -1), "", 14.0);
+        assert_eq!(
+            source_texts(&w).len(),
+            1,
+            "a source row has to draw its markup, not its plain text"
+        );
+
+        install_view_pane_at(&w, 3, "a.log", vec![line(1, "fn main() {")], (-1, -1), "", 14.0);
+        assert!(
+            source_texts(&w).is_empty(),
+            "a plain viewer line must not reach the source branch"
+        );
+    });
+}
+
+/// Both branches keep the line number in the gutter, and both announce the raw line —
+/// the colours are decoration, and a screen reader must not read markup at anyone.
+#[test]
+fn a_source_row_announces_the_line_it_shows() {
+    ui(|| {
+        let w = window();
+        install_view_pane_at(
+            &w,
+            6,
+            "src/main.rs",
+            vec![source(42, "let x = 1;", "<font color=\"#89b4fa\">let</font> x")],
+            (-1, -1),
+            "",
+            14.0,
+        );
+        only(&w, "Line 42: let x = 1;", AccessibleRole::ListItem);
+        only(&w, "42", AccessibleRole::Text);
+    });
+}
+
+/// The defect `d3808d0` shipped with. Every length in the plain-line branch was a bare
+/// literal while the row height was `19px * zoom`, so `Cmd+=` grew the spacing between
+/// lines and left the glyphs exactly where they were. The five zoom tests above all
+/// passed, because every one of them measured the *row*.
+///
+/// Measured here as geometry that can only move if the font moved: the gutter's own
+/// width, and the gap between the gutter and the text (its width plus the spacing).
+#[test]
+fn zoom_reaches_a_plain_line_and_not_just_its_row() {
+    ui(|| {
+        let w = window();
+        let rows = || vec![line(1, "fn main() {")];
+        let measure = |px: f32| {
+            install_view_pane_at(&w, 3, "a.log", rows(), (-1, -1), "", px);
+            let gutter = only(&w, "1", AccessibleRole::Text);
+            let body = only(&w, "fn main() {", AccessibleRole::Text);
+            (
+                gutter.size().width,
+                body.absolute_position().x - gutter.absolute_position().x,
+            )
+        };
+
+        let (gutter, gap) = measure(14.0);
+        let (gutter2, gap2) = measure(28.0);
+        assert!(gutter > 0.0 && gap > 0.0, "the row has to exist first");
+        assert!(
+            (gutter2 - gutter * 2.0).abs() < 0.5,
+            "the line-number gutter ignored the zoom: {gutter} → {gutter2}"
+        );
+        assert!(
+            (gap2 - gap * 2.0).abs() < 0.5,
+            "the gutter's width and the spacing after it ignored the zoom: {gap} → {gap2}"
+        );
+    });
+}
+
+/// The same chord on a source pane, where the coloured text *is* measurable: the
+/// `StyledText` takes its natural width (a spacer eats the rest of the row), so its
+/// width is the glyphs' width and nothing else.
+#[test]
+fn zoom_reaches_the_glyphs_of_a_source_line() {
+    ui(|| {
+        let w = window();
+        let rows = || vec![source(1, "fn main() {", "fn main")];
+        let width = |px: f32| {
+            install_view_pane_at(&w, 6, "src/main.rs", rows(), (-1, -1), "", px);
+            let found = source_texts(&w);
+            assert_eq!(found.len(), 1, "one source row, one coloured line");
+            found[0].size().width
+        };
+
+        let base = width(14.0);
+        let doubled = width(28.0);
+        assert!(base > 0.0, "an empty measurement proves nothing");
+        assert!(
+            (doubled - base * 2.0).abs() < 2.0,
+            "twice the font is twice the line: {base} → {doubled}"
+        );
+    });
+}
+
+/// Source has to be monospaced or every alignment in the file is a lie. `ui/viewpanes.slint`
+/// imports the bundled JetBrains Mono so `"JetBrains Mono"` resolves as a family name;
+/// if that import were dropped the family would silently fall back to the platform's
+/// proportional default, which is exactly the kind of quiet regression this asserts away:
+/// in a proportional face `iiiiiiiiii` is far narrower than `MMMMMMMMMM`.
+#[test]
+fn a_source_line_is_drawn_in_a_monospaced_face() {
+    ui(|| {
+        let w = window();
+        let width = |s: &str| {
+            install_view_pane_at(&w, 6, "src/main.rs", vec![source(1, s, s)], (-1, -1), "", 14.0);
+            source_texts(&w)[0].size().width
+        };
+        let narrow = width("iiiiiiiiii");
+        let wide = width("MMMMMMMMMM");
+        assert!(narrow > 0.0, "the line has to be drawn to be measured");
+        assert!(
+            (wide - narrow).abs() < 1.0,
+            "ten narrow glyphs and ten wide ones must occupy the same width: \
+             {narrow} vs {wide} — the monospace family did not resolve"
         );
     });
 }

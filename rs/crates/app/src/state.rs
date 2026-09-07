@@ -9545,7 +9545,7 @@ mod view_pane_tests {
             .expect("view pane added");
         // The projection is normally built by the render pass; a headless test builds it
         // itself so there are rows for a selection to name.
-        crate::viewpane::model_for(&uid, &PaneKind::FileViewer, Some(&f.display().to_string()));
+        crate::viewpane::model_for(&uid, &PaneKind::FileViewer, Some(&f.display().to_string()), 0);
 
         st.select_all_pane(0);
         assert_eq!(crate::viewpane::selected_range(&uid), Some((0, 2)));
@@ -9594,7 +9594,7 @@ mod view_pane_tests {
             .expect("re-hosted into the new tab");
         assert_eq!(p.cwd.as_deref(), Some("/repo/README.md"));
         assert!(
-            !crate::viewpane::rows_for(&p.kind, p.cwd.as_deref()).is_empty(),
+            !crate::viewpane::rows_for(&p.kind, p.cwd.as_deref(), 0).is_empty(),
             "a target-less view pane projects only the 'No path set' notice"
         );
     }
