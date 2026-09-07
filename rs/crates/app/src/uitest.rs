@@ -370,3 +370,389 @@ fn a_git_section_head_collapses_and_reopens_its_list() {
         );
     });
 }
+
+/// Elements by their Slint element id (`Component::name`), for the controls that are not
+/// icon buttons and so carry no tooltip — a tab chip is named by the title it draws, which
+/// is data, not an affordance.
+fn by_id(w: &crate::AppWindow, id: &str) -> Vec<ElementHandle> {
+    ElementHandle::find_by_element_id(w, id).collect()
+}
+
+// ===== the top bar =====
+//
+// Everything above the panes: the tab strip, the panel toggle, the window buttons. A tab
+// strip that does not switch tabs makes every pane behind the wrong tab unreachable, and
+// the window buttons are the only way to minimise or close a frameless window.
+
+/// Publish a tab strip. `active` is the selected index; `system` marks the app-owned tab,
+/// which shows no ×.
+fn install_tabs(w: &crate::AppWindow, titles: &[&str], active: usize, system: Option<usize>) {
+    let rows: Vec<crate::TabItem> = titles
+        .iter()
+        .enumerate()
+        .map(|(i, t)| crate::TabItem {
+            title: (*t).into(),
+            active: i == active,
+            system: Some(i) == system,
+        })
+        .collect();
+    w.set_tabs(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+}
+
+/// The ＋ is the only pointer route to a new tab that does not go through a menu.
+#[test]
+fn the_new_tab_button_is_clickable_and_reaches_rust() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one"], 0, None);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_new_tab(move || fired.set(true));
+        }
+
+        let found = by_label(&w, "New tab");
+        assert_eq!(found.len(), 1, "the strip must show exactly one ＋");
+        click(&w, &found[0]);
+        assert!(fired.get(), "the ＋ must reach new-tab");
+    });
+}
+
+/// Clicking a chip must select *that* chip. An off-by-one here is invisible in a
+/// screenshot and switches the user to the wrong workspace.
+#[test]
+fn clicking_a_tab_chip_selects_that_tab() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one", "two", "three"], 0, None);
+
+        let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let saw = saw.clone();
+            w.on_select_tab(move |i| saw.set(i));
+        }
+
+        let chips = by_id(&w, "TabChip::ta");
+        assert_eq!(chips.len(), 3, "one hit area per tab, in strip order");
+        click(&w, &chips[2]);
+        assert_eq!(saw.get(), 2, "clicking the third chip must select tab 2");
+    });
+}
+
+/// The × is per-chip, so it carries the same off-by-one risk as selection — with a worse
+/// outcome, since closing the wrong tab ends the wrong shells.
+#[test]
+fn the_tab_close_button_closes_that_tab() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one", "two", "three"], 1, None);
+
+        let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let saw = saw.clone();
+            w.on_close_tab(move |i| saw.set(i));
+        }
+
+        let found = by_label(&w, "Close this tab");
+        assert_eq!(found.len(), 3, "every ordinary tab offers a ×");
+        assert!(
+            found[1].computed_opacity() > 0.0,
+            "the selected tab's × must actually be painted, not merely present"
+        );
+        click(&w, &found[1]);
+        assert_eq!(saw.get(), 1, "the second tab's × must close tab 1");
+    });
+}
+
+/// The always-on "Hyperpane" tab cannot be closed, so it must not offer a ×: an affordance
+/// that does nothing is worse than no affordance.
+#[test]
+fn the_system_tab_offers_no_close_button() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["Hyperpane", "two", "three"], 1, Some(0));
+        assert_eq!(
+            by_label(&w, "Close this tab").len(),
+            2,
+            "the system tab must show no ×, the other two must"
+        );
+    });
+}
+
+/// The toggle is the only pointer route to the left panel — the surface the reported bug
+/// lived on. If it stopped reaching Rust, every test above it would still pass.
+#[test]
+fn the_left_panel_toggle_reaches_rust() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one"], 0, None);
+        w.global::<crate::LeftPanelAdapter>().set_open(false);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.global::<crate::LeftPanelAdapter>()
+                .on_toggle(move || fired.set(true));
+        }
+
+        let found = by_label(
+            &w,
+            "Show the left panel — workspace tree, library, sets, detached sessions",
+        );
+        assert_eq!(found.len(), 1, "a closed panel offers one Show button");
+        click(&w, &found[0]);
+        assert!(fired.get(), "the toggle must reach LeftPanelAdapter.toggle");
+    });
+}
+
+/// The hamburger is the discoverable route to everything that has no icon of its own —
+/// preferences, layouts, new pane. It opens the shared context menu at the app root.
+#[test]
+fn the_app_menu_button_reaches_rust() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one"], 0, None);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_open_app_menu(move |_x, _y| fired.set(true));
+        }
+
+        let found = by_label(
+            &w,
+            "Application menu — new tab or pane, layouts, preferences",
+        );
+        assert_eq!(found.len(), 1, "one hamburger");
+        click(&w, &found[0]);
+        assert!(fired.get(), "the hamburger must reach open-app-menu");
+    });
+}
+
+/// This is a frameless window: these three buttons ARE the title bar. Nothing else can
+/// minimise, restore or close it with a mouse.
+#[test]
+fn the_window_controls_reach_rust() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one"], 0, None);
+
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+        for (label, mark) in [
+            ("Minimize the window", "min"),
+            ("Maximize the window", "max"),
+            ("Close the window", "close"),
+        ] {
+            let seen = seen.clone();
+            match mark {
+                "min" => w.on_min_window(move || seen.borrow_mut().push("min")),
+                "max" => w.on_max_window(move || seen.borrow_mut().push("max")),
+                _ => w.on_close_window(move || seen.borrow_mut().push("close")),
+            }
+            let found = by_label(&w, label);
+            assert_eq!(found.len(), 1, "exactly one {label:?} button");
+            click(&w, &found[0]);
+        }
+        assert_eq!(
+            *seen.borrow(),
+            vec!["min", "max", "close"],
+            "each window button must reach its own callback, and only its own"
+        );
+    });
+}
+
+// ===== the pane header =====
+//
+// Four buttons in 26px, repeated per pane. They are the only pointer route to zoom,
+// fullscreen and closing a pane, and each carries the pane's index — so "it works" and
+// "it works on the pane you clicked" are different claims.
+
+/// Publish `n` panes tiled side by side, each big enough that its 26px header is not
+/// clipped away (the pane rect clips its children).
+fn install_panes(w: &crate::AppWindow, kinds: &[i32]) {
+    let rows: Vec<crate::PaneItem> = kinds
+        .iter()
+        .enumerate()
+        .map(|(i, kind)| crate::PaneItem {
+            title: format!("pane {i}").into(),
+            x: 8.0 + i as f32 * 420.0,
+            y: 40.0,
+            w: 400.0,
+            h: 300.0,
+            visible: true,
+            focused: i == 0,
+            kind: *kind,
+            ..Default::default()
+        })
+        .collect();
+    w.set_panes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+}
+
+/// Close carries the index, and closing the wrong pane ends the wrong shell.
+#[test]
+fn the_pane_close_button_reaches_rust_with_its_own_index() {
+    ui(|| {
+        let w = window();
+        install_panes(&w, &[0, 0]);
+
+        let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let saw = saw.clone();
+            w.on_pane_close(move |i| saw.set(i));
+        }
+
+        let found = by_label(&w, "Close this pane and end its shell");
+        assert_eq!(found.len(), 2, "one close button per pane");
+        click(&w, &found[1]);
+        assert_eq!(saw.get(), 1, "the second pane's × must close pane 1");
+    });
+}
+
+/// Zoom and fullscreen sit between the mic and the ×, in a header only 26px tall. A layout
+/// that squeezed them to nothing would still draw a plausible-looking header.
+#[test]
+fn the_pane_zoom_and_fullscreen_buttons_reach_rust() {
+    ui(|| {
+        let w = window();
+        install_panes(&w, &[0]);
+
+        let zoomed = std::rc::Rc::new(std::cell::Cell::new(-1));
+        let full = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let zoomed = zoomed.clone();
+            w.on_pane_zoom(move |i| zoomed.set(i));
+            let full = full.clone();
+            w.on_pane_fullscreen(move |i| full.set(i));
+        }
+
+        let z = by_label(&w, "Zoom this pane to fill the tab");
+        assert_eq!(z.len(), 1);
+        click(&w, &z[0]);
+        assert_eq!(zoomed.get(), 0, "zoom must reach pane-zoom(0)");
+
+        let f = by_label(&w, "Fullscreen this pane — the whole window, no chrome");
+        assert_eq!(f.len(), 1);
+        click(&w, &f[0]);
+        assert_eq!(full.get(), 0, "fullscreen must reach pane-fullscreen(0)");
+    });
+}
+
+/// A view pane (`kind >= 2`) is read-only: there is nowhere for a transcript to be typed,
+/// so the microphone must be absent rather than present and inert.
+#[test]
+fn only_a_terminal_pane_offers_the_microphone() {
+    ui(|| {
+        let w = window();
+        install_panes(&w, &[0, 2]);
+
+        let mic = "Dictate into this pane — record speech, then type the transcript";
+        assert_eq!(
+            by_label(&w, mic).len(),
+            1,
+            "the terminal pane offers a mic and the view pane does not"
+        );
+        // …and the view pane's close button must not promise to end a shell it has not got.
+        assert_eq!(by_label(&w, "Close this pane and end its shell").len(), 1);
+        assert_eq!(by_label(&w, "Close this pane").len(), 1);
+    });
+}
+
+/// The mic is a toggle drawn as one button, so "stop" is a different sentence on the same
+/// control — the state a listener needs and the only thing that says recording is live.
+#[test]
+fn a_recording_pane_offers_stop_rather_than_start() {
+    ui(|| {
+        let w = window();
+        w.set_panes(
+            std::rc::Rc::new(slint::VecModel::from(vec![crate::PaneItem {
+                title: "pane 0".into(),
+                x: 8.0,
+                y: 40.0,
+                w: 400.0,
+                h: 300.0,
+                visible: true,
+                focused: true,
+                recording: true,
+                ..Default::default()
+            }]))
+            .into(),
+        );
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let fired = fired.clone();
+            w.on_pane_mic(move |i| fired.set(i));
+        }
+
+        let stop = "Stop recording — transcribe and type it into this pane";
+        let found = by_label(&w, stop);
+        assert_eq!(found.len(), 1, "a recording pane must offer Stop");
+        click(&w, &found[0]);
+        assert_eq!(fired.get(), 0, "the mic must reach pane-mic(0)");
+    });
+}
+
+// ===== the right-hand rail =====
+
+/// The rail's ＋ is the primary way a pane gets made; the reported bug class is exactly a
+/// button that is drawn but wired to nothing.
+#[test]
+fn the_rail_new_pane_button_reaches_rust() {
+    ui(|| {
+        let w = window();
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_new_pane(move || fired.set(true));
+        }
+
+        let found = by_label(&w, "New pane · Shift-click for shell, command and split options");
+        assert_eq!(found.len(), 1, "the rail shows exactly one ＋");
+        click(&w, &found[0]);
+        assert!(fired.get(), "the rail ＋ must reach new-pane");
+    });
+}
+
+/// The projects flyout is the only route to a repo's worktrees, and it opens from a glyph
+/// with no text on it.
+#[test]
+fn the_projects_rail_button_toggles_projects() {
+    ui(|| {
+        let w = window();
+        w.set_sidebar_open(false);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_toggle_projects(move || fired.set(true));
+        }
+
+        let found = by_label(&w, "Projects — open a repo or manage its git worktrees");
+        assert_eq!(found.len(), 1, "a closed rail offers one Projects button");
+        click(&w, &found[0]);
+        assert!(fired.get(), "it must reach toggle-projects");
+    });
+}
+
+/// The ＋ on the PROJECTS header exists only inside the open flyout, so it is exactly the
+/// kind of control that can rot unnoticed behind a collapsed section.
+#[test]
+fn the_add_project_button_reaches_rust() {
+    ui(|| {
+        let w = window();
+        w.set_sidebar_open(true);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_open_add_project(move || fired.set(true));
+        }
+
+        let found = by_label(&w, "Add a project folder to this list");
+        assert_eq!(found.len(), 1, "the open flyout offers one ＋");
+        click(&w, &found[0]);
+        assert!(fired.get(), "it must reach open-add-project");
+    });
+}

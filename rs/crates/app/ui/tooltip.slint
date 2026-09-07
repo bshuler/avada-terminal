@@ -32,6 +32,18 @@ export global Tip {
 export component TipArea inherits TouchArea {
     in property <string> tip;
     in property <int> side: 0;
+    // The tooltip is already the sentence that says what pressing this does, so it is also
+    // the accessible name. Without it every icon-only control in this app — which is nearly
+    // all of them, since the glyphs are drawn Paths carrying no text — is an unnamed box to
+    // a screen reader, and equally unaddressable from a UI test.
+    //
+    // `button` for everything, including the left-panel mode strip, where `tab` would be
+    // the truer word: Slint requires `accessible-role` to be a *constant*, so a shared
+    // component cannot vary it per use site. The strip carries `accessible-checked`
+    // instead, which is the part a listener actually needs — which one is selected.
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-action-default => { root.clicked(); }
 
     changed has-hover => {
         if (root.has-hover && root.tip != "") {

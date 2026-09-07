@@ -286,15 +286,10 @@ component ModeButton inherits Rectangle {
         tip: root.mode-row.label;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+        // The strip is glyphs only; `TipArea` turns the tooltip into the accessible name.
+        // `checked` is what says which of the several views is the selected one.
+        accessible-checked: root.active;
     }
-
-    // The strip is glyphs only, so without this it is a row of unnamed boxes to a screen
-    // reader and to a test. `tab` rather than `button` because that is what the strip is:
-    // one of several views, exactly one of them selected.
-    accessible-role: tab;
-    accessible-label: root.mode-row.label;
-    accessible-checked: root.active;
-    accessible-action-default => { root.clicked(); }
 }
 
 // A floppy-disk "save" glyph (stroked body + shutter + label) for the LIBRARY header.
@@ -874,21 +869,17 @@ component SectionHead inherits Rectangle {
 
     // Declared FIRST so the action button's own TouchArea (declared later, on top) wins
     // its clicks; this one is also narrowed to leave the button's corner alone.
+    // The label alone does not say the head is pressable, and the chevron is a bare Path,
+    // so the tooltip carries the name. `expanded` is what makes the collapsed state legible
+    // rather than guessable.
     hta := TipArea {
         tip: root.tip;
         x: 0;
         width: root.has-action ? parent.width - 24px : parent.width;
         mouse-cursor: pointer;
         clicked => { root.toggled(); }
+        accessible-expanded: root.open;
     }
-
-    // The label alone does not say the head is pressable, and the chevron is a bare Path.
-    // The tooltip is already the sentence naming the action, so it is the label; `expanded`
-    // is what makes the collapsed state legible rather than guessable.
-    accessible-role: button;
-    accessible-label: root.tip;
-    accessible-expanded: root.open;
-    accessible-action-default => { root.toggled(); }
 
     HorizontalLayout {
         spacing: 4px;
@@ -930,9 +921,6 @@ component SectionHead inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => { root.acted(); }
                 }
-                accessible-role: button;
-                accessible-label: root.action-tip;
-                accessible-action-default => { root.acted(); }
             }
         }
     }
@@ -1019,18 +1007,13 @@ component HeadButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         ink: hb.has-hover ? Theme.text : Theme.subtext;
     }
+    // The glyph is a drawn Path with no text anywhere; `TipArea` is what names the button,
+    // to a screen reader and to a test alike.
     hb := TipArea {
         tip: root.tip;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
-
-    // The glyph is a drawn Path with no text anywhere, so without this the button is
-    // invisible to a screen reader and nameless to a test. The tooltip is already the
-    // sentence that says what pressing it does, so it is the label.
-    accessible-role: button;
-    accessible-label: root.tip;
-    accessible-action-default => { root.clicked(); }
 }
 
 // One row of the FILES tree. Indent is `depth`, so the flattening in Rust is the whole
