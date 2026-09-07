@@ -92,6 +92,20 @@ component PrefToggle inherits Rectangle {
                 width: 40px;
                 height: 22px;
                 border-radius: 11px;
+                // Eleven of these carry the whole of Preferences and not one had a name:
+                // the caption is a sibling Text, so the thing you press announced nothing
+                // and answered to no query. `switch` is the accurate role — a track with a
+                // knob, not a box with a tick.
+                //
+                // The name goes on the *track*, not on the row, because the track is what
+                // a click can reach: the row is 30px of mostly-caption with no TouchArea
+                // under it. Naming the row would put the a11y tree and the hit target in
+                // two different places, and a test that clicked the announced element
+                // would sail past a switch that no mouse can actually work.
+                accessible-role: switch;
+                accessible-label: root.label;
+                accessible-checked: root.on;
+                accessible-action-default => { root.toggled(!root.on); }
                 background: root.on ? Theme.accent : Theme.surface2;
                 animate background { duration: 120ms; }
                 Rectangle {
@@ -230,8 +244,20 @@ component AppearancePreview inherits Rectangle {
 component FontDropdown inherits Rectangle {
     in property <[PrefOption]> options;
     in property <string> current-label;
+    // The caption above the control ("Terminal font", "Color theme", "Default shell") is a
+    // sibling Text, so the dropdown itself was anonymous. Name is the caption; *value* is
+    // the current selection — announcing "Menlo" as the control's name would be telling a
+    // screen-reader user what it holds instead of what it is.
+    in property <string> label;
     callback selected(int);
     height: 32px;
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-value: root.current-label;
+    accessible-expandable: true;
+    accessible-expanded: popup.is-open;
+    accessible-action-expand => { popup.show(); }
+    accessible-action-default => { popup.show(); }
     border-radius: 7px;
     border-width: 1px;
     border-color: Theme.border;
@@ -276,6 +302,10 @@ component FontDropdown inherits Rectangle {
                     height: 28px;
                     border-radius: 5px;
                     background: opt.active ? Theme.surface2 : (ita.has-hover ? Theme.surface : transparent);
+                    accessible-role: list-item;
+                    accessible-label: opt.label;
+                    accessible-item-selected: opt.active;
+                    accessible-action-default => { root.selected(opt.id); popup.close(); }
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -822,6 +852,7 @@ export component OverlayLayer inherits Rectangle {
             // ---- terminal font family ----
             Text { text: "Terminal font"; color: Theme.faint; font-size: 11px; }
             FontDropdown {
+                label: "Terminal font";
                 options: root.families;
                 current-label: root.font-label;
                 selected(id) => { root.pref-action(0, id); }
@@ -858,6 +889,7 @@ export component OverlayLayer inherits Rectangle {
             // ---- terminal color theme ----
             Text { text: "Color theme"; color: Theme.faint; font-size: 11px; }
             FontDropdown {
+                label: "Color theme";
                 options: root.themes;
                 current-label: root.theme-label;
                 selected(id) => { root.pref-action(9, id); }
@@ -908,6 +940,7 @@ export component OverlayLayer inherits Rectangle {
             // ---- default shell (applies to new panes & restarts) ----
             Text { text: "Default shell"; color: Theme.faint; font-size: 11px; }
             FontDropdown {
+                label: "Default shell";
                 options: root.shells;
                 current-label: root.shell-label;
                 selected(id) => { root.pref-action(5, id); }
@@ -1081,6 +1114,7 @@ export component OverlayLayer inherits Rectangle {
                 spacing: 12px;
                 Text { text: "Glow effect"; color: Theme.faint; font-size: 11px; }
                 FontDropdown {
+                    label: "Glow effect";
                     options: root.idle-effects;
                     current-label: root.idle-effect-label;
                     selected(id) => { root.pref-action(11, id); }

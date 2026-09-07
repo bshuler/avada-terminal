@@ -286,7 +286,10 @@ export component NewGoalDialog inherits Rectangle {
                                 vertical-alignment: center;
                             }
                             rmta := TipArea {
-                                tip: "Remove this attachment";
+                                // Named after the file, not the action: with three images
+                                // attached, three buttons called "Remove this attachment"
+                                // tell a screen-reader user nothing about which is which.
+                                tip: "Remove attachment " + name;
                                 clicked => { root.remove-image(i); }
                             }
                         }
@@ -305,6 +308,15 @@ export component NewGoalDialog inherits Rectangle {
                     spacing: 12px;
                     for value[i] in root.chips : Rectangle {
                         horizontal-stretch: 1;
+                        // A single use site can afford the accurate role — `accessible-role`
+                        // must be constant, so only a *shared* component is forced to settle
+                        // for `button`. The chip is named by its category and reads out its
+                        // current value; `checked` is which one the keyboard is on.
+                        accessible-role: tab;
+                        accessible-label: root.chip-names[i];
+                        accessible-description: value;
+                        accessible-checked: root.field == i + 1;
+                        accessible-action-default => { root.field-click(i + 1); }
                         HorizontalLayout {
                             spacing: 5px;
                             Text {
@@ -331,6 +343,11 @@ export component NewGoalDialog inherits Rectangle {
                     spacing: 0px;
                     for row[j] in root.menu : Rectangle {
                         height: 26px;
+                        accessible-role: button;
+                        accessible-label: row.title;
+                        accessible-description: row.subtitle;
+                        accessible-checked: j == root.menu-sel;
+                        accessible-action-default => { root.menu-click(j); }
                         HorizontalLayout {
                             padding-left: 10px;
                             spacing: 8px;
@@ -369,6 +386,11 @@ export component NewGoalDialog inherits Rectangle {
                 spacing: 0px;
                 for row[j] in root.menu : Rectangle {
                     height: 26px;
+                    accessible-role: button;
+                    accessible-label: row.title;
+                    accessible-description: row.subtitle;
+                    accessible-checked: j == root.menu-sel;
+                    accessible-action-default => { root.menu-click(j); }
                     HorizontalLayout {
                         padding-left: 12px;
                         spacing: 8px;

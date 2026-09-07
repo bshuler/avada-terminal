@@ -1256,3 +1256,305 @@ fn the_preferences_done_button_reaches_rust() {
         assert!(fired.get(), "Done must reach pref-done");
     });
 }
+
+// ===========================================================================================
+// Block 3 — the New-Goal box and the controls *inside* each preferences panel.
+//
+// Blocks 1 and 2 reached the frames: the icon strip, the dialogs' verbs, the preferences
+// rail. What sat inside a panel was still anonymous — eleven `PrefToggle`s and four
+// `FontDropdown`s carried the whole of Preferences with no name between them, because the
+// caption is a sibling `Text` and the thing you press is a bare track or a bare rectangle.
+// Same for the New-Goal box's category chips and its option lists.
+// ===========================================================================================
+
+/// Put up the New-Goal box with its option chips revealed, the way Ctrl+O does.
+///
+/// `field` is which category the keyboard is on: 0 is the free-text goal, 1-4 are the chips.
+/// The chips must be non-empty or the row draws nothing — the box only shows categories it
+/// has values for.
+fn open_new_goal(w: &crate::AppWindow, field: i32) {
+    w.set_overlay_kind(5);
+    w.set_goal_options_open(true);
+    w.set_goal_field(field);
+    w.set_goal_chips(
+        std::rc::Rc::new(slint::VecModel::from(vec![
+            slint::SharedString::from("hyperpanes"),
+            slint::SharedString::from("opus"),
+            slint::SharedString::from("sonnet"),
+            slint::SharedString::from("haiku"),
+        ]))
+        .into(),
+    );
+}
+
+/// The New-Goal option list for whichever field is focused.
+fn install_goal_menu(w: &crate::AppWindow, rows: &[(&str, &str)], sel: i32) {
+    w.set_goal_menu(
+        std::rc::Rc::new(slint::VecModel::from(
+            rows.iter()
+                .map(|(title, subtitle)| crate::PaletteItem {
+                    title: (*title).into(),
+                    subtitle: (*subtitle).into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    w.set_goal_menu_sel(sel);
+    w.set_goal_menu_open(true);
+}
+
+/// A `PrefOption` list for a dropdown, with `active` on exactly one row.
+fn pref_options(rows: &[&str], active: usize) -> slint::ModelRc<crate::PrefOption> {
+    std::rc::Rc::new(slint::VecModel::from(
+        rows.iter()
+            .enumerate()
+            .map(|(i, label)| crate::PrefOption {
+                id: i as i32,
+                label: (*label).into(),
+                active: i == active,
+            })
+            .collect::<Vec<_>>(),
+    ))
+    .into()
+}
+
+/// The four category chips are a tab strip: each one names its category, reads out the value
+/// it currently holds, and says whether it is the one the keyboard is on. Before this the row
+/// was four unnamed rectangles, so neither a screen reader nor a test could tell "Orch" from
+/// "Spec" — the only difference between them is the text drawn inside.
+#[test]
+fn the_goal_chips_are_a_tab_strip() {
+    ui(|| {
+        let w = window();
+        open_new_goal(&w, 2);
+
+        for (name, value) in [
+            ("Project", "hyperpanes"),
+            ("Orch", "opus"),
+            ("Spec", "sonnet"),
+            ("Impl", "haiku"),
+        ] {
+            let chip = only(&w, name, AccessibleRole::Tab);
+            assert_eq!(
+                chip.accessible_description().as_deref(),
+                Some(value),
+                "the {name} chip must read out the value it holds"
+            );
+        }
+
+        assert_eq!(
+            only(&w, "Orch", AccessibleRole::Tab).accessible_checked(),
+            Some(true),
+            "goal-field 2 is the Orch chip"
+        );
+        assert_eq!(
+            only(&w, "Project", AccessibleRole::Tab).accessible_checked(),
+            Some(false),
+            "…and only that one"
+        );
+    });
+}
+
+/// Clicking a chip must ask Rust to focus *that* chip. `goal-field` is one-based over the
+/// chips because 0 is the free-text field, so an off-by-one here silently moves the keyboard
+/// to the neighbouring model.
+#[test]
+fn clicking_a_goal_chip_focuses_that_field() {
+    ui(|| {
+        let w = window();
+        open_new_goal(&w, 0);
+
+        let got = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let got = got.clone();
+            w.on_goal_field_click(move |i| got.set(i));
+        }
+
+        click(&w, &only(&w, "Spec", AccessibleRole::Tab));
+        assert_eq!(got.get(), 3, "Spec is chip index 2, i.e. goal-field 3");
+    });
+}
+
+/// The focused chip's option list. It must report the row that was clicked, and announce
+/// which row the keyboard is on — the same list is drawn for history, projects and model
+/// tiers, so an index that drifted would pick the wrong model with no visible symptom.
+#[test]
+fn a_goal_option_row_reports_its_own_index() {
+    ui(|| {
+        let w = window();
+        open_new_goal(&w, 2);
+        install_goal_menu(&w, &[("opus", "most capable"), ("sonnet", "faster")], 0);
+
+        assert_eq!(
+            only(&w, "sonnet", AccessibleRole::Button).accessible_checked(),
+            Some(false),
+            "row 1 is not the selected row"
+        );
+        assert_eq!(
+            only(&w, "opus", AccessibleRole::Button).accessible_checked(),
+            Some(true),
+            "row 0 is"
+        );
+
+        let got = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let got = got.clone();
+            w.on_goal_menu_click(move |i| got.set(i));
+        }
+        click(&w, &only(&w, "sonnet", AccessibleRole::Button));
+        assert_eq!(got.get(), 1, "the second row must report index 1");
+    });
+}
+
+/// With `goal-field == 0` the same `goal-menu` is the *history* dropdown, drawn by a
+/// different branch of the .slint. Two branches rendering one model is exactly where a fix
+/// applied to one and not the other hides, so both are exercised.
+#[test]
+fn the_goal_history_dropdown_is_the_other_branch_of_the_same_list() {
+    ui(|| {
+        let w = window();
+        open_new_goal(&w, 0);
+        install_goal_menu(&w, &[("fix the diff button", "2 days ago")], 0);
+
+        let got = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let got = got.clone();
+            w.on_goal_menu_click(move |i| got.set(i));
+        }
+        click(
+            &w,
+            &only(&w, "fix the diff button", AccessibleRole::Button),
+        );
+        assert_eq!(got.get(), 0, "the history row must reach goal-menu-click");
+    });
+}
+
+/// Each attachment's remove button is named after its file. With two images attached the
+/// old shared tooltip produced two controls called "Remove this attachment": ambiguous to
+/// read, ambiguous to click, and `assert_eq!(len, 1)` would have failed on both.
+#[test]
+fn each_attachment_names_the_file_it_removes() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(5);
+        w.set_goal_images(
+            std::rc::Rc::new(slint::VecModel::from(vec![
+                slint::SharedString::from("screenshot.png"),
+                slint::SharedString::from("diagram.png"),
+            ]))
+            .into(),
+        );
+
+        let got = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let got = got.clone();
+            w.on_goal_remove_image(move |i| got.set(i));
+        }
+
+        click(
+            &w,
+            &only(&w, "Remove attachment diagram.png", AccessibleRole::Button),
+        );
+        assert_eq!(got.get(), 1, "the second attachment's × must remove index 1");
+    });
+}
+
+/// The two switches that decide what a pane looks like. `pref-action` is a pair of ints —
+/// kind, then argument — so a switch wired to the wrong kind would silently toggle a
+/// different preference, which no per-function test can see.
+#[test]
+fn the_appearance_switches_reach_rust_with_their_own_kind() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(2);
+        w.set_pref_frame(true);
+        w.set_pref_dot(false);
+
+        let log: std::rc::Rc<std::cell::RefCell<Vec<(i32, i32)>>> = Default::default();
+        {
+            let log = log.clone();
+            w.on_pref_action(move |kind, arg| log.borrow_mut().push((kind, arg)));
+        }
+
+        let frame = only(&w, "Pane frame border", AccessibleRole::Switch);
+        assert_eq!(
+            frame.accessible_checked(),
+            Some(true),
+            "the frame switch must show the state it was given"
+        );
+        click(&w, &frame);
+
+        let dot = only(&w, "Pane color dot", AccessibleRole::Switch);
+        assert_eq!(dot.accessible_checked(), Some(false));
+        click(&w, &dot);
+
+        assert_eq!(
+            *log.borrow(),
+            vec![(2, 0), (3, 1)],
+            "frame is kind 2 and was on, so it asks for off; dot is kind 3 and was off"
+        );
+    });
+}
+
+/// Every switch in Preferences must be nameable — this is the one assertion that fails when
+/// a new one is added without a label, which is how the last eleven got here unnamed.
+#[test]
+fn every_preferences_panel_names_its_switches() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(2);
+        w.set_pref_clickable(true);
+        w.set_pref_idle_alert(true);
+
+        // The selected panel is dialog-local state — there is no global to poke — so the
+        // test walks the rail the way a user does, which is the more honest route anyway.
+        let panels: [(&str, &[&str]); 4] = [
+            ("Appearance", &["Pane frame border", "Pane color dot"]),
+            ("Terminal", &["Copy on select", "Clickable file paths"]),
+            ("AI features", &["Idle glow for AI panes"]),
+            ("General", &["Ask before closing a pane or a tab"]),
+        ];
+        for (panel, switches) in panels {
+            click(&w, &only(&w, panel, AccessibleRole::Tab));
+            for name in switches {
+                assert_eq!(
+                    by_role(&w, name, AccessibleRole::Switch).len(),
+                    1,
+                    "the {panel} panel must offer a switch named {name:?}"
+                );
+            }
+        }
+    });
+}
+
+/// A dropdown is named by its caption and *valued* by its selection. Naming it after the
+/// current font would announce what it holds instead of what it is — and would rename the
+/// control every time the user changed it, so no test could address it twice.
+#[test]
+fn a_preferences_dropdown_is_named_by_its_caption_not_its_value() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(2);
+        w.set_pref_families(pref_options(&["Menlo", "JetBrains Mono"], 0));
+        w.set_pref_font_label("Menlo".into());
+
+        let dd = only(&w, "Terminal font", AccessibleRole::Combobox);
+        assert_eq!(dd.accessible_value().as_deref(), Some("Menlo"));
+        assert_eq!(
+            dd.accessible_expanded(),
+            Some(false),
+            "it starts closed, and says so"
+        );
+
+        w.set_pref_font_label("JetBrains Mono".into());
+        assert_eq!(
+            only(&w, "Terminal font", AccessibleRole::Combobox)
+                .accessible_value()
+                .as_deref(),
+            Some("JetBrains Mono"),
+            "the value follows the selection; the name does not"
+        );
+    });
+}
