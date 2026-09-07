@@ -183,6 +183,75 @@ component CodeGlyph inherits Path {
             + "M 9.4 3.4 L 6.6 12.6";
 }
 
+// The structured-data tree's mark: one parent node with two children hanging off a
+// bracket — the shape every JSON/YAML inspector collapses and expands. Three small boxes
+// rather than braces, because `{}` at 14px is a smudge and the tree IS the feature.
+component DataGlyph inherits Path {
+    in property <color> ink;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: ink;
+    stroke-width: 1.3px;
+    fill: transparent;
+    commands: "M 2 2.5 H 7 V 6 H 2 Z"
+            + "M 4.5 6 V 12.5 H 8.5"
+            + "M 4.5 9 H 8.5"
+            + "M 8.5 7.5 H 13.5 V 10.5 H 8.5 Z"
+            + "M 8.5 11 H 13.5 V 14 H 8.5 Z";
+}
+
+// The table view's mark: a grid — an outer box, one header rule and one column rule. Two
+// rules, not a full lattice: at 14px three or more lines merge into a grey square.
+component TableGlyph inherits Path {
+    in property <color> ink;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: ink;
+    stroke-width: 1.3px;
+    fill: transparent;
+    commands: "M 2 3 H 14 V 13 H 2 Z"
+            + "M 2 6.5 H 14"
+            + "M 6.5 6.5 V 13"
+            + "M 2 9.75 H 14";
+}
+
+// The image view's mark: a frame with a mountain and a sun — the picture icon every file
+// manager draws, so it needs no learning.
+component ImageGlyph inherits Path {
+    in property <color> ink;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: ink;
+    stroke-width: 1.3px;
+    fill: transparent;
+    commands: "M 2 3 H 14 V 13 H 2 Z"
+            + "M 2 11.5 L 6 7.5 L 9 10.5 L 11 8.5 L 14 11.5"
+            + "M 10.5 5.8 A 0.9 0.9 0 1 1 10.49 5.8";
+}
+
+// A module surface's mark: a plug — a body, two prongs and a cord. Deliberately generic:
+// it says "something installed draws this", which is exactly the fact the panel knows.
+component ModuleGlyph inherits Path {
+    in property <color> ink;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: ink;
+    stroke-width: 1.3px;
+    fill: transparent;
+    commands: "M 5.5 1.5 V 5"
+            + "M 10.5 1.5 V 5"
+            + "M 3.5 5 H 12.5 V 8.5 A 4.5 4.5 0 0 1 3.5 8.5 Z"
+            + "M 8 13 V 15";
+}
+
 // The internal browser's mark: a globe — the sphere, its equator and one meridian. The
 // circle is one arc that comes back a hundredth of a unit short of its start, the same
 // trick SearchGlyph's lens uses: a path that closed exactly on its origin would have no
@@ -236,6 +305,10 @@ component PaneMark inherits Rectangle {
     if root.kind == -4 : MarkdownGlyph { ink: root.ink; }
     if root.kind == -5 : GlobeGlyph { ink: root.ink; }
     if root.kind == -6 : CodeGlyph { ink: root.ink; }
+    if root.kind == -7 : DataGlyph { ink: root.ink; }
+    if root.kind == -8 : TableGlyph { ink: root.ink; }
+    if root.kind == -9 : ImageGlyph { ink: root.ink; }
+    if root.kind == -10 : ModuleGlyph { ink: root.ink; }
     if root.kind > 0 : ToolIcon { kind: root.kind; ink: root.ink; }
 }
 

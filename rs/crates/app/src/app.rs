@@ -97,19 +97,21 @@ fn relaunch_command() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     #[cfg(target_os = "macos")]
     {
-        if let Some(bundle) = exe.ancestors().find(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("app"))
-        }) {
+        if let Some(bundle) = exe
+            .ancestors()
+            .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")))
+        {
             let installed = std::path::Path::new("/Applications/Hyperpanes.app");
-            let target = if bundle.starts_with("/Applications/.hyperpanes-attic")
-                && installed.is_dir()
-            {
-                installed
-            } else {
-                bundle
-            };
-            return Some(format!("sleep 2; exec /usr/bin/open '{}'", target.display()));
+            let target =
+                if bundle.starts_with("/Applications/.hyperpanes-attic") && installed.is_dir() {
+                    installed
+                } else {
+                    bundle
+                };
+            return Some(format!(
+                "sleep 2; exec /usr/bin/open '{}'",
+                target.display()
+            ));
         }
     }
     Some(format!("sleep 2; exec '{}'", exe.display()))
@@ -752,7 +754,12 @@ impl App {
                     for img in &g.images {
                         if set_clipboard_image_from_file(img) {
                             std::thread::sleep(Duration::from_millis(150));
-                            crate::state::pane_write(&mgr, &g.uid, "\u{16}", "pending-goal-image-ctrl-v"); // Ctrl+V
+                            crate::state::pane_write(
+                                &mgr,
+                                &g.uid,
+                                "\u{16}",
+                                "pending-goal-image-ctrl-v",
+                            ); // Ctrl+V
                             std::thread::sleep(Duration::from_millis(700));
                             crate::state::pane_write(&mgr, &g.uid, "\r", "pending-goal-enter");
                             std::thread::sleep(Duration::from_millis(400));
@@ -827,7 +834,9 @@ impl App {
             .unwrap_or_else(|| uid.clone());
         if let Some(s) = hyperpanes_core::claude_panes::read_pane_session(&pane_id) {
             match hyperpanes_core::resume_queue::enqueue(&s.session_id, prompt) {
-                Ok(()) => tracing::info!(uid = %uid, session = %s.session_id, "status loop: prompt queued for the Hyperpane agent"),
+                Ok(()) => {
+                    tracing::info!(uid = %uid, session = %s.session_id, "status loop: prompt queued for the Hyperpane agent")
+                }
                 Err(e) => tracing::warn!(uid = %uid, error = %e, "status loop: prompt not queued"),
             }
             return;
@@ -867,7 +876,11 @@ impl App {
             tracing::info!(window = w.id, "restart loop: no monitored agent panes");
             return;
         }
-        tracing::info!(window = w.id, count = targets.len(), "restart loop: restarting the monitored agents");
+        tracing::info!(
+            window = w.id,
+            count = targets.len(),
+            "restart loop: restarting the monitored agents"
+        );
         for (ti, pi, uid, tool) in targets {
             let pane_id = self
                 .control
@@ -876,10 +889,10 @@ impl App {
             let marker = (tool == "claude")
                 .then(|| hyperpanes_core::claude_panes::read_pane_session(&pane_id))
                 .flatten();
-            let rebound = w
-                .state
-                .borrow_mut()
-                .restart_monitored_pane(ti, pi, &self.mgr, marker.as_ref());
+            let rebound =
+                w.state
+                    .borrow_mut()
+                    .restart_monitored_pane(ti, pi, &self.mgr, marker.as_ref());
             match rebound {
                 Some((old, new)) => {
                     self.ai.send(crate::ai::AiMsg::Exit { uid: old.clone() });
@@ -888,7 +901,9 @@ impl App {
                     self.control.rebind_uid(&old, &new);
                     tracing::info!(tool = %tool, old = %old, new = %new, "restart loop: agent pane restarted");
                 }
-                None => tracing::warn!(tool = %tool, uid = %uid, "restart loop: pane not restarted"),
+                None => {
+                    tracing::warn!(tool = %tool, uid = %uid, "restart loop: pane not restarted")
+                }
             }
         }
     }
@@ -1106,10 +1121,12 @@ impl App {
         crate::perf::mark("spawn_window: seeding first pane");
         self.apply_seed(&mut state, seed);
         crate::perf::mark("spawn_window: first pane seeded (pty spawn queued)");
-        tracing::debug!("spawn_window[{id}]: seeded tabs={} active={} panes={:?}",
+        tracing::debug!(
+            "spawn_window[{id}]: seeded tabs={} active={} panes={:?}",
             state.tabs.len(),
             state.active,
-            state.tabs.iter().map(|t| t.panes.len()).collect::<Vec<_>>());
+            state.tabs.iter().map(|t| t.panes.len()).collect::<Vec<_>>()
+        );
 
         let aw = match AppWindow::new() {
             Ok(a) => a,
@@ -1733,8 +1750,12 @@ impl App {
                     if let Some((old, new)) = &out.rebound {
                         self.control.rebind_uid(old, new);
                     }
-                    tracing::debug!("exit[{}] uid={uid} code={code} alive={} rebound={:?}",
-                        w.id, out.alive, out.rebound);
+                    tracing::debug!(
+                        "exit[{}] uid={uid} code={code} alive={} rebound={:?}",
+                        w.id,
+                        out.alive,
+                        out.rebound
+                    );
                     if !out.alive {
                         w.closing.set(true);
                     }
@@ -2234,9 +2255,11 @@ impl App {
         self.wake();
         let si =
             hyperpanes_core::cli::routing::resolve_second_instance_windows(&msg.argv, &msg.cwd);
-        tracing::debug!("handoff resolved: windows={} routing={:?}",
+        tracing::debug!(
+            "handoff resolved: windows={} routing={:?}",
             si.windows.len(),
-            si.routing);
+            si.routing
+        );
         if si.windows.is_empty() {
             return; // a bare relaunch just focuses the primary (nothing to open)
         }
@@ -2289,7 +2312,8 @@ impl App {
         // the echo renders without the idle-cadence delay (#3). Commands go through
         // `run_command` (which also wakes); this covers raw typing routed straight to the pty.
         self.wake();
-        tracing::debug!("key raw text={:x?} ctrl={} alt={} shift={} meta={}",
+        tracing::debug!(
+            "key raw text={:x?} ctrl={} alt={} shift={} meta={}",
             msg.text.chars().map(|c| c as u32).collect::<Vec<_>>(),
             msg.control,
             msg.alt,
@@ -2297,14 +2321,17 @@ impl App {
             // `meta` is the physical Control key on macOS (see `crate::pty_ctrl`), so without
             // it this line cannot tell a Ctrl+C apart from a plain "c" on the one platform
             // where the two modifiers are swapped.
-            msg.meta);
+            msg.meta
+        );
         // Ctrl+Shift is fully app-reserved: run the mapped command and ALWAYS swallow.
         if msg.control && msg.shift {
             let cmd = crate::route_chord(&win.state.borrow().keymap, &msg);
-            tracing::debug!("key ctrl+shift text={:x?} alt={} -> {:?}",
+            tracing::debug!(
+                "key ctrl+shift text={:x?} alt={} -> {:?}",
                 msg.text.chars().map(|c| c as u32).collect::<Vec<_>>(),
                 msg.alt,
-                cmd);
+                cmd
+            );
             if let Some(cmd) = cmd {
                 self.run_command(win, cmd);
             }
@@ -2415,12 +2442,14 @@ impl App {
             let clears = keys::clears_selection(&msg.text, ctrl, msg.alt);
             let mut st = win.state.borrow_mut();
             if let Some(ps) = st.active_tab_mut().panes.get_mut(idx) {
-                tracing::debug!("key pane={} text={:x?} clears={} drag={} on_cursor_row={}",
+                tracing::debug!(
+                    "key pane={} text={:x?} clears={} drag={} on_cursor_row={}",
                     idx,
                     msg.text.chars().map(|c| c as u32).collect::<Vec<_>>(),
                     clears,
                     ps.pane.selection_is_drag(),
-                    ps.pane.selection_on_cursor_row());
+                    ps.pane.selection_on_cursor_row()
+                );
                 if clears && ps.pane.selection_is_drag() {
                     // Prompt-line TYPE-OVER: a printable key over a single-row selection on the
                     // cursor's own row first ERASES the selected text (clamp-safe arrow/
@@ -2491,8 +2520,7 @@ impl App {
             let Some((pos, down)) = drag::global_pointer().poll() else {
                 return;
             };
-            tracing::debug!("pane-grab win={} idx={} uid={}",
-                win.id, pane_idx, uid);
+            tracing::debug!("pane-grab win={} idx={} uid={}", win.id, pane_idx, uid);
             let mut ds = DragState::new(win.id, DragKind::Pane { uid }, (pos.x, pos.y));
             // The button is down right now (this fires on pointer-down); arm immediately so
             // a click faster than one tick still resolves its release.

@@ -23,14 +23,14 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::ssh::bridge::{self, Bridge, BridgeParams};
+use crate::ssh::config::{SshPaths, SshSettings};
+use crate::ssh::keys;
 use hyperpanes_core::session::attach::{self, ResizePolicy};
 use russh::keys::ssh_key::PublicKey;
 use russh::server::{self, Auth, Handle, Msg, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet, Pty};
 use tokio::net::TcpListener;
-use crate::ssh::bridge::{self, Bridge, BridgeParams};
-use crate::ssh::config::{SshPaths, SshSettings};
-use crate::ssh::keys;
 
 /// Everything a connection needs; shared immutably by every handler.
 #[derive(Debug, Clone)]
@@ -267,8 +267,12 @@ impl SshHandler {
             detach: self.opts.detach,
             peer: self.peer.clone(),
         };
-        tracing::debug!("ssh: {} ({}) opening a channel (query {:?}, list {list})",
-            self.peer, self.key_label, query);
+        tracing::debug!(
+            "ssh: {} ({}) opening a channel (query {:?}, list {list})",
+            self.peer,
+            self.key_label,
+            query
+        );
         state.bridge = Some(bridge::spawn(params, handle, channel));
         let _ = session.channel_success(channel);
     }
@@ -291,8 +295,10 @@ impl server::Handler for SshHandler {
     /// terminal on the machine.
     #[tracing::instrument(level = "debug", skip_all)]
     async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth, Self::Error> {
-        tracing::debug!("ssh: {} tried password auth as {user:?} — refused (publickey only)",
-            self.peer);
+        tracing::debug!(
+            "ssh: {} tried password auth as {user:?} — refused (publickey only)",
+            self.peer
+        );
         Ok(reject())
     }
 
@@ -349,15 +355,19 @@ impl server::Handler for SshHandler {
             Some(label) => {
                 self.user = user.to_string();
                 self.key_label = label.clone();
-                tracing::debug!("ssh: {} authenticated as {user:?} with {} ({label})",
+                tracing::debug!(
+                    "ssh: {} authenticated as {user:?} with {} ({label})",
                     self.peer,
-                    keys::fingerprint(public_key));
+                    keys::fingerprint(public_key)
+                );
                 Ok(Auth::Accept)
             }
             None => {
-                tracing::debug!("ssh: {} REJECTED — {} is not authorized",
+                tracing::debug!(
+                    "ssh: {} REJECTED — {} is not authorized",
                     self.peer,
-                    keys::fingerprint(public_key));
+                    keys::fingerprint(public_key)
+                );
                 Ok(reject())
             }
         }
@@ -445,8 +455,7 @@ impl server::Handler for SshHandler {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        tracing::debug!("ssh: {} asked for subsystem {name:?} — refused",
-            self.peer);
+        tracing::debug!("ssh: {} asked for subsystem {name:?} — refused", self.peer);
         session.channel_failure(channel)?;
         Ok(())
     }

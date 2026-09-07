@@ -717,8 +717,14 @@ mod tests {
         let line = "$ HP=/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes";
         let c = extract_path_candidates(line);
         assert_eq!(c.len(), 1);
-        assert_eq!(c[0].path, "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes");
-        assert_eq!(&line[c[0].start..c[0].end], "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes");
+        assert_eq!(
+            c[0].path,
+            "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes"
+        );
+        assert_eq!(
+            &line[c[0].start..c[0].end],
+            "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes"
+        );
 
         let c = extract_path_candidates("--out=~/tmp/report.txt");
         assert_eq!(c.len(), 1);

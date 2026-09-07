@@ -259,16 +259,20 @@ impl DaemonSessionManager {
                     // The pty-host being an older build is the whole point of `Tolerant`:
                     // it holds live ConPTYs that Windows gives us no way to move. A build
                     // difference there is expected, not stale.
-                    tracing::info!("pty-host build skew (client {}, host {daemon_build}); proceeding — \
+                    tracing::info!(
+                        "pty-host build skew (client {}, host {daemon_build}); proceeding — \
                          the host surface is version-stable by contract",
-                        build_id::build_id());
+                        build_id::build_id()
+                    );
                     return Self::from_stream_with_hello(stream, events, hello);
                 }
                 ProtoCheck::BuildMismatch { daemon_build } if forced_build_upgrade => {
-                    tracing::info!("daemon is build {daemon_build}, not ours ({}), after we already \
+                    tracing::info!(
+                        "daemon is build {daemon_build}, not ours ({}), after we already \
                          handed it over once; another client wants it that way — driving \
                          it rather than starting a takeover fight",
-                        build_id::build_id());
+                        build_id::build_id()
+                    );
                     return Self::from_stream_with_hello(stream, events, hello);
                 }
                 ProtoCheck::BuildMismatch { daemon_build } => {
@@ -277,9 +281,11 @@ impl DaemonSessionManager {
                     // means its backend to serve. Take the sessions over rather than kill
                     // anything — the descriptors move, the shells never notice, and that is
                     // what makes upgrading (or rolling back) either side free.
-                    tracing::info!("daemon build mismatch (client {}, daemon {daemon_build}); \
+                    tracing::info!(
+                        "daemon build mismatch (client {}, daemon {daemon_build}); \
                          attempting live takeover (attempt {attempt})",
-                        build_id::build_id());
+                        build_id::build_id()
+                    );
                     forced_build_upgrade = true;
                     drop(stream);
                     if !hand_over_stale_daemon(salt, &endpoint) {
@@ -288,8 +294,10 @@ impl DaemonSessionManager {
                         // salt and its terminals; we just work with the build that is there.
                         // (Unlike a proto mismatch, there is never a reason to tear this
                         // one down — an upgrade we merely prefer is not worth a session.)
-                        tracing::info!("build takeover failed against daemon {daemon_build}; driving it \
-                             as-is — the terminals matter more than the upgrade");
+                        tracing::info!(
+                            "build takeover failed against daemon {daemon_build}; driving it \
+                             as-is — the terminals matter more than the upgrade"
+                        );
                         let stream = connect_or_spawn(&endpoint, salt)?;
                         return Self::from_stream(stream, events);
                     }
@@ -299,8 +307,10 @@ impl DaemonSessionManager {
                     // live ConPTYs. Replacing it is exactly what we must NOT do — every
                     // terminal in it would die. The host surface is frozen (see
                     // `VersionPolicy::Tolerant`), so an older host is safe to drive.
-                    tracing::info!("pty-host proto skew (client {PROTO_VER}, host {daemon_ver}); \
-                         proceeding — the host surface is version-stable by contract");
+                    tracing::info!(
+                        "pty-host proto skew (client {PROTO_VER}, host {daemon_ver}); \
+                         proceeding — the host surface is version-stable by contract"
+                    );
                     return Self::from_stream_with_hello(stream, events, hello);
                 }
                 ProtoCheck::Mismatch { daemon_ver } => {
@@ -310,8 +320,10 @@ impl DaemonSessionManager {
                     // survives. Only if that does not produce a matching daemon (the incumbent
                     // predates takeover, or is wedged) do we fall back to the old tear-down,
                     // which kills every session.
-                    tracing::info!("daemon proto-version mismatch (client {PROTO_VER}, daemon {daemon_ver}); \
-                         attempting live takeover (attempt {attempt})");
+                    tracing::info!(
+                        "daemon proto-version mismatch (client {PROTO_VER}, daemon {daemon_ver}); \
+                         attempting live takeover (attempt {attempt})"
+                    );
                     drop(stream);
                     if !hand_over_stale_daemon(salt, &endpoint) {
                         // The takeover did not produce a matching daemon: the incumbent
@@ -327,16 +339,20 @@ impl DaemonSessionManager {
                                 tear_down_stale_daemon(&endpoint, salt);
                             }
                             StaleFallback::Drive => {
-                                tracing::info!("takeover failed against a daemon holding live sessions \
+                                tracing::info!(
+                                    "takeover failed against a daemon holding live sessions \
                                      (daemon {daemon_ver}, client {PROTO_VER}); driving it \
-                                     as-is — the terminals matter more than the upgrade");
+                                     as-is — the terminals matter more than the upgrade"
+                                );
                                 let stream = connect_or_spawn(&endpoint, salt)?;
                                 return Self::from_stream(stream, events);
                             }
                             StaleFallback::Refuse => {
-                                tracing::info!("daemon {daemon_ver} is below the drivable floor \
+                                tracing::info!(
+                                    "daemon {daemon_ver} is below the drivable floor \
                                      {MIN_DRIVABLE_DAEMON_VER} and holds live sessions; \
-                                     leaving it alone");
+                                     leaving it alone"
+                                );
                                 return Err(io::Error::new(
                                     io::ErrorKind::Unsupported,
                                     "a daemon too old to drive holds live sessions for this \
@@ -1793,7 +1809,10 @@ mod tests {
         // The replay reaches past everything mirrored so far.
         splice_replay(&mut sh, 5, "abcde");
         assert_eq!(sh.replay.get(), "abcde");
-        assert_eq!(sh.output_bytes, 5, "the cursor advances to the replay's end");
+        assert_eq!(
+            sh.output_bytes, 5,
+            "the cursor advances to the replay's end"
+        );
     }
 
     #[test]
@@ -1807,7 +1826,11 @@ mod tests {
     #[test]
     fn utf16_tail_never_splits_a_surrogate_pair() {
         assert_eq!(utf16_tail("ab😀", 2), "😀");
-        assert_eq!(utf16_tail("ab😀", 1), "", "one unit cannot hold a 2-unit char");
+        assert_eq!(
+            utf16_tail("ab😀", 1),
+            "",
+            "one unit cannot hold a 2-unit char"
+        );
         assert_eq!(utf16_tail("ab😀", 3), "b😀");
         assert_eq!(utf16_tail("abc", 10), "abc");
         assert_eq!(utf16_tail("abc", 0), "");
@@ -2770,7 +2793,10 @@ mod tests {
 
         let stream = std::os::unix::net::UnixStream::connect(&socket).expect("connect");
         let (check, hello) = probe_daemon_identity(&stream).expect("probe");
-        assert!(matches!(check, ProtoCheck::Match), "a same-version daemon must match");
+        assert!(
+            matches!(check, ProtoCheck::Match),
+            "a same-version daemon must match"
+        );
         assert!(hello.is_some(), "a real daemon answers the probe's Hello");
         // Build the manager on the SAME stream, reusing the probe's `Hello` answer — as
         // `new_with_policy` does after a Match — and drive it: proves no desync + blocking

@@ -1261,8 +1261,15 @@ mod restart_rebinds_the_control_alias_tests {
 
         match dispatch(&mut st, Command::RestartPane(0), &mgr) {
             Effect::Rebound(old, new) => {
-                assert_eq!(old, before, "old side of the swap is the pane's previous uid");
-                assert_eq!(new, st.active_tab().panes[0].uid, "new side is what the pane holds now");
+                assert_eq!(
+                    old, before,
+                    "old side of the swap is the pane's previous uid"
+                );
+                assert_eq!(
+                    new,
+                    st.active_tab().panes[0].uid,
+                    "new side is what the pane holds now"
+                );
                 assert_ne!(old, new);
             }
             other => panic!("expected a rebound effect, got {other:?}"),
@@ -1290,8 +1297,14 @@ mod restart_rebinds_the_control_alias_tests {
     fn restarting_a_pane_that_is_gone_is_a_no_op() {
         let mgr = mgr();
         let mut st = fresh();
-        assert!(matches!(dispatch(&mut st, Command::RestartPane(7), &mgr), Effect::None));
-        assert!(matches!(dispatch(&mut st, Command::RefreshEnvPane(7), &mgr), Effect::None));
+        assert!(matches!(
+            dispatch(&mut st, Command::RestartPane(7), &mgr),
+            Effect::None
+        ));
+        assert!(matches!(
+            dispatch(&mut st, Command::RefreshEnvPane(7), &mgr),
+            Effect::None
+        ));
     }
 }
 
@@ -1395,7 +1408,11 @@ mod git_commit_diff_tests {
         let cmd = st.ctx_command(row).expect("the row carries a command");
         dispatch(&mut st, cmd, &mgr);
 
-        let pane = st.active_tab().panes.last().expect("the pick opened a pane");
+        let pane = st
+            .active_tab()
+            .panes
+            .last()
+            .expect("the pick opened a pane");
         let spawned = pane.spawn_command.clone().unwrap_or_default();
         assert!(
             spawned.contains("show") && spawned.contains(&r.hash) && spawned.contains("sub/a.txt"),
@@ -1436,7 +1453,9 @@ mod git_commit_diff_tests {
             st.git.rows.iter().map(|w| &w.path).collect::<Vec<_>>()
         );
 
-        let abs = st.git_abs("sub/a.txt").expect("a row resolves against the repo root");
+        let abs = st
+            .git_abs("sub/a.txt")
+            .expect("a row resolves against the repo root");
         st.open_file_context(&abs, 10.0, 10.0);
         let menu = st.ctx.as_ref().expect("the row menu opened");
         let labels: Vec<String> = menu.entries.iter().map(|e| e.label.to_string()).collect();
@@ -1447,7 +1466,11 @@ mod git_commit_diff_tests {
 
         let cmd = st.ctx_command(row).expect("the row carries a command");
         dispatch(&mut st, cmd, &mgr);
-        let pane = st.active_tab().panes.last().expect("the pick opened a pane");
+        let pane = st
+            .active_tab()
+            .panes
+            .last()
+            .expect("the pick opened a pane");
         let spawned = pane.spawn_command.clone().unwrap_or_default();
         assert!(
             spawned.contains("diff") && spawned.contains("HEAD") && spawned.contains("sub/a.txt"),

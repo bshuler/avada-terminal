@@ -119,13 +119,13 @@ fn parse_porcelain(out: &str) -> Vec<WorktreeRow> {
 
     // Flush the record accumulated so far (if any) into a row.
     let flush = |path: &mut Option<String>,
-                     head: &mut Option<String>,
-                     branch: &mut Option<String>,
-                     detached: &mut bool,
-                     bare: &mut bool,
-                     locked: &mut bool,
-                     prunable: &mut bool,
-                     rows: &mut Vec<WorktreeRow>| {
+                 head: &mut Option<String>,
+                 branch: &mut Option<String>,
+                 detached: &mut bool,
+                 bare: &mut bool,
+                 locked: &mut bool,
+                 prunable: &mut bool,
+                 rows: &mut Vec<WorktreeRow>| {
         if let Some(p) = path.take() {
             let label = if *bare {
                 "(bare)".to_string()

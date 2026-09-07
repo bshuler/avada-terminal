@@ -382,14 +382,17 @@ impl Settings {
             ));
         }
         if !self.default_shell.is_empty()
-            && !SHELL_OPTIONS
-                .iter()
-                .any(|(_, t)| *t == self.default_shell)
+            && !SHELL_OPTIONS.iter().any(|(_, t)| *t == self.default_shell)
         {
             return Err(format!(
                 "defaultShell {:?} is not one of {} (\"\" = the system shell)",
                 self.default_shell,
-                join_tokens(SHELL_OPTIONS.iter().map(|(_, t)| *t).filter(|t| !t.is_empty()))
+                join_tokens(
+                    SHELL_OPTIONS
+                        .iter()
+                        .map(|(_, t)| *t)
+                        .filter(|t| !t.is_empty())
+                )
             ));
         }
         if !hyperpanes_core::logging::valid_level(&self.log_level) {
@@ -682,10 +685,14 @@ mod tests {
         assert!(err_of(|s| s.browser_mode = "chrome".into()).starts_with("browserMode"));
         assert!(err_of(|s| s.default_shell = "/bin/nope".into()).starts_with("defaultShell"));
         assert!(err_of(|s| s.log_level = "verbose".into()).starts_with("logLevel"));
-        assert!(err_of(|s| s.status_loop_minutes = MAX_STATUS_LOOP_MINUTES + 1)
-            .starts_with("statusLoopMinutes"));
-        assert!(err_of(|s| s.restart_loop_hours = MAX_RESTART_LOOP_HOURS + 1)
-            .starts_with("restartLoopHours"));
+        assert!(
+            err_of(|s| s.status_loop_minutes = MAX_STATUS_LOOP_MINUTES + 1)
+                .starts_with("statusLoopMinutes")
+        );
+        assert!(
+            err_of(|s| s.restart_loop_hours = MAX_RESTART_LOOP_HOURS + 1)
+                .starts_with("restartLoopHours")
+        );
         // The message carries the bad value, so a script author can see what was sent.
         assert!(err_of(|s| s.idle_effect = "strobe".into()).contains("\"strobe\""));
     }

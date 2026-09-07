@@ -78,7 +78,9 @@ impl DispatchError {
     #[tracing::instrument(level = "debug", ret)]
     fn message(&self) -> &str {
         match self {
-            DispatchError::BadRequest(m) | DispatchError::NotFound(m) | DispatchError::Internal(m) => m,
+            DispatchError::BadRequest(m)
+            | DispatchError::NotFound(m)
+            | DispatchError::Internal(m) => m,
         }
     }
     #[tracing::instrument(level = "debug", ret)]
@@ -145,7 +147,10 @@ pub fn handle_command(
 ) -> DispatchResult {
     let r = handle_command_inner(model, sessions, control_file, scope, cmd, speech);
     if r.status != 200 {
-        let ty = cmd.get("type").and_then(Value::as_str).unwrap_or("<missing>");
+        let ty = cmd
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing>");
         let reason = r.body["error"].as_str().unwrap_or("");
         if r.status >= 500 {
             tracing::error!(command = ty, status = r.status, reason, "command failed");
@@ -502,12 +507,9 @@ fn exec(
         }
         "setTalk" => {
             let pane_id = str_field(cmd, "paneId")?;
-            let enabled = cmd
-                .get("enabled")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| {
-                    DispatchError::BadRequest("missing boolean field: enabled".to_string())
-                })?;
+            let enabled = cmd.get("enabled").and_then(Value::as_bool).ok_or_else(|| {
+                DispatchError::BadRequest("missing boolean field: enabled".to_string())
+            })?;
             if !model.set_talk(&pane_id, enabled) {
                 return Err(DispatchError::no_such_pane(&pane_id));
             }

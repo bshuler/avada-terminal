@@ -581,7 +581,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "hyperpanes: session daemon unavailable ({e}); running ptys in-process \
                      — terminals will NOT survive restarting the app"
                 );
-                tracing::debug!("session-backend: daemon unavailable ({e}); falling back to in-process");
+                tracing::debug!(
+                    "session-backend: daemon unavailable ({e}); falling back to in-process"
+                );
                 SessionManager::new(etx)
             }
         }
@@ -693,7 +695,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let keep_alive = prefs::load().keep_alive;
     if mgr.is_daemon() {
         if keep_alive || GUI_RESTARTING.load(std::sync::atomic::Ordering::SeqCst) {
-            tracing::debug!("quit: keep-alive ON (or GUI restart) — leaving the daemon + sessions running");
+            tracing::debug!(
+                "quit: keep-alive ON (or GUI restart) — leaving the daemon + sessions running"
+            );
         } else {
             tracing::debug!("quit: keep-alive OFF — shutting the daemon down");
             mgr.shutdown_daemon();

@@ -20,12 +20,80 @@
 
 use super::registry::{self, ToolDef};
 
+pub use avada_module_sdk::ModuleId;
+pub use semver::Version;
+
 /// The `PaneSpec.meta` key this is stored under.
 pub const META_KIND_KEY: &str = "pane.kind";
 
 /// Views are namespaced so a tool id can never collide with one. Registry ids are
 /// lowercase-kebab (enforced by a test in `registry`), so they cannot contain `:`.
 const VIEW_PREFIX: &str = "view:";
+
+/// A module surface is namespaced the same way. Module ids are `owner/repo` (see
+/// [`ModuleId`]) and can never carry a `:` either, so the three namespaces — tool id,
+/// `view:*`, `module:*` — are disjoint by construction.
+const MODULE_PREFIX: &str = "module:";
+
+/// What a module pane points at: one surface of one installed module, optionally pinned
+/// to the version the workspace was saved with.
+///
+/// Serialised as `module:owner/repo#surface@1.2.0` (the `@version` is omitted when there
+/// is no pin). The host resolves the surface against the module's manifest at open time;
+/// a module that is not installed, or a surface it no longer contributes, draws the
+/// placeholder pane rather than a blank one — and the value still saves back verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModulePaneRef {
+    /// The module, `owner/repo`.
+    pub id: ModuleId,
+    /// The version the workspace was written by, when it recorded one. Advisory: the
+    /// host opens whatever is installed and shows the pin in the placeholder when they
+    /// differ.
+    pub pin: Option<Version>,
+    /// The `[[contributions]]` id of kind `pane` this pane shows.
+    pub surface: String,
+}
+
+impl ModulePaneRef {
+    /// Build a reference, validating the id the way the manifest does and the surface
+    /// the way a contribution id is validated (`[a-z0-9_-]+`, non-empty).
+    pub fn new(id: &str, surface: &str, pin: Option<Version>) -> Option<Self> {
+        let id = ModuleId::new(id).ok()?;
+        if !Self::is_surface(surface) {
+            return None;
+        }
+        Some(ModulePaneRef {
+            id,
+            pin,
+            surface: surface.to_string(),
+        })
+    }
+
+    fn is_surface(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    }
+
+    /// The `owner/repo#surface[@version]` body, without the `module:` prefix.
+    fn body(&self) -> String {
+        match &self.pin {
+            Some(v) => format!("{}#{}@{}", self.id, self.surface, v),
+            None => format!("{}#{}", self.id, self.surface),
+        }
+    }
+
+    /// Parse the body of a `module:` meta value. `None` for anything malformed: the
+    /// caller keeps the raw string so the workspace still round-trips.
+    fn parse(body: &str) -> Option<Self> {
+        let (id, rest) = body.split_once('#')?;
+        let (surface, pin) = match rest.split_once('@') {
+            Some((s, v)) => (s, Some(Version::parse(v).ok()?)),
+            None => (rest, None),
+        };
+        Self::new(id, surface, pin)
+    }
+}
 
 /// What a pane is.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -47,6 +115,17 @@ pub enum PaneKind {
     Code,
     /// Web content. Gated behind the internal-browser decision; see the plan's Q2.
     Browser,
+    /// A structured-data file (JSON, JSONL, YAML, TOML) drawn as a collapsible tree.
+    /// `docs/viewer-panes-plan.md` WP1.
+    Data,
+    /// A delimited file (CSV, TSV) drawn as a grid. `docs/viewer-panes-plan.md` WP2.
+    Table,
+    /// A raster or vector image, fitted to the pane. `docs/viewer-panes-plan.md` WP3.
+    Image,
+    /// A surface contributed by an installed module (`docs/modules-fanout-plan.md`).
+    /// Neither a PTY nor a projected row model: the module draws it over the host's
+    /// pane protocol, and until the host resolves it the pane shows a placeholder.
+    Module(ModulePaneRef),
 }
 
 impl PaneKind {
@@ -75,8 +154,23 @@ impl PaneKind {
     pub fn is_view(&self) -> bool {
         matches!(
             self,
-            PaneKind::FileBrowser | PaneKind::FileViewer | PaneKind::Markdown | PaneKind::Code
+            PaneKind::FileBrowser
+                | PaneKind::FileViewer
+                | PaneKind::Markdown
+                | PaneKind::Code
+                | PaneKind::Data
+                | PaneKind::Table
+                | PaneKind::Image
         )
+    }
+
+    /// The module reference when this is a module pane.
+    #[tracing::instrument(level = "debug", ret)]
+    pub fn module(&self) -> Option<&ModulePaneRef> {
+        match self {
+            PaneKind::Module(m) => Some(m),
+            _ => None,
+        }
     }
 
     /// The registry entry, when this is a tool we know about.
@@ -110,6 +204,10 @@ impl PaneKind {
             PaneKind::Markdown => Some(format!("{VIEW_PREFIX}markdown")),
             PaneKind::Code => Some(format!("{VIEW_PREFIX}code")),
             PaneKind::Browser => Some(format!("{VIEW_PREFIX}browser")),
+            PaneKind::Data => Some(format!("{VIEW_PREFIX}data")),
+            PaneKind::Table => Some(format!("{VIEW_PREFIX}table")),
+            PaneKind::Image => Some(format!("{VIEW_PREFIX}image")),
+            PaneKind::Module(m) => Some(format!("{MODULE_PREFIX}{}", m.body())),
         }
     }
 
@@ -129,8 +227,19 @@ impl PaneKind {
                 "markdown" => PaneKind::Markdown,
                 "code" => PaneKind::Code,
                 "browser" => PaneKind::Browser,
+                "data" => PaneKind::Data,
+                "table" => PaneKind::Table,
+                "image" => PaneKind::Image,
                 _ => PaneKind::Terminal,
             };
+        }
+        if let Some(body) = v.strip_prefix(MODULE_PREFIX) {
+            // A malformed module reference is kept as an opaque tool id: it renders as a
+            // plain terminal, exactly like an unknown tool, and saves back byte-identically.
+            // Degrading to `Terminal` here would drop the value on the next save.
+            if let Some(m) = ModulePaneRef::parse(body) {
+                return PaneKind::Module(m);
+            }
         }
         PaneKind::Tool(v.to_string())
     }
@@ -148,6 +257,10 @@ impl PaneKind {
             PaneKind::Markdown => 4,
             PaneKind::Browser => 5,
             PaneKind::Code => 6,
+            PaneKind::Data => 7,
+            PaneKind::Table => 8,
+            PaneKind::Image => 9,
+            PaneKind::Module(_) => 10,
         }
     }
 
@@ -171,6 +284,12 @@ impl PaneKind {
             PaneKind::Markdown => "Markdown".to_string(),
             PaneKind::Code => "Code".to_string(),
             PaneKind::Browser => "Browser".to_string(),
+            PaneKind::Data => "Data".to_string(),
+            PaneKind::Table => "Table".to_string(),
+            PaneKind::Image => "Image".to_string(),
+            // `repo · surface`: the owner is noise in a pane header, the surface is not —
+            // a module may contribute several.
+            PaneKind::Module(m) => format!("{} · {}", m.id.repo(), m.surface),
         }
     }
 
@@ -220,7 +339,20 @@ mod tests {
             PaneKind::Markdown,
             PaneKind::Code,
             PaneKind::Browser,
+            PaneKind::Data,
+            PaneKind::Table,
+            PaneKind::Image,
+            PaneKind::Module(module_ref(Some("1.2.0"))),
         ]
+    }
+
+    fn module_ref(pin: Option<&str>) -> ModulePaneRef {
+        ModulePaneRef::new(
+            "acme/avada-files",
+            "tree",
+            pin.map(|v| Version::parse(v).unwrap()),
+        )
+        .unwrap()
     }
 
     /// Not a test — a compile error. Adding a variant to [`PaneKind`] stops the build
@@ -236,7 +368,99 @@ mod tests {
             PaneKind::Markdown => 4,
             PaneKind::Code => 5,
             PaneKind::Browser => 6,
+            PaneKind::Data => 7,
+            PaneKind::Table => 8,
+            PaneKind::Image => 9,
+            PaneKind::Module(_) => 10,
         }
+    }
+
+    #[test]
+    fn a_module_pane_writes_the_module_prefix_and_reads_it_back() {
+        let pinned = PaneKind::Module(module_ref(Some("1.2.0")));
+        assert_eq!(
+            pinned.as_meta_value().as_deref(),
+            Some("module:acme/avada-files#tree@1.2.0")
+        );
+        let loose = PaneKind::Module(module_ref(None));
+        assert_eq!(
+            loose.as_meta_value().as_deref(),
+            Some("module:acme/avada-files#tree")
+        );
+        assert_eq!(
+            PaneKind::from_meta_value("module:acme/avada-files#tree"),
+            loose
+        );
+        assert_eq!(
+            PaneKind::from_meta_value("module:ACME/Avada-Files#tree@1.2.0"),
+            pinned,
+            "the id is case-folded like the manifest's"
+        );
+        assert!(!pinned.is_pty() && !pinned.is_view());
+        assert_eq!(pinned.module().unwrap().surface, "tree");
+        assert_eq!(pinned.ui_name(), "avada-files · tree");
+        assert_eq!(pinned.ui_kind(), 10);
+    }
+
+    #[test]
+    fn a_malformed_module_reference_is_kept_verbatim_not_dropped() {
+        // No `#surface`, a bad version, a bad id, a bad surface, nothing at all: none
+        // may become `Terminal`, because `Terminal` writes nothing and the value would
+        // vanish on the next save.
+        for raw in [
+            "module:acme/avada-files",
+            "module:acme/avada-files#tree@banana",
+            "module:not-an-id#tree",
+            "module:acme/avada-files#Tree Surface",
+            "module:acme/avada-files#",
+            "module:",
+        ] {
+            let k = PaneKind::from_meta_value(raw);
+            assert_eq!(k, PaneKind::Tool(raw.to_string()), "{raw}");
+            assert_eq!(
+                k.as_meta_value().as_deref(),
+                Some(raw),
+                "{raw} must round-trip"
+            );
+            assert!(k.module().is_none());
+            assert!(
+                k.tool().is_none(),
+                "{raw} must not resolve to a registry tool"
+            );
+        }
+    }
+
+    #[test]
+    fn the_three_namespaces_cannot_collide() {
+        // A tool id is lowercase-kebab; a view is `view:`-prefixed; a module is
+        // `module:`-prefixed and its id carries a `/`. Each parser refuses the others.
+        assert_eq!(
+            PaneKind::from_meta_value("view:acme/avada-files#tree"),
+            PaneKind::Terminal
+        );
+        assert_eq!(
+            PaneKind::from_meta_value("acme/avada-files#tree"),
+            PaneKind::Tool("acme/avada-files#tree".into())
+        );
+        for t in registry::TOOLS {
+            assert!(!t.id.contains(':') && !t.id.contains('/'), "{}", t.id);
+        }
+    }
+
+    #[test]
+    fn the_new_view_kinds_write_their_view_names() {
+        for (k, v) in [
+            (PaneKind::Data, "view:data"),
+            (PaneKind::Table, "view:table"),
+            (PaneKind::Image, "view:image"),
+        ] {
+            assert_eq!(k.as_meta_value().as_deref(), Some(v));
+            assert_eq!(PaneKind::from_meta_value(v), k);
+            assert!(k.is_view() && !k.is_pty());
+        }
+        assert_eq!(PaneKind::Data.ui_name(), "Data");
+        assert_eq!(PaneKind::Table.ui_name(), "Table");
+        assert_eq!(PaneKind::Image.ui_name(), "Image");
     }
 
     #[test]
@@ -306,9 +530,17 @@ mod tests {
             PaneKind::FileViewer,
             PaneKind::Markdown,
             PaneKind::Code,
+            PaneKind::Data,
+            PaneKind::Table,
+            PaneKind::Image,
         ] {
             assert!(k.is_view(), "{k:?} draws a projected row model");
         }
+        let m = PaneKind::Module(module_ref(None));
+        assert!(
+            !m.is_pty() && !m.is_view(),
+            "a module surface is a third family"
+        );
     }
 
     #[test]

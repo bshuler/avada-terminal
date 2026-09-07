@@ -382,12 +382,25 @@ mod tests {
 
     #[test]
     fn a_ref_name_is_two_or_more_plain_segments() {
-        for ok in ["origin/main", "feature/x-1.2", "upstream/release/2.4", "a_b/c.d"] {
+        for ok in [
+            "origin/main",
+            "feature/x-1.2",
+            "upstream/release/2.4",
+            "a_b/c.d",
+        ] {
             assert!(is_ref_name(ok), "{ok}");
         }
         for bad in [
-            "main", "and/or/", "/usr/bin", "./x", "origin/-x", "a..b/c", "x/y.lock",
-            "HEAD@{1}/x", "a/b:c", "a b/c",
+            "main",
+            "and/or/",
+            "/usr/bin",
+            "./x",
+            "origin/-x",
+            "a..b/c",
+            "x/y.lock",
+            "HEAD@{1}/x",
+            "a/b:c",
+            "a b/c",
         ] {
             assert!(!is_ref_name(bad), "{bad}");
         }
@@ -408,7 +421,10 @@ mod tests {
         if !made {
             return;
         }
-        assert_eq!(resolve_commit(dir.path(), "feature/x").as_deref(), Some(hash.as_str()));
+        assert_eq!(
+            resolve_commit(dir.path(), "feature/x").as_deref(),
+            Some(hash.as_str())
+        );
         assert_eq!(resolve_commit(dir.path(), "and/or"), None);
         // One word is a word, even when git would know it.
         assert_eq!(resolve_commit(dir.path(), "main"), None);

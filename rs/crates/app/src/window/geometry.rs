@@ -81,7 +81,9 @@ pub fn restore_geometry(id: usize, aw: &crate::AppWindow) {
     let saved = window_geometry::load();
     let clamped = saved.clamp_to_displays(&displays());
     if clamped != saved {
-        tracing::debug!("geometry: remembered frame {saved:?} is off the attached displays; using {clamped:?}");
+        tracing::debug!(
+            "geometry: remembered frame {saved:?} is off the attached displays; using {clamped:?}"
+        );
     }
     // Size FIRST: it is the call that pins the adapter's `has_explicit_size`, and until
     // that is set the first show would resize the window to the .slint preferred size and

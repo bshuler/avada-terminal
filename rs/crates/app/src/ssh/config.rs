@@ -299,7 +299,10 @@ mod tests {
         std::fs::write(&p, b"{ not json").unwrap();
         assert_eq!(SshSettings::load(&p).unwrap(), SshSettings::default());
         // The bad file was moved out of the way — not deleted, not left to be overwritten.
-        assert!(!p.exists(), "the malformed file must not stay under its live name");
+        assert!(
+            !p.exists(),
+            "the malformed file must not stay under its live name"
+        );
         let aside = bad_sibling(&p);
         assert_eq!(std::fs::read(&aside).unwrap(), b"{ not json");
         // And with it gone, the next load is a plain "absent" default too.

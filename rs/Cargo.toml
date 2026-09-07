@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "crates/module-sdk"]
 # The spikes are throwaway, heavy-dependency (Slint/wgpu) crates owned entirely by
 # their own fan-out track. Each declares its own `[workspace]` so it never drags
 # the lean core build, and is excluded here for clarity.

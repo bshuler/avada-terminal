@@ -1135,14 +1135,23 @@ mod tests {
         std::fs::write(tp.settings(), r#"{ "concurrency": 0, "settleMs": 700 }"#).unwrap();
         let (mut svc, _meta) = build(&tp, Fake::ok("x"));
         svc.init();
-        assert_eq!(svc.settings.concurrency, 1, "a persisted 0 must not stall the scheduler");
-        assert_eq!(svc.settings.settle_ms, 700, "the rest of the file still loads");
+        assert_eq!(
+            svc.settings.concurrency, 1,
+            "a persisted 0 must not stall the scheduler"
+        );
+        assert_eq!(
+            svc.settings.settle_ms, 700,
+            "the rest of the file still loads"
+        );
 
         svc.configure(AiSettingsPatch {
             concurrency: Some(0),
             ..Default::default()
         });
-        assert_eq!(svc.settings.concurrency, 1, "a live patch of 0 is clamped too");
+        assert_eq!(
+            svc.settings.concurrency, 1,
+            "a live patch of 0 is clamped too"
+        );
         // And the clamped value is what got persisted, atomically, in place of the bad one.
         let saved = std::fs::read_to_string(tp.settings()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&saved).unwrap();

@@ -101,7 +101,10 @@ mod tests {
     fn a_poisoned_lock_hands_back_the_value_instead_of_panicking() {
         let m = Mutex::new(String::from("half"));
         poison(&m);
-        assert!(m.is_poisoned(), "the fixture must actually poison the mutex");
+        assert!(
+            m.is_poisoned(),
+            "the fixture must actually poison the mutex"
+        );
         assert!(m.lock().is_err(), "and plain lock() must still be an error");
 
         // The whole point: this line is what `.unwrap()` would have panicked on.

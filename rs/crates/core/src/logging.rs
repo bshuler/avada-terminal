@@ -91,8 +91,7 @@ pub fn log_path(role: &str) -> PathBuf {
 #[tracing::instrument(level = "debug", ret)]
 pub fn init(role: &str, default_level: &str) {
     let directives = resolve_directives(default_level);
-    let filter = EnvFilter::try_new(&directives)
-        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LEVEL));
+    let filter = EnvFilter::try_new(&directives).unwrap_or_else(|_| EnvFilter::new(DEFAULT_LEVEL));
     let file_writer = RotatingWriter::new(log_path(role), MAX_LOG_BYTES, KEEP_ROTATED);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
@@ -164,7 +163,11 @@ impl RotatingWriter {
     /// The live file's path.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn path(&self) -> PathBuf {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).path.clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .path
+            .clone()
     }
 }
 
@@ -271,11 +274,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "hp-logging-{}-{}",
-            std::process::id(),
-            name
-        ));
+        let dir = std::env::temp_dir().join(format!("hp-logging-{}-{}", std::process::id(), name));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join("hyperpanes-test.log")
     }
@@ -330,7 +329,8 @@ mod tests {
         let path = tmp("big");
         let w = RotatingWriter::new(path.clone(), 10, 1);
         let mut h = w.make_writer();
-        h.write_all(b"this line is longer than ten bytes\n").unwrap();
+        h.write_all(b"this line is longer than ten bytes\n")
+            .unwrap();
         h.write_all(b"second\n").unwrap();
         let live = std::fs::read_to_string(&path).unwrap();
         assert_eq!(live, "second\n");
@@ -348,7 +348,12 @@ mod tests {
         let mut h = w.make_writer();
         h.write_all(b"0123456789\n").unwrap(); // 95 + 11 > 100 → rolls first
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "0123456789\n");
-        assert_eq!(std::fs::metadata(format!("{}.1", path.display())).unwrap().len(), 95);
+        assert_eq!(
+            std::fs::metadata(format!("{}.1", path.display()))
+                .unwrap()
+                .len(),
+            95
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

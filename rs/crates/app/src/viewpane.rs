@@ -250,8 +250,19 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<Vi
         PaneKind::FileViewer => read_lines(&path),
         PaneKind::Markdown => markdown_blocks(&path),
         PaneKind::Code => highlight_lines(&path, palette),
-        // Family A, or a kind this build does not know: nothing to project.
-        _ => Vec::new(),
+        // Reserved in Wave 0 of docs/modules-fanout-plan.md; each gets its own projection
+        // in the viewer-panes track (WP1 tree, WP2 grid, WP3 bitmap). Until then the file
+        // is shown as text, which is honest for the first two and a NOTICE for the third.
+        PaneKind::Data | PaneKind::Table => read_lines(&path),
+        PaneKind::Image => vec![ViewRow::inert(
+            role::NOTICE,
+            "Image preview is not available in this build",
+        )],
+        // Family A, a module surface (drawn by the module, not projected), or a kind this
+        // build does not know: nothing to project.
+        PaneKind::Terminal | PaneKind::Tool(_) | PaneKind::Browser | PaneKind::Module(_) => {
+            Vec::new()
+        }
     }
 }
 
@@ -2109,7 +2120,10 @@ mod tests {
         // extension at all — guessing a language from a shebang is a bigger promise than
         // this pane makes.
         assert_eq!(kind_for_file(Path::new("/a/LICENSE")), PaneKind::FileViewer);
-        assert_eq!(kind_for_file(Path::new("/a/notes.txt")), PaneKind::FileViewer);
+        assert_eq!(
+            kind_for_file(Path::new("/a/notes.txt")),
+            PaneKind::FileViewer
+        );
     }
 
     /// The source viewer end to end, from a real file on disk to the rows the pane draws.
@@ -2143,7 +2157,10 @@ mod tests {
         // palette has to produce different ink. `Fingerprint` carries it for this reason.
         let latte = rows_for(&PaneKind::Code, file.to_str(), 3);
         assert_eq!(latte.len(), rows.len());
-        assert_eq!(latte[0].text, rows[0].text, "the source itself must not move");
+        assert_eq!(
+            latte[0].text, rows[0].text,
+            "the source itself must not move"
+        );
         assert_ne!(
             latte[0].markup, rows[0].markup,
             "a palette switch has to re-ink the source"

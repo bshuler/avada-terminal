@@ -495,32 +495,42 @@ impl Keymap {
         }
     }
 
-    /// Load the persisted overrides (an empty map on a missing/corrupt file). Unknown ids are
-    /// dropped and un-parseable chords fall back to the default, so an older blob never breaks
-    /// the editor. A `null` value is an explicit unbind.
+    /// Load the persisted overrides (an empty map on a missing/corrupt file). Un-parseable
+    /// chords fall back to the default, so an older blob never breaks the editor. A `null`
+    /// value is an explicit unbind. Ids that no binding in this build declares are **kept**,
+    /// not dropped: a module's commands (plan track A4) register bindings only while the
+    /// module is installed, and an override the user set for one must survive a disable /
+    /// re-enable cycle and a run of the app before that module was loaded. See
+    /// [`Keymap::from_json`].
     #[tracing::instrument(level = "debug")]
     pub fn load() -> Self {
-        let mut overrides = BTreeMap::new();
         let path = paths::user_data_dir().join("native-keybindings.json");
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            if let Ok(map) = serde_json::from_str::<BTreeMap<String, Option<ChordRepr>>>(&raw) {
-                let valid: std::collections::HashSet<&str> =
-                    bindings().iter().map(|b| b.id).collect();
-                for (id, repr) in map {
-                    if !valid.contains(id.as_str()) {
-                        continue;
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => Self::from_json(&raw),
+            Err(_) => Keymap {
+                overrides: BTreeMap::new(),
+            },
+        }
+    }
+
+    /// Parse a persisted blob. Corrupt JSON is an empty map; an entry with an un-parseable
+    /// chord is skipped (it would fall back to the default anyway); everything else is kept
+    /// verbatim, unknown ids included.
+    #[tracing::instrument(level = "debug", skip(raw))]
+    pub fn from_json(raw: &str) -> Self {
+        let mut overrides = BTreeMap::new();
+        if let Ok(map) = serde_json::from_str::<BTreeMap<String, Option<ChordRepr>>>(raw) {
+            for (id, repr) in map {
+                match repr {
+                    // a parseable chord rebinds; an un-parseable one falls back to default
+                    Some(r) => {
+                        if let Some(chord) = r.to_chord() {
+                            overrides.insert(id, Some(chord));
+                        }
                     }
-                    match repr {
-                        // a parseable chord rebinds; an un-parseable one falls back to default
-                        Some(r) => {
-                            if let Some(chord) = r.to_chord() {
-                                overrides.insert(id, Some(chord));
-                            }
-                        }
-                        // explicit unbind
-                        None => {
-                            overrides.insert(id, None);
-                        }
+                    // explicit unbind
+                    None => {
+                        overrides.insert(id, None);
                     }
                 }
             }
@@ -661,7 +671,8 @@ impl Keymap {
     /// Whether any binding is overridden (drives the "Reset all" affordance).
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn any_overridden(&self) -> bool {
-        !self.overrides.is_empty()
+        let known: std::collections::HashSet<&str> = bindings().iter().map(|b| b.id).collect();
+        self.overrides.keys().any(|id| known.contains(id.as_str()))
     }
 
     /// The bindings grouped by [`CATEGORY_ORDER`] (category order, then table order) — the
@@ -696,6 +707,49 @@ mod tests {
         Keymap {
             overrides: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn from_json_keeps_unknown_ids_and_drops_only_unparseable_chords() {
+        let raw = r#"{
+            "palette.toggle": {"ctrl": true, "key": "p"},
+            "module:acme/files:reveal": {"ctrl": true, "shift": true, "key": "r"},
+            "module:acme/files:hide": null,
+            "pane.paste": {"key": "NotAKey!!"}
+        }"#;
+        let km = Keymap::from_json(raw);
+        assert!(km.is_overridden("palette.toggle"));
+        assert!(
+            km.is_overridden("module:acme/files:reveal"),
+            "an id no binding declares in this build survives the round trip"
+        );
+        assert!(
+            km.is_overridden("module:acme/files:hide"),
+            "an unbind survives too"
+        );
+        assert!(
+            !km.is_overridden("pane.paste"),
+            "an un-parseable chord falls back to the default"
+        );
+        // Rows only list declared bindings, so the phantom ids never reach the editor.
+        assert!(km.rows().iter().all(|r| !r.id.starts_with("module:")));
+    }
+
+    #[test]
+    fn any_overridden_ignores_ids_this_build_does_not_declare() {
+        let km = Keymap::from_json(r#"{"module:acme/files:reveal": {"ctrl": true, "key": "r"}}"#);
+        assert!(
+            !km.any_overridden(),
+            "no visible override, so no Reset-all affordance"
+        );
+        let km = Keymap::from_json(r#"{"palette.toggle": null}"#);
+        assert!(km.any_overridden());
+    }
+
+    #[test]
+    fn from_json_on_garbage_is_empty() {
+        assert!(Keymap::from_json("not json").overrides.is_empty());
+        assert!(Keymap::from_json("").overrides.is_empty());
     }
 
     #[test]

@@ -526,7 +526,9 @@ fn write_goals_mcp_config() -> Option<std::path::PathBuf> {
     let path = hyperpanes_core::persistence::paths::state_dir().join("goals-mcp.json");
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            tracing::warn!("failed to create state dir for goals-mcp.json: {e}; spawning without --mcp-config");
+            tracing::warn!(
+                "failed to create state dir for goals-mcp.json: {e}; spawning without --mcp-config"
+            );
             return None;
         }
     }
@@ -572,9 +574,7 @@ fn write_goals_settings_config() -> Option<std::path::PathBuf> {
     match std::fs::write(&path, json) {
         Ok(()) => Some(path),
         Err(e) => {
-            tracing::warn!(
-                "failed to write goals-settings.json: {e}; spawning without --settings"
-            );
+            tracing::warn!("failed to write goals-settings.json: {e}; spawning without --settings");
             None
         }
     }
@@ -1104,7 +1104,9 @@ fn pane_write_failures() -> &'static std::sync::Mutex<BTreeSet<String>> {
 /// `mod pane_write_tests` below.
 #[tracing::instrument(level = "debug", ret)]
 fn note_pane_write(uid: &str, ok: bool) -> bool {
-    let mut failed = pane_write_failures().lock().expect("pane_write_failures lock");
+    let mut failed = pane_write_failures()
+        .lock()
+        .expect("pane_write_failures lock");
     if ok {
         // `remove` reports whether the uid was present, i.e. whether this write is the
         // one that ends an outage. A success on a uid with no prior failure is the
@@ -1150,7 +1152,10 @@ pub fn pane_write(mgr: &SessionManager, uid: &str, data: &str, op: &str) {
     let ok = mgr.write(uid, data).is_ok();
     if note_pane_write(uid, ok) && !ok {
         tracing::warn!(uid = %uid, op, "pane write failed; backend is gone, further writes to this pane will be suppressed until it recovers or is closed");
-        pane_write_failed_uids().lock().expect("pane_write_failed_uids lock").push(uid.to_string());
+        pane_write_failed_uids()
+            .lock()
+            .expect("pane_write_failed_uids lock")
+            .push(uid.to_string());
     }
 }
 
@@ -1208,7 +1213,11 @@ mod pane_write_tests {
             .filter(|q| **q == uid)
             .cloned()
             .collect();
-        assert_eq!(queued.len(), 0, "an already-failed uid must not be re-queued");
+        assert_eq!(
+            queued.len(),
+            0,
+            "an already-failed uid must not be re-queued"
+        );
     }
 
     #[test]
@@ -2218,7 +2227,11 @@ impl State {
             // The resolved shell program → its short header badge (computed once here).
             // Only a pty pane gets one: a file browser never spawned a shell, and a header
             // reading "notes.md  zsh" claims a process that does not exist.
-            shell_label: if kind.is_pty() { shell_label(&shell_path) } else { String::new() },
+            shell_label: if kind.is_pty() {
+                shell_label(&shell_path)
+            } else {
+                String::new()
+            },
             // Remember the spawn spec so the relaunch snapshot can re-run this program. A New
             // Pane dialog carries no argv, so `spawn_args` stays None. A view pane never ran a
             // program, so it records none — the snapshot restores it from its `kind` alone.
@@ -3133,8 +3146,11 @@ impl State {
             DividerKind::Main => {
                 let before = t.main_fraction;
                 t.main_fraction = clamp_fraction(t.main_fraction + delta);
-                tracing::debug!("    resize main: {before:.3} + {delta:.4} -> {:.3} (layout={:?})",
-                    t.main_fraction, t.layout);
+                tracing::debug!(
+                    "    resize main: {before:.3} + {delta:.4} -> {:.3} (layout={:?})",
+                    t.main_fraction,
+                    t.layout
+                );
             }
             DividerKind::Size => {
                 if index >= 0 {
@@ -4601,7 +4617,10 @@ impl State {
         // `log_level` is a free string to serde; the logger only understands its own set,
         // and a typo stored here would silently fall back at the next launch.
         if !hyperpanes_core::logging::valid_level(&next.log_level) {
-            return Err(format!("bad settings patch: unknown log level {:?}", next.log_level));
+            return Err(format!(
+                "bad settings patch: unknown log level {:?}",
+                next.log_level
+            ));
         }
 
         // The panel's widgets can only produce in-range values; a JSON caller can ask for a
@@ -4614,7 +4633,8 @@ impl State {
         // Everything the clamps above don't cover (palette indices, token-valued strings, the
         // loop cadences and prompt): one rule set, shared with the save path, so a value the
         // panel would refuse cannot arrive through the control plane instead.
-        next.validate().map_err(|e| format!("bad settings patch: {e}"))?;
+        next.validate()
+            .map_err(|e| format!("bad settings patch: {e}"))?;
 
         // Then the same live effects `apply_setting` runs, driven off what actually changed —
         // each is expensive enough (a font reload, a repaint of every open pane) to be worth
@@ -5334,10 +5354,7 @@ impl State {
             return;
         };
         let Some(file) = read_workspace(&entry.path) else {
-            tracing::warn!(
-                "{} is not a valid workspace",
-                entry.path.display()
-            );
+            tracing::warn!("{} is not a valid workspace", entry.path.display());
             // The row is stale (deleted or corrupted since the scan) — rescan so it goes.
             crate::leftpanel::refresh_library();
             self.dirty = true;
@@ -6101,7 +6118,10 @@ impl State {
                 let minutes = (row - crate::contextmenu::CTX_CUSTOM_REMIND_BASE) as u32;
                 return (c.kind == crate::contextmenu::CtxKind::Pane
                     && (1..=1440).contains(&minutes))
-                .then_some(Command::RemindPane(c.target, ReminderOffset::Custom(minutes)));
+                .then_some(Command::RemindPane(
+                    c.target,
+                    ReminderOffset::Custom(minutes),
+                ));
             }
             c.commands.get(row).cloned().flatten()
         })
@@ -6491,7 +6511,12 @@ impl State {
             self.dirty = true;
         }
         if let Some((uid, bytes)) = caret {
-            pane_write(mgr, &uid, &String::from_utf8_lossy(&bytes), "click-move-cursor");
+            pane_write(
+                mgr,
+                &uid,
+                &String::from_utf8_lossy(&bytes),
+                "click-move-cursor",
+            );
         }
     }
 
@@ -6569,7 +6594,12 @@ impl State {
             let PaneKind::Tool(tool) = &p.kind else {
                 return None;
             };
-            (tool.clone(), p.cwd.clone(), p.env.clone(), p.tool_session.clone())
+            (
+                tool.clone(),
+                p.cwd.clone(),
+                p.env.clone(),
+                p.tool_session.clone(),
+            )
         };
         let bin = hyperpanes_core::tools::by_id(&tool)
             .map(|t| t.bin)
@@ -6605,7 +6635,10 @@ impl State {
             // conversation it is being put back into so a later relaunch resumes it too.
             if let (Some(id), Some(cwd)) = (&session, &resume_cwd) {
                 if let Some(m) = ToolSessionMark::new(id, cwd) {
-                    p.tool_session = Some(ToolSessionMark { tool: mark.and_then(|m| m.tool), ..m });
+                    p.tool_session = Some(ToolSessionMark {
+                        tool: mark.and_then(|m| m.tool),
+                        ..m
+                    });
                 }
             }
         }
@@ -6624,7 +6657,11 @@ impl State {
         idx: usize,
         mgr: &SessionManager,
     ) -> Option<(String, String)> {
-        let (cwd, env) = self.active_tab().panes.get(idx).map(|p| (p.cwd.clone(), p.env.clone()))?;
+        let (cwd, env) = self
+            .active_tab()
+            .panes
+            .get(idx)
+            .map(|p| (p.cwd.clone(), p.env.clone()))?;
         self.restart_pane_at(self.active, idx, mgr, cwd, env)
     }
 
@@ -7615,10 +7652,7 @@ impl State {
                 let _ = std::fs::create_dir_all(parent);
             }
             if !write_workspace(&member_path, &ws) {
-                tracing::warn!(
-                    "failed to write set member {}",
-                    member_path.display()
-                );
+                tracing::warn!("failed to write set member {}", member_path.display());
                 continue;
             }
             members.push(sets::SetMember {
@@ -7664,10 +7698,7 @@ impl State {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn open_set_from(&mut self, path: &std::path::Path, mgr: &SessionManager) -> usize {
         let Some(set) = sets::read_set(path) else {
-            tracing::warn!(
-                "{} is not a valid workspace set",
-                path.display()
-            );
+            tracing::warn!("{} is not a valid workspace set", path.display());
             return 0;
         };
         let members = sets::load_members(&set);
@@ -8070,8 +8101,12 @@ impl State {
                         let bin = hyperpanes_core::tools::by_id(&tool)
                             .map(|t| t.bin)
                             .unwrap_or(tool.as_str());
-                        startup =
-                            Some(resume_startup_line(Some(&mark.cwd), "", bin, &extra.join(" ")));
+                        startup = Some(resume_startup_line(
+                            Some(&mark.cwd),
+                            "",
+                            bin,
+                            &extra.join(" "),
+                        ));
                     }
                 }
             }
@@ -8194,7 +8229,11 @@ impl State {
             env: None,
             // The resolved shell program → its short header badge (computed once here);
             // suppressed for a view pane for the same reason as in `make_pane`.
-            shell_label: if is_view { String::new() } else { shell_label(&shell_path) },
+            shell_label: if is_view {
+                String::new()
+            } else {
+                shell_label(&shell_path)
+            },
             // Carry the spawned program forward so a later relaunch snapshot still records it
             // (the spec's command/args + the resolved shell).
             spawn_command: (!is_view).then(|| spec.command.clone()).flatten(),
@@ -8598,7 +8637,12 @@ fn due_for(since_mid: u64, offset: ReminderOffset) -> (u64, String) {
 /// trailing space) or empty. Shared by the Claude shell-pane arm and the generic tool arm
 /// of `make_pane_from_spec`, so a change to the shape reaches both.
 #[tracing::instrument(level = "debug", ret)]
-pub(crate) fn resume_startup_line(cwd: Option<&str>, prefix: &str, bin: &str, args: &str) -> String {
+pub(crate) fn resume_startup_line(
+    cwd: Option<&str>,
+    prefix: &str,
+    bin: &str,
+    args: &str,
+) -> String {
     match cwd {
         Some(cwd) => format!("cd '{cwd}' && {prefix}{bin} {args}\r"),
         None => format!("{prefix}{bin} {args}\r"),
@@ -9545,7 +9589,12 @@ mod view_pane_tests {
             .expect("view pane added");
         // The projection is normally built by the render pass; a headless test builds it
         // itself so there are rows for a selection to name.
-        crate::viewpane::model_for(&uid, &PaneKind::FileViewer, Some(&f.display().to_string()), 0);
+        crate::viewpane::model_for(
+            &uid,
+            &PaneKind::FileViewer,
+            Some(&f.display().to_string()),
+            0,
+        );
 
         st.select_all_pane(0);
         assert_eq!(crate::viewpane::selected_range(&uid), Some((0, 2)));
@@ -9658,8 +9707,15 @@ mod view_pane_tests {
 
         let out = st.pane_exited(&uid, &m, 130);
 
-        assert!(out.alive, "the workspace must not be torn down by a tool exiting");
-        assert_eq!(st.active_tab().panes.len(), 1, "the pane stays where it was");
+        assert!(
+            out.alive,
+            "the workspace must not be torn down by a tool exiting"
+        );
+        assert_eq!(
+            st.active_tab().panes.len(),
+            1,
+            "the pane stays where it was"
+        );
         let p = &st.active_tab().panes[0];
         assert_ne!(p.uid, uid, "the fallback shell is a new session");
         assert_eq!(
@@ -12328,7 +12384,10 @@ mod hyperpane_uniqueness_tests {
         let mut s = strip(&[("Hyperpane", true), ("work", false)]);
         assert!(s.close_pane_in(0, 0, &m), "the window stays open");
         assert_eq!(s.tabs.len(), 2, "the tab was kept, not dropped");
-        assert!(s.tabs[0].system, "and it is still the system tab at index 0");
+        assert!(
+            s.tabs[0].system,
+            "and it is still the system tab at index 0"
+        );
         assert_eq!(
             s.tabs[0].panes.len(),
             1,
@@ -12348,7 +12407,11 @@ mod hyperpane_uniqueness_tests {
         assert_eq!(s.tabs.len(), 2);
         assert!(s.tabs[0].system, "the Hyperpane survives its pane leaving");
         assert_eq!(s.tabs[0].panes.len(), 1, "reseeded");
-        assert_eq!(s.tabs[1].panes.len(), 2, "the pane arrived in the target tab");
+        assert_eq!(
+            s.tabs[1].panes.len(),
+            2,
+            "the pane arrived in the target tab"
+        );
     }
 
     #[test]
@@ -12378,7 +12441,9 @@ mod hyperpane_uniqueness_tests {
         let mut survivor = strip(&[("other", false), ("more", false)]);
         survivor.active = 1;
 
-        let det = closing.take_system_tab().expect("the closing window held it");
+        let det = closing
+            .take_system_tab()
+            .expect("the closing window held it");
         assert_eq!(titles(&closing), ["work"]);
         assert!(!closing.tabs.iter().any(|t| t.system));
         assert!(survivor.take_system_tab().is_none(), "nothing to take here");
@@ -12416,7 +12481,10 @@ mod hyperpane_uniqueness_tests {
         assert_eq!(s.tabs.iter().filter(|t| t.system).count(), 1);
         assert!(s.tabs[0].system, "pinned to index 0");
         assert_eq!(titles(&s), ["A", "work", "B", "restored"]);
-        assert_eq!(s.active, 3, "landed on the restored tab, index fixed by the pin");
+        assert_eq!(
+            s.active, 3,
+            "landed on the restored tab, index fixed by the pin"
+        );
     }
 
     #[test]
@@ -12429,7 +12497,10 @@ mod hyperpane_uniqueness_tests {
             .expect("a known key with the right type");
         assert_eq!(keys, ["showSidebar"]);
         assert!(!s.settings.show_sidebar);
-        assert!(!s.sidebar_open, "hiding the sidebar also closes it, as the toggle does");
+        assert!(
+            !s.sidebar_open,
+            "hiding the sidebar also closes it, as the toggle does"
+        );
         assert!(s.dirty);
     }
 
@@ -12477,9 +12548,14 @@ mod hyperpane_uniqueness_tests {
         s.add_pane(&m);
         let before = s.settings.scrollback as usize;
         for p in &s.active_tab().panes {
-            assert_eq!(p.pane.scrollback_capacity(), before, "built at the setting's depth");
+            assert_eq!(
+                p.pane.scrollback_capacity(),
+                before,
+                "built at the setting's depth"
+            );
         }
-        s.apply_settings_patch(&serde_json::json!({ "scrollback": 123 })).unwrap();
+        s.apply_settings_patch(&serde_json::json!({ "scrollback": 123 }))
+            .unwrap();
         assert_eq!(s.settings.scrollback, 123);
         for p in &s.active_tab().panes {
             assert_eq!(p.pane.scrollback_capacity(), 123);
@@ -12513,7 +12589,12 @@ mod hyperpane_uniqueness_tests {
     #[test]
     fn resume_startup_line_has_both_shapes() {
         assert_eq!(
-            resume_startup_line(Some("/w/p"), "CLAUDE_CONFIG_DIR='/c' ", "claude", "--resume abc"),
+            resume_startup_line(
+                Some("/w/p"),
+                "CLAUDE_CONFIG_DIR='/c' ",
+                "claude",
+                "--resume abc"
+            ),
             "cd '/w/p' && CLAUDE_CONFIG_DIR='/c' claude --resume abc\r"
         );
         assert_eq!(

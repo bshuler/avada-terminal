@@ -1,0 +1,54 @@
+# The reference manifest. `docs/module-contract.md` explains every key.
+capabilities = ["fs.read", "workspace.read", "ui.rail", "ui.pane", "ui.commands", "skills.materialize"]
+
+[module]
+id = "acme/avada-files"
+name = "Files"
+version = "1.2.0"
+description = "A file browser rail and viewer pane"
+publisher = "Acme"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[dependencies]
+"acme/avada-git" = "^1.0"
+
+[[provides]]
+shape = "avada.files.tree"
+version = "1.0.0"
+
+[[requires]]
+shape = "avada.git.status"
+version = "^1"
+provider = "acme/avada-git"
+
+[[contributions]]
+kind = "rail"
+id = "files"
+tier = 1
+label = "Files"
+icon = "icons/files.svg"
+
+[[contributions]]
+kind = "pane"
+id = "viewer"
+tier = 3
+label = "File viewer"
+
+[[contributions]]
+kind = "command"
+id = "reveal"
+tier = 1
+label = "Reveal in Files"
+
+[[profiles]]
+name = "High security"
+description = "Read only, and ask before touching the workspace"
+[profiles.values]
+"fs.read" = "always"
+"workspace.read" = "ask"
+
+[skills]
+paths = ["skills"]

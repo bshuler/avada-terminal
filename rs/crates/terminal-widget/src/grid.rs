@@ -694,7 +694,10 @@ mod tests {
 
     #[test]
     fn scrollback_depth_is_configurable_and_bounds_the_kept_history() {
-        assert_eq!(TermGrid::new(20, 4).scrollback_capacity(), TermGrid::DEFAULT_SCROLLBACK);
+        assert_eq!(
+            TermGrid::new(20, 4).scrollback_capacity(),
+            TermGrid::DEFAULT_SCROLLBACK
+        );
         let mut g = TermGrid::with_scrollback(20, 4, 3);
         assert_eq!(g.scrollback_capacity(), 3);
         // `history_lines` also lists the live viewport (absolute line >= 0); count history only.
@@ -703,7 +706,11 @@ mod tests {
         for i in 0..10 {
             g.feed(format!("line{i}\r\n").as_bytes());
         }
-        assert_eq!(history(&g), 3, "history must be capped at the configured depth");
+        assert_eq!(
+            history(&g),
+            3,
+            "history must be capped at the configured depth"
+        );
         // Growing the depth keeps what is there and admits more.
         g.set_scrollback(8);
         assert_eq!(g.scrollback_capacity(), 8);

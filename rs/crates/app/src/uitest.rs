@@ -54,8 +54,7 @@ fn ui<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
 /// different squeeze bug. This is roughly the default.
 fn window() -> crate::AppWindow {
     let w = crate::AppWindow::new().expect("the component tree builds");
-    w.window()
-        .set_size(slint::PhysicalSize::new(1280, 800));
+    w.window().set_size(slint::PhysicalSize::new(1280, 800));
     w
 }
 
@@ -71,10 +70,7 @@ fn click(w: &crate::AppWindow, el: &ElementHandle) {
         size.width,
         size.height
     );
-    let at = LogicalPosition::new(
-        pos.x + size.width / 2.0,
-        pos.y + size.height / 2.0,
-    );
+    let at = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
     let win = w.window();
     win.dispatch_event(WindowEvent::PointerMoved { position: at });
     win.dispatch_event(WindowEvent::PointerPressed {
@@ -315,9 +311,21 @@ fn a_clean_working_tree_shows_no_diff_button() {
 /// Publish the three built-in modes the way `paneview` does on every resync.
 fn install_modes(w: &crate::AppWindow) {
     let rows = vec![
-        crate::LeftModeRow { label: "Workspace".into(), icon: 0, brand: slint::Color::from_rgb_u8(0, 0, 0) },
-        crate::LeftModeRow { label: "Files".into(), icon: -1, brand: slint::Color::from_rgb_u8(0, 0, 0) },
-        crate::LeftModeRow { label: "Git".into(), icon: -2, brand: slint::Color::from_rgb_u8(0, 0, 0) },
+        crate::LeftModeRow {
+            label: "Workspace".into(),
+            icon: 0,
+            brand: slint::Color::from_rgb_u8(0, 0, 0),
+        },
+        crate::LeftModeRow {
+            label: "Files".into(),
+            icon: -1,
+            brand: slint::Color::from_rgb_u8(0, 0, 0),
+        },
+        crate::LeftModeRow {
+            label: "Git".into(),
+            icon: -2,
+            brand: slint::Color::from_rgb_u8(0, 0, 0),
+        },
     ];
     let lp = w.global::<crate::LeftPanelAdapter>();
     lp.set_open(true);
@@ -331,12 +339,14 @@ fn the_mode_strip_switches_to_git_and_tells_rust() {
     ui(|| {
         let w = window();
         install_modes(&w);
-        w.global::<crate::LeftPanelAdapter>().set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
+        w.global::<crate::LeftPanelAdapter>()
+            .set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
 
         let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
         {
             let saw = saw.clone();
-            w.global::<crate::LeftPanelAdapter>().on_mode_changed(move |m| saw.set(m));
+            w.global::<crate::LeftPanelAdapter>()
+                .on_mode_changed(move |m| saw.set(m));
         }
 
         let found = by_label(&w, "Git");
@@ -362,16 +372,22 @@ fn the_mode_strip_switches_to_files_and_tells_rust() {
     ui(|| {
         let w = window();
         install_modes(&w);
-        w.global::<crate::LeftPanelAdapter>().set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
+        w.global::<crate::LeftPanelAdapter>()
+            .set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
 
         let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
         {
             let saw = saw.clone();
-            w.global::<crate::LeftPanelAdapter>().on_mode_changed(move |m| saw.set(m));
+            w.global::<crate::LeftPanelAdapter>()
+                .on_mode_changed(move |m| saw.set(m));
         }
 
         let found = by_label(&w, "Files");
-        assert_eq!(found.len(), 1, "the strip must show exactly one Files button");
+        assert_eq!(
+            found.len(),
+            1,
+            "the strip must show exactly one Files button"
+        );
         click(&w, &found[0]);
         assert_eq!(
             w.global::<crate::LeftPanelAdapter>().get_mode(),
@@ -394,11 +410,16 @@ fn the_refresh_button_still_works_beside_the_new_diff_button() {
         let fired = std::rc::Rc::new(std::cell::Cell::new(false));
         {
             let fired = fired.clone();
-            w.global::<crate::LeftPanelAdapter>().on_git_refresh(move || fired.set(true));
+            w.global::<crate::LeftPanelAdapter>()
+                .on_git_refresh(move || fired.set(true));
         }
 
         let found = by_label(&w, "Re-run git status");
-        assert_eq!(found.len(), 1, "the git header must show one refresh button");
+        assert_eq!(
+            found.len(),
+            1,
+            "the git header must show one refresh button"
+        );
         click(&w, &found[0]);
         assert!(fired.get(), "refresh must still reach git-refresh");
     });
@@ -414,7 +435,11 @@ fn a_git_section_head_collapses_and_reopens_its_list() {
 
         let open = "Collapse the working-tree changes";
         let shut = "Show the working-tree changes";
-        assert_eq!(by_label(&w, open).len(), 1, "the Changes head starts expanded");
+        assert_eq!(
+            by_label(&w, open).len(),
+            1,
+            "the Changes head starts expanded"
+        );
 
         click(&w, &by_label(&w, open)[0]);
         assert!(
@@ -768,7 +793,10 @@ fn the_rail_new_pane_button_reaches_rust() {
             w.on_new_pane(move || fired.set(true));
         }
 
-        let found = by_label(&w, "New pane · Shift-click for shell, command and split options");
+        let found = by_label(
+            &w,
+            "New pane · Shift-click for shell, command and split options",
+        );
         assert_eq!(found.len(), 1, "the rail shows exactly one ＋");
         click(&w, &found[0]);
         assert!(fired.get(), "the rail ＋ must reach new-pane");
@@ -985,7 +1013,11 @@ fn clicking_a_palette_row_selects_it_before_running_it() {
         let w = window();
         install_palette(
             &w,
-            &[("New Pane", "Ctrl+T"), ("Show Diff", ""), ("Preferences", "")],
+            &[
+                ("New Pane", "Ctrl+T"),
+                ("Show Diff", ""),
+                ("Preferences", ""),
+            ],
             0,
         );
 
@@ -1126,14 +1158,17 @@ fn the_browser_chooser_returns_the_row_that_was_clicked() {
     ui(|| {
         let w = window();
         w.set_ask_url("https://example.com/a".into());
-        let rows: Vec<crate::PrefBrowserRow> = [("com.apple.Safari", "Safari"), ("org.mozilla.firefox", "Firefox")]
-            .iter()
-            .map(|(id, name)| crate::PrefBrowserRow {
-                id: (*id).into(),
-                name: (*name).into(),
-                active: false,
-            })
-            .collect();
+        let rows: Vec<crate::PrefBrowserRow> = [
+            ("com.apple.Safari", "Safari"),
+            ("org.mozilla.firefox", "Firefox"),
+        ]
+        .iter()
+        .map(|(id, name)| crate::PrefBrowserRow {
+            id: (*id).into(),
+            name: (*name).into(),
+            active: false,
+        })
+        .collect();
         w.set_ask_browsers(std::rc::Rc::new(slint::VecModel::from(rows)).into());
         w.set_overlay_kind(6);
 
@@ -1483,10 +1518,7 @@ fn the_goal_history_dropdown_is_the_other_branch_of_the_same_list() {
             let got = got.clone();
             w.on_goal_menu_click(move |i| got.set(i));
         }
-        click(
-            &w,
-            &only(&w, "fix the diff button", AccessibleRole::Button),
-        );
+        click(&w, &only(&w, "fix the diff button", AccessibleRole::Button));
         assert_eq!(got.get(), 0, "the history row must reach goal-menu-click");
     });
 }
@@ -1517,7 +1549,11 @@ fn each_attachment_names_the_file_it_removes() {
             &w,
             &only(&w, "Remove attachment diagram.png", AccessibleRole::Button),
         );
-        assert_eq!(got.get(), 1, "the second attachment's × must remove index 1");
+        assert_eq!(
+            got.get(),
+            1,
+            "the second attachment's × must remove index 1"
+        );
     });
 }
 
@@ -1670,7 +1706,8 @@ fn install_projects(w: &crate::AppWindow, history: bool, segment: i32) {
 /// Where project `index`'s right-click menu sits in window coordinates: the `ProjectRow`
 /// component it hangs off, plus `ProjectMenu`'s declared `x`/`y` anchor.
 fn project_menu_origin(w: &crate::AppWindow, index: usize) -> LogicalPosition {
-    let rows: Vec<ElementHandle> = ElementHandle::find_by_element_type_name(w, "ProjectRow").collect();
+    let rows: Vec<ElementHandle> =
+        ElementHandle::find_by_element_type_name(w, "ProjectRow").collect();
     let p = rows[index].absolute_position();
     LogicalPosition::new(p.x + 10.0, p.y + 26.0)
 }
@@ -1712,7 +1749,11 @@ fn clicking_a_project_row_opens_that_project() {
         w.on_open_project(move |i| seen.borrow_mut().push(i));
 
         click(&w, &only(&w, "claude-standards", AccessibleRole::ListItem));
-        assert_eq!(*log.borrow(), vec![1], "the second row opens the second project");
+        assert_eq!(
+            *log.borrow(),
+            vec![1],
+            "the second row opens the second project"
+        );
     });
 }
 
@@ -1737,7 +1778,11 @@ fn the_chevron_unfolds_that_project_and_nothing_else() {
             only(&w, "hyperpanes", AccessibleRole::ListItem).accessible_expanded(),
             Some(true)
         );
-        assert_eq!(by_label(&w, trash).len(), 1, "the wip worktree can be deleted");
+        assert_eq!(
+            by_label(&w, trash).len(),
+            1,
+            "the wip worktree can be deleted"
+        );
         assert_eq!(
             by_label(&w, "The main checkout can't be removed").len(),
             1,
@@ -1906,12 +1951,15 @@ fn the_project_menu_removes_the_project_it_names() {
         click_in_popup(
             &w,
             project_menu_origin(&w, 1),
-            &only(&w, "Remove project claude-standards", AccessibleRole::Button),
+            &only(
+                &w,
+                "Remove project claude-standards",
+                AccessibleRole::Button,
+            ),
         );
         assert_eq!(*log.borrow(), vec![1]);
     });
 }
-
 
 // ===== the view panes =====
 //
@@ -1936,7 +1984,15 @@ fn install_view_pane(
     sel: (i32, i32),
     toast: &str,
 ) {
-    install_view_pane_at(w, kind, title, rows, sel, toast, crate::prefs::DEFAULT_FONT_PX);
+    install_view_pane_at(
+        w,
+        kind,
+        title,
+        rows,
+        sel,
+        toast,
+        crate::prefs::DEFAULT_FONT_PX,
+    );
 }
 
 /// The same pane at a chosen font size — what `Ctrl/Cmd+=` and `+-` move through
@@ -1979,7 +2035,7 @@ fn install_view_pane_at(
 /// tests set both rather than letting the helper infer a view from the row roles.
 /// [`the_is_view_flag_matches_the_kind_it_claims`] is what keeps this list honest.
 fn view_flag(kind: i32) -> bool {
-    matches!(kind, 2 | 3 | 4 | 6)
+    matches!(kind, 2 | 3 | 4 | 6 | 7 | 8 | 9)
 }
 
 /// `PaneItem::is-view` replaced a `kind >= 2 && kind <= 4` range test in the `.slint`, and
@@ -2000,6 +2056,10 @@ fn the_is_view_flag_matches_the_kind_it_claims() {
             PaneKind::Markdown => 4,
             PaneKind::Browser => 5,
             PaneKind::Code => 6,
+            PaneKind::Data => 7,
+            PaneKind::Table => 8,
+            PaneKind::Image => 9,
+            PaneKind::Module(_) => 10,
         }
     }
     let all = [
@@ -2010,6 +2070,10 @@ fn the_is_view_flag_matches_the_kind_it_claims() {
         PaneKind::Markdown,
         PaneKind::Browser,
         PaneKind::Code,
+        PaneKind::Data,
+        PaneKind::Table,
+        PaneKind::Image,
+        PaneKind::from_meta_value("module:acme/avada-files#tree"),
     ];
     for k in all {
         assert_eq!(
@@ -2139,9 +2203,19 @@ fn clicking_an_inert_line_selects_it_rather_than_opening_it() {
             w.on_pane_view_select(move |pane, row, ext| picked.borrow_mut().push((pane, row, ext)));
         }
 
-        click(&w, &only(&w, "Line 2:     run();", AccessibleRole::ListItem));
-        assert_eq!(*picked.borrow(), vec![(0, 1, false)], "a plain click selects");
-        assert!(!opened.get(), "an inert row must not claim to open anything");
+        click(
+            &w,
+            &only(&w, "Line 2:     run();", AccessibleRole::ListItem),
+        );
+        assert_eq!(
+            *picked.borrow(),
+            vec![(0, 1, false)],
+            "a plain click selects"
+        );
+        assert!(
+            !opened.get(),
+            "an inert row must not claim to open anything"
+        );
     });
 }
 
@@ -2188,7 +2262,12 @@ fn the_selected_range_says_which_rows_are_in_it() {
             &w,
             3,
             "src/main.rs",
-            vec![line(1, "one"), line(2, "two"), line(3, "three"), line(4, "four")],
+            vec![
+                line(1, "one"),
+                line(2, "two"),
+                line(3, "three"),
+                line(4, "four"),
+            ],
             (1, 2),
             "",
         );
@@ -2197,7 +2276,11 @@ fn the_selected_range_says_which_rows_are_in_it() {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let row = only(&w, &format!("Line {}: {t}", i + 1), AccessibleRole::ListItem);
+                let row = only(
+                    &w,
+                    &format!("Line {}: {t}", i + 1),
+                    AccessibleRole::ListItem,
+                );
                 row.accessible_item_selected() == Some(true)
             })
             .collect();
@@ -2383,18 +2466,36 @@ fn the_pane_chrome_holds_its_size_while_the_content_zooms() {
         let w = window();
         let rows = || vec![listing(2, "README.md", "", false)];
 
-        install_view_pane_at(&w, 2, "src/main.rs", rows(), (-1, -1), "Copied 12 lines", 14.0);
+        install_view_pane_at(
+            &w,
+            2,
+            "src/main.rs",
+            rows(),
+            (-1, -1),
+            "Copied 12 lines",
+            14.0,
+        );
         let crumb = only(&w, "src/main.rs", AccessibleRole::Text).size();
         let toast = only(&w, "Copied 12 lines", AccessibleRole::Text).size();
 
-        install_view_pane_at(&w, 2, "src/main.rs", rows(), (-1, -1), "Copied 12 lines", 28.0);
+        install_view_pane_at(
+            &w,
+            2,
+            "src/main.rs",
+            rows(),
+            (-1, -1),
+            "Copied 12 lines",
+            28.0,
+        );
         assert_eq!(
             only(&w, "src/main.rs", AccessibleRole::Text).size().height,
             crumb.height,
             "the breadcrumb is chrome, not content"
         );
         assert_eq!(
-            only(&w, "Copied 12 lines", AccessibleRole::Text).size().height,
+            only(&w, "Copied 12 lines", AccessibleRole::Text)
+                .size()
+                .height,
             toast.height,
             "so is the toast"
         );
@@ -2496,7 +2597,15 @@ fn a_source_row_draws_the_coloured_line_and_a_plain_one_does_not() {
             "a source row has to draw its markup, not its plain text"
         );
 
-        install_view_pane_at(&w, 3, "a.log", vec![line(1, "fn main() {")], (-1, -1), "", 14.0);
+        install_view_pane_at(
+            &w,
+            3,
+            "a.log",
+            vec![line(1, "fn main() {")],
+            (-1, -1),
+            "",
+            14.0,
+        );
         assert!(
             source_texts(&w).is_empty(),
             "a plain viewer line must not reach the source branch"
@@ -2514,7 +2623,11 @@ fn a_source_row_announces_the_line_it_shows() {
             &w,
             6,
             "src/main.rs",
-            vec![source(42, "let x = 1;", "<font color=\"#89b4fa\">let</font> x")],
+            vec![source(
+                42,
+                "let x = 1;",
+                "<font color=\"#89b4fa\">let</font> x",
+            )],
             (-1, -1),
             "",
             14.0,
@@ -2595,7 +2708,15 @@ fn a_source_line_is_drawn_in_a_monospaced_face() {
     ui(|| {
         let w = window();
         let width = |s: &str| {
-            install_view_pane_at(&w, 6, "src/main.rs", vec![source(1, s, s)], (-1, -1), "", 14.0);
+            install_view_pane_at(
+                &w,
+                6,
+                "src/main.rs",
+                vec![source(1, s, s)],
+                (-1, -1),
+                "",
+                14.0,
+            );
             source_texts(&w)[0].size().width
         };
         let narrow = width("iiiiiiiiii");

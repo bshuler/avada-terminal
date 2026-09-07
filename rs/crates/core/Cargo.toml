@@ -71,6 +71,18 @@ whisper-rs = { version = "0.16", default-features = false }
 # digest before it is opened.
 sha2 = "0.10"
 
+# --- Wave 0: module host (docs/modules-fanout-plan.md, track W0) ---
+# The contract crate every module and the host share: manifest, capabilities, JSON-RPC
+# framing, install records, lockfile, route descriptors. Path dep; never published alone.
+avada-module-sdk = { path = "../module-sdk" }
+# avada.toml and modules.lock parsing on the host side.
+toml = "0.8"
+# Install-record MAC (rights.rs) — the host signs what the user accepted with a key held
+# in the OS keychain so a hand-edited record is refused.
+hmac = "0.12"
+# Version ranges in manifests and the lockfile.
+semver = { version = "1", features = ["serde"] }
+
 # platform: single-instance (named mutex + named-pipe argv handoff)
 # 0.58 -> 0.62 to unify with the app + wgpu-hal 29 (avoids two `windows` crate versions).
 # Target-gated so Linux/macOS builds never pull the Win32 bindings.

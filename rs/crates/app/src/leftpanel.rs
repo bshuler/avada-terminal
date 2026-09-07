@@ -98,6 +98,15 @@ pub mod pane_mark {
     pub const BROWSER: i32 = -5;
     /// The highlighted source view — `</>`.
     pub const CODE: i32 = -6;
+    /// The structured-data tree — a branching node.
+    pub const DATA: i32 = -7;
+    /// The delimited-file grid — a table.
+    pub const TABLE: i32 = -8;
+    /// The image view — a picture frame with a sun.
+    pub const IMAGE: i32 = -9;
+    /// A module-contributed surface — a plug. One mark for every module: the module's own
+    /// icon (if it ships one) is a Wave 2 concern, and the panel needs a stable answer today.
+    pub const MODULE: i32 = -10;
 }
 
 /// The mark one pane row carries, in the namespace `PaneMark` in `ui/leftpanel.slint`
@@ -117,6 +126,10 @@ pub fn pane_mark_kind(kind: &PaneKind) -> i32 {
         PaneKind::Markdown => pane_mark::MARKDOWN,
         PaneKind::Browser => pane_mark::BROWSER,
         PaneKind::Code => pane_mark::CODE,
+        PaneKind::Data => pane_mark::DATA,
+        PaneKind::Table => pane_mark::TABLE,
+        PaneKind::Image => pane_mark::IMAGE,
+        PaneKind::Module(_) => pane_mark::MODULE,
         // `ui_icon` answers 0 for a plain shell AND for a tool id with no mark in this
         // build; both are PTY panes, so both get the prompt rather than a gap.
         PaneKind::Terminal | PaneKind::Tool(_) => match kind.ui_icon() {
@@ -877,6 +890,14 @@ mod tests {
             (PaneKind::FileViewer, pane_mark::FILE_VIEWER),
             (PaneKind::Markdown, pane_mark::MARKDOWN),
             (PaneKind::Browser, pane_mark::BROWSER),
+            (PaneKind::Code, pane_mark::CODE),
+            (PaneKind::Data, pane_mark::DATA),
+            (PaneKind::Table, pane_mark::TABLE),
+            (PaneKind::Image, pane_mark::IMAGE),
+            (
+                PaneKind::from_meta_value("module:acme/avada-files#tree"),
+                pane_mark::MODULE,
+            ),
             // A tool id from a build newer than this one: still a terminal running
             // something, so it gets the prompt rather than a gap or a borrowed brand.
             (
@@ -901,9 +922,31 @@ mod tests {
             pane_mark::FILE_VIEWER,
             pane_mark::MARKDOWN,
             pane_mark::BROWSER,
+            pane_mark::CODE,
+            pane_mark::DATA,
+            pane_mark::TABLE,
+            pane_mark::IMAGE,
+            pane_mark::MODULE,
         ] {
             assert!(m < 0, "view mark {m} is inside the registry's half");
         }
+        // …and no two built-in marks share a number, or two views would wear one glyph.
+        let mut marks = vec![
+            pane_mark::TERMINAL,
+            pane_mark::FILE_BROWSER,
+            pane_mark::FILE_VIEWER,
+            pane_mark::MARKDOWN,
+            pane_mark::BROWSER,
+            pane_mark::CODE,
+            pane_mark::DATA,
+            pane_mark::TABLE,
+            pane_mark::IMAGE,
+            pane_mark::MODULE,
+        ];
+        let n = marks.len();
+        marks.sort_unstable();
+        marks.dedup();
+        assert_eq!(marks.len(), n, "two pane marks share a number");
         // …and every registry kind stays in the other half, which is what lets
         // `PaneMark` dispatch on the sign alone.
         for t in hyperpanes_core::tools::registry::TOOLS {

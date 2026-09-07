@@ -216,9 +216,11 @@ pub fn run(salt: &str) -> io::Result<()> {
                 // sessions, so a lock we cannot take is worth strictly less than the user's
                 // terminals. Serve without it and say so.
                 serving_without_flock = true;
-                tracing::warn!(sessions = inherited.len(),
+                tracing::warn!(
+                    sessions = inherited.len(),
                     "takeover: the incumbent handed over but never released the flock; \
-                     serving without it rather than dropping live sessions");
+                     serving without it rather than dropping live sessions"
+                );
             }
         }
         Err(std::fs::TryLockError::Error(e)) => return Err(e),
@@ -297,8 +299,10 @@ fn bind_with_retry(
             // a closed master is not.
             Err(e) => {
                 if tries.is_multiple_of(20) {
-                    tracing::debug!("bind retry after {e} ({}s, holding handed-over sessions)",
-                        tries / 20);
+                    tracing::debug!(
+                        "bind retry after {e} ({}s, holding handed-over sessions)",
+                        tries / 20
+                    );
                 }
                 tries += 1;
                 let _ = std::fs::remove_file(socket);
@@ -369,7 +373,11 @@ fn take_over(socket: &Path) -> io::Result<Vec<(SessionSnapshot, OwnedFd)>> {
             }
         }
     }
-    tracing::info!(sessions = out.len(), messages, "took over the incumbent's sessions");
+    tracing::info!(
+        sessions = out.len(),
+        messages,
+        "took over the incumbent's sessions"
+    );
     if messages == 0 {
         return Err(io::Error::new(
             io::ErrorKind::ConnectionAborted,
@@ -849,8 +857,10 @@ impl Daemon {
                             // Idle through the whole grace → exit. No sessions to kill (idle).
                             // In production `shutdown` never returns (process exit); under
                             // test it flags + returns, so we `break` to stop the monitor.
-                            tracing::info!(idle_ms = since.elapsed().as_millis() as u64,
-                                "no sessions and no clients through the idle grace; shutting down");
+                            tracing::info!(
+                                idle_ms = since.elapsed().as_millis() as u64,
+                                "no sessions and no clients through the idle grace; shutting down"
+                            );
                             lifecycle.shutdown(|| {});
                             break;
                         }
@@ -997,8 +1007,9 @@ impl Daemon {
             notices_on: Arc::clone(&notices_on),
             out_tx: out_tx.clone(),
         };
-        self.rt
-            .spawn(forward_broadcasts(conn_id, fanout, bus_rx, notice_rx, stop_rx));
+        self.rt.spawn(forward_broadcasts(
+            conn_id, fanout, bus_rx, notice_rx, stop_rx,
+        ));
 
         // Reader/dispatch loop: handle each ClientMsg against the registry.
         let mut takeover = false;
@@ -1070,7 +1081,10 @@ impl Daemon {
     fn hand_over(&self, sock: &std::os::unix::net::UnixStream) {
         let handed = self.registry.hand_off();
         let cwds = self.cwds.lock().unwrap().clone();
-        tracing::info!(sessions = handed.len(), "handing sessions over to the successor");
+        tracing::info!(
+            sessions = handed.len(),
+            "handing sessions over to the successor"
+        );
 
         // `chunks` on an empty slice yields nothing, so the empty case is sent explicitly.
         let batches: Vec<&[(SessionSnapshot, std::os::fd::RawFd)]> = if handed.is_empty() {
@@ -1294,7 +1308,10 @@ impl Daemon {
                 // dispatch, because the handoff needs the socket itself. Reaching here would
                 // mean the interception was bypassed — close the connection rather than
                 // silently ignoring a request that the peer is waiting on.
-                tracing::warn!(conn = conn_id, "takeover reached dispatch; closing the connection");
+                tracing::warn!(
+                    conn = conn_id,
+                    "takeover reached dispatch; closing the connection"
+                );
                 return false;
             }
             ClientMsg::Shutdown => {

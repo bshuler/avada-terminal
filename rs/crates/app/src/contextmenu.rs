@@ -1052,7 +1052,9 @@ mod read_only_menu_tests {
             .iter()
             .position(|e| e.label == "Restart Hyperpanes")
             .expect("the app menu offers a restart");
-        let cmd = menu.commands[at].clone().expect("the row carries a command");
+        let cmd = menu.commands[at]
+            .clone()
+            .expect("the row carries a command");
         assert!(matches!(
             crate::command::dispatch(&mut st, cmd, &mgr),
             crate::command::Effect::RestartApp
@@ -1152,8 +1154,12 @@ mod tests {
         let m = link_menu(&link(true, false), 0.0, 0.0);
         let labels: Vec<&str> = m.entries.iter().map(|e| e.label.as_str()).collect();
         assert_eq!(labels, ["Open Link", "", "Copy Link"]);
-        assert!(matches!(&m.commands[0], Some(Command::OpenLink(u)) if u == "https://example.com/x"));
-        assert!(matches!(&m.commands[2], Some(Command::CopyPathText(u)) if u == "https://example.com/x"));
+        assert!(
+            matches!(&m.commands[0], Some(Command::OpenLink(u)) if u == "https://example.com/x")
+        );
+        assert!(
+            matches!(&m.commands[2], Some(Command::CopyPathText(u)) if u == "https://example.com/x")
+        );
     }
 
     #[test]

@@ -421,7 +421,11 @@ mod tests {
         s.advance(10);
         assert_eq!(s.in_flight_count(), 1, "0 must behave as 1, not as 'never'");
         s.complete("a", JobResult::Ok);
-        assert_eq!(s.in_flight_count(), 1, "the next queued pane must be admitted");
+        assert_eq!(
+            s.in_flight_count(),
+            1,
+            "the next queued pane must be admitted"
+        );
         s.stop();
     }
 

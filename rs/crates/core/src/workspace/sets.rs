@@ -238,7 +238,8 @@ pub fn load_members(set: &WorkspaceSet) -> Vec<WorkspaceFile> {
             None => {
                 tracing::warn!(
                     "set {:?}: member {:?} is not a valid workspace — skipped",
-                    set.name, m.path
+                    set.name,
+                    m.path
                 );
                 None
             }

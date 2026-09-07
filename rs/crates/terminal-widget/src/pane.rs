@@ -25,9 +25,8 @@ use crate::font::Font;
 use crate::grid::TermGrid;
 use crate::links::{
     extract_commit_candidates, extract_path_candidates, extract_ref_candidates,
-    extract_url_candidates, is_path_root,
-    leading_path_fragment, trailing_path_fragment, trim_trailing_punct, PathCandidate,
-    UrlCandidate,
+    extract_url_candidates, is_path_root, leading_path_fragment, trailing_path_fragment,
+    trim_trailing_punct, PathCandidate, UrlCandidate,
 };
 use crate::render::{PaneRenderer, RenderOpts};
 use crate::search::{self, Match};
@@ -1000,7 +999,16 @@ impl TerminalPane {
         y: f32,
         surf_w: f32,
         surf_h: f32,
-    ) -> Option<(String, String, usize, usize, usize, f32, f32, Option<String>)> {
+    ) -> Option<(
+        String,
+        String,
+        usize,
+        usize,
+        usize,
+        f32,
+        f32,
+        Option<String>,
+    )> {
         // No cwd means no repository to ask. Unlike a path, a commit has no sensible fallback:
         // resolving it against the home directory would answer for whatever repo happens to be
         // there, which is never the one the text came from.
@@ -2700,7 +2708,10 @@ mod tests {
             .expect("the branch name should light up");
         assert!(hit.is_commit);
         assert!(hit.abs_path.starts_with(&short), "{}", hit.abs_path);
-        assert_eq!(hit.tip, format!("feature/x \u{b7} commit {}", &hit.abs_path[..12]));
+        assert_eq!(
+            hit.tip,
+            format!("feature/x \u{b7} commit {}", &hit.abs_path[..12])
+        );
         assert_eq!(hit.x, start as f32);
         assert_eq!(hit.w, "feature/x".len() as f32);
         // A click opens the tip commit in the panel, exactly as a hash would.
@@ -2865,7 +2876,10 @@ mod tests {
         let hit = p
             .link_at(at, row as f32 + 0.5, w, h)
             .expect("the wrapped cd target should still be found");
-        assert_eq!(std::path::Path::new(&hit.abs_path), proj.join("35-gaps.yaml"));
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj.join("35-gaps.yaml")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2881,7 +2895,9 @@ mod tests {
         p.set_cwd(Some(dir.join("elsewhere").to_string_lossy().into_owned()));
         // No `cd` anywhere — only a full path to one file in the project, which is enough
         // to place a sibling named relative to the project root.
-        p.feed(&format!("wrote {inner_s}\r\nsee docs/language/sql/35-gaps.yaml\r\n"));
+        p.feed(&format!(
+            "wrote {inner_s}\r\nsee docs/language/sql/35-gaps.yaml\r\n"
+        ));
         let (w, h) = (240.0, 6.0);
 
         let at = "see ".len() as f32 + 0.5;

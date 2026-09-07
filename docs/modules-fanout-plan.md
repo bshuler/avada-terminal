@@ -222,6 +222,12 @@ marketplace path a third-party module uses. Developing them in-tree would hide t
 | **G9** skills adapters | remaining tools, glob rules, detection table, user scope | core | F4 |
 | **G10** commercial skeleton | `avada-commercial` crate, feature flag, policy swap, precompiled loader | private | G7, G8 |
 | **G11** marketplace UI | full marketplace pane, badges, profiles UI, version picker | module+app | F2, H2, G6 |
+| **L1** link base | `TerminalPane::set_project_roots`, relative paths resolved against remembered project roots before the screen is read; `state.rs` `reload_projects()` (`docs/link-base-project-roots-plan.md`) | widget+app | — |
+| **V1** data tree | `view:data` pane: JSON tree with collapse state, `src/datatree.rs`, role 18 `DATA_NODE`, `Command::ViewToggleNode` (`docs/viewer-panes-plan.md` WP1) | app | W0 |
+| **V2** table | `view:table` pane: `src/csv.rs` RFC 4180, cell roles 13/14 (WP2) | app | W0 |
+| **V3** image | `view:image` pane: sibling `ImagePane` branch, fit never upscale, caption, checkerboard (WP3) | app | W0 |
+| **V4** annotation gap | accessibility roles on `FileRowView`/`GitRowView`, raw `TouchArea` walk (WP4) | app | V1–V3 |
+| **V5** proof pass | `docs/feature-test-matrix.md`, gap-closing tests, a test that fails on an unlisted `Command`/callback (WP5) | app | V1–V4 |
 
 ---
 
@@ -248,10 +254,17 @@ Everything compiles and is inert. No behaviour changes.
   cloned from `workspace_kind_compat.rs` in all four directions.
 - New deps, the ones Wave 0 needs and no more: `toml`, `hmac`, `keyring`, `semver`.
   (`pubgrub`, `ed25519-dalek`/`jsonwebtoken`, `clap`, `gix` land with their first user.)
-- CI: `module-sdk` added to the three-OS `cargo check` and test matrices in
-  `.github/workflows/verify.yml`.
+- CI: `module-sdk` is a member of the `rs` workspace, so the three-OS `cargo test --all`
+  and the Linux clippy gate in `.github/workflows/verify.yml` already cover it; no matrix
+  edit was needed.
 - `docs/module-contract.md`: the contract as a module author reads it, generated from the
   SDK doc comments where possible.
+- Pane kinds reserved: `PaneKind::{Data, Table, Image, Module(ModulePaneRef)}` with
+  `ui_kind` 7/8/9/10 and `pane_mark` -7/-8/-9/-10, meta `view:data` / `view:table` /
+  `view:image` / `module:owner/repo#surface[@semver]`; a malformed `module:` reference is
+  kept verbatim as a tool id so no build ever drops a pane it does not understand.
+- Deferred until the network is back: `keyring` (not in the offline cache); `serde_yaml`
+  likewise, so V1 reads JSON only in its first cut.
 
 **Exit:** both workspaces green on three OSes; a module author can `cargo doc` the SDK.
 
@@ -291,7 +304,24 @@ the git history.
 Seams pre-carved in Wave 0 so these do not collide: A1 and A6 meet at the SDK contract
 types; A3 and A2 meet at `RouteDescriptor.capability`; A4 and A1 meet at `RailEntry`
 registration, which A1 exposes as a channel and A4 consumes. A7 starts one week behind A1
-and A5 against their Unix implementations. `state.rs` and `app.rs` are hot files: A4 is
+and A5 against their Unix implementations.
+
+Alongside the seven host agents, six more run with no seam into `core/src/module`:
+
+| Agent | Track | Owns (exclusively) |
+|---|---|---|
+| A8 | L1 | `terminal-widget/src/{terminal,links}.rs`, the `reload_projects()` sites in `app/src/state.rs` |
+| A9 | V1 | `app/src/datatree.rs`, the `Data` arms of `viewpane.rs`, `ui/viewpane.slint` data rows |
+| A10 | V2 | `app/src/csv.rs`, the `Table` arms of `viewpane.rs`, `ui/viewpane.slint` cell rows |
+| A11 | V3 | `app/src/imagepane.rs`, `ui/imagepane.slint`, the `Image` arm of `paneview.rs` |
+| A12 | V4 | accessibility annotations in `ui/leftpanel.slint` rows, `uitest.rs` raw walk (after A9–A11) |
+| A13 | V5 | `docs/feature-test-matrix.md`, `uitest.rs` matrix test (after A12) |
+
+A8 touches `state.rs` only at the eight `self.projects = sidebar::list();` sites, which A4
+does not; A9–A11 share `viewpane.rs` by arm, and each adds its own `Command` variants at the
+end of the enum. The bar for V1–V5 is the viewer plan's: every new `Command` and Slint
+callback reaches the headless harness, and a mutation check (delete the branch, watch a
+test fail) on each new arm. One track, one commit, pushed to `main`. `state.rs` and `app.rs` are hot files: A4 is
 their only Wave-1 owner; A1's placeholder pane and A2's ask-toast reach them through
 insertion points Wave 0 stubs.
 

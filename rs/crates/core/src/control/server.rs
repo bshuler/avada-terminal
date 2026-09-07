@@ -674,10 +674,7 @@ pub async fn run_reaper_ticker(shared: Arc<Shared>) {
         interval.tick().await;
         let reaped = shared.work.lock().unwrap().reap_expired(now_ms());
         if !reaped.is_empty() {
-            tracing::info!(
-                "reaper requeued/dead-lettered {} task(s)",
-                reaped.len()
-            );
+            tracing::info!("reaper requeued/dead-lettered {} task(s)", reaped.len());
         }
     }
 }
@@ -785,7 +782,13 @@ fn supervise_exit(shared: &Arc<Shared>, pane_id: &str, exited_uid: &str, code: i
             broadcast_supervisor(shared, pane_id, "completed", None, None, None, Some(code));
         }
         Decision::Exhausted { attempt, max, code } => {
-            tracing::warn!(pane_id, attempt, max, code, "supervised pane exhausted its restarts");
+            tracing::warn!(
+                pane_id,
+                attempt,
+                max,
+                code,
+                "supervised pane exhausted its restarts"
+            );
             broadcast_supervisor(
                 shared,
                 pane_id,
@@ -811,7 +814,14 @@ fn supervise_exit(shared: &Arc<Shared>, pane_id: &str, exited_uid: &str, code: i
                 Some(delay_ms),
                 Some(code),
             );
-            tracing::info!(pane_id, attempt, max, delay_ms, code, "supervised pane restart scheduled");
+            tracing::info!(
+                pane_id,
+                attempt,
+                max,
+                delay_ms,
+                code,
+                "supervised pane restart scheduled"
+            );
             let shared = Arc::clone(shared);
             let pane_id = pane_id.to_string();
             let exited_uid = exited_uid.to_string();
@@ -856,7 +866,10 @@ fn do_restart(
         })
     };
     let Some((status, current_uid, shell, args, command, cwd)) = recipe else {
-        tracing::info!(pane_id, "supervised restart dropped: pane closed during backoff");
+        tracing::info!(
+            pane_id,
+            "supervised restart dropped: pane closed during backoff"
+        );
         return;
     };
     if status == PaneStatus::Running || current_uid != exited_uid {
@@ -1130,7 +1143,10 @@ mod tests {
         do_restart(&shared, "p1", &uid, 1, 3, 1);
 
         let pane = shared.model.lock().unwrap().pane("p1").unwrap().clone();
-        assert_eq!(pane.session_uid, "u2", "the hand-started session must be left alone");
+        assert_eq!(
+            pane.session_uid, "u2",
+            "the hand-started session must be left alone"
+        );
         assert_eq!(pane.status, PaneStatus::Running);
         assert_eq!(shared.supervisor.lock().unwrap().retries_used("p1"), 0);
     }

@@ -626,7 +626,11 @@ mod tests {
         let path = dir.file();
         let first = Loops::at(path.clone());
         first.poll_at(1000, 60, 0);
-        assert_eq!(first.schedule().status_last, None, "scheduling is not firing");
+        assert_eq!(
+            first.schedule().status_last,
+            None,
+            "scheduling is not firing"
+        );
         assert_eq!(first.poll_at(1100, 60, 0), vec![LoopKind::Status]);
         assert_eq!(first.schedule().status_last, Some(1100));
         drop(first);
@@ -647,7 +651,11 @@ mod tests {
         l.poll_at(1100, 60, 0);
         l.poll_at(1101, 0, 0);
         assert_eq!(l.schedule().status_next, None);
-        assert_eq!(l.schedule().status_last, Some(1100), "history is not a schedule");
+        assert_eq!(
+            l.schedule().status_last,
+            Some(1100),
+            "history is not a schedule"
+        );
     }
 
     #[test]
@@ -735,7 +743,13 @@ mod tests {
             "cd '/w/proj' && claude --resume abc-123\r"
         );
         assert_eq!(
-            restart_line("claude", "claude", Some("/w/proj"), "CLAUDE_CONFIG_DIR='/c' ", Some("abc-123")),
+            restart_line(
+                "claude",
+                "claude",
+                Some("/w/proj"),
+                "CLAUDE_CONFIG_DIR='/c' ",
+                Some("abc-123")
+            ),
             "cd '/w/proj' && CLAUDE_CONFIG_DIR='/c' claude --resume abc-123\r"
         );
     }

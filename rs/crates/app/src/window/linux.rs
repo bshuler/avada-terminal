@@ -177,8 +177,10 @@ pub fn hwnd_of(win: &slint::Window) -> isize {
         }
     });
     if let Some(frameless) = fresh {
-        tracing::debug!("hwnd_of: realized raw={raw} wayland={}",
-            WAYLAND.get().copied().unwrap_or(false));
+        tracing::debug!(
+            "hwnd_of: realized raw={raw} wayland={}",
+            WAYLAND.get().copied().unwrap_or(false)
+        );
         // The hook does double duty:
         //  * feed the pointer tracker (the Wayland drag fallback) from this window's
         //    event stream — positions are physical px, window-relative;

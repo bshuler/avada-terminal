@@ -469,10 +469,13 @@ impl SessionRegistry {
         let events = self.events.clone();
         tokio::spawn(drive_session(pipeline, prx, events, sessions, uid.clone()));
 
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(uid, Session { pty: Arc::from(pty), shared });
+        self.sessions.lock().unwrap().insert(
+            uid,
+            Session {
+                pty: Arc::from(pty),
+                shared,
+            },
+        );
     }
 
     /// Re-create a session around a pty **inherited from a predecessor process** — the
