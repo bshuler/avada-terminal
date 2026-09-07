@@ -18,38 +18,41 @@ import { ListView } from "std-widgets.slint";
 component RowMark inherits Rectangle {
     in property <int> role;
     in property <color> ink;
+    // Drawn, not glyphed, so nothing scales it for free — every measurement below is
+    // multiplied by hand. See `ViewRowView::zoom`.
+    in property <float> zoom: 1.0;
 
-    width: 12px;
-    height: 12px;
+    width: 12px * root.zoom;
+    height: 12px * root.zoom;
 
     // a folder: a body with a raised tab on its leading edge
     if root.role == 0 || root.role == 1 : Rectangle {
         Rectangle {
-            x: 0; y: 2px;
-            width: 5px; height: 2px;
+            x: 0; y: 2px * root.zoom;
+            width: 5px * root.zoom; height: 2px * root.zoom;
             background: root.ink;
-            border-radius: 1px;
+            border-radius: 1px * root.zoom;
         }
         Rectangle {
-            x: 0; y: 3.5px;
-            width: 12px; height: 7.5px;
+            x: 0; y: 3.5px * root.zoom;
+            width: 12px * root.zoom; height: 7.5px * root.zoom;
             background: root.ink;
-            border-radius: 1.5px;
+            border-radius: 1.5px * root.zoom;
         }
     }
 
     // a page: a sheet with its top-trailing corner folded away
     if root.role == 2 : Rectangle {
         Rectangle {
-            x: 1.5px; y: 1px;
-            width: 9px; height: 10px;
+            x: 1.5px * root.zoom; y: 1px * root.zoom;
+            width: 9px * root.zoom; height: 10px * root.zoom;
             background: root.ink;
-            border-radius: 1.5px;
+            border-radius: 1.5px * root.zoom;
         }
         // the fold, punched out in the pane's own background
         Rectangle {
-            x: 7.5px; y: 0.5px;
-            width: 3.5px; height: 3.5px;
+            x: 7.5px * root.zoom; y: 0.5px * root.zoom;
+            width: 3.5px * root.zoom; height: 3.5px * root.zoom;
             background: Theme.bg;
         }
     }
@@ -61,6 +64,17 @@ component RowMark inherits Rectangle {
 component ViewRowView inherits Rectangle {
     in property <PaneViewRow> item;
     in property <color> accent;
+    // Cmd+= / Cmd+- / Cmd+0. The multiplier the pane derives from its own `font-px`, so a
+    // view pane answers the zoom chords the same way a terminal pane does — the chord was
+    // always reaching Rust, and the focused pane's `font_px` was always projected here; it
+    // was only this half of the app that never read it.
+    //
+    // Applied by hand rather than by a transform because Slint has none for a subtree: a
+    // row is absolute positions and hard-coded sizes, and every one of them has to be told.
+    // The exception is a mermaid diagram (role 12), whose box was measured Rust-side in
+    // `src/mermaid.rs` — scaling the frame without the layout inside it would only crop it,
+    // so a diagram keeps its own size and the prose around it grows past it.
+    in property <float> zoom: 1.0;
     // Inside the pane's selected row range: paints the highlight.
     in property <bool> selected;
     callback activate();
@@ -79,9 +93,9 @@ component ViewRowView inherits Rectangle {
     property <bool> heads: root.item.role >= 4 && root.item.role <= 6;
     // Where the text column starts. A list item steps in by its nesting; the
     // gutter to its left holds the dot, the ordinal or the task box.
-    property <length> lead: root.item.role == 8 ? 24px + root.item.indent * 14px
+    property <length> lead: (root.item.role == 8 ? 24px + root.item.indent * 14px
         : root.item.role == 9 ? 16px
-        : 8px;
+        : 8px) * root.zoom;
 
     // A rule is a divider, not a line of text; a blank line is air. A diagram
     // sizes itself: its height was decided by the layout in `src/mermaid.rs`, and
@@ -102,13 +116,15 @@ component ViewRowView inherits Rectangle {
     // The air a document wants then comes from the places that asked for it — the
     // blank-line rows (role 15) between paragraphs, and the heading padding below — rather
     // than from a uniform tax on every line.
+    // The flowing and heading rows measure themselves, so they follow the font size on
+    // their own; the fixed ones are told. A diagram's height came from Rust and stays.
     height: root.item.role == 12 ? root.item.diagram.h + 12px
-        : root.item.role == 10 ? 15px
-        : root.item.role == 15 ? 7px
-        : root.item.role == 13 || root.item.role == 14 ? 24px
-        : root.flows ? max(14px, flow.preferred-height)
-        : root.heads ? max(22px, head.preferred-height + 8px)
-        : 19px;
+        : root.item.role == 10 ? 15px * root.zoom
+        : root.item.role == 15 ? 7px * root.zoom
+        : root.item.role == 13 || root.item.role == 14 ? 24px * root.zoom
+        : root.flows ? max(14px * root.zoom, flow.preferred-height)
+        : root.heads ? max(22px * root.zoom, head.preferred-height + 8px * root.zoom)
+        : 19px * root.zoom;
     // Selection wins over hover: while a range is highlighted, the pointer moving
     // across it must not make one row of it look different from the rest.
     background: root.selected ? root.accent.with-alpha(0.22)
@@ -190,14 +206,14 @@ component ViewRowView inherits Rectangle {
         // source line out of the text shaper.
         text: root.item.md;
         default-color: root.item.role == 9 ? Theme.subtext : Theme.text;
-        default-font-size: 12px;
+        default-font-size: 12px * root.zoom;
         link-color: Theme.link;
         link-clicked(l) => { root.link-clicked(l); }
     }
     head := Text {
-        x: 8px;
-        y: 4px;
-        width: root.width - 16px;
+        x: 8px * root.zoom;
+        y: 4px * root.zoom;
+        width: root.width - 16px * root.zoom;
         visible: root.heads;
         // A heading is a plain Text because it needs a font weight, and
         // `StyledText` has no property for one — so its markers were stripped
@@ -205,7 +221,7 @@ component ViewRowView inherits Rectangle {
         text: root.heads ? root.item.text : "";
         wrap: word-wrap;
         color: root.item.role == 4 ? root.accent : Theme.text;
-        font-size: root.item.role == 4 ? 17px : root.item.role == 5 ? 14px : 12px;
+        font-size: (root.item.role == 4 ? 17px : root.item.role == 5 ? 14px : 12px) * root.zoom;
         font-weight: 700;
     }
 
@@ -220,8 +236,8 @@ component ViewRowView inherits Rectangle {
 
     // --- 9: block quote — the bar; the text is `flow`, dimmed ---
     if root.item.role == 9 : Rectangle {
-        x: 6px; y: 2px;
-        width: 2px; height: parent.height - 4px;
+        x: 6px * root.zoom; y: 2px * root.zoom;
+        width: 2px * root.zoom; height: parent.height - 4px * root.zoom;
         background: Theme.surface2;
     }
 
@@ -229,13 +245,13 @@ component ViewRowView inherits Rectangle {
     if root.item.role == 7 : Rectangle {
         background: Theme.text.with-alpha(0.06);
         Text {
-            x: 12px;
-            width: parent.width - 18px;
+            x: 12px * root.zoom;
+            width: parent.width - 18px * root.zoom;
             height: 100%;
             vertical-alignment: center;
             text: root.item.text;
             color: Theme.text;
-            font-size: 12px;
+            font-size: 12px * root.zoom;
             overflow: elide;
         }
     }
@@ -244,67 +260,70 @@ component ViewRowView inherits Rectangle {
     // A dot, an ordinal or a task box, all drawn: "•" and "☑" are font glyphs,
     // and a missing codepoint renders as a hollow box on Windows.
     if root.item.role == 8 && root.item.check < 0 && root.item.marker == "" : Rectangle {
-        x: root.lead - 12px;
+        x: root.lead - 12px * root.zoom;
         // Each gutter mark tracks `flow.y`: they line up with the item's *first* line, not
         // with the row box, which grows downward as the item wraps.
-        y: 5px;
-        width: 3px; height: 3px;
-        border-radius: 1.5px;
+        y: 5px * root.zoom;
+        width: 3px * root.zoom; height: 3px * root.zoom;
+        border-radius: 1.5px * root.zoom;
         background: Theme.subtext;
     }
     if root.item.role == 8 && root.item.check < 0 && root.item.marker != "" : Text {
         // Right-aligned so "9." and "10." share an edge instead of ragging.
         x: 0;
-        width: root.lead - 6px;
+        width: root.lead - 6px * root.zoom;
         y: 0;
         horizontal-alignment: right;
         text: root.item.marker;
         color: Theme.subtext;
-        font-size: 12px;
+        font-size: 12px * root.zoom;
     }
     if root.item.role == 8 && root.item.check >= 0 : Rectangle {
-        x: root.lead - 15px;
-        y: 1px;
-        width: 11px; height: 11px;
-        border-radius: 2px;
-        border-width: 1px;
+        x: root.lead - 15px * root.zoom;
+        y: 1px * root.zoom;
+        width: 11px * root.zoom; height: 11px * root.zoom;
+        border-radius: 2px * root.zoom;
+        border-width: 1px * root.zoom;
         border-color: root.item.check == 1 ? Theme.ok : Theme.faint;
         background: root.item.check == 1 ? Theme.ok.with-alpha(0.18) : transparent;
         // The tick, stroked rather than glyphed, for the same reason as the dot.
         if root.item.check == 1 : Path {
-            x: 2px; y: 2px;
-            width: 7px; height: 7px;
+            x: 2px * root.zoom; y: 2px * root.zoom;
+            width: 7px * root.zoom; height: 7px * root.zoom;
+            // The viewbox is unitless and the path is drawn in it, so the SVG scales with
+            // the box above on its own — only the stroke is in screen px.
             viewbox-width: 7;
             viewbox-height: 7;
             commands: "M 0.4 3.5 L 2.6 5.8 L 6.6 1.1";
             stroke: Theme.ok;
-            stroke-width: 1.5px;
+            stroke-width: 1.5px * root.zoom;
             fill: transparent;
         }
     }
 
     // --- 11: notice — the app talking, not the file ---
     if root.item.role == 11 : Text {
-        x: 8px;
-        width: parent.width - 14px;
+        x: 8px * root.zoom;
+        width: parent.width - 14px * root.zoom;
         height: 100%;
         vertical-alignment: center;
         text: root.item.text;
         color: Theme.faint;
         font-italic: true;
-        font-size: 11px;
+        font-size: 11px * root.zoom;
         overflow: elide;
     }
 
     // --- 0/1/2: a listing row — mark, name, and a dim trailing detail column ---
     if root.item.role <= 2 : HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 7px;
+        padding-left: 8px * root.zoom;
+        padding-right: 8px * root.zoom;
+        spacing: 7px * root.zoom;
         VerticalLayout {
             alignment: center;
             RowMark {
                 role: root.item.role;
+                zoom: root.zoom;
                 // ".." and directories take the accent so the navigable rows read
                 // as a group; files stay dim.
                 ink: root.item.role == 2 ? Theme.faint : root.accent;
@@ -316,14 +335,14 @@ component ViewRowView inherits Rectangle {
             text: root.item.text;
             color: root.item.role == 2 ? Theme.text : Theme.text;
             font-weight: root.item.role == 2 ? 400 : 600;
-            font-size: 12px;
+            font-size: 12px * root.zoom;
             overflow: elide;
         }
         Text {
             vertical-alignment: center;
             text: root.item.detail;
             color: Theme.faint;
-            font-size: 10px;
+            font-size: 10px * root.zoom;
         }
     }
 
@@ -456,16 +475,16 @@ component ViewRowView inherits Rectangle {
     if root.item.role == 13 || root.item.role == 14 : Rectangle {
         background: root.item.role == 13 ? Theme.text.with-alpha(0.03) : transparent;
         HorizontalLayout {
-            padding-left: 8px;
-            padding-right: 8px;
-            spacing: 10px;
+            padding-left: 8px * root.zoom;
+            padding-right: 8px * root.zoom;
+            spacing: 10px * root.zoom;
             for c in root.item.cells : StyledText {
                 horizontal-stretch: 1;
                 vertical-alignment: center;
                 horizontal-alignment: c.align == 1 ? center : c.align == 2 ? right : left;
                 text: c.md;
                 default-color: root.item.role == 13 ? root.accent : Theme.text;
-                default-font-size: 12px;
+                default-font-size: 12px * root.zoom;
                 link-color: Theme.link;
                 link-clicked(l) => { root.link-clicked(l); }
             }
@@ -523,6 +542,19 @@ export component ViewPane inherits Rectangle {
     // drawn by the terminal widget; a view pane covers that widget entirely, so without a
     // copy of it here a copy from a view pane would confirm itself to nobody.
     in property <string> toast;
+    // The focused-pane zoom, in the same units the terminal uses: `PaneItem::font-px`,
+    // which Ctrl/Cmd+= / +- / +0 move through `State::font_zoom` and which a workspace file
+    // already persists as `fontSize`. Every pane has carried it all along; this view is
+    // simply the half that now reads it.
+    //
+    // Divided by the DEFAULT rather than by the user's configured base, so the multiplier
+    // here is the same number the zoom toast flashes in the corner ("114%") — one reading
+    // for what the chord just did, not two.
+    in property <length> font-px: 14px;
+    // A pane that has never been told a size reports 0, not 14 — the default above only
+    // applies when nothing binds the property at all. Reading that literally would collapse
+    // every row to nothing, so an out-of-range value means "unzoomed" rather than "invisible".
+    property <float> zoom: root.font-px < 1px ? 1.0 : root.font-px / 14px;
     // Reports the row INDEX; the controller resolves it against the same cached
     // projection it handed to this view.
     callback activate(int);
@@ -564,6 +596,7 @@ export component ViewPane inherits Rectangle {
             for it[i] in root.rows : ViewRowView {
                 item: it;
                 accent: root.accent;
+                zoom: root.zoom;
                 selected: root.sel-lo >= 0 && i >= root.sel-lo && i <= root.sel-hi;
                 activate => { root.activate(i); }
                 select(ext) => { root.select(i, ext); }

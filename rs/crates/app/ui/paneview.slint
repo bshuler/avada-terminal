@@ -718,6 +718,11 @@ export component PaneView inherits Rectangle {
                         sel-lo: pane.view-sel-lo;
                         sel-hi: pane.view-sel-hi;
                         toast: pane.toast;
+                        // Cmd/Ctrl+= / +- / +0. The same per-pane `font-px` the terminal
+                        // widget renders at, so one pair of chords means one thing whatever
+                        // kind of pane has focus — and a zoomed view pane comes back zoomed,
+                        // because the workspace file was already recording `fontSize`.
+                        font-px: pane.font-px;
                         activate(i) => {
                             root.focus-pane(idx);
                             root.pane-view-activate(idx, i);

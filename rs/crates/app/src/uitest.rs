@@ -1936,6 +1936,21 @@ fn install_view_pane(
     sel: (i32, i32),
     toast: &str,
 ) {
+    install_view_pane_at(w, kind, title, rows, sel, toast, crate::prefs::DEFAULT_FONT_PX);
+}
+
+/// The same pane at a chosen font size — what `Ctrl/Cmd+=` and `+-` move through
+/// `State::font_zoom`, and what a workspace file persists as `fontSize`. Every pane has
+/// always carried it; only the terminal half used to read it.
+fn install_view_pane_at(
+    w: &crate::AppWindow,
+    kind: i32,
+    title: &str,
+    rows: Vec<crate::PaneViewRow>,
+    sel: (i32, i32),
+    toast: &str,
+    font_px: f32,
+) {
     w.set_panes(
         std::rc::Rc::new(slint::VecModel::from(vec![crate::PaneItem {
             title: "the pane".into(),
@@ -1951,6 +1966,7 @@ fn install_view_pane(
             view_sel_lo: sel.0,
             view_sel_hi: sel.1,
             toast: toast.into(),
+            font_px,
             ..Default::default()
         }]))
         .into(),
@@ -2231,5 +2247,161 @@ fn the_breadcrumb_names_the_target_not_the_pane() {
         only(&w, "src/main.rs", AccessibleRole::Text);
         // …and it is not the pane's own title, which the header draws separately.
         assert!(!by_label(&w, "the pane").is_empty());
+    });
+}
+
+// ===== zoom in a view pane =====
+//
+// `Cmd/Ctrl+=`, `+-` and `+0` were always reaching Rust: the chord resolves
+// (`keybindings::font_zoom_chords_resolve`), `State::font_zoom` moves the focused pane's
+// `font_px` with no pane-kind gate, the toast flashed the new percentage, and a workspace
+// file already persisted it as `fontSize`. The one missing hop was here — `ViewPane` never
+// read `PaneItem::font-px`, so in a file browser, viewer or markdown preview the chord
+// fired, the corner said "114%", and nothing on screen moved. That is precisely the class
+// of defect no per-function test can see: every link type-checked, and the feature was
+// still dead on the screen the user was looking at.
+
+/// The height of the row that draws `label`, in logical px.
+fn row_height(w: &crate::AppWindow, label: &str) -> f32 {
+    only(w, label, AccessibleRole::ListItem).size().height
+}
+
+/// One listing row, measured at three font sizes. `19px` is the fixed row height the view
+/// draws at the default; the assertion is proportionality rather than a magic number, so
+/// re-tuning the row does not break the test — only losing the zoom does.
+#[test]
+fn zoom_grows_and_shrinks_a_view_pane_row() {
+    ui(|| {
+        let w = window();
+        let rows = || vec![listing(2, "README.md", "2.1 kB · 3d", false)];
+
+        install_view_pane_at(&w, 2, "code", rows(), (-1, -1), "", 14.0);
+        let base = row_height(&w, "README.md");
+
+        install_view_pane_at(&w, 2, "code", rows(), (-1, -1), "", 28.0);
+        let doubled = row_height(&w, "README.md");
+
+        install_view_pane_at(&w, 2, "code", rows(), (-1, -1), "", 8.0);
+        let smallest = row_height(&w, "README.md");
+
+        assert!(base > 0.0, "the base row has to exist before it can grow");
+        assert!(
+            (doubled - base * 2.0).abs() < 0.5,
+            "twice the font is twice the row: {base} → {doubled}"
+        );
+        assert!(
+            smallest < base,
+            "the minimum font size has to shrink the row: {base} → {smallest}"
+        );
+    });
+}
+
+/// The chord says "any pane", so all three Family B kinds have to answer it — the browser
+/// listing, the viewer's verbatim lines and the preview's prose each measure themselves a
+/// different way, and only one of the three shares a code path with the others.
+#[test]
+fn every_view_kind_answers_the_zoom_chord() {
+    ui(|| {
+        let w = window();
+        let prose = crate::PaneViewRow {
+            role: 16,
+            text: "A terminal multiplexer.".into(),
+            ..Default::default()
+        };
+        let cases: [(i32, crate::PaneViewRow, &str); 3] = [
+            (2, listing(2, "README.md", "", false), "README.md"),
+            (3, line(1, "fn main() {"), "Line 1: fn main() {"),
+            (4, prose, "A terminal multiplexer."),
+        ];
+
+        for (kind, row, label) in cases {
+            install_view_pane_at(&w, kind, "t", vec![row.clone()], (-1, -1), "", 10.0);
+            let small = row_height(&w, label);
+            install_view_pane_at(&w, kind, "t", vec![row], (-1, -1), "", 24.0);
+            let large = row_height(&w, label);
+            assert!(
+                large > small,
+                "pane kind {kind} ignored the zoom: {small} → {large}"
+            );
+        }
+    });
+}
+
+/// Chrome does not scale. A browser's Cmd+ grows the page and leaves the toolbar alone;
+/// the breadcrumb that says which file this is, and the toast that says what just
+/// happened, are this pane's toolbar.
+#[test]
+fn the_pane_chrome_holds_its_size_while_the_content_zooms() {
+    ui(|| {
+        let w = window();
+        let rows = || vec![listing(2, "README.md", "", false)];
+
+        install_view_pane_at(&w, 2, "src/main.rs", rows(), (-1, -1), "Copied 12 lines", 14.0);
+        let crumb = only(&w, "src/main.rs", AccessibleRole::Text).size();
+        let toast = only(&w, "Copied 12 lines", AccessibleRole::Text).size();
+
+        install_view_pane_at(&w, 2, "src/main.rs", rows(), (-1, -1), "Copied 12 lines", 28.0);
+        assert_eq!(
+            only(&w, "src/main.rs", AccessibleRole::Text).size().height,
+            crumb.height,
+            "the breadcrumb is chrome, not content"
+        );
+        assert_eq!(
+            only(&w, "Copied 12 lines", AccessibleRole::Text).size().height,
+            toast.height,
+            "so is the toast"
+        );
+    });
+}
+
+/// A mermaid diagram is laid out in Rust (`src/mermaid.rs`) and arrives here already
+/// measured, so scaling the frame around it would crop the drawing rather than magnify it.
+/// It keeps its own size deliberately, and the prose around it grows past it — a known
+/// limit, pinned here so it stays a decision rather than becoming a regression.
+#[test]
+fn a_diagram_keeps_the_size_rust_measured_for_it() {
+    ui(|| {
+        let w = window();
+        let diagram = || crate::PaneViewRow {
+            role: 12,
+            diagram: crate::PaneDiagram {
+                w: 400.0,
+                h: 120.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        install_view_pane_at(&w, 4, "README.md", vec![diagram()], (-1, -1), "", 14.0);
+        let base = row_height(&w, "Diagram");
+        install_view_pane_at(&w, 4, "README.md", vec![diagram()], (-1, -1), "", 28.0);
+        assert_eq!(
+            row_height(&w, "Diagram"),
+            base,
+            "the box was measured before it got here; growing it alone would only crop it"
+        );
+    });
+}
+
+/// A pane whose size was never set reports 0, not the property's default — the default
+/// only applies where nothing binds it at all. Read literally that would divide the whole
+/// view down to nothing, which is a blank pane rather than a small one.
+#[test]
+fn an_unsized_pane_renders_unzoomed_rather_than_invisible() {
+    ui(|| {
+        let w = window();
+        install_view_pane_at(
+            &w,
+            2,
+            "code",
+            vec![listing(2, "README.md", "", false)],
+            (-1, -1),
+            "",
+            0.0,
+        );
+        assert!(
+            row_height(&w, "README.md") > 0.0,
+            "an out-of-range font size means unzoomed, not collapsed"
+        );
     });
 }
