@@ -15,6 +15,12 @@ import { PrefBrowserRow } from "types.slint";
 component AbRow inherits Rectangle {
     in property <string> label;
     callback clicked;
+    // Named for the same reason `TipArea` names the icon buttons: a button whose label is
+    // drawn by a child `Text` announces nothing itself, so a screen reader — and a UI test —
+    // sees an anonymous rectangle beside a stray caption.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
     height: 36px;
     border-radius: 7px;
     background: ta.has-hover ? Theme.surface2 : Theme.surface;
@@ -41,6 +47,12 @@ component AbRow inherits Rectangle {
 component AbButton inherits Rectangle {
     in property <string> label;
     callback clicked;
+    // Named for the same reason `TipArea` names the icon buttons: a button whose label is
+    // drawn by a child `Text` announces nothing itself, so a screen reader — and a UI test —
+    // sees an anonymous rectangle beside a stray caption.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
     height: 32px;
     min-width: 84px;
     border-radius: 7px;

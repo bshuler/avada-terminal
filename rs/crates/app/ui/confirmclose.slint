@@ -21,6 +21,12 @@ component CcButton inherits Rectangle {
     in property <bool> primary;
     in property <bool> danger;
     callback clicked;
+    // Named for the same reason `TipArea` names the icon buttons: a button whose label is
+    // drawn by a child `Text` announces nothing itself, so a screen reader — and a UI test —
+    // sees an anonymous rectangle beside a stray caption.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
     height: 32px;
     min-width: 92px;
     border-radius: 7px;
@@ -133,6 +139,10 @@ export component ConfirmCloseDialog inherits Rectangle {
             // measuring it, and Slint rejects the loop.
             if !root.final-close : Rectangle {
                 height: 18px;
+                accessible-role: checkbox;
+                accessible-label: "Ask before closing";
+                accessible-checked: root.ask;
+                accessible-action-default => { root.set-ask(!root.ask); }
                 cbta := TouchArea { mouse-cursor: pointer; clicked => { root.set-ask(!root.ask); } }
                 HorizontalLayout {
                     spacing: 8px;

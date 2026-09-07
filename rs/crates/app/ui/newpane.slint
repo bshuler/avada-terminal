@@ -83,6 +83,10 @@ component NpToggle inherits Rectangle {
     in property <string> label;
     in property <bool> on;
     callback toggled(bool);
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checked: root.on;
+    accessible-action-default => { root.toggled(!root.on); }
     height: 26px;
     border-radius: 6px;
     background: ta.has-hover ? Theme.surface2 : transparent;
@@ -189,6 +193,12 @@ component NpButton inherits Rectangle {
     in property <string> label;
     in property <bool> primary: false;
     callback clicked;
+    // Named for the same reason `TipArea` names the icon buttons: a button whose label is
+    // drawn by a child `Text` announces nothing itself, so a screen reader — and a UI test —
+    // sees an anonymous rectangle beside a stray caption.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
     height: 32px;
     min-width: 84px;
     border-radius: 7px;

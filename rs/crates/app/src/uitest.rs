@@ -756,3 +756,503 @@ fn the_add_project_button_reaches_rust() {
         assert!(fired.get(), "it must reach open-add-project");
     });
 }
+
+// ===== the overlays, the dialogs and the context menus =====
+//
+// Everything mounted at the window root behind `overlay-kind` or `ctx-kind`. None of it
+// was reachable from a test until the components carried accessible names — which is the
+// same sentence as "none of it was reachable from a screen reader", and the reason
+// "Show Diff" could ship as a menu row nothing ever pressed.
+
+use i_slint_backend_testing::AccessibleRole;
+
+/// Controls announcing themselves with this label *and* this role.
+///
+/// Slint gives every `Text` an automatic `accessible-label` of its own string and the role
+/// `text` (`builtins.slint`), so a card's heading and the button repeating that word are
+/// both findable by label — only one of them is pressable. The role is what tells them
+/// apart. The alternative, stripping the caption's name so the label is unique, would make
+/// the screen reader worse in order to make the test easier.
+fn by_role(w: &crate::AppWindow, label: &str, role: AccessibleRole) -> Vec<ElementHandle> {
+    by_label(w, label)
+        .into_iter()
+        .filter(|e| e.accessible_role() == Some(role))
+        .collect()
+}
+
+/// Exactly one control with this label and role, or a failure naming what was found. Every
+/// overlay test wants this shape, and "found 0" vs "found 2" are different bugs.
+fn only(w: &crate::AppWindow, label: &str, role: AccessibleRole) -> ElementHandle {
+    let found = by_role(w, label, role);
+    assert_eq!(
+        found.len(),
+        1,
+        "expected exactly one {role:?} named {label:?}, found {}",
+        found.len()
+    );
+    found.into_iter().next().unwrap()
+}
+
+/// A plain top-level menu row. `kind: 0` is an item; `-1` is a separator and `>= 2` opens a
+/// submenu, which is why the index a row reports is not its position among the *rows*.
+fn menu_row(label: &str) -> crate::MenuEntry {
+    crate::MenuEntry {
+        label: label.into(),
+        ..Default::default()
+    }
+}
+
+/// Post a context menu, the way a right-click on a pane header does.
+fn install_menu(w: &crate::AppWindow, entries: Vec<crate::MenuEntry>) {
+    w.set_ctx_x(140.0);
+    w.set_ctx_y(120.0);
+    w.set_ctx_entries(std::rc::Rc::new(slint::VecModel::from(entries)).into());
+    w.set_ctx_kind(1);
+}
+
+/// The defect the user reported, one layer up from the git panel: a menu row that draws but
+/// dispatches nothing. The separator makes this sharper than "something fired" — the row
+/// must report its own index in `ctx-entries`, and a menu whose separators were skipped
+/// while counting would run the neighbouring command instead.
+#[test]
+fn a_context_menu_row_reaches_rust_with_its_own_index() {
+    ui(|| {
+        let w = window();
+        install_menu(
+            &w,
+            vec![
+                menu_row("Split Right"),
+                crate::MenuEntry {
+                    kind: -1,
+                    ..Default::default()
+                },
+                menu_row("Show Diff"),
+            ],
+        );
+
+        let picked = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let picked = picked.clone();
+            w.on_ctx_pick(move |i| picked.set(i));
+        }
+
+        click(&w, &only(&w, "Show Diff", AccessibleRole::Button));
+        assert_eq!(
+            picked.get(),
+            2,
+            "the row must report its index in ctx-entries, separators counted"
+        );
+    });
+}
+
+/// A greyed row must be inert, not merely grey. The menus disable rows that would act on
+/// nothing (Show Diff on an untracked file), and a disabled row that still dispatched would
+/// be a worse bug than no row at all.
+#[test]
+fn a_disabled_context_menu_row_cannot_be_clicked() {
+    ui(|| {
+        let w = window();
+        install_menu(
+            &w,
+            vec![
+                menu_row("Close Pane"),
+                crate::MenuEntry {
+                    label: "Show Diff".into(),
+                    disabled: true,
+                    ..Default::default()
+                },
+            ],
+        );
+
+        let picked = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let picked = picked.clone();
+            w.on_ctx_pick(move |i| picked.set(i));
+        }
+
+        let row = only(&w, "Show Diff", AccessibleRole::Button);
+        assert_eq!(
+            row.accessible_enabled(),
+            Some(false),
+            "a disabled row must say so, not just draw itself faintly"
+        );
+        click(&w, &row);
+        assert_eq!(picked.get(), -1, "a disabled row must dispatch nothing");
+    });
+}
+
+/// A separator is decoration. If it were a row it would be pickable, and picking it would
+/// dispatch an index the Rust side maps to a real command.
+#[test]
+fn a_context_menu_separator_is_not_a_row() {
+    ui(|| {
+        let w = window();
+        install_menu(
+            &w,
+            vec![
+                menu_row("Close Pane"),
+                crate::MenuEntry {
+                    kind: -1,
+                    ..Default::default()
+                },
+            ],
+        );
+        let rows: Vec<_> = ElementHandle::find_by_element_id(&w, "ContextMenu::row").collect();
+        assert_eq!(rows.len(), 1, "two entries, one of them a rule, is one row");
+    });
+}
+
+/// Publish a command palette with `sel` highlighted.
+fn install_palette(w: &crate::AppWindow, rows: &[(&str, &str)], sel: i32) {
+    let items: Vec<crate::PaletteItem> = rows
+        .iter()
+        .map(|(t, s)| crate::PaletteItem {
+            title: (*t).into(),
+            subtitle: (*s).into(),
+        })
+        .collect();
+    w.set_palette(std::rc::Rc::new(slint::VecModel::from(items)).into());
+    w.set_palette_sel(sel);
+    w.set_overlay_kind(1);
+}
+
+/// Clicking a palette row must select it *and then* run it. The order is the whole point:
+/// `palette-activate` runs whatever `palette-sel` currently is, so activating before
+/// picking would run the row the keyboard cursor happened to be on — the row above.
+#[test]
+fn clicking_a_palette_row_selects_it_before_running_it() {
+    ui(|| {
+        let w = window();
+        install_palette(
+            &w,
+            &[("New Pane", "Ctrl+T"), ("Show Diff", ""), ("Preferences", "")],
+            0,
+        );
+
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        {
+            let log = log.clone();
+            w.on_palette_pick(move |i| log.borrow_mut().push(format!("pick {i}")));
+        }
+        {
+            let log = log.clone();
+            w.on_palette_activate(move || log.borrow_mut().push("activate".into()));
+        }
+
+        click(&w, &only(&w, "Show Diff", AccessibleRole::Button));
+        assert_eq!(
+            log.borrow().as_slice(),
+            ["pick 1".to_string(), "activate".to_string()],
+            "a palette row must pick itself, then activate"
+        );
+    });
+}
+
+/// The highlight is the keyboard cursor: it is the row Enter runs. Drawing it as a
+/// background tint alone tells a screen reader nothing, and tells this test nothing either.
+#[test]
+fn the_palette_announces_which_row_is_selected() {
+    ui(|| {
+        let w = window();
+        install_palette(&w, &[("New Pane", ""), ("Show Diff", "")], 1);
+
+        assert_eq!(
+            only(&w, "Show Diff", AccessibleRole::Button).accessible_checked(),
+            Some(true),
+            "the selected row must announce itself as the selected one"
+        );
+        assert_eq!(
+            only(&w, "New Pane", AccessibleRole::Button).accessible_checked(),
+            Some(false),
+            "…and only that row"
+        );
+    });
+}
+
+/// An empty result set must say so rather than leaving a blank card, which reads as a hung
+/// palette.
+#[test]
+fn an_empty_palette_says_so() {
+    ui(|| {
+        let w = window();
+        install_palette(&w, &[], 0);
+        assert!(
+            !by_label(&w, "No matching commands").is_empty(),
+            "a palette with no matches must show its empty state"
+        );
+    });
+}
+
+/// Put up the close confirmation. `final_close` is the last pane in the window, where the
+/// close is irreversible and the "ask me" opt-out is withheld.
+fn open_confirm_close(w: &crate::AppWindow, final_close: bool) {
+    w.set_cc_title("bash — ~/code/hyperpanes".into());
+    w.set_cc_final(final_close);
+    w.set_cc_ask(true);
+    w.set_overlay_kind(7);
+}
+
+/// The confirmation exists to stop an accidental close; a Close button that reached nothing
+/// would strand the pane behind a card the user cannot get past.
+#[test]
+fn the_close_confirmation_confirms() {
+    ui(|| {
+        let w = window();
+        open_confirm_close(&w, false);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_confirm_close_go(move || fired.set(true));
+        }
+
+        click(&w, &only(&w, "Close", AccessibleRole::Button));
+        assert!(fired.get(), "Close must reach confirm-close-go");
+    });
+}
+
+/// The opt-out is a checkbox drawn from a Path and a caption, with no platform checkbox
+/// anywhere in it — so its state exists only in what it announces.
+#[test]
+fn the_close_confirmation_opt_out_toggles_and_reaches_rust() {
+    ui(|| {
+        let w = window();
+        open_confirm_close(&w, false);
+
+        let asked = std::rc::Rc::new(std::cell::Cell::new(true));
+        {
+            let asked = asked.clone();
+            w.on_set_confirm_close(move |on| asked.set(on));
+        }
+
+        let box_ = only(&w, "Ask before closing", AccessibleRole::Checkbox);
+        assert_eq!(
+            box_.accessible_checked(),
+            Some(true),
+            "the box must start ticked — that is the state it is drawn in"
+        );
+        click(&w, &box_);
+        assert!(
+            !asked.get(),
+            "clicking a ticked box must ask Rust to switch it off"
+        );
+    });
+}
+
+/// Closing the last pane closes the window, and that one cannot be undone — so the card
+/// changes its verb and withholds the "stop asking me" opt-out entirely.
+#[test]
+fn the_final_close_is_named_differently_and_offers_no_opt_out() {
+    ui(|| {
+        let w = window();
+        open_confirm_close(&w, true);
+
+        assert_eq!(
+            by_role(&w, "Close Window", AccessibleRole::Button).len(),
+            1,
+            "the last-pane close must name the window it is closing"
+        );
+        assert!(
+            by_role(&w, "Ask before closing", AccessibleRole::Checkbox).is_empty(),
+            "the irreversible confirmation must not be silenceable"
+        );
+    });
+}
+
+/// The "Open link with…" chooser. Each row is a browser the OS reported; the index is the
+/// only thing that gets back to Rust, so a row wired to the wrong one opens the wrong app.
+#[test]
+fn the_browser_chooser_returns_the_row_that_was_clicked() {
+    ui(|| {
+        let w = window();
+        w.set_ask_url("https://example.com/a".into());
+        let rows: Vec<crate::PrefBrowserRow> = [("com.apple.Safari", "Safari"), ("org.mozilla.firefox", "Firefox")]
+            .iter()
+            .map(|(id, name)| crate::PrefBrowserRow {
+                id: (*id).into(),
+                name: (*name).into(),
+                active: false,
+            })
+            .collect();
+        w.set_ask_browsers(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        w.set_overlay_kind(6);
+
+        let picked = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let picked = picked.clone();
+            w.on_pick_browser(move |i| picked.set(i));
+        }
+
+        click(&w, &only(&w, "Firefox", AccessibleRole::Button));
+        assert_eq!(picked.get(), 1, "the second row must report index 1");
+    });
+}
+
+/// The Add-Project dialog, and the duplicate-label trap in one test: the card's heading and
+/// its submit button are both "Add project", so a label-only search finds two elements and
+/// only one of them can be pressed.
+#[test]
+fn the_add_project_dialog_submits() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(4);
+
+        assert_eq!(
+            by_label(&w, "Add project").len(),
+            3,
+            "the heading, the button and the button's own caption all carry the phrase — \
+             which is why the role, not the label, is what picks the pressable one"
+        );
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_submit_add_project(move |_| fired.set(true));
+        }
+
+        click(&w, &only(&w, "Add project", AccessibleRole::Button));
+        assert!(fired.get(), "the button must reach submit-add-project");
+    });
+}
+
+/// An inline validation error must actually appear; a dialog that rejects a path silently
+/// looks like a dead button.
+#[test]
+fn the_add_project_dialog_shows_its_error() {
+    ui(|| {
+        let w = window();
+        w.set_ap_error("that folder does not exist".into());
+        w.set_overlay_kind(4);
+        assert!(
+            !by_label(&w, "that folder does not exist").is_empty(),
+            "ap-error must be rendered, not just held"
+        );
+    });
+}
+
+/// Seed the New-Pane dialog. Its colour row indexes `swatches` and its shell dropdown
+/// indexes `shells`, so both must be non-empty for the card to be the card a user sees.
+fn open_new_pane(w: &crate::AppWindow) {
+    w.set_np_swatches(
+        std::rc::Rc::new(slint::VecModel::from(vec![
+            slint::Color::from_rgb_u8(0xe0, 0x60, 0x60),
+            slint::Color::from_rgb_u8(0x60, 0xa0, 0xe0),
+        ]))
+        .into(),
+    );
+    w.set_np_shells(
+        std::rc::Rc::new(slint::VecModel::from(vec![crate::PrefOption {
+            id: 0,
+            label: "zsh".into(),
+            active: true,
+        }]))
+        .into(),
+    );
+    w.set_np_default_idx(0);
+    w.set_overlay_kind(3);
+}
+
+/// The dialog is the only route to a pane with a chosen shell, command or colour; the ＋
+/// beside it makes a default one. If Create reached nothing the whole card would be a form
+/// that discards what you typed.
+#[test]
+fn the_new_pane_dialog_creates() {
+    ui(|| {
+        let w = window();
+        open_new_pane(&w);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_submit_new_pane(move |_, _, _, _, _, _, _| fired.set(true));
+        }
+
+        click(&w, &only(&w, "Create pane", AccessibleRole::Button));
+        assert!(fired.get(), "Create pane must reach submit-new-pane");
+    });
+}
+
+/// Show Frame / Show Dot are dialog-local state — nothing in Rust sees them until submit —
+/// so the only observable proof the toggle works is the state it announces afterwards.
+#[test]
+fn the_new_pane_frame_toggle_flips() {
+    ui(|| {
+        let w = window();
+        open_new_pane(&w);
+
+        let before = only(&w, "Show Frame", AccessibleRole::Checkbox);
+        assert_eq!(
+            before.accessible_checked(),
+            Some(false),
+            "the card opens with no colour picked, so the frame starts off"
+        );
+        click(&w, &before);
+        assert_eq!(
+            only(&w, "Show Frame", AccessibleRole::Checkbox).accessible_checked(),
+            Some(true),
+            "clicking the toggle must switch it on"
+        );
+    });
+}
+
+/// The preferences rail. Seven panels behind seven items, and the panel you cannot reach is
+/// the panel whose settings may as well not exist.
+#[test]
+fn the_preferences_rail_switches_panels() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(2);
+
+        for name in [
+            "Appearance",
+            "Terminal",
+            "AI features",
+            "Keybindings",
+            "General",
+            "Tools",
+            "Browser",
+        ] {
+            assert_eq!(
+                by_role(&w, name, AccessibleRole::Tab).len(),
+                1,
+                "the rail must offer {name}"
+            );
+        }
+
+        assert_eq!(
+            only(&w, "Appearance", AccessibleRole::Tab).accessible_checked(),
+            Some(true),
+            "the card opens on Appearance"
+        );
+        click(&w, &only(&w, "Keybindings", AccessibleRole::Tab));
+        assert_eq!(
+            only(&w, "Keybindings", AccessibleRole::Tab).accessible_checked(),
+            Some(true),
+            "clicking a rail item must select its panel"
+        );
+        assert_eq!(
+            only(&w, "Appearance", AccessibleRole::Tab).accessible_checked(),
+            Some(false),
+            "…and deselect the one that was showing"
+        );
+    });
+}
+
+/// Done is what commits the appearance draft. A Done that reached nothing would look like
+/// preferences that silently forget every change.
+#[test]
+fn the_preferences_done_button_reaches_rust() {
+    ui(|| {
+        let w = window();
+        w.set_overlay_kind(2);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_pref_done(move || fired.set(true));
+        }
+
+        click(&w, &only(&w, "Done", AccessibleRole::Button));
+        assert!(fired.get(), "Done must reach pref-done");
+    });
+}

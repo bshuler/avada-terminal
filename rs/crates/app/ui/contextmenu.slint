@@ -226,6 +226,13 @@ component CtxRow inherits Rectangle {
     callback clicked();
     // Fires on hover enter/leave (true/false) so the menu can open a submenu on hover.
     callback hover-changed(bool);
+    // The row's own name is the entry it draws. Without this the whole menu is a stack of
+    // unnamed rectangles with captions floating in them — unreadable to a screen reader and
+    // unaddressable from a UI test, which is how "Show Diff" shipped unexercised.
+    accessible-role: button;
+    accessible-label: root.e.label;
+    accessible-enabled: !root.e.disabled;
+    accessible-action-default => { root.clicked(); }
     height: 30px;
     border-radius: 6px;
     background: e.disabled ? transparent

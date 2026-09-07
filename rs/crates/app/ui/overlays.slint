@@ -114,6 +114,14 @@ component NavItem inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     callback clicked;
+    // A real `tab`, not a `button`: this component has exactly one use site — the
+    // preferences rail — so the constant `accessible-role` Slint demands can afford to be
+    // the accurate word here, unlike the shared `TipArea`. `accessible-checked` carries
+    // which panel is showing.
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-checked: root.active;
+    accessible-action-default => { root.clicked(); }
     height: 32px;
     border-radius: 6px;
     background: root.active ? Theme.surface2 : (ta.has-hover ? Theme.surface : transparent);
@@ -297,6 +305,12 @@ component Pill inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     callback clicked;
+    // Named for the same reason `TipArea` names the icon buttons: a button whose label is
+    // drawn by a child `Text` announces nothing itself, so a screen reader — and a UI test —
+    // sees an anonymous rectangle beside a stray caption.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
     height: 28px;
     min-width: 28px;
     border-radius: 6px;
@@ -593,6 +607,16 @@ export component OverlayLayer inherits Rectangle {
                     }
                     for row[i] in root.palette : Rectangle {
                         height: 34px;
+                        // Named by the command it runs; `accessible-checked` is the
+                        // keyboard cursor, which is the row Enter would activate.
+                        accessible-role: button;
+                        accessible-label: row.title;
+                        accessible-description: row.subtitle;
+                        accessible-checked: i == root.palette-sel;
+                        accessible-action-default => {
+                            root.palette-pick(i);
+                            root.palette-activate();
+                        }
                         border-radius: 7px;
                         background: i == root.palette-sel ? Theme.surface2 : transparent;
                         HorizontalLayout {
