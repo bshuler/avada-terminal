@@ -236,8 +236,12 @@ pub fn extract_path_candidates(line: &str) -> Vec<PathCandidate> {
         // does not have. Testing the left side instead — "is `Artifact` a bare word?" — reads
         // the same on `a(b).txt`, where the bracket really is part of the filename, and would
         // cut it to `b).txt`.
+        //
+        // `=` joins the openers for the same reason: `HP=/Applications/x`, `--out=/tmp/y` name
+        // a path, and the variable or flag to its left is prose about it. Anywhere a `=` is
+        // part of a name (`/tmp/a=b/c`) it is not followed by a root, so it splits nothing.
         for i in (s + 1..e).rev() {
-            if LEAD.contains(&tok[i]) {
+            if LEAD.contains(&tok[i]) || tok[i] == '=' {
                 if i + 1 < e && is_path_root(&tok[i + 1..e]) {
                     s = i + 1;
                 }
@@ -554,6 +558,62 @@ pub fn extract_commit_candidates(line: &str) -> Vec<CommitCandidate> {
     out
 }
 
+/// A detected ref-shaped token (`origin/main`) and the column range it occupies on the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefCandidate {
+    /// The token as printed, with sentence punctuation removed.
+    pub name: String,
+    /// Inclusive start column into the source row.
+    pub start: usize,
+    /// Exclusive end column into the source row.
+    pub end: usize,
+}
+
+/// Extract every `word/word` token from one rendered row — the shape a branch or a
+/// remote-tracking ref has when a session narrates it (`origin/main is current at …`).
+///
+/// Loose on purpose, like [`extract_commit_candidates`]: the real gate is git, which
+/// [`hyperpanes_core::git::resolve_commit`] asks per token, and `and/or` simply never lights
+/// up. What is ruled out here is the shape that is *already* something else — a rooted path
+/// (`/usr/bin/grep`, `./x`, `../x`, `~/x`) belongs to the path resolver, and a token glued
+/// to `:` or `@` (`origin/main:file`, `user@host/x`) is a pathspec or an address.
+#[tracing::instrument(level = "debug", ret)]
+pub fn extract_ref_candidates(line: &str) -> Vec<RefCandidate> {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let run = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '/');
+    let glued = |c: Option<&char>| matches!(c, Some(':' | '@' | '~' | '\\'));
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if !run(chars[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < n && run(chars[i]) {
+            i += 1;
+        }
+        if glued(start.checked_sub(1).and_then(|k| chars.get(k))) || glued(chars.get(i)) {
+            continue;
+        }
+        // Sentence punctuation is not part of the name: `origin/main.` and `origin/main,`.
+        let mut end = i;
+        while end > start && matches!(chars[end - 1], '.' | '-' | '/') {
+            end -= 1;
+        }
+        if end <= start || matches!(chars[start], '/' | '.') {
+            continue;
+        }
+        let name: String = chars[start..end].iter().collect();
+        if !name.contains('/') {
+            continue;
+        }
+        out.push(RefCandidate { name, start, end });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +707,31 @@ mod tests {
             &"Artifact(/Users/me/a.txt)"[c[0].start..c[0].end],
             "/Users/me/a.txt"
         );
+    }
+
+    #[test]
+    fn an_assignment_or_flag_yields_the_rooted_path_after_its_equals() {
+        // `HP=/Applications/…/hyperpanes` in a Claude Code transcript: the variable is prose
+        // about the path, and the hover has to land on `/Applications/…` — not on a
+        // non-existent `HP=/Applications/…` relative to the cwd.
+        let line = "$ HP=/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes";
+        let c = extract_path_candidates(line);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].path, "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes");
+        assert_eq!(&line[c[0].start..c[0].end], "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes");
+
+        let c = extract_path_candidates("--out=~/tmp/report.txt");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].path, "~/tmp/report.txt");
+    }
+
+    #[test]
+    fn an_equals_inside_a_name_does_not_split_the_path() {
+        // What follows the `=` is not a root, so it is part of the name, exactly like a
+        // bracket inside `a(b).txt`.
+        let c = extract_path_candidates("/tmp/a=b/c.txt");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].path, "/tmp/a=b/c.txt");
     }
 
     #[test]
@@ -795,6 +880,37 @@ mod tests {
     fn cell_from_index_wraps_past_the_column_count() {
         assert_eq!(cell_from_index(80, 5, 80), (1, 7));
         assert_eq!(cell_from_index(165, 0, 80), (6, 3));
+    }
+
+    // ---- refs (origin/main) ----
+
+    fn refs(line: &str) -> Vec<String> {
+        extract_ref_candidates(line)
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+    }
+
+    #[test]
+    fn a_branch_named_in_prose_is_offered_without_its_punctuation() {
+        assert_eq!(
+            refs("Working tree is clean, origin/main is current at cd04a3d36."),
+            ["origin/main"]
+        );
+        assert_eq!(
+            refs("merged feature/x-1.2, then release/2.4."),
+            ["feature/x-1.2", "release/2.4"]
+        );
+        let c = &extract_ref_candidates("see origin/main.")[0];
+        assert_eq!((c.start, c.end), (4, 15));
+    }
+
+    #[test]
+    fn what_is_already_a_path_a_url_or_a_pathspec_is_not_a_ref() {
+        assert!(refs("/usr/bin/grep ./a/b ../c/d ~/e/f").is_empty());
+        assert!(refs("https://a.com/x/y").is_empty());
+        assert!(refs("origin/main:README.md user@host/x").is_empty());
+        assert!(refs("no slash here, a920101").is_empty());
     }
 
     // ---- commit hashes ----

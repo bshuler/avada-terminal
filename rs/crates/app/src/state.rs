@@ -4832,6 +4832,33 @@ impl State {
         p.pane.activate_link(x, y, w, h, ctrl)
     }
 
+    /// Right-click on a link: open the menu the target deserves, anchored at window-logical
+    /// `(ax, ay)`. A file gets the explorer's own row menu — the same rows a right-click on
+    /// it in the left panel offers — a URL or a commit gets an open/copy menu. Returns `false`
+    /// when nothing under the pointer is a link (or clickable paths are off), so the widget can
+    /// let the click be the paste it has always been; only what is underlined earns a menu,
+    /// because taking paste away from a token that was never a link would be a surprise.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn pane_link_context(&mut self, idx: usize, x: f32, y: f32, ax: f32, ay: f32) -> bool {
+        if !self.settings.clickable_paths {
+            return false;
+        }
+        let Some(p) = self.active_tab_mut().panes.get_mut(idx) else {
+            return false;
+        };
+        let (w, h) = p.surf;
+        let Some(hit) = p.pane.link_at(x, y, w, h) else {
+            return false;
+        };
+        if hit.is_url || hit.is_commit {
+            self.ctx = Some(crate::contextmenu::link_menu(&hit, ax, ay));
+            self.dirty = true;
+        } else {
+            self.open_file_context(Path::new(&hit.abs_path), ax, ay);
+        }
+        true
+    }
+
     // ---- left panel: Files mode (D14) ----
     //
     // The explorer is an ordinary IDE file tree: one root, directories you open a level at a

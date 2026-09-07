@@ -597,6 +597,31 @@ pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMe
     b.finish(CtxKind::File, 0, x, y)
 }
 
+/// The menu for a right-clicked URL or commit link. A file link never comes here — it gets
+/// [`file_menu`], so a path reads the same whether it was right-clicked on the screen or in
+/// the explorer. URLs and commits have no explorer row, so they get the two things a link can
+/// do: go there, or take the text. Both run through the same commands a left-click uses.
+#[tracing::instrument(level = "debug")]
+pub fn link_menu(hit: &hyperpanes_terminal_widget::LinkHit, x: f32, y: f32) -> CtxMenu {
+    let mut b = Build::new();
+    if hit.is_commit {
+        b.item(
+            "Show Commit",
+            Command::ShowCommit {
+                cwd: hit.commit_cwd.clone(),
+                hash: hit.abs_path.clone(),
+            },
+        );
+        b.sep();
+        b.item("Copy Hash", Command::CopyPathText(hit.abs_path.clone()));
+    } else {
+        b.item("Open Link", Command::OpenLink(hit.abs_path.clone()));
+        b.sep();
+        b.item("Copy Link", Command::CopyPathText(hit.abs_path.clone()));
+    }
+    b.finish(CtxKind::File, 0, x, y)
+}
+
 /// Whether "Run" is worth offering: the file says how to run itself (a shebang or a kind we
 /// know an interpreter for), or the filesystem says it is a program.
 #[tracing::instrument(level = "debug", ret)]
@@ -1054,7 +1079,8 @@ mod read_only_menu_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_runnable, parse_custom_duration};
+    use super::{is_runnable, link_menu, parse_custom_duration};
+    use crate::command::Command;
 
     const NOON: u64 = 12 * 3_600;
 
@@ -1099,6 +1125,46 @@ mod tests {
                 "{bad:?} must not parse"
             );
         }
+    }
+
+    fn link(is_url: bool, is_commit: bool) -> hyperpanes_terminal_widget::LinkHit {
+        hyperpanes_terminal_widget::LinkHit {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            abs_path: if is_url {
+                "https://example.com/x".into()
+            } else {
+                "0123456789abcdef0123456789abcdef01234567".into()
+            },
+            line: None,
+            col: None,
+            tip: String::new(),
+            is_url,
+            is_commit,
+            commit_cwd: "/repo".into(),
+            exists: true,
+        }
+    }
+
+    #[test]
+    fn a_right_clicked_url_can_be_opened_or_copied() {
+        let m = link_menu(&link(true, false), 0.0, 0.0);
+        let labels: Vec<&str> = m.entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Open Link", "", "Copy Link"]);
+        assert!(matches!(&m.commands[0], Some(Command::OpenLink(u)) if u == "https://example.com/x"));
+        assert!(matches!(&m.commands[2], Some(Command::CopyPathText(u)) if u == "https://example.com/x"));
+    }
+
+    #[test]
+    fn a_right_clicked_commit_shows_or_copies_the_hash() {
+        let m = link_menu(&link(false, true), 0.0, 0.0);
+        let labels: Vec<&str> = m.entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Show Commit", "", "Copy Hash"]);
+        assert!(matches!(
+            &m.commands[0],
+            Some(Command::ShowCommit { cwd, hash }) if cwd == "/repo" && hash.starts_with("0123")
+        ));
     }
 
     #[test]

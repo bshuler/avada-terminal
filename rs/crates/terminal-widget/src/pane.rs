@@ -24,7 +24,8 @@ use crate::clipboard::Clipboard;
 use crate::font::Font;
 use crate::grid::TermGrid;
 use crate::links::{
-    extract_commit_candidates, extract_path_candidates, extract_url_candidates, is_path_root,
+    extract_commit_candidates, extract_path_candidates, extract_ref_candidates,
+    extract_url_candidates, is_path_root,
     leading_path_fragment, trailing_path_fragment, trim_trailing_punct, PathCandidate,
     UrlCandidate,
 };
@@ -547,6 +548,12 @@ impl TerminalPane {
                     // only one such file, or `elsewhere` would have declined to guess.
                     self.verified.insert(key, found.clone());
                     found
+                } else if let Some(found) = self.relative_to_screen(row, &cand.path) {
+                    // Relative to a directory the screen itself named above this row — the
+                    // `cd /some/where && git status` shape, where the pane's own cwd never
+                    // moved but every path that follows belongs to `/some/where`.
+                    self.verified.insert(key, found.clone());
+                    found
                 } else if require_exists {
                     return None;
                 } else {
@@ -867,6 +874,88 @@ impl TerminalPane {
         r
     }
 
+    /// How far above the hovered row the screen is read for a directory, in grid lines. A
+    /// `cd` that scrolled further off than this is not what the human is looking at.
+    const CONTEXT_LINES: usize = 200;
+    /// The stat budget for one screen-context lookup. Every rooted token above the row, and
+    /// each of its ancestors, is one candidate base; a screen full of absolute paths must not
+    /// turn a hover into a disk walk.
+    const CONTEXT_STATS: usize = 32;
+
+    /// The screen-context fallback for a relative path that neither the pane's cwd nor its
+    /// repository could place.
+    ///
+    /// A tool that `cd`s somewhere and prints paths relative to *that* directory leaves the
+    /// pane's cwd untouched — an agent's shell does exactly this — so `docs/x.yaml` is dark
+    /// even though `/abs/project` is printed three lines up. The rooted tokens above the row
+    /// are the only directories the screen vouches for, and they are tried nearest-first: the
+    /// last `cd` wins the way it would in the shell. Each rooted token is tried as a base, then
+    /// its ancestors (a path *inside* the project names the project too), until something on
+    /// disk answers. Nothing about this is cached here — a hit lands in `verified` by the
+    /// caller, and a miss must stay a miss only until the `cd` line scrolls into view.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn relative_to_screen(&self, row: usize, token: &str) -> Option<ResolveResult> {
+        let chars: Vec<char> = token.chars().collect();
+        if is_path_root(&chars) {
+            return None;
+        }
+        let line = row as i32 - self.grid.display_offset() as i32;
+        let mut stats = 0usize;
+        let mut cursor = line - 1;
+        let floor = line - Self::CONTEXT_LINES as i32;
+        while cursor >= floor {
+            let Some(mut text) = self.grid.line_text(cursor) else {
+                break;
+            };
+            // Walk back to the head of a soft-wrapped run so a long `cd` target is whole.
+            let mut first = cursor;
+            while first > floor && self.grid.line_wraps(first - 1) {
+                first -= 1;
+                match self.grid.line_text(first) {
+                    Some(t) => text.insert_str(0, &t),
+                    None => break,
+                }
+            }
+            for base in Self::rooted_bases(&text) {
+                let mut dir: Option<&std::path::Path> = Some(std::path::Path::new(&base));
+                while let Some(d) = dir {
+                    if d.as_os_str().is_empty() || d.parent().is_none() {
+                        break; // the root itself is not a project
+                    }
+                    if stats >= Self::CONTEXT_STATS {
+                        return None;
+                    }
+                    stats += 1;
+                    let r = paths::resolve_path(Some(&d.to_string_lossy()), token);
+                    if r.exists {
+                        return Some(r);
+                    }
+                    dir = d.parent();
+                }
+            }
+            cursor = first - 1;
+        }
+        None
+    }
+
+    /// The rooted (absolute, `~/`, drive-lettered) path tokens on one logical line, rightmost
+    /// first — on a `cd a && cd b` line the later one is where the shell ended up. `~` is
+    /// expanded so the result can serve as a base directory verbatim.
+    #[tracing::instrument(level = "debug", ret)]
+    fn rooted_bases(text: &str) -> Vec<String> {
+        let mut out: Vec<String> = extract_path_candidates(text)
+            .into_iter()
+            .filter(|c| {
+                let cs: Vec<char> = c.path.chars().collect();
+                is_path_root(&cs) && !c.path.starts_with('.')
+            })
+            .map(|c| paths::resolve_path(None, &c.path).abs_path)
+            .collect();
+        out.reverse();
+        out.dedup();
+        out
+    }
+
     /// Find an http/https URL under the (logical-px) point, returning the candidate, its row,
     /// and the cell metrics. URLs linkify on shape alone — no disk/network verification (so no
     /// cache either; extraction per hover is cheap, same as the path re-extract in `link_at`).
@@ -911,7 +1000,7 @@ impl TerminalPane {
         y: f32,
         surf_w: f32,
         surf_h: f32,
-    ) -> Option<(String, String, usize, usize, usize, f32, f32)> {
+    ) -> Option<(String, String, usize, usize, usize, f32, f32, Option<String>)> {
         // No cwd means no repository to ask. Unlike a path, a commit has no sensible fallback:
         // resolving it against the home directory would answer for whatever repo happens to be
         // there, which is never the one the text came from.
@@ -927,21 +1016,33 @@ impl TerminalPane {
         }
         let snap = self.grid.snapshot();
         let (text, idx, first) = self.logical_line(&snap, row, col)?;
-        let cand = extract_commit_candidates(&text)
+        // A hex hash first; failing that, a `word/word` token — `origin/main` — that git can
+        // name a commit for. Both go through the same cache and the same resolver, and a ref
+        // carries its name out so the tooltip can say which branch the commit is the tip of.
+        let (rev, cand_start, cand_end, label) = match extract_commit_candidates(&text)
             .into_iter()
-            .find(|c| idx >= c.start && idx < c.end)?;
+            .find(|c| idx >= c.start && idx < c.end)
+        {
+            Some(c) => (c.hash, c.start, c.end, None),
+            None => {
+                let c = extract_ref_candidates(&text)
+                    .into_iter()
+                    .find(|c| idx >= c.start && idx < c.end)?;
+                (c.name.clone(), c.start, c.end, Some(c.name))
+            }
+        };
 
-        let key = self.cache_key(&cand.hash);
+        let key = self.cache_key(&rev);
         let full = match self.commits.get(&key) {
             Some(hit) => hit.clone(),
             None => {
-                let r = git::resolve_commit(std::path::Path::new(&cwd), &cand.hash);
+                let r = git::resolve_commit(std::path::Path::new(&cwd), &rev);
                 self.commits.insert(key, r.clone());
                 r
             }
         }?;
-        let (start, end) = Self::row_segment(cand.start, cand.end, row, first, snap.cols);
-        Some((full, cwd, start, end, row, cell_w, cell_h))
+        let (start, end) = Self::row_segment(cand_start, cand_end, row, first, snap.cols);
+        Some((full, cwd, start, end, row, cell_w, cell_h, label))
     }
 
     /// Hit-test a (logical-px) hover point against the rendered grid. Returns the underline rect +
@@ -1002,13 +1103,17 @@ impl TerminalPane {
     /// case the way there is for a path.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn commit_hit(&mut self, x: f32, y: f32, surf_w: f32, surf_h: f32) -> Option<LinkHit> {
-        let (full, cwd, start, end, row, cell_w, cell_h) =
+        let (full, cwd, start, end, row, cell_w, cell_h, label) =
             self.commit_under(x, y, surf_w, surf_h)?;
+        let short = &full[..full.len().min(12)];
         Some(LinkHit {
             x: start as f32 * cell_w,
             y: (row as f32 + 1.0) * cell_h - 1.0,
             w: (end - start) as f32 * cell_w,
-            tip: format!("commit {}", &full[..full.len().min(12)]),
+            tip: match &label {
+                Some(name) => format!("{name} \u{b7} commit {short}"),
+                None => format!("commit {short}"),
+            },
             abs_path: full,
             line: None,
             col: None,
@@ -2568,6 +2673,52 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_this_repository_has_becomes_a_link_to_its_tip() {
+        let Some((dir, short)) = commit_fixture() else {
+            return;
+        };
+        let made = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["branch", "feature/x"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !made {
+            return;
+        }
+        let mut p = unit_pane(60, 3);
+        p.set_cwd(Some(dir.to_string_lossy().into_owned()));
+        p.feed("Working tree is clean, feature/x is current, and/or not.");
+        let (w, h) = (60.0, 3.0); // 1px per cell
+
+        let start = "Working tree is clean, ".len();
+        let hit = p
+            .link_at(start as f32 + 0.5, 0.5, w, h)
+            .expect("the branch name should light up");
+        assert!(hit.is_commit);
+        assert!(hit.abs_path.starts_with(&short), "{}", hit.abs_path);
+        assert_eq!(hit.tip, format!("feature/x \u{b7} commit {}", &hit.abs_path[..12]));
+        assert_eq!(hit.x, start as f32);
+        assert_eq!(hit.w, "feature/x".len() as f32);
+        // A click opens the tip commit in the panel, exactly as a hash would.
+        match p.activate_link(start as f32 + 0.5, 0.5, w, h, false) {
+            Some(LinkAction::ShowCommit { cwd, hash }) => {
+                assert_eq!(cwd, dir.to_string_lossy());
+                assert_eq!(hash, hit.abs_path);
+            }
+            other => panic!("expected ShowCommit, got {other:?}"),
+        }
+
+        // `and/or` has the shape but names nothing, and stays dark.
+        let at = "Working tree is clean, feature/x is current, ".len() as f32 + 0.5;
+        assert!(p.link_at(at, 0.5, w, h).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_hex_word_naming_no_commit_stays_dark() {
         let Some((dir, _)) = commit_fixture() else {
             return;
@@ -2619,6 +2770,125 @@ mod tests {
             p.link_at(dup, 0.5, w, h).is_none(),
             "two files of that name: opening one of them would be a guess"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A project directory that is NOT a git repository, so the repository fallback has
+    /// nothing to say and the screen is the only remaining witness.
+    fn context_fixture(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "hp_pane_ctx_{name}_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("proj/docs/language/sql")).unwrap();
+        std::fs::write(dir.join("proj/docs/language/sql/35-gaps.yaml"), "a: 1\n").unwrap();
+        std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_path_relative_to_a_directory_printed_above_it_linkifies() {
+        let dir = context_fixture("above");
+        let proj = dir.join("proj");
+        let proj_s = proj.to_string_lossy().into_owned();
+
+        // The pane is standing somewhere else entirely — an agent's shell `cd`s for one
+        // command and prints paths relative to where it went, not where the pane is.
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(dir.join("elsewhere").to_string_lossy().into_owned()));
+        p.feed(&format!(
+            "cd {proj_s} && git status --porcelain\r\n M docs/language/sql/35-gaps.yaml\r\n"
+        ));
+        let (w, h) = (200.0, 6.0); // 1px per cell
+
+        let at = " M ".len() as f32 + 0.5;
+        let hit = p
+            .link_at(at, 1.5, w, h)
+            .expect("the relative path should resolve against the cd target above it");
+        assert!(hit.exists);
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj.join("docs/language/sql/35-gaps.yaml")
+        );
+        assert_eq!(hit.x, " M ".len() as f32);
+        assert_eq!(hit.w, "docs/language/sql/35-gaps.yaml".len() as f32);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_printed_below_the_path_does_not_count() {
+        let dir = context_fixture("below");
+        let proj_s = dir.join("proj").to_string_lossy().into_owned();
+
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(dir.join("elsewhere").to_string_lossy().into_owned()));
+        // The only directory on screen comes AFTER the path: the shell had not gone there
+        // yet when the path was printed, so it is no witness for it.
+        p.feed(&format!(
+            " M docs/language/sql/35-gaps.yaml\r\ncd {proj_s}\r\n"
+        ));
+        let (w, h) = (200.0, 6.0);
+
+        let at = " M ".len() as f32 + 0.5;
+        assert!(
+            p.link_at(at, 0.5, w, h).is_none(),
+            "a directory named later on screen must not vouch for an earlier path"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_soft_wrapped_directory_above_is_read_whole() {
+        let dir = context_fixture("wrap");
+        let proj = dir.join("proj");
+        let proj_s = proj.to_string_lossy().into_owned();
+
+        // Narrow enough that the `cd` line soft-wraps mid-path: the base has to be stitched
+        // back together from two visual rows before it can be tried.
+        let cols = ("cd ".len() + proj_s.len()) * 2 / 3;
+        let mut p = unit_pane(cols, 8);
+        p.set_cwd(Some(dir.join("elsewhere").to_string_lossy().into_owned()));
+        p.feed(&format!("cd {proj_s}\r\nM 35-gaps.yaml\r\n"));
+        let (w, h) = (cols as f32, 8.0);
+        // Row 0..2 hold the wrapped cd line; the relative path is on the row after.
+        let row = ("cd ".len() + proj_s.len()) / cols + 1;
+
+        // `35-gaps.yaml` lives under docs/language/sql — relative to the wrong base this
+        // stays dark, so the ancestor walk must not be what makes this pass.
+        std::fs::write(proj.join("35-gaps.yaml"), "b: 2\n").unwrap();
+        let at = "M ".len() as f32 + 0.5;
+        let hit = p
+            .link_at(at, row as f32 + 0.5, w, h)
+            .expect("the wrapped cd target should still be found");
+        assert_eq!(std::path::Path::new(&hit.abs_path), proj.join("35-gaps.yaml"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_path_inside_the_project_names_the_project_too() {
+        let dir = context_fixture("ancestor");
+        let proj = dir.join("proj");
+        let inner = proj.join("docs/language/sql/35-gaps.yaml");
+        let inner_s = inner.to_string_lossy().into_owned();
+
+        let mut p = unit_pane(240, 6);
+        p.set_cwd(Some(dir.join("elsewhere").to_string_lossy().into_owned()));
+        // No `cd` anywhere — only a full path to one file in the project, which is enough
+        // to place a sibling named relative to the project root.
+        p.feed(&format!("wrote {inner_s}\r\nsee docs/language/sql/35-gaps.yaml\r\n"));
+        let (w, h) = (240.0, 6.0);
+
+        let at = "see ".len() as f32 + 0.5;
+        let hit = p
+            .link_at(at, 1.5, w, h)
+            .expect("an ancestor of a printed path should serve as the base");
+        assert_eq!(std::path::Path::new(&hit.abs_path), inner);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

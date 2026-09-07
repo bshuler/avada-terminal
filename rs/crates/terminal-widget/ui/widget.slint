@@ -411,6 +411,10 @@ export component TerminalPane inherits Rectangle {
     // Right button pressed → paste the clipboard into this pane's session (the consumer may
     // instead copy an active selection first — the Windows-Terminal right-click nuance).
     callback paste-requested();
+    // (x, y, window-x, window-y) → bool — right-click landed in the pane body. The app
+    // hit-tests (x, y) for a link and returns true when it opened a menu for it; false lets
+    // the click fall through to `paste-requested`. The window-logical pair anchors the menu.
+    callback link-context(length, length, length, length) -> bool;
     // Mouse wheel over the surface → (pointer-x, pointer-y, lines). Positive lines = up / into
     // history, negative = down / toward the live edge. The app routes it through
     // `TerminalPane::wheel`, which either moves our scrollback OR — in the alternate screen / a
@@ -571,11 +575,17 @@ export component TerminalPane inherits Rectangle {
                     if (e.button == PointerEventButton.left) {
                         root.selection-begin(self.mouse-x, self.mouse-y);
                     } else if (e.button == PointerEventButton.right) {
-                        // Right-click pastes the clipboard into the pane — or copies an active
-                        // selection, decided app-side (focus it first so any follow-up typing
-                        // routes here). No native context menu in the BODY — the pane menu lives
-                        // on the header right-click. Matches Windows Terminal.
-                        root.paste-requested();
+                        // Right-click on a LINK opens the same row menu the file explorer
+                        // offers for that path (or an open/copy menu for a URL or commit).
+                        // Anywhere else it pastes the clipboard into the pane — or copies an
+                        // active selection, decided app-side (focus it first so any follow-up
+                        // typing routes here). No pane menu in the BODY — that lives on the
+                        // header right-click. Matches Windows Terminal.
+                        if (!root.link-context(self.mouse-x, self.mouse-y,
+                                               self.absolute-position.x + self.mouse-x,
+                                               self.absolute-position.y + self.mouse-y)) {
+                            root.paste-requested();
+                        }
                     }
                 }
                 if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {

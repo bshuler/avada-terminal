@@ -140,12 +140,45 @@ pub fn find_in_repo(dir: &Path, name: &str) -> Option<PathBuf> {
     Some(root.join(hit?))
 }
 
+/// True when `rev` is shaped like a branch or remote-tracking ref a pane might print —
+/// `origin/main`, `feature/x-1`, `upstream/release/2.4`: two or more segments of word
+/// characters, dots and dashes, joined by `/`. That is `git check-ref-format`'s shape pared
+/// down to what prose contains: no `@`, `~`, `^`, `:` or `{` (the revision *operators*
+/// `rev-parse` would otherwise evaluate), no segment starting with `-` (an option) or `.`,
+/// no `..` and no `.lock` tail. A bare `main` is deliberately out — one word is a word.
+#[tracing::instrument(level = "debug", ret)]
+pub fn is_ref_name(rev: &str) -> bool {
+    if rev.len() > 200 {
+        return false;
+    }
+    let mut segments = 0;
+    for seg in rev.split('/') {
+        segments += 1;
+        if seg.is_empty()
+            || seg.starts_with('-')
+            || seg.starts_with('.')
+            || seg.ends_with(".lock")
+            || seg.contains("..")
+            || !seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+        {
+            return false;
+        }
+    }
+    segments >= 2
+}
+
 /// Resolve `rev` to the full hash of a **commit** in the repository containing `dir`, or
 /// `None`. The `^{commit}` peel is what makes this an answer rather than a guess: a tree or
 /// blob whose abbreviation happens to match is not something a commit link can show.
+///
+/// `rev` is either a hex object name ([`is_hex_rev`]) or a ref name ([`is_ref_name`]); a
+/// ref answers with the commit at its tip, which is what "open `origin/main`" can mean to
+/// a panel that shows commits.
 #[tracing::instrument(level = "debug", ret)]
 pub fn resolve_commit(dir: &Path, rev: &str) -> Option<String> {
-    if !is_hex_rev(rev) {
+    if !is_hex_rev(rev) && !is_ref_name(rev) {
         return None;
     }
     let out = git(
@@ -345,6 +378,40 @@ mod tests {
             "a revision expression is not a clicked hash"
         );
         assert!(!is_hex_rev(":/fix the thing"));
+    }
+
+    #[test]
+    fn a_ref_name_is_two_or_more_plain_segments() {
+        for ok in ["origin/main", "feature/x-1.2", "upstream/release/2.4", "a_b/c.d"] {
+            assert!(is_ref_name(ok), "{ok}");
+        }
+        for bad in [
+            "main", "and/or/", "/usr/bin", "./x", "origin/-x", "a..b/c", "x/y.lock",
+            "HEAD@{1}/x", "a/b:c", "a b/c",
+        ] {
+            assert!(!is_ref_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_branch_resolves_to_the_commit_at_its_tip() {
+        let Some((dir, hash)) = fixture() else { return };
+        let made = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["branch", "feature/x"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !made {
+            return;
+        }
+        assert_eq!(resolve_commit(dir.path(), "feature/x").as_deref(), Some(hash.as_str()));
+        assert_eq!(resolve_commit(dir.path(), "and/or"), None);
+        // One word is a word, even when git would know it.
+        assert_eq!(resolve_commit(dir.path(), "main"), None);
     }
 
     #[test]

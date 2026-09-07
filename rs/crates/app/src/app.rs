@@ -3547,6 +3547,20 @@ impl App {
         // right-click in a pane body → paste the clipboard into that pane's session, mirroring
         // Windows Terminal — UNLESS the pane has an active selection, in which case the
         // right-click copies it (and clears the highlight) instead (#32). The pane was already
+        // Right-click on a link: the explorer's row menu for a file, an open/copy menu for a
+        // URL or commit. Returns whether a menu opened — when it did not, the widget falls
+        // back to the paste below. Same borrow rule: the state borrow ends before the return.
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app.on_pane_link_context(move |i, x, y, ax, ay| {
+                app.window_by_id(id).is_some_and(|w| {
+                    w.state
+                        .borrow_mut()
+                        .pane_link_context(i as usize, x, y, ax, ay)
+                })
+            });
+        }
         // focused by `focus-requested` (fired on the same mouse-down, before this callback).
         // Routed through the command path so the paste uses the session manager.
         {

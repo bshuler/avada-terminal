@@ -309,6 +309,9 @@ export component PaneView inherits Rectangle {
     callback pane-selection-end(int);
     // right-click in a pane body → paste the clipboard into that pane's session.
     callback pane-paste(int);
+    // right-click a link in pane `i` at surface (x, y), menu anchor at window (ax, ay) → true
+    // when a menu opened (the widget then skips its paste)
+    callback pane-link-context(int, length, length, length, length) -> bool;
     // in-pane search box (opened from the pane menu's "Search…")
     callback pane-search-edited(int, string);
     callback pane-search-next(int);
@@ -679,6 +682,9 @@ export component PaneView inherits Rectangle {
                         selection-update(x, y) => { root.pane-selection-update(idx, x, y); }
                         selection-end => { root.pane-selection-end(idx); }
                         paste-requested => { root.pane-paste(idx); }
+                        link-context(x, y, ax, ay) => {
+                            return root.pane-link-context(idx, x, y, ax, ay);
+                        }
                         search-edited(q) => { root.pane-search-edited(idx, q); }
                         search-next => { root.pane-search-next(idx); }
                         search-prev => { root.pane-search-prev(idx); }
