@@ -87,6 +87,66 @@ fn click(w: &crate::AppWindow, el: &ElementHandle) {
     });
 }
 
+/// Press the right button on an element's centre, the way a context-menu gesture does.
+/// `TouchArea` reports the button in `pointer-event`, so a menu bound to the right button
+/// only opens if the event really carries it — which is why this is not `click()` with a
+/// flag.
+fn right_click(w: &crate::AppWindow, el: &ElementHandle) {
+    let pos = el.absolute_position();
+    let size = el.size();
+    assert!(
+        size.width > 0.0 && size.height > 0.0,
+        "the control laid out to {}x{} — nothing can click it",
+        size.width,
+        size.height
+    );
+    let at = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+    let win = w.window();
+    win.dispatch_event(WindowEvent::PointerMoved { position: at });
+    win.dispatch_event(WindowEvent::PointerPressed {
+        position: at,
+        button: PointerEventButton::Right,
+    });
+    win.dispatch_event(WindowEvent::PointerReleased {
+        position: at,
+        button: PointerEventButton::Right,
+    });
+}
+
+/// Click an element that lives inside a `PopupWindow`, given the popup's own window-space
+/// origin.
+///
+/// `absolute_position()` walks up with `StopAtPopups`, so an element inside a popup reports
+/// coordinates relative to the **popup**, while `dispatch_event` speaks **window**
+/// coordinates. Nothing public bridges the two, so the caller supplies the origin — the same
+/// arithmetic Slint does when it places the popup. Worth the fiddle: the alternative,
+/// `invoke_accessible_default_action()`, proves the callback is wired but would pass just as
+/// happily for a swatch laid out to zero size or buried under a sibling.
+fn click_in_popup(w: &crate::AppWindow, origin: LogicalPosition, el: &ElementHandle) {
+    let pos = el.absolute_position();
+    let size = el.size();
+    assert!(
+        size.width > 0.0 && size.height > 0.0,
+        "the control laid out to {}x{} — nothing can click it",
+        size.width,
+        size.height
+    );
+    let at = LogicalPosition::new(
+        origin.x + pos.x + size.width / 2.0,
+        origin.y + pos.y + size.height / 2.0,
+    );
+    let win = w.window();
+    win.dispatch_event(WindowEvent::PointerMoved { position: at });
+    win.dispatch_event(WindowEvent::PointerPressed {
+        position: at,
+        button: PointerEventButton::Left,
+    });
+    win.dispatch_event(WindowEvent::PointerReleased {
+        position: at,
+        button: PointerEventButton::Left,
+    });
+}
+
 /// Every button announcing itself with this label. The glyph buttons in this UI draw a
 /// Path and no text, so their accessible label — which is their tooltip sentence — is the
 /// only thing that names them, to a screen reader and to this test alike.
@@ -1558,3 +1618,297 @@ fn a_preferences_dropdown_is_named_by_its_caption_not_its_value() {
         );
     });
 }
+
+// ===========================================================================================
+// The sidebar: the projects flyout, its rows, and the menu behind a right-click
+// ===========================================================================================
+
+/// Two projects in the sidebar with the flyout open, the way clicking the folder icon does.
+/// The first has two worktrees; `history` decides whether it also has agent sessions, which
+/// is what gates the Worktrees|History bar, and `segment` which of the two is showing.
+fn install_projects(w: &crate::AppWindow, history: bool, segment: i32) {
+    w.set_show_sidebar(true);
+    w.set_sidebar_open(true);
+    let wt = |branch: &str, path: &str, is_main: bool| crate::WorktreeRow {
+        branch: branch.into(),
+        path: path.into(),
+        is_main,
+        ..Default::default()
+    };
+    let worktrees = std::rc::Rc::new(slint::VecModel::from(vec![
+        wt("main", "/code/hyperpanes", true),
+        wt("wip", "/code/hyperpanes-wip", false),
+    ]));
+    let sessions = std::rc::Rc::new(slint::VecModel::from(if history {
+        vec![crate::ClaudeSessionItem {
+            id: "abc123".into(),
+            source: "Claude".into(),
+            summary: "the show-diff defect".into(),
+            when: "2h ago".into(),
+            count: 42,
+        }]
+    } else {
+        vec![]
+    }));
+    let projects = std::rc::Rc::new(slint::VecModel::from(vec![
+        crate::ProjectItem {
+            name: "hyperpanes".into(),
+            worktrees: worktrees.into(),
+            sessions: sessions.into(),
+            has_history: history,
+            segment,
+            ..Default::default()
+        },
+        crate::ProjectItem {
+            name: "claude-standards".into(),
+            ..Default::default()
+        },
+    ]));
+    w.set_projects(projects.into());
+}
+
+/// Where project `index`'s right-click menu sits in window coordinates: the `ProjectRow`
+/// component it hangs off, plus `ProjectMenu`'s declared `x`/`y` anchor.
+fn project_menu_origin(w: &crate::AppWindow, index: usize) -> LogicalPosition {
+    let rows: Vec<ElementHandle> = ElementHandle::find_by_element_type_name(w, "ProjectRow").collect();
+    let p = rows[index].absolute_position();
+    LogicalPosition::new(p.x + 10.0, p.y + 26.0)
+}
+
+/// A project is a row you can open and a row you can unfold, and it has to say so. Before
+/// this the name was a child `Text` — auto-labelled, so the tree *looked* named while the
+/// pressable row announced nothing and answered to no query.
+#[test]
+fn a_project_row_is_a_named_expandable_list_item() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, false, 0);
+
+        let row = only(&w, "hyperpanes", AccessibleRole::ListItem);
+        assert_eq!(row.accessible_expandable(), Some(true));
+        assert_eq!(
+            row.accessible_expanded(),
+            Some(false),
+            "it starts collapsed, and says so"
+        );
+        assert_eq!(
+            by_role(&w, "claude-standards", AccessibleRole::ListItem).len(),
+            1,
+            "every project is a row, not just the first"
+        );
+    });
+}
+
+/// Opening a project is the sidebar's whole point, and the index it sends is the only thing
+/// that decides *which* repo opens. An off-by-one here opens the neighbour, which looks like
+/// a working feature until you have two projects.
+#[test]
+fn clicking_a_project_row_opens_that_project() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, false, 0);
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+        let seen = log.clone();
+        w.on_open_project(move |i| seen.borrow_mut().push(i));
+
+        click(&w, &only(&w, "claude-standards", AccessibleRole::ListItem));
+        assert_eq!(*log.borrow(), vec![1], "the second row opens the second project");
+    });
+}
+
+/// The chevron is the only way to see a project's worktrees. It is also named per project
+/// now — four chevrons called "Expand this project" are four controls nothing can tell
+/// apart, for a screen reader and for this test alike.
+#[test]
+fn the_chevron_unfolds_that_project_and_nothing_else() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, false, 0);
+        let trash = "Delete this worktree from disk";
+        assert!(
+            by_label(&w, trash).is_empty(),
+            "a collapsed project shows none of its worktrees"
+        );
+
+        let tip = "Expand hyperpanes — worktrees and Claude history";
+        click(&w, &only(&w, tip, AccessibleRole::Button));
+
+        assert_eq!(
+            only(&w, "hyperpanes", AccessibleRole::ListItem).accessible_expanded(),
+            Some(true)
+        );
+        assert_eq!(by_label(&w, trash).len(), 1, "the wip worktree can be deleted");
+        assert_eq!(
+            by_label(&w, "The main checkout can't be removed").len(),
+            1,
+            "…and the main checkout says why it cannot"
+        );
+        assert_eq!(
+            by_role(&w, "Collapse hyperpanes", AccessibleRole::Button).len(),
+            1,
+            "the chevron now offers the opposite gesture"
+        );
+        assert!(
+            by_label(&w, "Expand claude-standards — worktrees and Claude history").len() == 1,
+            "the other project stayed collapsed"
+        );
+    });
+}
+
+/// Worktrees|History is a two-tab strip. Both pills were unnamed rectangles whose only
+/// distinguishing feature was the text drawn inside them, so nothing could say which one was
+/// showing — and the segment a click reports is what the controller stores per project.
+#[test]
+fn the_worktrees_and_history_segments_are_a_tab_strip() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, true, 0);
+        click(
+            &w,
+            &only(
+                &w,
+                "Expand hyperpanes — worktrees and Claude history",
+                AccessibleRole::Button,
+            ),
+        );
+
+        assert_eq!(
+            only(&w, "Worktrees", AccessibleRole::Tab).accessible_checked(),
+            Some(true)
+        );
+        assert_eq!(
+            only(&w, "History", AccessibleRole::Tab).accessible_checked(),
+            Some(false)
+        );
+
+        click(&w, &only(&w, "History", AccessibleRole::Tab));
+        let ui_state = w.global::<crate::HistoryUi>();
+        assert_eq!(
+            (ui_state.get_proj(), ui_state.get_segment()),
+            (0, 1),
+            "the pick names the project it came from and the segment it chose"
+        );
+    });
+}
+
+/// The bar is only drawn for a project that has history at all — otherwise the expanded body
+/// is just the worktrees. A bar that appeared with nothing behind it would be a dead control.
+#[test]
+fn a_project_without_history_gets_no_segmented_bar() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, false, 0);
+        click(
+            &w,
+            &only(
+                &w,
+                "Expand hyperpanes — worktrees and Claude history",
+                AccessibleRole::Button,
+            ),
+        );
+
+        assert!(by_role(&w, "Worktrees", AccessibleRole::Tab).is_empty());
+        assert!(by_role(&w, "History", AccessibleRole::Tab).is_empty());
+        assert_eq!(
+            by_label(&w, "Delete this worktree from disk").len(),
+            1,
+            "the worktrees show anyway — the bar-less default"
+        );
+    });
+}
+
+/// With the History segment showing, the worktrees give way to sessions. Two `if` branches
+/// over one expanded body is exactly where a fix applied to one and not the other hides.
+#[test]
+fn the_history_segment_swaps_worktrees_for_sessions() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, true, 1);
+        click(
+            &w,
+            &only(
+                &w,
+                "Expand hyperpanes — worktrees and Claude history",
+                AccessibleRole::Button,
+            ),
+        );
+
+        assert_eq!(
+            only(&w, "History", AccessibleRole::Tab).accessible_checked(),
+            Some(true)
+        );
+        assert!(
+            by_label(&w, "Delete this worktree from disk").is_empty(),
+            "the worktree rows are gone"
+        );
+        assert_eq!(
+            by_label(&w, "Resume this Claude session in a new pane").len(),
+            1,
+            "…and the session is there to resume"
+        );
+    });
+}
+
+/// The right-click menu. Eight 18px squares that differ only by hue are eight identical
+/// controls to anything that cannot see them, and the recolour index they send is what picks
+/// the colour — so this checks the name AND that the name maps to the right index.
+#[test]
+fn the_project_menu_names_every_colour_swatch() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, false, 0);
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(i32, i32)>::new()));
+        let seen = log.clone();
+        w.on_recolor_project(move |i, s| seen.borrow_mut().push((i, s)));
+
+        right_click(&w, &only(&w, "hyperpanes", AccessibleRole::ListItem));
+
+        for name in [
+            "Red", "Orange", "Green", "Blue", "Purple", "Pink", "Teal", "Yellow",
+        ] {
+            assert_eq!(
+                by_role(&w, name, AccessibleRole::Button).len(),
+                1,
+                "the {name} swatch names itself"
+            );
+        }
+
+        click_in_popup(
+            &w,
+            project_menu_origin(&w, 0),
+            &only(&w, "Blue", AccessibleRole::Button),
+        );
+        assert_eq!(
+            *log.borrow(),
+            vec![(0, 3)],
+            "Blue is palette slot 3 of project 0"
+        );
+    });
+}
+
+/// The destructive row in that menu. A bare "Remove" is one of several in this app; the one
+/// that drops a project should say which project.
+#[test]
+fn the_project_menu_removes_the_project_it_names() {
+    ui(|| {
+        let w = window();
+        install_projects(&w, false, 0);
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+        let seen = log.clone();
+        w.on_remove_project(move |i| seen.borrow_mut().push(i));
+
+        right_click(&w, &only(&w, "claude-standards", AccessibleRole::ListItem));
+        assert!(
+            by_role(&w, "Remove project hyperpanes", AccessibleRole::Button).is_empty(),
+            "the menu belongs to the row that opened it"
+        );
+
+        click_in_popup(
+            &w,
+            project_menu_origin(&w, 1),
+            &only(&w, "Remove project claude-standards", AccessibleRole::Button),
+        );
+        assert_eq!(*log.borrow(), vec![1]);
+    });
+}
+

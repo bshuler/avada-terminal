@@ -77,6 +77,10 @@ component TrashGlyph inherits Path {
 // One recolor swatch in the project context menu.
 component Swatch inherits Rectangle {
     in property <color> hue;
+    // A colour is not a name. Eight 18px squares that differ only by hue are eight
+    // identical controls to anything that cannot see them — a screen reader, or a test —
+    // so each use site says which colour it is.
+    in property <string> label;
     callback picked();
     width: 18px;
     height: 18px;
@@ -84,6 +88,9 @@ component Swatch inherits Rectangle {
     background: hue;
     border-width: sa.has-hover ? 2px : 0px;
     border-color: Theme.text;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.picked(); }
     sa := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.picked(); }
@@ -126,14 +133,14 @@ component ProjectMenu inherits PopupWindow {
                     // (the default `stretch` would spread the fixed-width swatches apart).
                     spacing: 3px;
                     alignment: start;
-                    Swatch { hue: #e5484d; picked => { root.recolor(0); root.close(); } }
-                    Swatch { hue: #f5a623; picked => { root.recolor(1); root.close(); } }
-                    Swatch { hue: #30a46c; picked => { root.recolor(2); root.close(); } }
-                    Swatch { hue: #3b82f6; picked => { root.recolor(3); root.close(); } }
-                    Swatch { hue: #a855f7; picked => { root.recolor(4); root.close(); } }
-                    Swatch { hue: #ec4899; picked => { root.recolor(5); root.close(); } }
-                    Swatch { hue: #14b8a6; picked => { root.recolor(6); root.close(); } }
-                    Swatch { hue: #eab308; picked => { root.recolor(7); root.close(); } }
+                    Swatch { hue: #e5484d; label: "Red"; picked => { root.recolor(0); root.close(); } }
+                    Swatch { hue: #f5a623; label: "Orange"; picked => { root.recolor(1); root.close(); } }
+                    Swatch { hue: #30a46c; label: "Green"; picked => { root.recolor(2); root.close(); } }
+                    Swatch { hue: #3b82f6; label: "Blue"; picked => { root.recolor(3); root.close(); } }
+                    Swatch { hue: #a855f7; label: "Purple"; picked => { root.recolor(4); root.close(); } }
+                    Swatch { hue: #ec4899; label: "Pink"; picked => { root.recolor(5); root.close(); } }
+                    Swatch { hue: #14b8a6; label: "Teal"; picked => { root.recolor(6); root.close(); } }
+                    Swatch { hue: #eab308; label: "Yellow"; picked => { root.recolor(7); root.close(); } }
                 }
             }
 
@@ -150,6 +157,10 @@ component ProjectMenu inherits PopupWindow {
                     padding-left: 8px;
                     padding-right: 8px;
                     ri := TextInput {
+                        // The field is captioned by nothing at all — it opens pre-selected
+                        // with the project's own name in it, which reads as a value, not
+                        // as a prompt. Say what typing here does.
+                        accessible-label: "Rename project " + root.pname;
                         text: root.pname;
                         color: Theme.text;
                         font-size: 12px;
@@ -166,6 +177,12 @@ component ProjectMenu inherits PopupWindow {
                 height: 28px;
                 border-radius: 5px;
                 background: rta.has-hover ? Theme.danger : transparent;
+                // Names the project, not just the verb: this menu is one of several
+                // places in the app with a bare "Remove", and the destructive one should
+                // be the one that says what it destroys.
+                accessible-role: button;
+                accessible-label: "Remove project " + root.pname;
+                accessible-action-default => { root.remove(); root.close(); }
                 HorizontalLayout {
                     padding-left: 9px;
                     Text {
@@ -313,6 +330,15 @@ component Segment inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
+    // The two pills that switch an expanded project between its worktrees and its Claude
+    // history had no name at all: the caption is a child Text, so the *pill* announced
+    // nothing and no query could reach it. `tab` is the honest role — two mutually
+    // exclusive views of the same panel — and it is legal here because Segment is used
+    // only by SegmentedBar, so the constant role is never wrong at some other use site.
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-checked: root.active;
+    accessible-action-default => { root.pick(); }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.pick(); }
@@ -466,6 +492,19 @@ component ProjectRow inherits Rectangle {
             border-radius: 5px;
             background: ta.has-hover ? Theme.surface2 : transparent;
 
+            // The row's name is a child Text, which Slint auto-labels — so the project
+            // *looked* named while the thing you press was anonymous. The name goes on
+            // this Rectangle because that is where `ta` is: the announced element and the
+            // hit target have to be the same element, or a caller can address a control
+            // that no click can reach. Both actions are declared, because the row really
+            // does have two: press opens the repo, expand unfolds the worktrees.
+            accessible-role: list-item;
+            accessible-label: root.proj.name;
+            accessible-expandable: true;
+            accessible-expanded: root.expanded;
+            accessible-action-default => { root.open(); }
+            accessible-action-expand => { root.expanded = !root.expanded; }
+
             // full-row click target (open / right-click menu); declared FIRST so the
             // chevron's own TouchArea sits on top of it.
             ta := TouchArea {
@@ -503,7 +542,13 @@ component ProjectRow inherits Rectangle {
                             : "M 2.5 3.3 L 5 0.8 L 7.5 3.3 M 2.5 6.7 L 5 9.2 L 7.5 6.7";
                     }
                     cta := TipArea {
-                        tip: root.expanded ? "Collapse this project" : "Expand this project — worktrees and Claude history";
+                        // Named after the project, not the gesture: with four projects
+                        // listed, four chevrons all called "Expand this project" are four
+                        // indistinguishable controls — the same ambiguity the attachment
+                        // remove buttons had.
+                        tip: root.expanded
+                            ? "Collapse " + root.proj.name
+                            : "Expand " + root.proj.name + " — worktrees and Claude history";
                         mouse-cursor: pointer;
                         clicked => { root.expanded = !root.expanded; }
                     }
