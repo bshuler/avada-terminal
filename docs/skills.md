@@ -174,31 +174,44 @@ capability set holds `skills.materialize` and it is enabled in a workspace
 using that root; the user scope needs the capability only. Two workspaces
 sharing a root pass the union of their enabled modules.
 
-### Sources and what was not verified
+### Sources, and the one row still resting on an inference
 
 Checked 2026-09-08 against each tool's public documentation (URLs in the
-`ADAPTERS` doc comment in `rs/crates/core/src/skills/adapters.rs`):
+`ADAPTERS` doc comment in `rs/crates/core/src/skills/adapters.rs`), by fetching
+every page and quoting it:
 
 - Claude Code: `.claude/rules/*.md` with `paths:` front matter, `~/.claude/rules/`,
   skills with `disable-model-invocation: true`, the 4 MiB cap.
 - Cline: `.clinerules/` directory of `.md`/`.txt`, `paths:` front matter,
   `~/Documents/Cline/Rules`, workflows in `.clinerules/workflows/` and
-  `~/Documents/Cline/Workflows`.
-- Kiro: `.kiro/steering/` and `~/.kiro/steering/`, `inclusion:` values.
-- Augment: `.augment/rules/`, `type:` values; user rules under
-  `~/.augment/rules/` are always-on regardless of front matter.
-- Continue: `.continue/rules/` with `name`, `globs`, `description`, `alwaysApply`.
+  `~/Documents/Cline/Workflows`. It also reads `AGENTS.md` and
+  `~/.agents/AGENTS.md`.
+- Kiro: `.kiro/steering/` and `~/.kiro/steering/`, `inclusion:` values. It reads
+  `AGENTS.md` too, always and without inclusion modes. Its steering docs
+  describe no skill form at all, so no skills are written for Kiro.
+- Augment: `.augment/rules/`, `type:` values; `type: manual` is IDE-only and
+  "skipped by the CLI"; user rules under `~/.augment/rules/` are always-on
+  regardless of front matter. It reads `AGENTS.md`, and `CLAUDE.md` above it.
+- Continue: `.continue/rules/` with `name`, `globs`, `description`,
+  `alwaysApply`. A `regex` condition also exists and is not emitted.
+- No file size limit is documented for Cline, Kiro, Augment or Continue, so none
+  is enforced for them.
 
-Not verified, and how the code treats it:
+One row is not quoted from anywhere: Continue's global `~/.continue/rules/`
+appears on neither of Continue's two rules pages. It is inferred from Continue's
+data directory, and the user-scope layout is written on that inference — safe in
+the sense that a tool which does not read the directory just ignores it, but it
+is the only path in the table that could simply be wrong.
 
-- Continue's global rules directory (`~/.continue/rules/`) is inferred from its
-  config layout, not from a documented statement; the user-scope layout is
-  written on that inference.
-- Whether Cline reads `AGENTS.md`: not claimed; Cline gets native rule files.
-- Augment's `type: manual` is documented for the IDE extension; the CLI's
-  handling is unstated. It is written as documented.
-- Whether Kiro, Augment or Continue impose a file size limit: none found, so
-  none is enforced.
+Because Cline, Kiro and Augment all read `AGENTS.md`, an always-on rule reaches
+them twice at project scope: once in the shared file and once in their native
+rules directory. That is deliberate. Augment publishes an order of precedence
+over rules files without saying whether it loads all of them or stops at the
+first, so suppressing the native copy risks dropping the rule entirely, which is
+worse than repeating it. The suppression path exists for importing tools
+(`RulesForm::ImportShared`, which is how Claude Code avoids the repeat) and can
+be extended to native rule files once one of the three documents that its lists
+accumulate.
 
 ## Fence contract
 

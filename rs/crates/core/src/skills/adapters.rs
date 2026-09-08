@@ -224,8 +224,9 @@ const CLAUDE_CODE_CAP: Cap = Cap {
 
 /// The table. Order is the order fences are appended in a shared file.
 ///
-/// Sources of truth, checked 2026-09-08 against each vendor's docs; what could
-/// not be verified is marked:
+/// Sources of truth, checked 2026-09-08 against each vendor's docs. Every claim
+/// here was read off a page that was fetched; where a page settles nothing, the
+/// choice this table makes and what it costs are named instead of left open.
 ///
 /// * **Claude Code** — `code.claude.com/docs/en/memory`: `./CLAUDE.md` with
 ///   `@AGENTS.md` imports, `.claude/rules/*.md` with `paths:` front matter,
@@ -238,26 +239,51 @@ const CLAUDE_CODE_CAP: Cap = Cap {
 /// * **Aider** — `CONVENTIONS.md` is the documented convention (read via
 ///   `--read`); no user-level file, no on-demand form.
 /// * **Cline** — `docs.cline.bot/features/cline-rules`: `.clinerules/` holds
-///   `.md`/`.txt` rule files, `paths:` front matter scopes a rule to globs, global
-///   rules in `~/Documents/Cline/Rules`; workflows in `.clinerules/workflows/`
-///   and `~/Documents/Cline/Workflows`, invoked as `/<file>.md`. No documented
-///   size cap ("keep rules concise"). Whether Cline reads `AGENTS.md` on its own
-///   was not verified, so always-on rules are written natively too.
+///   `.md`/`.txt` rule files, `paths:` front matter scopes a rule to globs
+///   ("Currently, `paths` is the supported conditional"), global rules in
+///   `~/Documents/Cline/Rules`; workflows in `.clinerules/workflows/` and
+///   `~/Documents/Cline/Workflows`, invoked as `/<file>.md`. No documented size
+///   cap. Cline does read the shared file — its table of supported rules lists
+///   "AGENTS.md | `AGENTS.md`, `~/.agents/AGENTS.md`" — see the duplication
+///   note below.
 /// * **Kiro** — `kiro.dev/docs/steering`: `.kiro/steering/*.md` and
 ///   `~/.kiro/steering/*.md`; front matter `inclusion: always | fileMatch |
 ///   manual | auto`, `fileMatchPattern` as string or list, `#name` or `/name`
-///   invokes a manual file. No documented cap. Whether Kiro reads
-///   `.agents/skills/` was not verified; skills are not written for it.
+///   invokes a manual file. No documented cap. That page documents no
+///   `.agents/skills/` and no on-demand skill form at all, so none are written
+///   for Kiro. It does read the shared file: "Kiro supports providing steering
+///   directives via the AGENTS.md standard", and such files "do not support
+///   inclusion modes and are always included".
 /// * **Augment** — `docs.augmentcode.com/cli/rules`: `.augment/rules/*.md` with
-///   `type: always_apply | agent_requested | manual` (`manual` is IDE-only; the
-///   CLI skips it), `description` required for `agent_requested`;
-///   `~/.augment/rules/` is read as always-on regardless of front matter. No
-///   glob form, no documented cap.
+///   `type: always_apply | agent_requested | manual`, `description` required for
+///   `agent_requested`. `manual` is IDE-only, verbatim: those rules are "skipped
+///   by the CLI". `~/.augment/rules/` ignores front matter, verbatim: "User
+///   rules in `~/.augment/rules/` are always treated as `always_apply` and do
+///   not support other frontmatter types". No glob form, no documented cap. It
+///   reads `AGENTS.md`, and `CLAUDE.md` at a higher precedence still.
 /// * **Continue** — `docs.continue.dev/customize/deep-dives/rules`:
-///   `.continue/rules/*.md` with `name`, `description`, `globs`, `alwaysApply`.
-///   The global `~/.continue/rules/` directory is from Continue's config
-///   layout and was **not** re-verified against the current page. No
-///   documented cap.
+///   `.continue/rules/*.md` with `name`, `description`, `globs` and
+///   `alwaysApply` (plus a `regex` condition this host does not emit). No
+///   documented cap. Neither that page nor `docs.continue.dev/customize/rules`
+///   documents a global `~/.continue/rules/`: the user-scope row remains an
+///   inference from Continue's data directory. It is a safe one in the way an
+///   inference should be — a tool that does not read the directory simply
+///   ignores it — but it is not a documented location, and it is the one row
+///   here resting on something other than a quote.
+///
+/// # Always-on rules reach three tools twice, deliberately
+///
+/// Cline, Kiro and Augment each read `AGENTS.md` themselves, so an always-on
+/// unit arrives once through the shared file and again through the tool's own
+/// rules directory. The native copy stays. Augment publishes an "order of
+/// precedence" — `--rules`, `CLAUDE.md`, `AGENTS.md`, workspace guidelines,
+/// workspace rules, user rules — without saying whether it loads all of them or
+/// stops at the first match, and a rule silently dropped by a precedence rule is
+/// a worse failure than a rule the model reads twice. Dropping the copy needs a
+/// per-row "reads the shared file" flag and an `is_covered` arm for
+/// `Form::RuleFile`, and is worth doing once one of the three documents that its
+/// lists accumulate. It bites project scope only: there is no shared layer at
+/// user scope, where the native file is the sole carrier.
 pub const ADAPTERS: &[AdapterRow] = &[
     AdapterRow {
         id: "claude-code",
