@@ -20,6 +20,9 @@ pub mod cache;
 pub mod fetch;
 pub mod github;
 pub mod job;
+// ---- track G6 resolver
+pub mod resolve;
+// ---- end track G6 resolver
 pub mod token;
 pub mod toolchain;
 pub mod workspace;
@@ -32,8 +35,13 @@ use crate::install::{
     hash_file, FileKeyStore, InstallError, InstallPaths, InstallStore, KeyStore, RecordStatus,
 };
 use crate::persistence::lockfile::LockfileIoError;
+// ---- track G6 resolver
+use crate::install::resolver::{self, Defaults, InstalledVersion};
+use resolve::MarketplaceSource;
+use semver::VersionReq;
+// ---- end track G6 resolver
 use avada_module_sdk::caps::Capability;
-use avada_module_sdk::manifest::{Manifest, ModuleId, Requirement};
+use avada_module_sdk::manifest::{Manifest, ModuleId};
 use avada_module_sdk::rights::{InstallKind, InstallRecord};
 use cache::Cache;
 use fetch::{check_free_build, newest_tag, read_manifest, run_streaming, Git};
@@ -50,8 +58,6 @@ use token::{FileTokenStore, Token, TokenStore};
 use toolchain::Toolchain;
 use workspace::{valid_key, WorkspaceStates};
 
-/// How deep the inline dependency install follows `requires` (the real resolver is G6).
-const DEPENDENCY_DEPTH: usize = 4;
 /// The marketplace's own state directory, a sibling of the modules root
 /// (`<data_dir>/marketplace`). It is not under the modules root because the install
 /// store lists every directory there as a module.
@@ -490,7 +496,7 @@ impl Marketplace {
         std::thread::Builder::new()
             .name(format!("marketplace-install-{}", &job_id[..8]))
             .spawn(move || {
-                match me.run_install(&job_id, &req, &toolchain, 0) {
+                match me.run_install(&job_id, &req, &toolchain, true) {
                     Ok(version) => me.jobs.done(&job_id, &version.to_string()),
                     Err(e) => {
                         tracing::warn!(job = %job_id, module = %req.module, error = %e, "marketplace install failed");
@@ -502,14 +508,18 @@ impl Marketplace {
         Ok(job)
     }
 
-    /// The whole pipeline for one module, on the calling thread. Dependencies recurse
-    /// with the same job (their log lines interleave, prefixed by module).
+    /// The whole pipeline for one module, on the calling thread.
+    ///
+    /// `root` marks the module the user asked for. Its manifest is resolved against
+    /// the whole dependency graph (see [`Self::install_dependencies`]) and every
+    /// module the plan needs is installed first, on this same job, so their log lines
+    /// interleave prefixed by module.
     fn run_install(
         &self,
         job_id: &str,
         req: &InstallRequest,
         toolchain: &Toolchain,
-        depth: usize,
+        root: bool,
     ) -> Result<Version, MarketplaceError> {
         let id = Self::parse_id(&req.module)?;
         let jobs = &self.jobs;
@@ -540,7 +550,7 @@ impl Marketplace {
                     ))
                 })?,
         };
-        if depth == 0 {
+        if root {
             jobs.tag(job_id, &tag);
         }
         let remote_commit = tags.get(&tag).cloned().ok_or_else(|| {
@@ -607,10 +617,12 @@ impl Marketplace {
             manifest.capabilities.len()
         ));
 
-        // Verify: what it requires must be installed.
-        for requirement in &manifest.requires {
-            self.ensure_requirement(job_id, requirement, toolchain, depth, &log)?;
+        // ---- track G6 resolver
+        // Verify: resolve the whole graph and install what it needs, first.
+        if root {
+            self.install_dependencies(job_id, req, &manifest, &git, toolchain, &log)?;
         }
+        // ---- end track G6 resolver
 
         // Build.
         jobs.phase(job_id, Phase::Build, Some(50));
@@ -664,6 +676,10 @@ impl Marketplace {
                 .collect()
         });
         let version = manifest.module.version.clone();
+        // ---- track G6 resolver
+        let claims_defaults = (req.kind == InstallKind::Manual && !manifest.provides.is_empty())
+            .then(|| manifest.clone());
+        // ---- end track G6 resolver
         let record = InstallRecord {
             module_id: id.clone(),
             repo: url.clone(),
@@ -679,6 +695,11 @@ impl Marketplace {
         };
         self.store.install(record, &binary)?;
         self.store.activate(&id, &version)?;
+        // ---- track G6 resolver
+        if let Some(m) = &claims_defaults {
+            self.note_defaults(m, req.kind, &log);
+        }
+        // ---- end track G6 resolver
         jobs.phase(job_id, Phase::Install, Some(95));
         if let Some(ws) = &req.workspace {
             self.workspaces.set_enabled(ws, &id, true)?;
@@ -688,81 +709,152 @@ impl Marketplace {
         Ok(version)
     }
 
-    /// Satisfy one `requires` entry: already provided by an installed module, or
-    /// install the declared provider's newest tag as a dependency.
-    fn ensure_requirement(
+    // ---- track G6 resolver
+
+    /// Resolve the whole dependency graph of one install request and install
+    /// everything it needs, dependencies first.
+    ///
+    /// The root's manifest is already in hand — this job cloned and verified it — so
+    /// it is handed to the resolver directly and never fetched again. Everything else
+    /// the plan reaches comes from the install store (already installed) or from a
+    /// throwaway shallow clone of one tag (see [`resolve::MarketplaceSource`]).
+    ///
+    /// One plan covers the whole job: `resolve` either returns an order that satisfies
+    /// every version requirement, `requires` shape and workspace pin at once, or a
+    /// [`resolver::Conflict`] explaining which of them cannot hold together. There is
+    /// no depth limit any more; a cycle is a conflict, not a runaway recursion.
+    fn install_dependencies(
         &self,
         job_id: &str,
-        requirement: &Requirement,
+        req: &InstallRequest,
+        root: &Manifest,
+        git: &Git,
         toolchain: &Toolchain,
-        depth: usize,
         log: &dyn Fn(&str),
     ) -> Result<(), MarketplaceError> {
-        if self.provided(requirement)? {
-            log(&format!(
-                "requires {} {}: provided",
-                requirement.shape, requirement.version
-            ));
-            return Ok(());
+        let id = root.id().clone();
+        let version = root.module.version.clone();
+
+        // What is on this machine already: candidate versions the resolver may keep,
+        // and their manifests, without a single fetch.
+        let mut known: BTreeMap<(ModuleId, Version), Manifest> = BTreeMap::new();
+        let mut installed: Vec<InstalledVersion> = Vec::new();
+        for status in self.store.records()? {
+            if let RecordStatus::Ok(i) = status {
+                let rights = i.rights();
+                installed.push(InstalledVersion {
+                    id: i.id.clone(),
+                    version: i.version.clone(),
+                    active: i.active,
+                    installed_at: rights.installed_at,
+                });
+                known.insert((i.id.clone(), i.version.clone()), rights.manifest.clone());
+            }
         }
-        let Some(provider) = &requirement.provider else {
-            return Err(MarketplaceError::Refused(format!(
-                "requires {} {} but nothing installed provides it and no provider is named \
-                 (install a provider first)",
-                requirement.shape, requirement.version
-            )));
+        known.insert((id.clone(), version.clone()), root.clone());
+
+        let pins = match &req.workspace {
+            Some(ws) => self.workspaces.pins(ws)?,
+            None => BTreeMap::new(),
         };
-        if depth >= DEPENDENCY_DEPTH {
-            return Err(MarketplaceError::Refused(format!(
-                "dependency chain deeper than {DEPENDENCY_DEPTH} at {}",
-                provider.as_str()
-            )));
+        let defaults = Defaults::load(self.store.paths())?;
+
+        // Manifest clones live here and are removed as soon as they have been read;
+        // this guard drops before the root's own scratch clone, which then empties
+        // the job directory.
+        let src = self.state_dir.join(SCRATCH_DIR).join(job_id).join("src");
+        let _src_cleanup = Cleanup(src.clone());
+        let source = MarketplaceSource::new(git, &self.options.git_base, &src, known, &log);
+
+        let roots = [resolver::Root {
+            id: id.clone(),
+            version: VersionReq::parse(&format!("={version}")).map_err(|e| {
+                MarketplaceError::Refused(format!("{version} is not a usable version: {e}"))
+            })?,
+        }];
+        let plan = resolver::resolve(&roots, &source, &installed, &defaults, &pins)
+            .map_err(|c| MarketplaceError::Refused(c.to_string()))?;
+
+        // The free build refuses a commercial or prebuilt module anywhere in the plan,
+        // not only at the root, and says which one.
+        for step in &plan.steps {
+            if step.id == id {
+                continue; // already checked, with the plain message
+            }
+            check_free_build(&step.manifest)
+                .map_err(|e| MarketplaceError::Refused(format!("{}: {e}", step.id.as_str())))?;
         }
-        log(&format!(
-            "requires {} {}: installing {} as a dependency",
-            requirement.shape,
-            requirement.version,
-            provider.as_str()
-        ));
-        let dep = InstallRequest {
-            module: provider.as_str().to_string(),
-            tag: None,
-            accepted: None,
-            workspace: None,
-            expected_commit: None,
-            kind: InstallKind::Dependency,
-        };
-        self.run_install(job_id, &dep, toolchain, depth + 1)?;
-        if !self.provided(requirement)? {
-            return Err(MarketplaceError::Refused(format!(
-                "{} was installed but does not provide {} {}",
-                provider.as_str(),
-                requirement.shape,
-                requirement.version
-            )));
+
+        for choice in &plan.providers {
+            let ready = choice
+                .providers
+                .iter()
+                .all(|(p, v)| plan.step(p, v).is_none_or(|s| s.installed));
+            let who = if choice.requirer == id {
+                String::new()
+            } else {
+                format!("{} ", choice.requirer.as_str())
+            };
+            if ready {
+                log(&format!(
+                    "{who}requires {} {}: provided",
+                    choice.shape, choice.version
+                ));
+            } else {
+                let names: Vec<&str> = choice.providers.iter().map(|(p, _)| p.as_str()).collect();
+                log(&format!(
+                    "{who}requires {} {}: installing {} as a dependency",
+                    choice.shape,
+                    choice.version,
+                    names.join(", ")
+                ));
+            }
+        }
+
+        // Post-order: every step's own dependencies come before it, and the root last.
+        for step in plan.to_install() {
+            if step.root {
+                continue; // the caller is installing it, from the clone it already has
+            }
+            let dep = InstallRequest {
+                module: step.id.as_str().to_string(),
+                tag: Some(format!("v{}", step.version)),
+                accepted: None,
+                workspace: None,
+                expected_commit: None,
+                kind: InstallKind::Dependency,
+            };
+            self.run_install(job_id, &dep, toolchain, false)?;
         }
         Ok(())
     }
 
-    /// Whether an installed module provides the shape at an acceptable version.
-    fn provided(&self, requirement: &Requirement) -> Result<bool, MarketplaceError> {
-        for status in self.store.records()? {
-            if let RecordStatus::Ok(installed) = status {
-                if let Some(provider) = &requirement.provider {
-                    if &installed.id != provider {
-                        continue;
-                    }
-                }
-                let satisfied = installed.rights().manifest.provides.iter().any(|p| {
-                    p.shape == requirement.shape && requirement.version.matches(&p.version)
-                });
-                if satisfied {
-                    return Ok(true);
-                }
-            }
+    /// A hand install claims every shape it provides that has no default provider yet
+    /// (`docs/modules-fanout-plan.md` §2). A dependency install never does: the user
+    /// did not choose it, so it must not silently become the answer to a shape.
+    fn note_defaults(&self, manifest: &Manifest, kind: InstallKind, log: &dyn Fn(&str)) {
+        if kind != InstallKind::Manual || manifest.provides.is_empty() {
+            return;
         }
-        Ok(false)
+        let paths = self.store.paths();
+        let mut defaults = match Defaults::load(paths) {
+            Ok(d) => d,
+            Err(e) => {
+                log(&format!("could not read the provider defaults: {e}"));
+                return;
+            }
+        };
+        let newly = defaults.note_manual_install(manifest);
+        if newly.is_empty() {
+            return;
+        }
+        match defaults.save(paths) {
+            Ok(()) => log(&format!("default provider for {}", newly.join(", "))),
+            Err(e) => log(&format!("could not record the provider defaults: {e}")),
+        }
     }
+
+    // ---- end track G6 resolver
 
     /// Every job, oldest first.
     pub fn jobs(&self) -> Vec<Job> {
@@ -794,6 +886,86 @@ impl Marketplace {
         Ok(self.workspaces.enabled_in(&id))
     }
 
+    // ---- track G6 resolver
+
+    /// Pin `module` to `version` in `workspace`, refusing a pin that would break
+    /// something already enabled there.
+    ///
+    /// The check is [`resolver::check_pin`]: every enabled module's dependency and
+    /// named-requirement demands on `module` are gathered, and if the pinned version
+    /// fails any of them the refusal names each broken demand and offers the nearest
+    /// installed version that keeps them all working, up or down.
+    pub fn pin(
+        &self,
+        workspace: &str,
+        module: &str,
+        version: &str,
+    ) -> Result<BTreeMap<ModuleId, Version>, MarketplaceError> {
+        let id = Self::parse_id(module)?;
+        Self::check_workspace(workspace)?;
+        let version = Version::parse(version)
+            .map_err(|_| MarketplaceError::NotInstalled(format!("{module}@{version}")))?;
+        let mut candidates: Vec<(Version, Manifest)> = Vec::new();
+        let mut demands: Vec<resolver::Demand> = Vec::new();
+        let enabled = self.workspaces.get(workspace)?.enabled;
+        for status in self.store.records()? {
+            let RecordStatus::Ok(i) = status else {
+                continue;
+            };
+            let manifest = i.rights().manifest.clone();
+            if i.id == id {
+                candidates.push((i.version.clone(), manifest));
+                continue;
+            }
+            if enabled.get(&i.id) != Some(&true) {
+                continue; // only what this workspace actually runs constrains the pin
+            }
+            for (dep, req) in &manifest.dependencies {
+                if dep == &id {
+                    demands.push(resolver::Demand {
+                        requirer: i.id.clone(),
+                        requirer_version: i.version.clone(),
+                        kind: resolver::DemandKind::Identity(req.clone()),
+                    });
+                }
+            }
+            for r in &manifest.requires {
+                if r.provider.as_ref() == Some(&id) {
+                    demands.push(resolver::Demand {
+                        requirer: i.id.clone(),
+                        requirer_version: i.version.clone(),
+                        kind: resolver::DemandKind::Shape {
+                            shape: r.shape.clone(),
+                            version: r.version.clone(),
+                        },
+                    });
+                }
+            }
+        }
+        resolver::check_pin(&id, &version, &candidates, &demands)
+            .map_err(|c| MarketplaceError::Refused(c.message))?;
+        Ok(self.workspaces.set_pin(workspace, &id, &version)?.pins)
+    }
+
+    /// Forget the pin on `module` in `workspace`.
+    pub fn unpin(
+        &self,
+        workspace: &str,
+        module: &str,
+    ) -> Result<BTreeMap<ModuleId, Version>, MarketplaceError> {
+        let id = Self::parse_id(module)?;
+        Self::check_workspace(workspace)?;
+        Ok(self.workspaces.clear_pin(workspace, &id)?.pins)
+    }
+
+    /// The versions pinned in `workspace`.
+    pub fn pins(&self, workspace: &str) -> Result<BTreeMap<ModuleId, Version>, MarketplaceError> {
+        Self::check_workspace(workspace)?;
+        Ok(self.workspaces.pins(workspace)?)
+    }
+
+    // ---- end track G6 resolver
+
     /// Remove one installed version; the last one removed forgets workspace state too.
     pub fn uninstall(&self, module: &str, version: &str) -> Result<(), MarketplaceError> {
         let id = Self::parse_id(module)?;
@@ -810,6 +982,14 @@ impl Marketplace {
         }
         if self.store.installed_versions(&id)?.is_empty() {
             self.workspaces.remove_module(&id)?;
+            // ---- track G6 resolver
+            // The module is gone: it can no longer be the default provider of anything.
+            let paths = self.store.paths();
+            let mut defaults = Defaults::load(paths)?;
+            if !defaults.clear_module(&id).is_empty() {
+                defaults.save(paths)?;
+            }
+            // ---- end track G6 resolver
         }
         Ok(())
     }
@@ -950,3 +1130,126 @@ impl Drop for Cleanup {
         }
     }
 }
+
+// ---- track G6 resolver
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::testing::{files_state, manifest_for, rig, wait, FakeCargo, FILES, GIT};
+    use super::*;
+    use crate::install::resolver::Defaults;
+    use std::time::Duration;
+
+    /// The whole G6 seam through the real install pipeline: the plan picks a version
+    /// (not simply the newest tag), a dependency install does not claim a default, a
+    /// hand install does, a pin that breaks an enabled module is refused with the
+    /// nearest working version offered, and uninstalling forgets the default.
+    #[tokio::test]
+    async fn the_plan_picks_versions_claims_defaults_and_guards_pins() {
+        let r = rig(
+            "g6",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        for (tag, provided) in [("v1.0.0", "1.0.0"), ("v1.2.0", "1.2.0")] {
+            // `repo` re-clones the bare mirror from the same working tree, so dropping
+            // it leaves one repository carrying both tags.
+            let _ = std::fs::remove_dir_all(r.fixtures.root.join(format!("{FILES}.git")));
+            r.fixtures.repo(
+                FILES,
+                tag,
+                &manifest_for(
+                    FILES,
+                    provided,
+                    "kind = \"source\"",
+                    &format!(
+                        "[[provides]]\nshape = \"avada.files.tree\"\nversion = \"{provided}\"\n"
+                    ),
+                ),
+            );
+        }
+        // The newest tag (v1.2.0) does NOT satisfy this: only resolution finds v1.0.0.
+        r.fixtures.repo(
+            GIT,
+            "v1.0.0",
+            &manifest_for(
+                GIT,
+                "1.0.0",
+                "kind = \"source\"",
+                "[[requires]]\nshape = \"avada.files.tree\"\nversion = \">=1, <1.2\"\n\
+                 provider = \"acme/avada-files\"\n",
+            ),
+        );
+
+        let mut req = InstallRequest::new(GIT);
+        req.workspace = Some("g6ws".into());
+        let job = r.mp.install(req).unwrap();
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let list = r.mp.installed().unwrap();
+        assert_eq!(list.len(), 2, "{list:?}");
+        let files = list
+            .iter()
+            .find(|i| i.module.as_deref() == Some(FILES))
+            .unwrap();
+        assert_eq!(
+            files.tag.as_deref(),
+            Some("v1.0.0"),
+            "the resolver kept the version the requirement allows, not the newest tag"
+        );
+        assert_eq!(files.kind, Some(InstallKind::Dependency));
+
+        // A dependency install never claims a shape.
+        let paths = r.mp.store().paths();
+        assert_eq!(Defaults::load(paths).unwrap().get("avada.files.tree"), None);
+
+        // By hand it does.
+        let mut req = InstallRequest::new(FILES);
+        req.tag = Some("v1.2.0".into());
+        let done = wait(&r.mp, &r.mp.install(req).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let id = ModuleId::new(FILES).unwrap();
+        assert_eq!(
+            Defaults::load(paths).unwrap().get("avada.files.tree"),
+            Some(&id)
+        );
+
+        // GIT is enabled in g6ws, so a pin to 1.2.0 breaks it and is refused.
+        r.mp.set_enabled("g6ws", FILES, true).unwrap();
+        let e = r.mp.pin("g6ws", FILES, "1.2.0").unwrap_err();
+        let text = e.to_string();
+        assert_eq!(e.http_status(), 409);
+        assert!(text.contains(GIT), "{text}");
+        assert!(
+            text.contains("1.0.0"),
+            "the nearest working version: {text}"
+        );
+        assert!(r.mp.pins("g6ws").unwrap().is_empty());
+
+        // The version the resolver already chose pins fine, and unpins again.
+        assert_eq!(
+            r.mp.pin("g6ws", FILES, "1.0.0").unwrap().get(&id),
+            Some(&Version::new(1, 0, 0))
+        );
+        assert_eq!(r.mp.pins("g6ws").unwrap().len(), 1);
+        assert!(r.mp.unpin("g6ws", FILES).unwrap().is_empty());
+
+        // A version nobody installed cannot be pinned at all.
+        let e = r.mp.pin("g6ws", FILES, "9.9.9").unwrap_err();
+        assert!(e.to_string().contains("not installed"), "{e}");
+
+        // Uninstalling every version forgets the default and the workspace state.
+        r.mp.uninstall(FILES, "1.0.0").unwrap();
+        assert_eq!(
+            Defaults::load(paths).unwrap().get("avada.files.tree"),
+            Some(&id),
+            "one version left, the default stands"
+        );
+        r.mp.uninstall(FILES, "1.2.0").unwrap();
+        assert_eq!(Defaults::load(paths).unwrap().get("avada.files.tree"), None);
+    }
+}
+
+// ---- end track G6 resolver

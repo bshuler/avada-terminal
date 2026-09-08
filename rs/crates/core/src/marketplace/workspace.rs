@@ -12,6 +12,7 @@ use crate::persistence::lockfile::{
 };
 use avada_module_sdk::install::WorkspaceModuleState;
 use avada_module_sdk::ModuleId;
+use semver::Version;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -100,17 +101,84 @@ impl WorkspaceStates {
 
     /// Forget `id` in every workspace (after an uninstall of its last version).
     pub fn remove_module(&self, id: &ModuleId) -> Result<(), LockfileIoError> {
-        for key in self.enabled_in(id).keys() {
-            let path = self.path(key);
+        for key in self.keys() {
+            let path = self.path(&key);
             let mut file = read_workspace_modules(&path)?;
-            let mut state = file.get(key);
-            state.enabled.remove(id);
-            state.pins.remove(id);
-            file.set(key, state);
+            let mut state = file.get(&key);
+            let had = state.enabled.remove(id).is_some();
+            let pinned = state.pins.remove(id).is_some();
+            if !had && !pinned {
+                continue;
+            }
+            file.set(&key, state);
             write_workspace_modules(&path, &file)?;
         }
         Ok(())
     }
+
+    // ---- track G6 resolver
+
+    /// Every workspace that has a state file, in directory order.
+    ///
+    /// A workspace only exists once something has been enabled or pinned in it, so
+    /// this is the set the resolver and uninstall have to consider, not the set of
+    /// workspaces the app knows about.
+    pub fn keys(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|k| valid_key(k))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The versions pinned in `key`.
+    ///
+    /// A pin is the workspace saying "this exact version, whatever the resolver would
+    /// otherwise pick": [`crate::install::resolver`] offers a pinned module no other
+    /// candidate, so a pin that cannot be satisfied is a conflict rather than a
+    /// silent upgrade.
+    pub fn pins(&self, key: &str) -> Result<BTreeMap<ModuleId, Version>, LockfileIoError> {
+        Ok(self.get(key)?.pins)
+    }
+
+    /// Pin `id` to `version` in `key`. The caller checks first that the pin can be
+    /// satisfied ([`crate::install::resolver::check_pin`]); this only records it.
+    pub fn set_pin(
+        &self,
+        key: &str,
+        id: &ModuleId,
+        version: &Version,
+    ) -> Result<WorkspaceModuleState, LockfileIoError> {
+        let path = self.path(key);
+        let mut file = read_workspace_modules(&path)?;
+        let mut state = file.get(key);
+        state.pins.insert(id.clone(), version.clone());
+        file.set(key, state.clone());
+        write_workspace_modules(&path, &file)?;
+        Ok(state)
+    }
+
+    /// Forget the pin on `id` in `key`; the resolver is free to move it again.
+    pub fn clear_pin(
+        &self,
+        key: &str,
+        id: &ModuleId,
+    ) -> Result<WorkspaceModuleState, LockfileIoError> {
+        let path = self.path(key);
+        let mut file = read_workspace_modules(&path)?;
+        let mut state = file.get(key);
+        state.pins.remove(id);
+        file.set(key, state.clone());
+        write_workspace_modules(&path, &file)?;
+        Ok(state)
+    }
+
+    // ---- end track G6 resolver
 }
 
 #[cfg(test)]
