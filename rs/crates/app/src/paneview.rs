@@ -23,10 +23,9 @@ use crate::state::{Overlay, PaneState, State};
 use crate::theme;
 use crate::{
     AppWindow, ClaudeSessionItem, CtxTab, DividerItem, FramePaletteOption, HiRect, KeybindingItem,
-    LayoutOption, LeftGitRow, LeftModeRow, LeftPaneRow, LeftPanelAdapter,
-    LeftSessionItem, LeftSessionRow, LeftSetRow, LeftTabRow, LeftWorkspaceRow, MenuEntry,
-    PaletteItem, PaneItem, PaneViewRow, PrefBrowserRow, PrefOption, PrefToolRow, ProjectItem,
-    TabItem, WorktreeRow,
+    LayoutOption, LeftGitRow, LeftModeRow, LeftPaneRow, LeftPanelAdapter, LeftSessionItem,
+    LeftSessionRow, LeftSetRow, LeftTabRow, LeftWorkspaceRow, MenuEntry, PaletteItem, PaneItem,
+    PaneViewRow, PrefBrowserRow, PrefOption, PrefToolRow, ProjectItem, TabItem, WorktreeRow,
 };
 
 /// Thickness (logical px) of the draggable divider hit-area.
@@ -342,6 +341,10 @@ fn replay_cursor_pos(_app: &AppWindow, _link_active: bool) {}
 /// Build a model row for pane `i`. `editing` flags the pane whose label is being renamed
 /// inline; `show_frame`/`show_dot` are the GLOBAL Appearance prefs, folded here over each
 /// pane's per-pane override (a clean new pane resolves OFF, a git-project pane ON).
+// Nine arguments, deliberately: every one is a value resolved BEFORE the `&mut state.tabs`
+// borrow in the caller, so folding them into a struct would only move the same nine reads
+// one line up. Kept flat until the projection itself grows a type.
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", ret, skip(ps))]
 fn pane_item(
     ps: &PaneState,
@@ -2196,7 +2199,7 @@ pub fn pump(
     let tab = &mut state.tabs[active_idx];
     let n = tab.panes.len();
     let mut rendered = 0usize;
-    for i in 0..n {
+    for (i, tool) in tool_row.iter().enumerate().take(n) {
         let ps = &mut tab.panes[i];
         // Advance this pane's idle glow every tick. A pane is "idle" once it's been
         // output-quiet past the threshold (the agent finished + is waiting); the alpha
@@ -2208,8 +2211,8 @@ pub fn pump(
         // which may never print a title at all) or the title sniff (which catches the
         // agents that do). Before the first, a `avada claude` pane sat there quiet and
         // unglowing because nothing had written a title for it to match.
-        let is_agent = !matches!(tool_row[i].0, PaneKind::Terminal)
-            || crate::glow::is_ai_pane(&ps.shell_title);
+        let is_agent =
+            !matches!(tool.0, PaneKind::Terminal) || crate::glow::is_ai_pane(&ps.shell_title);
         let idle = idle_on
             && ps.visible
             && is_agent
@@ -2287,8 +2290,8 @@ pub fn pump(
                     show_frame,
                     show_dot,
                     ps.font_px,
-                    &tool_row[i].0,
-                    tool_row[i].1,
+                    &tool.0,
+                    tool.1,
                     view_ui,
                 ),
             );

@@ -62,6 +62,14 @@ struct Scanner {
     rx: Receiver<ScanResult>,
 }
 
+/// The latest inference-store read per tool id: when it was drained, and the
+/// `(session id, cwd)` pairs it held.
+type StoreSnapshots = HashMap<String, (std::time::Instant, Vec<(String, String)>)>;
+
+/// Per-pane-uid identification watches, each with the stamp of the last store snapshot
+/// it consumed (`None` until it has consumed one).
+type WatchTable = HashMap<String, (PaneWatch, Option<std::time::Instant>)>;
+
 thread_local! {
     /// The scanner handle, spawned lazily on first use (UI thread only).
     static SCANNER: Scanner = spawn_scanner();
@@ -77,12 +85,10 @@ thread_local! {
     /// what lets a watch tell a snapshot it has already counted from one it hasn't: two
     /// looks at the *same* snapshot would find no new conversations and burn the watch's
     /// budget without ever having looked again.
-    static STORE: RefCell<HashMap<String, (std::time::Instant, Vec<(String, String)>)>> =
-        RefCell::new(HashMap::new());
+    static STORE: RefCell<StoreSnapshots> = RefCell::new(HashMap::new());
     /// Panes whose conversation we are still trying to identify, keyed by pane uid, each
     /// with the stamp of the last store snapshot it consumed.
-    static WATCHES: RefCell<HashMap<String, (PaneWatch, Option<std::time::Instant>)>> =
-        RefCell::new(HashMap::new());
+    static WATCHES: RefCell<WatchTable> = RefCell::new(HashMap::new());
 }
 
 /// Spawn the scanner thread and return its UI-side handle. The thread owns one

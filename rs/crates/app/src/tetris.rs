@@ -111,7 +111,7 @@ impl Tetris {
         for (cx, cy) in cells {
             let x = ox + cx;
             let y = oy + cy;
-            if x < 0 || x >= W || y >= H {
+            if !(0..W).contains(&x) || y >= H {
                 return true;
             }
             if y >= 0 && self.board[y as usize][x as usize] != 0 {
@@ -199,10 +199,10 @@ impl Tetris {
     #[tracing::instrument(level = "debug", ret)]
     fn evaluate(board: &[[u8; W as usize]; H as usize]) -> f64 {
         let mut heights = [0i32; W as usize];
-        for x in 0..W as usize {
-            for y in 0..H as usize {
-                if board[y][x] != 0 {
-                    heights[x] = H - y as i32;
+        for (x, h) in heights.iter_mut().enumerate() {
+            for (y, row) in board.iter().enumerate() {
+                if row[x] != 0 {
+                    *h = H - y as i32;
                     break;
                 }
             }
@@ -211,8 +211,8 @@ impl Tetris {
         let mut holes = 0;
         for x in 0..W as usize {
             let mut seen = false;
-            for y in 0..H as usize {
-                if board[y][x] != 0 {
+            for row in board {
+                if row[x] != 0 {
                     seen = true;
                 } else if seen {
                     holes += 1;
@@ -286,6 +286,7 @@ impl Tetris {
     /// The board's width in terminal columns (each cell is 2 glyphs wide).
     pub const COLS: usize = (W * 2) as usize;
     /// The board's height in terminal rows.
+    #[allow(dead_code)] // Referenced only from `#[cfg(test)]`, as the board's declared extent.
     pub const ROWS: usize = H as usize;
 
     /// The board as `ROWS` rows joined by `\r\n` (no leading/trailing control), with the

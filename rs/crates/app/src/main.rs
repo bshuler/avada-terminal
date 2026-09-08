@@ -5,13 +5,13 @@
 //! registry, spawns the first window, and starts the single 8 ms pump timer that drives
 //! every window. All the interesting logic lives in the modules:
 //!
-//!   * [`app`]      — the **window registry** + central event drain + per-window wiring;
-//!   * [`state`]    — one window's workspace state (tabs/panes/layout/zoom) and its
-//!                    mutate-then-resync API (**Seam #1**);
-//!   * [`command`]  — the `Command` enum + `dispatch` (**Seam #2**);
-//!   * [`paneview`] — resync (State → Slint models) + the per-window render pump;
-//!   * [`theme`]    — palette, layout metadata, font loading;
-//!   * [`window`]   — Win32 frameless / fullscreen glue (per window).
+//! * [`app`]      — the **window registry** + central event drain + per-window wiring;
+//! * [`state`]    — one window's workspace state (tabs/panes/layout/zoom) and its
+//!   mutate-then-resync API (**Seam #1**);
+//! * [`command`]  — the `Command` enum + `dispatch` (**Seam #2**);
+//! * [`paneview`] — resync (State → Slint models) + the per-window render pump;
+//! * [`theme`]    — palette, layout metadata, font loading;
+//! * [`window`]   — Win32 frameless / fullscreen glue (per window).
 //!
 //! The `.slint` views carry an empty overlay slot (**Seam #3**) for Wave-2 panels.
 //! See `ARCHITECTURE.md`. PTYs are owned centrally; a window only references pane uids,

@@ -931,7 +931,7 @@ pub fn parse_custom_duration(s: &str, now_secs_since_midnight: u64) -> Option<u3
         } else {
             target + 86_400 - now
         };
-        return Some((((delta + 59) / 60) as u32).max(1));
+        return Some((delta.div_ceil(60) as u32).max(1));
     }
     // NhM / Nh — hours with optional trailing minutes (the `m` suffix optional there too).
     if let Some((hh, rest)) = s.split_once('h') {

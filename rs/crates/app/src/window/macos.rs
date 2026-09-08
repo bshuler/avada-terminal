@@ -80,12 +80,10 @@ pub fn hwnd_of(win: &slint::Window) -> isize {
 #[tracing::instrument(level = "debug", ret)]
 pub fn make_frameless(raw: isize) {
     let Some(w) = ns_window(raw) else { return };
-    unsafe {
-        let mask = w.styleMask() | NSWindowStyleMask::FullSizeContentView;
-        w.setStyleMask(mask);
-        w.setTitlebarAppearsTransparent(true);
-        w.setTitleVisibility(NSWindowTitleVisibility::Hidden);
-    }
+    let mask = w.styleMask() | NSWindowStyleMask::FullSizeContentView;
+    w.setStyleMask(mask);
+    w.setTitlebarAppearsTransparent(true);
+    w.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     refuse_implicit_window_drag(w);
 }
 
@@ -139,24 +137,22 @@ pub fn start_drag(raw: isize) {
     if MainThreadMarker::new().is_none() {
         return;
     }
-    unsafe {
-        let cursor = NSEvent::mouseLocation(); // cocoa global (bottom-left) points
-        let frame = w.frame();
-        let loc_in_win = NSPoint::new(cursor.x - frame.origin.x, cursor.y - frame.origin.y);
-        let ev = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-            NSEventType::LeftMouseDown,
-            loc_in_win,
-            NSEventModifierFlags::empty(),
-            NSProcessInfo::processInfo().systemUptime(),
-            w.windowNumber(),
-            None,
-            0,
-            1,
-            1.0,
-        );
-        if let Some(ev) = ev {
-            w.performWindowDragWithEvent(&ev);
-        }
+    let cursor = NSEvent::mouseLocation(); // cocoa global (bottom-left) points
+    let frame = w.frame();
+    let loc_in_win = NSPoint::new(cursor.x - frame.origin.x, cursor.y - frame.origin.y);
+    let ev = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::LeftMouseDown,
+        loc_in_win,
+        NSEventModifierFlags::empty(),
+        NSProcessInfo::processInfo().systemUptime(),
+        w.windowNumber(),
+        None,
+        0,
+        1,
+        1.0,
+    );
+    if let Some(ev) = ev {
+        w.performWindowDragWithEvent(&ev);
     }
 }
 
@@ -167,9 +163,7 @@ pub fn start_drag(raw: isize) {
 pub fn begin_drag_cursor(_raw: isize) {
     DRAG_CURSOR_ON.store(true, Ordering::Relaxed);
     if MainThreadMarker::new().is_some() {
-        unsafe {
-            NSCursor::closedHandCursor().set();
-        }
+        NSCursor::closedHandCursor().set();
     }
 }
 
@@ -177,9 +171,7 @@ pub fn begin_drag_cursor(_raw: isize) {
 #[tracing::instrument(level = "debug", ret)]
 pub fn end_drag_cursor(_raw: isize) {
     if DRAG_CURSOR_ON.swap(false, Ordering::Relaxed) && MainThreadMarker::new().is_some() {
-        unsafe {
-            NSCursor::arrowCursor().set();
-        }
+        NSCursor::arrowCursor().set();
     }
 }
 
@@ -189,9 +181,7 @@ pub fn end_drag_cursor(_raw: isize) {
 #[tracing::instrument(level = "debug", ret)]
 pub fn reassert_drag_cursor() {
     if DRAG_CURSOR_ON.load(Ordering::Relaxed) && MainThreadMarker::new().is_some() {
-        unsafe {
-            NSCursor::closedHandCursor().set();
-        }
+        NSCursor::closedHandCursor().set();
     }
 }
 
@@ -204,14 +194,10 @@ pub fn set_hover_cursor(on: bool) {
     }
     if on {
         if !HOVER_CURSOR_ON.swap(true, Ordering::Relaxed) {
-            unsafe {
-                NSCursor::openHandCursor().set();
-            }
+            NSCursor::openHandCursor().set();
         }
     } else if HOVER_CURSOR_ON.swap(false, Ordering::Relaxed) {
-        unsafe {
-            NSCursor::arrowCursor().set();
-        }
+        NSCursor::arrowCursor().set();
     }
 }
 

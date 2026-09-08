@@ -154,7 +154,8 @@ pub enum PendingSeed {
     /// materialised through [`State::load_workspace`] (tabs/panes/layout from the spec).
     Workspace(Box<avada_core::workspace::model::WorkspaceFile>),
     /// Re-host a session detached from another window (replay-primed, no PTY restart).
-    Adopt(DetachedPane),
+    /// Boxed: a `DetachedPane` is ~312 bytes and would otherwise size the whole enum.
+    Adopt(Box<DetachedPane>),
     /// Re-host a whole tab (its panes + title/layout) detached from another window.
     AdoptTab(DetachedTab),
     /// Already seeded — nothing to do.
@@ -933,7 +934,7 @@ impl App {
             let mut f = st.to_session_file();
             let holds_system = st.tabs.iter().any(|t| t.system);
             drop(st);
-            if f.groups.as_deref().map_or(true, |g| g.is_empty()) {
+            if f.groups.as_deref().is_none_or(|g| g.is_empty()) {
                 continue;
             }
             self.embed_claude_sessions(&mut f);
@@ -2128,7 +2129,7 @@ impl App {
                     st.add_pane(&self.mgr);
                 }
             }
-            PendingSeed::Adopt(det) => st.adopt_pane(&self.mgr, det),
+            PendingSeed::Adopt(det) => st.adopt_pane(&self.mgr, *det),
             PendingSeed::AdoptTab(det) => st.adopt_tab(&self.mgr, det),
             PendingSeed::Done => {}
         }
@@ -3125,7 +3126,7 @@ impl App {
                     None => {
                         let det = src.state.borrow_mut().detach_uid(uid);
                         if let Some((det, alive)) = det {
-                            self.spawn_window(crate::app::PendingSeed::Adopt(det));
+                            self.spawn_window(crate::app::PendingSeed::Adopt(Box::new(det)));
                             if let Some(nw) = self.windows.borrow().last() {
                                 let scale = src.app.window().scale_factor().max(1.0);
                                 let lx = cursor.0 as f32 / scale - 80.0;
@@ -3309,7 +3310,7 @@ impl App {
                             // A hand-typed program names no conversation.
                             session: None,
                         };
-                        app.run_command(&w, Command::SubmitNewPane(opts));
+                        app.run_command(&w, Command::SubmitNewPane(Box::new(opts)));
                     }
                 });
         }
@@ -3718,7 +3719,7 @@ impl App {
                     // A view pane holds a file, not a conversation.
                     session: None,
                 };
-                app.run_command(&w, Command::SubmitNewPane(opts));
+                app.run_command(&w, Command::SubmitNewPane(Box::new(opts)));
             });
         }
 
@@ -4237,7 +4238,7 @@ impl App {
                         // back out of the command line later would be a guess.
                         session: Some(sid.to_string()),
                     };
-                    app.run_command(&w, Command::SubmitNewPane(opts));
+                    app.run_command(&w, Command::SubmitNewPane(Box::new(opts)));
                 });
         }
 
@@ -4385,10 +4386,7 @@ impl App {
                 .global::<crate::RailAdapter>()
                 .on_row_context(move |key, row, x, y| {
                     if let Some(w) = app.window_by_id(id) {
-                        app.run_command(
-                            &w,
-                            Command::RailContext(key.into(), row.into(), x, y),
-                        );
+                        app.run_command(&w, Command::RailContext(key.into(), row.into(), x, y));
                     }
                 });
         }
@@ -4659,7 +4657,7 @@ impl App {
                     // from a relaunch as a fresh claude.
                     session: Some(sid.to_string()),
                 };
-                app.run_command(&w, Command::SubmitNewPane(opts));
+                app.run_command(&w, Command::SubmitNewPane(Box::new(opts)));
             });
         }
         {

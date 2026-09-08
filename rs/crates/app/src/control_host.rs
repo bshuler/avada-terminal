@@ -790,15 +790,7 @@ impl ControlHost {
     /// representative uid lets the focus reconcile resolve the focused tab by a pane that's
     /// actually in it (stable across GUI tab reorder/close) rather than parsing the positional id.
     #[tracing::instrument(level = "debug", skip(self, windows))]
-    fn snapshot_model(
-        &self,
-        model: &ReadModel,
-        windows: &[Rc<Window>],
-    ) -> (
-        HashMap<String, ModelPane>,
-        HashMap<i64, Option<String>>,
-        HashMap<i64, Option<String>>,
-    ) {
+    fn snapshot_model(&self, model: &ReadModel, windows: &[Rc<Window>]) -> ModelSnapshot {
         let mut cur = HashMap::new();
         for pr in model.panes() {
             if let Some(p) = model.pane(&pr.pane_id) {
@@ -1394,6 +1386,15 @@ impl ControlHost {
         None
     }
 }
+
+/// What [`ControlHost::snapshot_model`] reads out of the control read-model: every pane
+/// by id, then per window id the focused pane and the focused tab's representative pane
+/// (both `None` when the window has no focus recorded).
+type ModelSnapshot = (
+    HashMap<String, ModelPane>,
+    HashMap<i64, Option<String>>,
+    HashMap<i64, Option<String>>,
+);
 
 /// A pane as read from the control read-model.
 struct ModelPane {

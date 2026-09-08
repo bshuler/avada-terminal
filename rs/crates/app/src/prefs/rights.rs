@@ -603,12 +603,10 @@ mod tests {
             })
         );
         assert_eq!(
-            decode_select_profile("acme/avada-files", "High security")
-                .map(|c| match c {
-                    RightsCommand::SelectProfile { profile, .. } => profile,
-                    _ => None,
-                })
-                .flatten(),
+            decode_select_profile("acme/avada-files", "High security").and_then(|c| match c {
+                RightsCommand::SelectProfile { profile, .. } => profile,
+                _ => None,
+            }),
             Some("High security".to_string())
         );
     }
