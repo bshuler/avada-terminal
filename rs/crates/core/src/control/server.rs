@@ -130,6 +130,13 @@ pub struct Shared {
     /// installs one; until then every marketplace route answers 503, never 404 — same
     /// contract as `modules`.
     pub marketplace: RwLock<Option<Arc<crate::marketplace::Marketplace>>>,
+    // ---- track G8 license
+    /// Whoever answers `/license/...` (`crate::license`). Empty until the app installs a
+    /// service; until then every license route answers 503, never 404 — same contract as
+    /// `marketplace`. Licences are per-machine state, so the app builds this once over the
+    /// real modules root and hands it over here.
+    pub license: RwLock<Option<Arc<crate::license::LicenseService>>>,
+    // ---- end track G8 license
 }
 
 impl Shared {
@@ -175,6 +182,9 @@ impl Shared {
             caps: crate::control::dispatch::CapabilityResolver::new(),
             modules: RwLock::new(None),
             marketplace: RwLock::new(None),
+            // ---- track G8 license
+            license: RwLock::new(None),
+            // ---- end track G8 license
         })
     }
 
@@ -189,6 +199,14 @@ impl Shared {
     pub fn install_marketplace(&self, mp: Arc<crate::marketplace::Marketplace>) {
         *self.marketplace.write().unwrap() = Some(mp);
     }
+
+    // ---- track G8 license
+    /// Install (or replace) the licence service that answers `/license/...`. Takes effect
+    /// on the next request; no router rebuild.
+    pub fn install_license(&self, svc: Arc<crate::license::LicenseService>) {
+        *self.license.write().unwrap() = Some(svc);
+    }
+    // ---- end track G8 license
 
     /// Set the requested bind address/port (from `control_settings`) BEFORE `run_server`.
     /// `address` must be a bare IP (the settings loader already validated it); `port` 0 =

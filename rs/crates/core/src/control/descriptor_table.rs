@@ -426,6 +426,71 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             vec![path_id("id", "Sign-in id")],
         ),
         // ---- end track F2 marketplace
+        // ---- track G8 license
+        route(
+            "license.list",
+            "/license",
+            Get,
+            "Every installed licence: product, licensee, state",
+        ),
+        with(
+            route(
+                "license.show",
+                "/license/modules/{owner}/{repo}",
+                Get,
+                "One product's licence, state and last check-in",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+            ],
+        ),
+        with(
+            route(
+                "license.install",
+                "/license/install",
+                Post,
+                "Install a licence from a file or a signed URL",
+            ),
+            vec![
+                p("path", Body, "string", false, "License file to read"),
+                p("url", Body, "string", false, "URL to fetch it from"),
+            ],
+        ),
+        with(
+            route(
+                "license.device",
+                "/license/device",
+                Post,
+                "Start an RFC 8628 device flow at the issuer",
+            ),
+            vec![
+                p("issuer", Body, "string", true, "Issuer base URL"),
+                p("module", Body, "string", true, "owner/repo"),
+            ],
+        ),
+        with(
+            route(
+                "license.device.poll",
+                "/license/device/{code}",
+                Get,
+                "Poll a device flow until the licence installs",
+            ),
+            vec![path_id("code", "Device code from license.device")],
+        ),
+        with(
+            route(
+                "license.remove",
+                "/license/modules/{owner}/{repo}",
+                Delete,
+                "Forget a licence on this machine",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+            ],
+        ),
+        // ---- end track G8 license
         route(
             "schema",
             "/schema",
@@ -494,6 +559,16 @@ pub fn core_capability(method: &str) -> Option<Capability> {
         "events" => EventsSubscribe,
         // Track F2: every marketplace route is the one escape hatch, no finer grain.
         m if m.starts_with("marketplace.") => MarketplaceManage,
+        // ---- track G8 license
+        // A licence is machine-wide configuration, so it takes the settings pair the
+        // prefs routes use: reading which products are licensed is `settings.read`;
+        // installing, starting a device flow (it mints a credential) or forgetting one
+        // is `settings.write`. There is no `license.*` capability in the contract.
+        "license.list" | "license.show" => SettingsRead,
+        "license.install" | "license.device" | "license.device.poll" | "license.remove" => {
+            SettingsWrite
+        }
+        // ---- end track G8 license
         other => panic!("core route {other:?} has no capability assignment"),
     })
 }

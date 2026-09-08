@@ -137,6 +137,14 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("marketplace.toolchain", marketplace_toolchain),
         h("marketplace.signin", marketplace_signin),
         h("marketplace.signin.poll", marketplace_signin_poll),
+        // ---- track G8 license (mirrors the fenced block in descriptor_table)
+        h("license.list", license_list),
+        h("license.show", license_show),
+        h("license.install", license_install),
+        h("license.device", license_device),
+        h("license.device.poll", license_device_poll),
+        h("license.remove", license_remove),
+        // ---- end track G8 license
         h("schema", schema_get),
     ]
 }
@@ -2694,6 +2702,188 @@ async fn marketplace_signin_poll(
         Err(e) => marketplace_error(e),
     }
 }
+
+// ---- track G8 license: /license/... ---------------------------------------------------------
+
+/// The installed licence service, or the 503 every licence route answers until the app
+/// installs one (`Shared::install_license`). Same contract as the marketplace: the route
+/// is listed, the service is simply not reachable yet.
+// deferred per repo lint policy (test.yml): the error arm is a full Response
+#[allow(clippy::result_large_err)]
+fn license_of(shared: &Arc<Shared>) -> Result<Arc<crate::license::LicenseService>, Response> {
+    let svc = shared.license.read().unwrap().clone();
+    svc.ok_or_else(|| jstatus(503, json!({ "error": "licensing unavailable" })))
+}
+
+/// Identity first (401 before a stranger learns whether licensing exists), then the
+/// service (503). The capability gate (403) already ran in the router.
+#[allow(clippy::result_large_err)]
+fn license_for(
+    shared: &Arc<Shared>,
+    headers: &HeaderMap,
+) -> Result<Arc<crate::license::LicenseService>, Response> {
+    authorize(shared, headers)?;
+    license_of(shared)
+}
+
+/// A licence refusal as a response: the status is the error's own
+/// (`LicenseError::http_status`), the body its message. `LicenseError`'s Display is
+/// written to name products, issuers and paths and never a token, so it is safe here.
+fn license_error(e: crate::license::LicenseError) -> Response {
+    let status = e.http_status();
+    tracing::debug!(status, error = %e, "license refusal");
+    jstatus(status, json!({ "error": e.to_string() }))
+}
+
+/// `owner` and `repo` back into the `owner/repo` product id the service speaks.
+fn product_of(owner: &str, repo: &str) -> String {
+    format!("{owner}/{repo}")
+}
+
+/// Every installed licence, with its state and reason.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn license_list(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let svc = match license_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match svc.list().await {
+        Ok(licenses) => ok_json(json!({ "licenses": licenses })),
+        Err(e) => license_error(e),
+    }
+}
+
+/// One product's licence, plus the gate the host would apply right now — a client can
+/// show "running with a banner" without recomputing the state machine.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn license_show(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let svc = match license_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let product = product_of(&owner, &repo);
+    match svc.show(&product).await {
+        Ok(view) => {
+            let gate = svc.gate(&product).await;
+            ok_json(json!({ "license": view, "gate": gate }))
+        }
+        Err(e) => license_error(e),
+    }
+}
+
+/// `{path}` (manual install) or `{url}` (corporate install) → the installed licence.
+/// Exactly one of the two: naming both is ambiguous and naming neither is empty.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn license_install(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let svc = match license_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let path = body_str(&body, "path").filter(|v| !v.is_empty());
+    let url = body_str(&body, "url").filter(|v| !v.is_empty());
+    let installed = match (path, url) {
+        (Some(p), None) => svc.install_file(std::path::Path::new(&p)).await,
+        (None, Some(u)) => svc.install_from_url(&u).await,
+        (Some(_), Some(_)) => {
+            return jstatus(
+                400,
+                json!({ "error": "bad request", "message": "give path or url, not both" }),
+            )
+        }
+        (None, None) => {
+            return jstatus(
+                400,
+                json!({ "error": "bad request", "message": "give path or url" }),
+            )
+        }
+    };
+    match installed {
+        Ok(view) => ok_json(json!({ "license": view })),
+        Err(e) => license_error(e),
+    }
+}
+
+/// `{issuer, module}` → the device flow to show the user (RFC 8628 §3.2). The user code
+/// and verification URI are meant to be displayed; the issuer's own device code never
+/// leaves the service.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn license_device(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let svc = match license_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(issuer) = body_str(&body, "issuer").filter(|v| !v.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing issuer" }));
+    };
+    let Some(module) = body_str(&body, "module").filter(|v| !v.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing module" }));
+    };
+    match svc.device_flow_start(&issuer, &module).await {
+        Ok(flow) => ok_json(json!({ "device": flow })),
+        Err(e) => license_error(e),
+    }
+}
+
+/// Poll a flow started by `license.device`. Answers the RFC's own vocabulary
+/// (`pending`, `slow_down`, `expired`, `denied`) until the grant arrives, and then
+/// `installed` with the licence — the poll is what performs the install.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn license_device_poll(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+) -> Response {
+    let svc = match license_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match svc.device_flow_poll(&code).await {
+        Ok(poll) => ok_json(json!(poll)),
+        Err(e) => license_error(e),
+    }
+}
+
+/// Forget a licence on this machine. 404 when there was none, so a client can tell a
+/// removal from a no-op.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn license_remove(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let svc = match license_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let product = product_of(&owner, &repo);
+    match svc.revoke_local(&product) {
+        Ok(true) => ok_json(json!({ "removed": product })),
+        Ok(false) => license_error(crate::license::LicenseError::NotLicensed(product)),
+        Err(e) => license_error(e),
+    }
+}
+
+// ---- end track G8 license
 
 // ---- module routes: /m/<owner>/<repo>/... ---------------------------------------------------
 
@@ -5667,5 +5857,353 @@ mod marketplace_routes {
         let (st, v) = get(&s, "/marketplace/signin/nope").await;
         assert_eq!(st, 404, "{v}");
         assert_eq!(v["error"], "no sign-in `nope`");
+    }
+}
+
+/// Track G8: the `/license/...` routes over the real axum stack, with a `LicenseService`
+/// built over the in-process stub issuer and a memory store. No network, no real HOME,
+/// and the only token that exists is minted in memory by the stub for this test.
+#[cfg(test)]
+mod license_routes {
+    use super::golden::{boot_with_control_tag, client, Server};
+    use crate::control::descriptor_table::core_routes;
+    use crate::control::dispatch::CapabilitySource;
+    use crate::license::store::write_private;
+    use crate::license::stub_issuer::{Grant, StubIssuer};
+    use crate::license::{system_clock, LicenseService, MemoryLicenseStore};
+    use avada_module_sdk::caps::Capability;
+    use avada_module_sdk::descriptor::{ParamLocation, Verb};
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    const PRODUCT: &str = "acme/pro";
+
+    struct Fixed {
+        token: String,
+        caps: BTreeSet<Capability>,
+    }
+
+    impl CapabilitySource for Fixed {
+        fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>> {
+            (token == self.token).then(|| self.caps.clone())
+        }
+    }
+
+    fn limited(s: &Server, token: &str, caps: &[Capability]) {
+        s.shared
+            .tokens
+            .lock()
+            .unwrap()
+            .add_device(token.to_string(), "limited".into(), None, None);
+        s.shared.caps.install(Arc::new(Fixed {
+            token: token.to_string(),
+            caps: caps.iter().copied().collect(),
+        }));
+    }
+
+    async fn send(
+        s: &Server,
+        verb: Verb,
+        path: &str,
+        token: Option<&str>,
+        body: Option<&str>,
+    ) -> (u16, Value, String) {
+        let url = format!("{}{}", s.base, path);
+        let c = client();
+        let mut req = match verb {
+            Verb::Get => c.get(&url),
+            Verb::Post => c.post(&url),
+            Verb::Put => c.put(&url),
+            Verb::Patch => c.patch(&url),
+            Verb::Delete => c.delete(&url),
+        };
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        if let Some(b) = body {
+            req = req
+                .header("content-type", "application/json")
+                .body(b.to_string());
+        }
+        let r = req.send().await.unwrap();
+        let status = r.status().as_u16();
+        let text = r.text().await.unwrap();
+        let v = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+        (status, v, text)
+    }
+
+    async fn get(s: &Server, path: &str) -> (u16, Value) {
+        let (st, v, _) = send(s, Verb::Get, path, Some(&s.token), None).await;
+        (st, v)
+    }
+
+    async fn post(s: &Server, path: &str, body: &str) -> (u16, Value) {
+        let (st, v, _) = send(s, Verb::Post, path, Some(&s.token), Some(body)).await;
+        (st, v)
+    }
+
+    fn license_routes() -> Vec<avada_module_sdk::descriptor::RouteDescriptor> {
+        core_routes()
+            .into_iter()
+            .filter(|r| r.method.starts_with("license."))
+            .collect()
+    }
+
+    /// A path with every `{param}` replaced by something concrete.
+    fn concrete(path: &str) -> String {
+        path.replace("{owner}", "acme")
+            .replace("{repo}", "pro")
+            .replace("{code}", "nope")
+    }
+
+    /// The issuer plus a service over it, ready to be installed into `Shared`.
+    struct Rig {
+        issuer: Arc<StubIssuer>,
+        service: Arc<LicenseService>,
+    }
+
+    fn rig() -> Rig {
+        let issuer = Arc::new(StubIssuer::new("https://issuer.test"));
+        let service = Arc::new(LicenseService::new(
+            Arc::new(MemoryLicenseStore::new()),
+            Arc::clone(&issuer) as Arc<dyn crate::license::LicenseHttp>,
+            system_clock(),
+        ));
+        Rig { issuer, service }
+    }
+
+    /// A scratch file holding a freshly minted licence. The token lives for the length of
+    /// one test: it is written owner-only and the directory is removed at the end.
+    fn licence_file(issuer: &StubIssuer, tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "avada-license-routes-{tag}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let token = issuer
+            .issue(&Grant::for_product(PRODUCT).licensed_to("Acme Ltd"))
+            .expect("mint");
+        let path = dir.join("license.jwt");
+        write_private(&path, token.as_bytes()).expect("write licence");
+        path
+    }
+
+    #[test]
+    fn the_table_lists_six_license_routes_with_their_path_params_declared() {
+        let routes = license_routes();
+        let methods: Vec<&str> = routes.iter().map(|r| r.method.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "license.list",
+                "license.show",
+                "license.install",
+                "license.device",
+                "license.device.poll",
+                "license.remove",
+            ]
+        );
+        for r in &routes {
+            assert!(r.path.starts_with("/license"), "{}", r.path);
+            let want = match r.method.as_str() {
+                "license.list" | "license.show" => Capability::SettingsRead,
+                _ => Capability::SettingsWrite,
+            };
+            assert_eq!(r.capability, Some(want), "{}", r.method);
+            // Every `{x}` in the path is a declared Path param and vice versa.
+            let in_path: BTreeSet<String> = r
+                .path
+                .split('/')
+                .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+                .map(str::to_string)
+                .collect();
+            let declared: BTreeSet<String> = r
+                .params
+                .iter()
+                .filter(|p| p.location == ParamLocation::Path)
+                .map(|p| p.name.clone())
+                .collect();
+            assert_eq!(in_path, declared, "{}", r.method);
+            for p in r
+                .params
+                .iter()
+                .filter(|p| p.location == ParamLocation::Path)
+            {
+                assert!(
+                    p.required,
+                    "{}: path param {} must be required",
+                    r.method, p.name
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn every_route_is_401_then_403_then_503_until_a_service_is_installed() {
+        let s = boot_with_control_tag(true, "lic-gates").await;
+        limited(&s, "tok-nothing", &[]);
+        limited(&s, "tok-settings", &[Capability::SettingsWrite]);
+        for r in license_routes() {
+            let path = concrete(&r.path);
+            let (st, v, _) = send(&s, r.verb, &path, None, None).await;
+            assert_eq!(st, 401, "{}", r.method);
+            assert_eq!(v["error"], "unauthorized", "{}", r.method);
+            let (st, _, _) = send(&s, r.verb, &path, Some("tok-nothing"), None).await;
+            assert_eq!(st, 403, "{} let an empty token through", r.method);
+            let (st, v, _) = send(&s, r.verb, &path, Some(s.token.as_str()), None).await;
+            assert_eq!(st, 503, "{} {v}", r.method);
+            assert_eq!(v["error"], "licensing unavailable", "{}", r.method);
+        }
+        // A write-only token may not read the list: the two halves are gated apart.
+        let r = rig();
+        s.shared.install_license(Arc::clone(&r.service));
+        let (st, v) = get(&s, "/license").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["licenses"], serde_json::json!([]));
+        let (st, _, _) = send(&s, Verb::Get, "/license", Some("tok-settings"), None).await;
+        assert_eq!(st, 403, "settings.write alone must not read licences");
+    }
+
+    #[tokio::test]
+    async fn a_license_installs_from_a_file_shows_its_gate_and_is_removed() {
+        let s = boot_with_control_tag(true, "lic-install").await;
+        let r = rig();
+        s.shared.install_license(Arc::clone(&r.service));
+        let path = licence_file(&r.issuer, "install");
+
+        let (st, v, text) = send(
+            &s,
+            Verb::Post,
+            "/license/install",
+            Some(&s.token),
+            Some(&serde_json::json!({ "path": path.to_string_lossy() }).to_string()),
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["license"]["product"], PRODUCT);
+        assert_eq!(v["license"]["licensee"], "Acme Ltd");
+        assert_eq!(v["license"]["state"], "valid");
+        assert!(
+            !text.contains("eyJ"),
+            "a route must never hand back the licence token"
+        );
+
+        let (st, v) = get(&s, "/license").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["licenses"].as_array().unwrap().len(), 1);
+
+        let (st, v) = get(&s, "/license/modules/acme/pro").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["license"]["state"], "valid");
+        assert_eq!(v["gate"]["gate"], "run");
+
+        // Revoked at the issuer: the next check-in closes the gate, and the summary says why.
+        assert_eq!(r.issuer.revoke_product(PRODUCT), 1);
+        r.service.checkin(PRODUCT, true).await.expect("check in");
+        let (st, v) = get(&s, "/license/modules/acme/pro").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["license"]["state"], "revoked");
+        assert_eq!(v["gate"]["gate"], "refuse");
+
+        let (st, v, _) = send(
+            &s,
+            Verb::Delete,
+            "/license/modules/acme/pro",
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["removed"], PRODUCT);
+        let (st, v, _) = send(
+            &s,
+            Verb::Delete,
+            "/license/modules/acme/pro",
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(st, 404, "{v}");
+        let (st, _) = get(&s, "/license/modules/acme/pro").await;
+        assert_eq!(st, 404);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn install_wants_exactly_one_of_path_or_url() {
+        let s = boot_with_control_tag(true, "lic-body").await;
+        let r = rig();
+        s.shared.install_license(Arc::clone(&r.service));
+
+        let (st, v) = post(&s, "/license/install", "{}").await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["message"], "give path or url");
+
+        let (st, v) = post(
+            &s,
+            "/license/install",
+            r#"{"path":"/nope/license.jwt","url":"https://issuer.test/x"}"#,
+        )
+        .await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["message"], "give path or url, not both");
+
+        let (st, v) = post(&s, "/license/install", "[]").await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["message"], "body must be a JSON object");
+
+        // A path that is not there is the store's 404, not a 500.
+        let (st, v) = post(&s, "/license/install", r#"{"path":"/nope/license.jwt"}"#).await;
+        assert_eq!(st, 404, "{v}");
+    }
+
+    #[tokio::test]
+    async fn the_device_flow_starts_pends_and_installs_through_the_routes() {
+        let s = boot_with_control_tag(true, "lic-device").await;
+        let r = rig();
+        s.shared.install_license(Arc::clone(&r.service));
+
+        let (st, v) = post(&s, "/license/device", r#"{"issuer":"https://issuer.test"}"#).await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["error"], "missing module");
+
+        let body =
+            serde_json::json!({ "issuer": "https://issuer.test", "module": PRODUCT }).to_string();
+        let (st, v, text) = send(
+            &s,
+            Verb::Post,
+            "/license/device",
+            Some(&s.token),
+            Some(&body),
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        let code = v["device"]["code"].as_str().expect("handle").to_string();
+        let user_code = v["device"]["user_code"].as_str().expect("user code");
+        assert!(v["device"]["verification_uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://issuer.test"));
+        assert!(
+            !text.contains("device_code\":\""),
+            "the issuer's own device code stays inside the service"
+        );
+
+        let (st, v) = get(&s, &format!("/license/device/{code}")).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["status"], "pending");
+
+        assert!(r.issuer.approve_device(user_code));
+        let (st, v) = get(&s, &format!("/license/device/{code}")).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["status"], "installed");
+        assert_eq!(v["license"]["product"], PRODUCT);
+
+        let (st, v) = get(&s, "/license/device/nope").await;
+        assert_eq!(st, 404, "{v}");
     }
 }
