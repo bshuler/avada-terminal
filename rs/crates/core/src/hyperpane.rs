@@ -26,7 +26,7 @@ use avada_module_sdk::caps::Capability;
 use avada_module_sdk::descriptor::SchemaDocument;
 use avada_module_sdk::manifest::{ModuleId, SkillsSection};
 
-use crate::persistence::paths;
+use crate::persistence::{paths, skills_settings};
 use crate::skills::{Materializer, ModuleInput, Request, Tools};
 
 /// Module id of the shipped Hyperpane skill. Built in, always accepted.
@@ -62,10 +62,14 @@ pub fn source_dir() -> Option<PathBuf> {
 /// tree without its resources): the tab still needs a cwd, and an empty one is a working — if
 /// unhelpful — starting point, which is strictly better than the tab failing to open.
 ///
-/// Claude Code is always written for here regardless of detection: the tab exists to run it.
+/// Claude Code is added regardless of detection: this tab exists to run it, so its files
+/// belong here even on a machine where the binary hasn't been installed yet. That forcing
+/// covers *not detected*, not *not wanted* — a tool the user switched off in
+/// [`skills_settings`] stays disabled, Claude Code included, and
+/// [`crate::skills::Tools::has`] keeps anything from being written for it.
 #[tracing::instrument(level = "debug", ret)]
 pub fn materialize() -> io::Result<PathBuf> {
-    let tools = Tools::detect_here().with("claude-code");
+    let tools = Tools::detect_here_with(skills_settings::load().disabled_tools).with("claude-code");
     materialize_into(
         &paths::hyperpane_dir(),
         source_dir().as_deref(),

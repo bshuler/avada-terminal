@@ -129,9 +129,20 @@ tool as found-but-off. `ids()` lists the effective set, `detected_ids()` and
 turning a tool off removes what was written for it and turning it back on
 restores them. The shared layer is written whatever is detected.
 
-No preference stores the disabled set yet; `hyperpane::materialize()` calls
-`Tools::detect_here().with("claude-code")`. Wiring a setting is one call:
-`Tools::detect_here_with(prefs.disabled_tools)`.
+The disabled set persists in `skills-settings.json` under the config dir
+(`persistence::skills_settings`, `{ "disabledTools": ["cline", ...] }`), and
+`hyperpane::materialize()` reads it:
+`Tools::detect_here_with(skills_settings::load().disabled_tools).with("claude-code")`.
+Loading is forgiving — a missing or corrupt file, a non-array value, a
+non-string element, or an id no adapter in this build claims all coerce to
+"nothing disabled", which is the safe direction for a toggle that gates writes.
+
+Claude Code is force-added after the toggles, not before: the Hyperpane tab
+exists to run it, so its files belong in that directory even on a machine where
+the binary is not installed. That forcing makes it *present*, not *enabled* — if
+the user switched it off, `Tools::has` still says no and the sweep removes what
+an earlier run wrote. Nothing writes the file yet; the per-tool toggles are
+still owed a surface in the app's settings UI.
 
 ### Size caps
 

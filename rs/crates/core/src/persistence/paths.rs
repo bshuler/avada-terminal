@@ -176,6 +176,13 @@ pub fn control_settings_json() -> PathBuf {
     config_dir().join("control-settings.json")
 }
 
+/// `{ disabledTools }` — the agent-tool adapters the user switched off, consulted by
+/// [`crate::skills`] before anything is written for a tool. User setting → [`config_dir`].
+#[tracing::instrument(level = "debug", ret)]
+pub fn skills_settings_json() -> PathBuf {
+    config_dir().join("skills-settings.json")
+}
+
 /// Persisted paired-device tokens (mobile clients). Lives beside `control.json` in the state
 /// dir — the running server reads it on start and `avada pair`/`devices`/`revoke` drive it
 /// through the control API, so the two always agree.
@@ -447,6 +454,7 @@ mod tests {
         for p in [
             control_json(),
             control_settings_json(),
+            skills_settings_json(),
             last_workspace_json(),
             window_geometry_json(),
             projects_json(),
@@ -459,6 +467,10 @@ mod tests {
         assert_eq!(
             control_settings_json().file_name().unwrap(),
             "control-settings.json"
+        );
+        assert_eq!(
+            skills_settings_json().file_name().unwrap(),
+            "skills-settings.json"
         );
         assert_eq!(
             last_workspace_json().file_name().unwrap(),
@@ -541,6 +553,10 @@ mod tests {
                 config_dir().join("control-settings.json")
             );
             assert_eq!(ai_settings_json(), config_dir().join("ai-settings.json"));
+            assert_eq!(
+                skills_settings_json(),
+                config_dir().join("skills-settings.json")
+            );
             assert_eq!(projects_json(), data_dir().join("projects.json"));
             assert_eq!(ai_memory_json(), data_dir().join("ai-memory.json"));
             assert_eq!(control_json(), state_dir().join("control.json"));

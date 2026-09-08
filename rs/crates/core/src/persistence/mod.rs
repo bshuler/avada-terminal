@@ -9,4 +9,5 @@ pub mod device_tokens;
 pub mod lockfile;
 pub mod paths;
 pub mod projects;
+pub mod skills_settings;
 pub mod window_geometry;
