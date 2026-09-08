@@ -554,6 +554,23 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             ],
         ),
         // ---- end track G8 license
+        // ---- track G2 tools
+        route(
+            "tools.list",
+            "/tools",
+            Get,
+            "Every AI CLI Avada knows, and where this machine has it",
+        ),
+        with(
+            route(
+                "tools.sessions",
+                "/tools/{tool}/sessions",
+                Get,
+                "One tool's resumable conversations, newest-first per project",
+            ),
+            vec![path_id("tool", "Tool id from tools.list")],
+        ),
+        // ---- end track G2 tools
         route(
             "schema",
             "/schema",
@@ -632,6 +649,16 @@ pub fn core_capability(method: &str) -> Option<Capability> {
             SettingsWrite
         }
         // ---- end track G8 license
+        // ---- track G2 tools
+        // The catalogue is a read of the tool table joined with the human's per-tool
+        // binary overrides, which live in settings — so `settings.read` names it exactly.
+        "tools.list" => SettingsRead,
+        // Sessions are derived from transcripts under `~/.claude`, `~/.cursor` and
+        // `~/.copilot`: content read from absolute paths outside any workspace root. That
+        // is what `fs.read_any` means, and it is the same assignment `fs.read` carries.
+        // Granting a module `settings.read` must not quietly hand it conversation text.
+        "tools.sessions" => FsReadAny,
+        // ---- end track G2 tools
         other => panic!("core route {other:?} has no capability assignment"),
     })
 }

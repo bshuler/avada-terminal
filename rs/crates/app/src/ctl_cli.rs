@@ -1260,7 +1260,9 @@ mod tests {
             &dir,
         );
         assert_eq!(o, Outcome::Ok);
-        assert_eq!(out, "tokens\n");
+        // Both noun groups that begin "to". `tools` joined them with the routes that let
+        // the Tools module read the AI CLI catalogue and its conversation history.
+        assert_eq!(out, "tokens\ntools\n");
         let (o, _, err) = drive(&["avada", "completions", "powershell"], Err("down"), &dir);
         assert!(matches!(o, Outcome::Usage(_)), "{err}");
 
