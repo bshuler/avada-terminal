@@ -417,6 +417,16 @@ impl ControlHost {
         let _ = control_settings::save(&settings);
     }
 
+    /// The running server's shared state, or `None` when it is stopped.
+    ///
+    /// Exposed so [`crate::module_runtime::ModuleRuntime`] can install the module route
+    /// invoker on whatever `Shared` is current: the server can be stopped and started
+    /// again from Preferences, and each start builds a fresh one that needs the modules
+    /// mounted on it again.
+    pub fn shared_handle(&self) -> Option<Arc<Shared>> {
+        self.shared.borrow().clone()
+    }
+
     /// `(enabled, allow_input, port-if-running)` for the Preferences status line.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn status(&self) -> (bool, bool, Option<u16>) {

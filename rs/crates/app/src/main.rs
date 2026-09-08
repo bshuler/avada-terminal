@@ -42,6 +42,7 @@ mod keybindings;
 mod leftpanel;
 mod loops;
 mod mermaid;
+mod module_runtime;
 mod module_ui;
 mod pair;
 mod palette;

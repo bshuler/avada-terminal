@@ -5009,8 +5009,6 @@ impl State {
     /// A `Gone` (or a re-`Registered` set that no longer contains it) takes the active
     /// entry with it; the panel then falls back to the workspace tree rather than showing
     /// a head with no module behind it.
-    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
-    #[allow(dead_code)]
     pub fn apply_rail_event(&mut self, event: avada_core::module::RailEvent) -> bool {
         if self.rail.apply(event) {
             self.left_mode_request = Some(crate::paneview::LEFT_MODE_WORKSPACE);
@@ -5101,8 +5099,6 @@ impl State {
     }
 
     /// Take everything queued for the module host since the last drain.
-    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
-    #[allow(dead_code)]
     pub fn take_rail_requests(&mut self) -> Vec<RailRequest> {
         std::mem::take(&mut self.rail_requests)
     }
@@ -5151,8 +5147,6 @@ impl State {
 
     /// Take everything the rights page has queued for the module host and the install
     /// store since the last drain.
-    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
-    #[allow(dead_code)]
     pub fn take_rights_effects(&mut self) -> Vec<crate::prefs::rights::Applied> {
         std::mem::take(&mut self.rights_effects)
     }
@@ -5226,8 +5220,6 @@ impl State {
     }
 
     /// Take everything queued for `Host::emit` since the last drain.
-    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
-    #[allow(dead_code)]
     pub fn take_module_events(&mut self) -> Vec<(String, serde_json::Value)> {
         std::mem::take(&mut self.module_events)
     }

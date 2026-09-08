@@ -933,11 +933,13 @@ pub struct RailEntryView {
     pub entry: avada_core::module::RailEntry,
 }
 
-/// How a rail row was activated. A local echo of the SDK's `rail::Gesture`, which is not
-/// reachable from this crate: `avada_core::module` re-exports `RailEntry` and `Row` but
-/// not `Gesture`/`RowActivate`, and the app does not depend on `avada-module-sdk`. The
-/// wire spelling ([`RailGesture::as_str`]) is the SDK's, so whoever owns the host can
-/// build a `RowActivate` from a [`RailRequest`] without a mapping table.
+/// How a rail row was activated.
+///
+/// A local echo of the SDK's `rail::Gesture`, kept because this is also what the `.slint`
+/// hands back: [`RailGesture::parse`] turns the three words the UI sends into a value, and
+/// `module_runtime::wire_gesture` maps that onto the contract's own `Gesture` on the way
+/// out. One of the two could go, but not both — the UI edge needs a parse and the host
+/// edge needs the SDK's type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RailGesture {
     /// Click / Enter.
@@ -949,19 +951,6 @@ pub enum RailGesture {
 }
 
 impl RailGesture {
-    /// The SDK's wire spelling (`open` / `toggle` / `context`).
-    ///
-    /// Unused until the app constructs a module `Host`: the gesture only reaches the wire
-    /// once there is a host to send it to. Part of the pending module-rail plumbing.
-    #[allow(dead_code)]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RailGesture::Open => "open",
-            RailGesture::Toggle => "toggle",
-            RailGesture::Context => "context",
-        }
-    }
-
     /// Parse the wire spelling the Slint callback carries; `None` for anything else, so a
     /// typo in the UI is a dropped click rather than a wrong gesture sent to a module.
     pub fn parse(s: &str) -> Option<RailGesture> {
@@ -1037,8 +1026,6 @@ impl ModuleRail {
     ///
     /// The fold lives here rather than on `State` so the UI tests can drive the panel from
     /// the host's own event type without standing up a whole window.
-    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
-    #[allow(dead_code)]
     pub fn apply(&mut self, event: avada_core::module::RailEvent) -> bool {
         use avada_core::module::RailEvent;
         match event {
@@ -1057,8 +1044,6 @@ impl ModuleRail {
 
     /// The module registered (or re-registered) its entries — replaces the earlier set.
     /// Returns true when the active entry disappeared with it (the panel must fall back).
-    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
-    #[allow(dead_code)]
     pub fn register(
         &mut self,
         module: avada_core::rights::ModuleId,
@@ -1070,8 +1055,6 @@ impl ModuleRail {
 
     /// The module replaced the rows under `entry`. Rows for an entry the module never
     /// registered are ignored (the host already refused them; this is belt and braces).
-    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
-    #[allow(dead_code)]
     pub fn set_rows(
         &mut self,
         module: &avada_core::rights::ModuleId,
@@ -1111,15 +1094,11 @@ impl ModuleRail {
 
     /// The module is gone: its entries and rows leave the rail. Returns true when the
     /// active entry was one of them.
-    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
-    #[allow(dead_code)]
     pub fn gone(&mut self, module: &avada_core::rights::ModuleId) -> bool {
         self.modules.remove(module);
         self.drop_stale_active()
     }
 
-    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
-    #[allow(dead_code)]
     fn drop_stale_active(&mut self) -> bool {
         match &self.active {
             Some(key) if self.lookup(key).is_none() => {
@@ -1940,17 +1919,17 @@ mod tests {
             assert!(rail.active.is_none());
         }
 
-        /// The gesture makes a round trip through the wire spelling the SDK reads. The
-        /// `.slint` sends these three words and the host expects the same three back, so
-        /// a rename on either side has to break here rather than in a module.
+        /// The three words the `.slint` sends land on the three gestures the contract
+        /// names. A rename on either side has to break here rather than in a module.
         #[test]
         fn a_gesture_survives_the_wire_spelling() {
-            for g in [RailGesture::Open, RailGesture::Toggle, RailGesture::Context] {
-                assert_eq!(RailGesture::parse(g.as_str()), Some(g));
+            for (word, gesture) in [
+                ("open", RailGesture::Open),
+                ("toggle", RailGesture::Toggle),
+                ("context", RailGesture::Context),
+            ] {
+                assert_eq!(RailGesture::parse(word), Some(gesture));
             }
-            assert_eq!(RailGesture::Open.as_str(), "open");
-            assert_eq!(RailGesture::Toggle.as_str(), "toggle");
-            assert_eq!(RailGesture::Context.as_str(), "context");
             assert_eq!(RailGesture::parse("wiggle"), None);
         }
     }

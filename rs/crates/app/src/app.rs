@@ -260,6 +260,9 @@ pub struct App {
     /// tabs→panes tree into `core::control`'s read-model + applies inbound `/command`s to the
     /// GUI in-process, so the MCP / agent orchestration drives this process like Electron.
     pub control: crate::control_host::ControlHost,
+    /// The installed modules: one `core::module::Host`, its worker thread, and the two
+    /// event streams whose contents [`App::service_modules`] folds into every window.
+    pub modules: crate::module_runtime::ModuleRuntime,
     /// The offline-safe self-updater (Task 8): GitHub-releases check + installer download on
     /// background threads; its live status is mirrored into every window's General panel.
     pub update: crate::update::Updater,
@@ -305,6 +308,11 @@ impl App {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(mgr: Arc<SessionManager>, erx: UnboundedReceiver<SessionEvent>) -> Rc<Self> {
         let control = crate::control_host::ControlHost::new(&mgr);
+        // Starting the modules here, before the first window exists, is deliberate: a
+        // module registers its rail entries from inside `module.activate`, and the panel
+        // should be populated by the time the human can look at it rather than filling in
+        // a second later.
+        let modules = crate::module_runtime::ModuleRuntime::new();
         // Register the SessionStart/SessionEnd hooks for the tools that have them, next to
         // the Claude registration `main` already does. Additive, idempotent and
         // best-effort: a tool that isn't installed has no config directory, and a build
@@ -331,6 +339,7 @@ impl App {
             ai_feed: RefCell::new(std::collections::HashMap::new()),
             openurl_carry: RefCell::new(std::collections::HashMap::new()),
             control,
+            modules,
             update: crate::update::Updater::new(),
             timer: RefCell::new(None),
             idle_ticks: Cell::new(0),
@@ -766,6 +775,119 @@ impl App {
                         }
                     }
                 });
+            }
+        }
+    }
+
+    /// One tick of the module plane.
+    ///
+    /// Three things, in an order that matters. First the host's two event streams are
+    /// drained **once** — a module says a thing once, and every window's left panel has to
+    /// learn it, so draining per window would give the first window everything and the
+    /// rest nothing. Then each window folds that tick in and hands back whatever the human
+    /// did to a module's rail. Last, the panes a module asked for are opened on the first
+    /// window, the same place the Hyperpane tab and the scheduler loops use when a
+    /// window-less choice has to be made.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn service_modules(&self, windows: &[Rc<Window>]) {
+        // Mount the modules on whichever `Shared` the control server is running now. Both
+        // calls are cheap latch flips; the server can be stopped and restarted from
+        // Preferences, and a restart builds a fresh `Shared` that needs mounting again.
+        match self.control.shared_handle() {
+            Some(shared) => self.modules.attach_control(&shared),
+            None => self.modules.detach_control(),
+        }
+
+        let tick = self.modules.poll();
+        for w in windows {
+            let mut st = w.state.borrow_mut();
+            // The bool says whether anything changed; the 8 ms pump redraws regardless, so
+            // there is nothing here to gate on it yet.
+            let _ = self.modules.apply(&tick, &mut st);
+            self.modules.submit(&mut st);
+        }
+
+        let ops = self.modules.take_pane_ops();
+        if ops.is_empty() {
+            return;
+        }
+        let Some(first) = windows.first() else {
+            // No window to open a pane in. Dropping them is the honest outcome: the module
+            // was already answered, and queueing panes for a window that may never exist
+            // would open a burst of them at the worst possible moment.
+            tracing::debug!(dropped = ops.len(), "module pane ops with no window");
+            return;
+        };
+        let mut st = first.state.borrow_mut();
+        for op in ops {
+            self.apply_pane_op(&mut st, op);
+        }
+    }
+
+    /// Carry out one thing a module asked of the pane table.
+    fn apply_pane_op(&self, st: &mut State, op: crate::module_runtime::PaneOp) {
+        use crate::module_runtime::PaneOp;
+        match op {
+            PaneOp::Spawn {
+                module,
+                pane_id,
+                kind,
+                path,
+                surface,
+            } => {
+                let uid = match (kind.as_str(), path) {
+                    // The same door "Open" in a file module's row menu goes through, so a
+                    // file opens identically however it was reached — including the
+                    // markdown/plain split and the directory case.
+                    ("file", Some(path)) => {
+                        crate::command::dispatch(
+                            st,
+                            crate::command::Command::FilesOpen(path),
+                            &self.mgr,
+                        );
+                        st.active_tab().panes.last().map(|p| p.uid.clone())
+                    }
+                    // A module surface has no renderer in this build past the placeholder,
+                    // so there is nothing to open yet. Announced rather than dropped
+                    // silently: this is the one pane kind whose absence is a missing
+                    // feature rather than a module bug.
+                    ("module", _) => {
+                        tracing::debug!(
+                            module = %module.as_str(),
+                            surface = ?surface,
+                            "module surfaces are not rendered yet; pane not opened"
+                        );
+                        None
+                    }
+                    (other, path) => {
+                        tracing::debug!(
+                            module = %module.as_str(),
+                            kind = other,
+                            ?path,
+                            "unknown pane kind"
+                        );
+                        None
+                    }
+                };
+                if let Some(uid) = uid {
+                    self.modules.record_pane(&pane_id, &uid);
+                }
+            }
+            PaneOp::Input { pane_id, text } => {
+                // An id the app never opened, or a pane the human has since closed: drop
+                // it. `host.panes.input` promises the module exactly this — the host does
+                // not own the pane table, so an unknown id is a race, not an error.
+                let Some(uid) = self.modules.pane_uid(&pane_id) else {
+                    tracing::debug!(%pane_id, "input for a pane this app never opened");
+                    return;
+                };
+                if st.find_pane(&uid).is_none() {
+                    self.modules.forget_pane(&pane_id);
+                    return;
+                }
+                // A failed write means the pty is gone; the pane's own exit handling will
+                // notice and tear it down, so there is nothing useful to do here.
+                let _ = self.mgr.write(&uid, &text);
             }
         }
     }
@@ -1431,6 +1553,9 @@ impl App {
         //     GUI (on this UI thread), then republish the live tree into the read-model so
         //     `/state` / `list_panes` reflect the GUI. No-op when the server is stopped.
         self.control.sync(&windows, &self.mgr);
+        // 2d. Modules: fold what they said into every window's panel, post what the human
+        //     did back to them, and open the panes they asked for.
+        self.service_modules(&windows);
         // Mirror the control-server status into every window's Preferences props.
         {
             let (enabled, allow_input, port) = self.control.status();
