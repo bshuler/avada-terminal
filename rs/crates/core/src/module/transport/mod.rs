@@ -3,9 +3,9 @@
 //! end of the same wire).
 //!
 //! Unix: an `AF_UNIX`/`SOCK_STREAM` socketpair; the child inherits its end and finds the
-//! descriptor number in `AVADA_MODULE_FD`. Windows: a named pipe, landing in track H7 —
-//! until then [`pair`] returns an `io::Error` so the crate compiles and every caller sees
-//! a typed refusal rather than a hang.
+//! descriptor number in `AVADA_MODULE_FD`. Windows: a named pipe under `\\.\pipe\`
+//! with an owner-only DACL, its path in `AVADA_MODULE_PIPE` (see [`windows`]). Any other
+//! target gets a typed refusal from [`pair`] rather than a hang.
 
 use avada_module_sdk::client::MAX_LINE;
 use avada_module_sdk::contract::{ErrorCode, Message, RpcError};
@@ -14,12 +14,16 @@ use std::process::Command;
 
 #[cfg(unix)]
 pub mod unix;
+#[cfg(any(windows, test))]
+pub mod windows;
 
 /// The host's end of the pipe. Split it with [`HostEnd::split`] once the child is running.
 pub struct HostEnd {
     #[cfg(unix)]
     stream: std::os::unix::net::UnixStream,
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    inner: windows::HostPipe,
+    #[cfg(not(any(unix, windows)))]
     _never: std::convert::Infallible,
 }
 
@@ -28,7 +32,9 @@ pub struct HostEnd {
 pub struct ChildEnd {
     #[cfg(unix)]
     fd: std::os::fd::OwnedFd,
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    inner: windows::ChildPipe,
+    #[cfg(not(any(unix, windows)))]
     _never: std::convert::Infallible,
 }
 
@@ -38,13 +44,18 @@ pub fn pair() -> io::Result<(HostEnd, ChildEnd)> {
     unix::socketpair()
 }
 
-/// Windows: the named-pipe transport lands in track H7. Until then every spawn is refused
-/// here, before any process starts.
-#[cfg(not(unix))]
+/// Create one named pipe with an owner-only DACL; the child opens it by name.
+#[cfg(windows)]
+pub fn pair() -> io::Result<(HostEnd, ChildEnd)> {
+    windows::create_pair()
+}
+
+/// No transport on this target: every spawn is refused here, before any process starts.
+#[cfg(not(any(unix, windows)))]
 pub fn pair() -> io::Result<(HostEnd, ChildEnd)> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "named-pipe transport lands in track H7",
+        "no module transport on this target",
     ))
 }
 
@@ -56,7 +67,12 @@ impl ChildEnd {
         {
             unix::attach(&self.fd, cmd)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            windows::attach_env(self.inner.name(), cmd);
+            Ok(())
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = cmd;
             match self._never {}
@@ -81,7 +97,11 @@ impl HostEnd {
                 closer,
             ))
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            windows::split(self.inner)
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             match self._never {}
         }

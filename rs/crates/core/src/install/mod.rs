@@ -26,6 +26,8 @@
 pub mod artifact;
 pub mod dirs;
 pub mod keyring;
+#[cfg(any(windows, test))]
+pub mod keyring_windows;
 pub mod lock;
 pub mod record;
 pub mod store;

@@ -2,6 +2,8 @@
 //! NOTE: `paths::user_data_dir()` MUST resolve to the EXACT same folder Electron uses
 //! (`%APPDATA%\<productName>`), or the MCP can't find `control.json` and last-session
 //! restore breaks. See the core handoff.
+#[cfg(any(windows, test))]
+pub mod acl_windows;
 pub mod control_settings;
 pub mod device_tokens;
 pub mod lockfile;
