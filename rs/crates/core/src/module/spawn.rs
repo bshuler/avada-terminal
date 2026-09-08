@@ -28,6 +28,14 @@ pub enum SpawnError {
     },
     /// The binary could not be read for hashing.
     Unreadable(io::Error),
+    // ---- track G7 policy
+    /// The notarization policy refused this artifact when it was installed. The host
+    /// turns this into `ModuleStatus::Broken`; see `crate::policy`.
+    Notarized {
+        /// The refusal recorded at install time, verbatim.
+        reason: String,
+    },
+    // ---- end track G7 policy
     /// The transport could not be set up (on Windows: not until track H7).
     Transport(io::Error),
     /// `Command::spawn` failed.
@@ -44,6 +52,11 @@ impl std::fmt::Display for SpawnError {
                 short(expected)
             ),
             SpawnError::Unreadable(e) => write!(f, "cannot read the module binary: {e}"),
+            // ---- track G7 policy
+            SpawnError::Notarized { reason } => {
+                write!(f, "refused by the notarization policy: {reason}")
+            }
+            // ---- end track G7 policy
             SpawnError::Transport(e) => write!(f, "transport: {e}"),
             SpawnError::Exec(e) => write!(f, "cannot start the module: {e}"),
         }
@@ -63,8 +76,21 @@ pub fn sha256_hex(path: &Path) -> io::Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
-/// Re-hash `binary` and compare (constant time) to the record's `artifact_sha256`.
+/// Re-hash `binary` and compare (constant time) to the record's `artifact_sha256`,
+/// and refuse outright if the notarization policy refused it at install time.
+///
+/// The hash check is unchanged and still the primary gate. The recorded verdict is an
+/// addition that can only ever *stop* a spawn: a missing or unreadable
+/// `<binary>.notarization.json` leaves the pre-G7 behaviour exactly as it was, so
+/// deleting the sidecar cannot turn a refusal into a run. It is not in the MAC-signed
+/// install record because that record's shape is frozen SDK; the limitation is written
+/// down in `docs/notarization.md` rather than hidden.
 pub fn verify_hash(binary: &Path, record: &InstallRecord) -> Result<(), SpawnError> {
+    // ---- track G7 policy
+    if let Some(reason) = crate::policy::recorded_refusal(binary) {
+        return Err(SpawnError::Notarized { reason });
+    }
+    // ---- end track G7 policy
     let actual = sha256_hex(binary).map_err(SpawnError::Unreadable)?;
     let expected = record.artifact_sha256.trim().to_ascii_lowercase();
     if actual.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1 {

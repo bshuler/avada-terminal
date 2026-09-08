@@ -40,8 +40,11 @@ use crate::install::resolver::{self, Defaults, InstalledVersion};
 use resolve::MarketplaceSource;
 use semver::VersionReq;
 // ---- end track G6 resolver
+// ---- track G7 policy
+use crate::policy::{self, Decision, Policy, Verifier};
+// ---- end track G7 policy
 use avada_module_sdk::caps::Capability;
-use avada_module_sdk::manifest::{Manifest, ModuleId};
+use avada_module_sdk::manifest::{DistributionKind, Manifest, ModuleId};
 use avada_module_sdk::rights::{InstallKind, InstallRecord};
 use cache::Cache;
 use fetch::{check_free_build, newest_tag, read_manifest, run_streaming, Git};
@@ -322,6 +325,13 @@ pub struct Marketplace {
     signins: Mutex<BTreeMap<String, SignIn>>,
     workspaces: WorkspaceStates,
     state_dir: PathBuf,
+    // ---- track G7 policy
+    /// The notarization verifier applied to every artifact before it is recorded.
+    /// A field rather than a [`MarketplaceOptions`] entry because that struct is
+    /// literal-constructed in tests; this way the swap seam (a stricter commercial
+    /// verifier) and the test hook are the same one line.
+    verifier: Mutex<Arc<dyn Verifier>>,
+    // ---- end track G7 policy
 }
 
 impl Marketplace {
@@ -343,8 +353,73 @@ impl Marketplace {
             signins: Mutex::new(BTreeMap::new()),
             workspaces,
             state_dir,
+            // ---- track G7 policy
+            verifier: Mutex::new(policy::platform_verifier()),
+            // ---- end track G7 policy
         }
     }
+
+    // ---- track G7 policy
+
+    /// Replace the notarization verifier. The commercial build swaps in a stricter one
+    /// (Developer ID team pinning, EV certificate pinning); tests swap in a fake.
+    pub fn set_verifier(&self, verifier: Arc<dyn Verifier>) {
+        *self.verifier.lock().expect("verifier lock") = verifier;
+    }
+
+    /// The verifier in force.
+    pub fn verifier(&self) -> Arc<dyn Verifier> {
+        Arc::clone(&self.verifier.lock().expect("verifier lock"))
+    }
+
+    /// Assess `binary` and either let the install proceed or fail the job.
+    ///
+    /// Called once per artifact, after it exists and before the install record that
+    /// blesses it is written — the last moment at which refusing costs nothing but a
+    /// scratch directory. Returns the assessment to record beside the installed
+    /// artifact.
+    fn check_notarization(
+        &self,
+        id: &ModuleId,
+        manifest: &Manifest,
+        binary: &Path,
+        commit: &str,
+        url: &str,
+        log: &dyn Fn(&str),
+    ) -> Result<policy::RecordedVerdict, MarketplaceError> {
+        let (policy, complaint) = Policy::load_or_default(self.store.paths().root());
+        if let Some(complaint) = complaint {
+            // Never silent: a policy file nobody can parse is not a policy of "allow".
+            log(&format!("{complaint}; falling back to the default policy"));
+        }
+        // The free pipeline only ever compiles source, so this is `Built` today. The
+        // mapping is written out anyway so the commercial binary path arrives with its
+        // half of the policy already wired.
+        let source = match manifest.distribution.kind {
+            DistributionKind::Source => policy::Source::Built {
+                commit: commit.to_string(),
+            },
+            DistributionKind::Binary => policy::Source::Prebuilt {
+                url: url.to_string(),
+            },
+        };
+        let verifier = self.verifier();
+        let ctx = policy.context(id, source.clone());
+        let verdict = verifier.verify(binary, &ctx);
+        let decision = policy::decide(&policy, &verdict, &source);
+        log(&format!("notarization: {verdict} -> {decision}"));
+        if let Decision::Refuse { reason } = &decision {
+            return Err(MarketplaceError::Refused(reason.clone()));
+        }
+        Ok(policy::RecordedVerdict::new(
+            &verdict,
+            &decision,
+            &source,
+            verifier.name(),
+        ))
+    }
+
+    // ---- end track G7 policy
 
     /// The production wiring over the modules root `modules_root`: file key store, file
     /// token store (both in the store's key directory), the real GitHub client caching
@@ -663,6 +738,13 @@ impl Marketplace {
             )));
         }
 
+        // ---- track G7 policy
+        // Between "the artifact exists" and "the record blesses it": assess it, and
+        // fail the job if the policy refuses.
+        let assessment =
+            self.check_notarization(&id, &manifest, &binary, &head, &url, &log as &dyn Fn(&str))?;
+        // ---- end track G7 policy
+
         // Install: hash, record, store, activate, enable.
         jobs.phase(job_id, Phase::Install, Some(90));
         let sha256 = hash_file(&binary)?;
@@ -693,7 +775,15 @@ impl Marketplace {
             installed_at: cache::now_secs(),
             kind: req.kind,
         };
-        self.store.install(record, &binary)?;
+        let installed = self.store.install(record, &binary)?;
+        // ---- track G7 policy
+        // Remembered next to the installed artifact so the spawn path can refuse a
+        // binary installed under a refusal. Not fatal if it cannot be written: the
+        // sidecar can only ever add a refusal, never remove one.
+        if let Err(e) = policy::write_verdict(&installed.binary, &assessment) {
+            log(&format!("could not record the notarization verdict: {e}"));
+        }
+        // ---- end track G7 policy
         self.store.activate(&id, &version)?;
         // ---- track G6 resolver
         if let Some(m) = &claims_defaults {
@@ -1253,3 +1343,233 @@ mod resolver_tests {
 }
 
 // ---- end track G6 resolver
+
+// ---- track G7 policy
+
+/// The notarization gate seen from the pipeline: a fake verifier gives each of the four
+/// verdicts, and the install either refuses, warns or runs.
+///
+/// The [`policy`] module tests the matrix exhaustively; these tests only prove the
+/// wiring — that the verifier is consulted at all, that a refusal fails the job and
+/// installs nothing, and that what was decided is remembered next to the artifact.
+#[cfg(test)]
+mod policy_wiring {
+    use super::testing::{files_state, manifest_for, rig, wait, FakeCargo, FILES};
+    use super::*;
+    use crate::install::RecordStatus;
+    use crate::policy::{Context, RecordedVerdict, Verdict};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    /// Answers with one fixed verdict and counts the asking.
+    #[derive(Debug)]
+    struct FakeVerifier {
+        verdict: Verdict,
+        calls: AtomicUsize,
+    }
+
+    impl FakeVerifier {
+        fn new(verdict: Verdict) -> Arc<Self> {
+            Arc::new(FakeVerifier {
+                verdict,
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        /// How many artifacts were put to this verifier.
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Verifier for FakeVerifier {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn verify(&self, binary: &Path, _ctx: &Context) -> Verdict {
+            // The gate must run on the artifact itself, not on a path that might exist.
+            assert!(binary.is_file(), "{} is not a file", binary.display());
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.verdict.clone()
+        }
+    }
+
+    fn write_policy(root: &Path, json: &str) {
+        std::fs::write(Policy::path_under(root), json).expect("policy.json");
+    }
+
+    /// The one installed artifact and the verdict recorded beside it.
+    fn installed_verdict(mp: &Marketplace) -> (PathBuf, Option<RecordedVerdict>) {
+        let records = mp.store.records().expect("records");
+        let installed = records
+            .into_iter()
+            .find_map(|s| match s {
+                RecordStatus::Ok(i) => Some(i),
+                RecordStatus::Broken { .. } => None,
+            })
+            .expect("one installed module");
+        let verdict = policy::read_verdict(&installed.binary);
+        (installed.binary.clone(), verdict)
+    }
+
+    async fn install_under(
+        name: &str,
+        policy_json: &str,
+        verdict: Verdict,
+    ) -> (Job, super::testing::Rig, Arc<FakeVerifier>) {
+        let r = rig(
+            name,
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(60),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+        write_policy(&r.root, policy_json);
+        let fake = FakeVerifier::new(verdict);
+        r.mp.set_verifier(Arc::clone(&fake) as Arc<dyn Verifier>);
+        let job = r.mp.install(InstallRequest::new(FILES)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        (done, r, fake)
+    }
+
+    #[tokio::test]
+    async fn a_refusal_fails_the_job_and_installs_nothing() {
+        let (done, r, fake) = install_under(
+            "g7-refuse",
+            r#"{"locally_built":"require-signature"}"#,
+            Verdict::Unsigned,
+        )
+        .await;
+        assert_eq!(done.phase, Phase::Failed, "{done:?}");
+        let err = done.error.as_deref().unwrap_or_default();
+        assert!(err.contains("requires a signature"), "{err}");
+        assert!(err.contains("unsigned"), "{err}");
+        assert!(
+            r.mp.installed().expect("installed").is_empty(),
+            "a refused artifact must not be recorded"
+        );
+        assert_eq!(fake.calls(), 1, "the artifact is assessed exactly once");
+    }
+
+    #[tokio::test]
+    async fn a_warning_installs_and_is_remembered_beside_the_binary() {
+        let (done, r, fake) =
+            install_under("g7-warn", r#"{"locally_built":"warn"}"#, Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        assert!(
+            done.log_tail.iter().any(|l| l.contains("notarization")),
+            "the warning must reach the job log: {:?}",
+            done.log_tail
+        );
+        let (_, recorded) = installed_verdict(&r.mp);
+        let recorded = recorded.expect("a verdict beside the binary");
+        assert_eq!(recorded.decision, "warn");
+        assert_eq!(recorded.verdict, "unsigned");
+        assert_eq!(recorded.verifier, "fake");
+        assert_eq!(recorded.source, "built");
+        assert!(!recorded.refused());
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_trusted_artifact_installs_and_records_a_run() {
+        let (done, r, fake) = install_under(
+            "g7-trusted",
+            r#"{"locally_built":"require-signature"}"#,
+            Verdict::Trusted {
+                by: "Acme Software Ltd".into(),
+            },
+        )
+        .await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let (binary, recorded) = installed_verdict(&r.mp);
+        let recorded = recorded.expect("a verdict beside the binary");
+        assert_eq!(recorded.decision, "run");
+        assert!(
+            recorded.detail.contains("Acme Software Ltd"),
+            "{recorded:?}"
+        );
+        assert_eq!(crate::policy::recorded_refusal(&binary), None);
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_default_policy_lets_a_locally_built_module_through_unsigned() {
+        // No policy.json at all — the shipped default. A module the host compiled
+        // itself from a verified commit must still install with no signature anywhere.
+        let (done, r, fake) = install_under("g7-default", "{}", Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let (_, recorded) = installed_verdict(&r.mp);
+        assert_eq!(recorded.expect("recorded").decision, "run");
+        assert_eq!(fake.calls(), 1, "the default policy still asks");
+    }
+
+    #[tokio::test]
+    async fn a_recorded_refusal_stops_the_spawn_path() {
+        // The install-time refusal is what makes a module `Broken` later: `verify_hash`
+        // is the host's gate, and it consults the recorded verdict before hashing.
+        let (done, r, _fake) = install_under("g7-spawn", "{}", Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let records = r.mp.store.records().expect("records");
+        let installed = records
+            .into_iter()
+            .find_map(|s| match s {
+                RecordStatus::Ok(i) => Some(i),
+                RecordStatus::Broken { .. } => None,
+            })
+            .expect("one installed module");
+
+        // As installed, it spawns.
+        crate::module::spawn::verify_hash(&installed.binary, installed.rights())
+            .expect("a run verdict does not block the spawn");
+
+        // Now record the refusal the policy would have reached.
+        let refused = RecordedVerdict::new(
+            &Verdict::Unsigned,
+            &Decision::Refuse {
+                reason: "unsigned (built here from deadbeef)".into(),
+            },
+            &policy::Source::Built {
+                commit: "deadbeef".into(),
+            },
+            "fake",
+        );
+        policy::write_verdict(&installed.binary, &refused).expect("write");
+        match crate::module::spawn::verify_hash(&installed.binary, installed.rights()) {
+            Err(crate::module::spawn::SpawnError::Notarized { reason }) => {
+                assert!(reason.contains("unsigned"), "{reason}")
+            }
+            other => panic!("expected a notarization refusal, got {other:?}"),
+        }
+
+        // Removing the sidecar returns the artifact to the pre-G7 hash check and no
+        // further: the file can add a refusal, never remove one.
+        std::fs::remove_file(policy::verdict_path(&installed.binary)).expect("remove");
+        crate::module::spawn::verify_hash(&installed.binary, installed.rights())
+            .expect("no sidecar is the status quo");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_policy_is_logged_and_falls_back_to_the_strict_default() {
+        // Fail closed, and say so. The default allows a locally built module, so the
+        // install still succeeds — but the complaint has to reach the job log.
+        let (done, _r, _fake) =
+            install_under("g7-malformed", "{ not json", Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        assert!(
+            done.log_tail
+                .iter()
+                .any(|l| l.contains("malformed") && l.contains("default policy")),
+            "{:?}",
+            done.log_tail
+        );
+    }
+}
+
+// ---- end track G7 policy
