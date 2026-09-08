@@ -253,7 +253,8 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<Vi
         // Reserved in Wave 0 of docs/modules-fanout-plan.md; each gets its own projection
         // in the viewer-panes track (WP1 tree, WP2 grid, WP3 bitmap). Until then the file
         // is shown as text, which is honest for the first two and a NOTICE for the third.
-        PaneKind::Data | PaneKind::Table => read_lines(&path),
+        PaneKind::Data => read_lines(&path),
+        PaneKind::Table => table_rows(&path),
         PaneKind::Image => vec![ViewRow::inert(
             role::NOTICE,
             "Image preview is not available in this build",
@@ -1149,6 +1150,75 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+// ---- V2 table -------------------------------------------------------------
+// The grid projection (docs/viewer-panes-plan.md WP2). Parsing and layout live in
+// `crate::csv`; this is only the mapping onto rows.
+
+/// A CSV/TSV file as a grid: the first record is the header ([`role::TABLE_HEAD`]),
+/// every other one a body row ([`role::TABLE_ROW`]), each with one cell per column.
+///
+/// Bounded by [`MAX_LINES`] records (with a [`role::NOTICE`] saying how many more
+/// there were) and [`crate::csv::MAX_COL_CHARS`] per cell. Every failure — a file
+/// that cannot be read, one that is not CSV, an empty one — is a single inert
+/// notice row, never a panic: the pump calls this on whatever path the workspace
+/// file names.
+///
+/// The row's `detail` is its 1-based record number (the header is row 1, the way a
+/// spreadsheet counts), and its `text` is the verbatim cells joined by ` | ` — what
+/// a screen reader announces for the row. A markdown table leaves both empty, which
+/// is how the shared 13/14 view block tells a grid from a document table.
+#[tracing::instrument(level = "debug", ret)]
+pub fn table_rows(file: &Path) -> Vec<ViewRow> {
+    let text = match read_text(file) {
+        Ok(t) => t,
+        Err(row) => return vec![row],
+    };
+    let delim = crate::csv::delimiter_for(file);
+    let records = match crate::csv::parse(&text, delim) {
+        Ok(r) => r,
+        Err(e) => {
+            return vec![ViewRow::inert(
+                role::NOTICE,
+                format!("Cannot parse as {}: {e}", crate::csv::format_name(delim)),
+            )];
+        }
+    };
+    if records.is_empty() {
+        return vec![ViewRow::inert(role::NOTICE, "Empty file")];
+    }
+    let total = records.len();
+    let shown = &records[..total.min(MAX_LINES)];
+    let cap = crate::csv::MAX_COL_CHARS;
+    let layout = crate::csv::Layout::of(shown, cap);
+    let mut rows: Vec<ViewRow> = shown
+        .iter()
+        .enumerate()
+        .map(|(i, rec)| {
+            let role = if i == 0 {
+                role::TABLE_HEAD
+            } else {
+                role::TABLE_ROW
+            };
+            let mut row = ViewRow::inert(role, clip(&rec.join(" | ")));
+            row.detail = (i + 1).to_string();
+            row.cells = (0..layout.columns())
+                .map(|j| TableCell {
+                    text: layout.cell(rec, j, cap),
+                    align: if layout.numeric[j] { 2 } else { 0 },
+                })
+                .collect();
+            row
+        })
+        .collect();
+    if total > MAX_LINES {
+        rows.push(ViewRow::inert(
+            role::NOTICE,
+            format!("… {} more rows not shown", total - MAX_LINES),
+        ));
+    }
+    rows
+}
+
 // ---------------------------------------------------------------------------
 // the per-pane model cache
 // ---------------------------------------------------------------------------
@@ -1511,6 +1581,7 @@ pub fn kind_for_file(path: &Path) -> PaneKind {
         .unwrap_or_default();
     match ext.as_str() {
         "md" | "markdown" | "mdown" | "mkd" => PaneKind::Markdown,
+        "csv" | "tsv" | "tab" => PaneKind::Table,
         // Track V3: a bitmap this build can decode opens in the image pane. Before this
         // arm a PNG fell to the plain viewer, whose NUL heuristic then refused it.
         e if crate::imagepane::is_image_ext(e) => PaneKind::Image,
@@ -2254,5 +2325,225 @@ mod tests {
         assert_eq!(view_title(&PaneKind::Markdown, Some("")), "");
         // Family A panes have no view title at all.
         assert_eq!(view_title(&PaneKind::Terminal, Some("/Users/me")), "");
+    }
+
+    // ---- V2 table ---------------------------------------------------------
+
+    /// The cells of one row as the strings the view will draw.
+    fn cells(row: &ViewRow) -> Vec<&str> {
+        row.cells.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    #[test]
+    fn a_csv_becomes_a_head_row_and_body_rows_of_padded_cells() {
+        let d = scratch("csv-basic");
+        let f = write(
+            &d,
+            "parts.csv",
+            "name,qty,price\nbolt,4,1.20\n\"nut, brass\",12,0.5\n",
+        );
+
+        let rows = rows_for(&PaneKind::Table, Some(&f.display().to_string()), 0);
+        let roles: Vec<i32> = rows.iter().map(|r| r.role).collect();
+        assert_eq!(
+            roles,
+            vec![role::TABLE_HEAD, role::TABLE_ROW, role::TABLE_ROW]
+        );
+        // Row 1 is the header, the way a spreadsheet counts.
+        let details: Vec<&str> = rows.iter().map(|r| r.detail.as_str()).collect();
+        assert_eq!(details, vec!["1", "2", "3"]);
+
+        // Column widths come from the widest cell: "nut, brass" is 10, so "name"
+        // carries six NBSPs; the numeric columns are padded on the left instead.
+        assert_eq!(
+            cells(&rows[0]),
+            vec!["name\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}", "qty", "price"]
+        );
+        assert_eq!(
+            cells(&rows[2]),
+            vec!["nut, brass", "\u{a0}12", "\u{a0}\u{a0}0\\.5"]
+        );
+        let aligns: Vec<i32> = rows[1].cells.iter().map(|c| c.align).collect();
+        assert_eq!(aligns, vec![0, 2, 2], "numbers sit flush right, words left");
+
+        // What a screen reader announces and what a copy yields are the verbatim
+        // cells — no padding, no escapes.
+        assert_eq!(rows[2].text, "nut, brass | 12 | 0.5");
+        assert_eq!(rows[2].copy_text(), "nut, brass | 12 | 0.5");
+        assert!(!rows[1].activatable(), "a grid row opens nothing");
+    }
+
+    #[test]
+    fn a_tsv_splits_on_tabs_and_a_csv_with_the_same_bytes_does_not() {
+        let d = scratch("csv-tsv");
+        let body = "a\tb\n1,5\t2\n";
+        let tsv = write(&d, "data.tsv", body);
+        let csv = write(&d, "data.csv", body);
+
+        let rows = table_rows(&tsv);
+        assert_eq!(cells(&rows[0]), vec!["a\u{a0}\u{a0}", "b"]);
+        assert_eq!(cells(&rows[1]), vec!["1,5", "2"]);
+
+        // In a `.csv` the tab is content (drawn as a space) and the comma splits: the
+        // header is one cell, and the `1` column is numeric so it sits flush right.
+        let rows = table_rows(&csv);
+        assert_eq!(cells(&rows[0]), vec!["a b", "\u{a0}\u{a0}\u{a0}"]);
+        assert_eq!(cells(&rows[1]), vec!["\u{a0}\u{a0}1", "5 2"]);
+    }
+
+    #[test]
+    fn a_quoted_line_break_stays_one_row_and_shows_as_a_pilcrow() {
+        let d = scratch("csv-newline");
+        let f = write(&d, "n.csv", "id,note\n1,\"first\nsecond\"\n2,plain\n");
+        let rows = table_rows(&f);
+        assert_eq!(rows.len(), 3, "an embedded newline is not a row break");
+        // ("id" is two wide and numeric, so its `1` is padded on the left.)
+        assert_eq!(cells(&rows[1]), vec!["\u{a0}1", "first¶second"]);
+        assert_eq!(rows[1].text, "1 | first\nsecond");
+    }
+
+    #[test]
+    fn a_ragged_csv_is_squared_to_its_widest_row() {
+        let d = scratch("csv-ragged");
+        let f = write(&d, "r.csv", "a,b\n1\n1,2,3\n");
+        let rows = table_rows(&f);
+        for r in &rows {
+            assert_eq!(r.cells.len(), 3, "every row has the widest row's shape");
+        }
+        assert_eq!(cells(&rows[0]), vec!["a", "b", "\u{a0}"]);
+        assert_eq!(cells(&rows[1]), vec!["1", "\u{a0}", "\u{a0}"]);
+    }
+
+    #[test]
+    fn a_header_only_csv_is_one_head_row_and_an_empty_one_a_notice() {
+        let d = scratch("csv-header-only");
+        let f = write(&d, "h.csv", "a,b,c\n");
+        let rows = table_rows(&f);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, role::TABLE_HEAD);
+        assert_eq!(cells(&rows[0]), vec!["a", "b", "c"]);
+
+        let e = write(&d, "e.csv", "");
+        let rows = table_rows(&e);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, role::NOTICE);
+        assert_eq!(rows[0].text, "Empty file");
+    }
+
+    #[test]
+    fn a_csv_that_will_not_parse_is_one_notice_naming_the_line() {
+        let d = scratch("csv-bad");
+        let f = write(&d, "bad.csv", "a,b\n1,\"open\n2,3\n");
+        let rows = table_rows(&f);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, role::NOTICE);
+        assert_eq!(
+            rows[0].text,
+            "Cannot parse as CSV: unterminated quoted field starting on line 2"
+        );
+        // The same defect in a `.tsv` names the format it was read as.
+        let t = write(&d, "bad.tsv", "\"open\n");
+        assert!(table_rows(&t)[0].text.starts_with("Cannot parse as TSV:"));
+    }
+
+    #[test]
+    fn a_vanished_csv_and_a_directory_are_notices_not_panics() {
+        let d = scratch("csv-gone");
+        let rows = table_rows(&d.join("nope.csv"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, role::NOTICE);
+        assert!(
+            rows[0].text.starts_with("Cannot read:"),
+            "{:?}",
+            rows[0].text
+        );
+
+        let rows = rows_for(&PaneKind::Table, Some(&d.display().to_string()), 0);
+        assert_eq!(rows[0].text, "That is a directory");
+        let rows = rows_for(&PaneKind::Table, None, 0);
+        assert_eq!(rows[0].text, "No path set for this pane");
+    }
+
+    #[test]
+    fn a_thousand_rows_fit_and_the_row_cap_ends_in_a_count() {
+        let d = scratch("csv-cap");
+        let mut body = String::from("n,sq\n");
+        for i in 1..=1_000 {
+            body.push_str(&format!("{i},{}\n", i * i));
+        }
+        let f = write(&d, "k.csv", &body);
+        let rows = table_rows(&f);
+        assert_eq!(rows.len(), 1_001, "a thousand rows are under the cap");
+        assert_eq!(rows.last().unwrap().role, role::TABLE_ROW);
+        assert_eq!(cells(&rows[1_000]), vec!["1000", "1000000"]);
+
+        let mut body = String::from("n\n");
+        for i in 1..=(MAX_LINES + 10) {
+            body.push_str(&format!("{i}\n"));
+        }
+        let f = write(&d, "big.csv", &body);
+        let rows = table_rows(&f);
+        // The header counts as a record, so the cap keeps MAX_LINES records + 1 notice.
+        assert_eq!(rows.len(), MAX_LINES + 1);
+        assert_eq!(rows[MAX_LINES - 1].role, role::TABLE_ROW);
+        let last = rows.last().unwrap();
+        assert_eq!(last.role, role::NOTICE);
+        assert_eq!(last.text, "… 11 more rows not shown");
+    }
+
+    #[test]
+    fn a_cell_past_the_column_cap_is_elided_rather_than_widening_the_column() {
+        let d = scratch("csv-wide");
+        let long = "x".repeat(300);
+        let f = write(&d, "w.csv", &format!("k,v\n1,{long}\n2,short\n"));
+        let rows = table_rows(&f);
+        let cap = crate::csv::MAX_COL_CHARS;
+        let wide = rows[1].cells[1].text.as_str();
+        assert_eq!(
+            wide.chars().count(),
+            cap,
+            "cut to the cap, ellipsis included"
+        );
+        assert!(wide.ends_with('…'));
+        // Every other cell in the column is padded to that same width, not to 300.
+        assert_eq!(rows[2].cells[1].text.chars().count(), cap);
+        assert!(rows[2].cells[1].text.starts_with("short\u{a0}"));
+    }
+
+    #[test]
+    fn model_for_carries_the_grid_into_the_pane_model() {
+        use i_slint_core::styled_text::get_raw_text;
+        let d = scratch("csv-model");
+        let f = write(&d, "m.csv", "name,qty\nbolt,4\n\"a *b*\",12\n");
+        let target = f.display().to_string();
+        let uid = "view-table";
+
+        let model = model_for(uid, &PaneKind::Table, Some(&target), 0);
+        assert_eq!(model.row_count(), 3);
+        let head = model.row_data(0).unwrap();
+        assert_eq!(head.role, role::TABLE_HEAD);
+        assert_eq!(head.text.as_str(), "name | qty");
+        assert_eq!(head.detail.as_str(), "1");
+        assert_eq!(head.cells.row_count(), 2);
+
+        // The markdown channel draws the escaped cell as its literal text: the
+        // asterisks are shown, not eaten as emphasis.
+        let body = model.row_data(2).unwrap();
+        let cell = body.cells.row_data(0).unwrap();
+        assert_eq!(get_raw_text(&cell.md).trim_end_matches('\u{a0}'), "a *b*");
+        assert_eq!(body.cells.row_data(1).unwrap().align, 2);
+
+        // The pane's copy path sees the same rows.
+        assert_eq!(row_at(uid, 1).unwrap().copy_text(), "bolt | 4");
+    }
+
+    #[test]
+    fn a_csv_or_tsv_opens_in_the_table_pane() {
+        assert_eq!(kind_for_file(Path::new("/a/data.csv")), PaneKind::Table);
+        assert_eq!(kind_for_file(Path::new("/a/DATA.CSV")), PaneKind::Table);
+        assert_eq!(kind_for_file(Path::new("/a/data.tsv")), PaneKind::Table);
+        assert_eq!(kind_for_file(Path::new("/a/data.tab")), PaneKind::Table);
+        // A file that merely mentions the format is not one.
+        assert_eq!(kind_for_file(Path::new("/a/csv.txt")), PaneKind::FileViewer);
     }
 }

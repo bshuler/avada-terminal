@@ -476,23 +476,48 @@ component ViewRowView inherits Rectangle {
         }
     }
 
-    // --- 13/14: table — even columns, a rule under the header ---
-    if root.item.role == 13 || root.item.role == 14 : Rectangle {
-        background: root.item.role == 13 ? Theme.text.with-alpha(0.03) : transparent;
+    // --- 13/14: table — a rule under the header ---
+    // Two tables share this block. A markdown table (`detail` empty) shares the width
+    // out evenly. A CSV/TSV grid (`detail` = its record number, set by
+    // `viewpane::table_rows`) draws every cell at its own content width in the
+    // monospace face — the cells arrive padded to their column's width, so they line
+    // up the way `column -t` lines them up — behind a row-number gutter, with the
+    // overflow clipped rather than wrapped: row N stays one row tall. Body rows
+    // alternate a faint stripe. `cell` is reachable by element id; a `StyledText`
+    // cannot label itself from a `styled-text`, so the row's own label (`text`, the
+    // verbatim cells) is what a screen reader announces.
+    if root.item.role == 13 || root.item.role == 14 : tbl := Rectangle {
+        property <bool> grid: root.item.detail != "";
+        property <bool> striped: tbl.grid && Math.mod(root.item.detail.to-float(), 2) == 0;
+        clip: tbl.grid;
+        background: root.item.role == 13 ? Theme.text.with-alpha(0.03)
+            : tbl.striped ? Theme.text.with-alpha(0.02)
+            : transparent;
         HorizontalLayout {
             padding-left: 8px * root.zoom;
             padding-right: 8px * root.zoom;
             spacing: 10px * root.zoom;
-            for c in root.item.cells : StyledText {
-                horizontal-stretch: 1;
+            if tbl.grid : Text {
+                width: 34px * root.zoom;
+                text: root.item.detail;
+                color: Theme.faint;
+                font-size: 10px * root.zoom;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+            for c in root.item.cells : cell := StyledText {
+                horizontal-stretch: tbl.grid ? 0 : 1;
                 vertical-alignment: center;
                 horizontal-alignment: c.align == 1 ? center : c.align == 2 ? right : left;
                 text: c.md;
                 default-color: root.item.role == 13 ? root.accent : Theme.text;
+                default-font-family: tbl.grid ? "JetBrains Mono" : "";
                 default-font-size: 12px * root.zoom;
                 link-color: Theme.link;
                 link-clicked(l) => { root.link-clicked(l); }
             }
+            // Eats the slack so a grid's cells keep their natural width.
+            if tbl.grid : Rectangle { horizontal-stretch: 1; }
         }
         if root.item.role == 13 : Rectangle {
             x: 8px;
