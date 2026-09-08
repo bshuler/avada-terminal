@@ -85,10 +85,39 @@ pub struct ProjectFile {
     pub workspace: WorkspaceFile,
 }
 
-/// `<dir>/.avada/project.json`.
+/// `<dir>/.avada/project.json` — or, until the checkout is written to again,
+/// `<dir>/.hyperpanes/project.json` when only the pre-rename directory exists
+/// (`compat`: read both, write the new).
 #[tracing::instrument(level = "debug", ret)]
 pub fn project_file_path(dir: &Path) -> PathBuf {
-    dir.join(PROJECT_DIR).join(PROJECT_FILE)
+    let new = dir.join(PROJECT_DIR).join(PROJECT_FILE);
+    if new.exists() {
+        return new;
+    }
+    let legacy = crate::compat::legacy_project_dir(dir).join(PROJECT_FILE);
+    if legacy.exists() {
+        return legacy;
+    }
+    new
+}
+
+/// Does `dir` carry a project directory under either name?
+fn has_project_dir(dir: &Path) -> bool {
+    dir.join(PROJECT_DIR).is_dir() || crate::compat::legacy_project_dir(dir).is_dir()
+}
+
+/// Before the first write into a checkout that still has only `.hyperpanes/`, rename it
+/// to `.avada/` so the write lands in the new directory and git sees one rename rather
+/// than a copy. A checkout with both directories is left alone (the new one wins).
+#[tracing::instrument(level = "debug", ret)]
+fn adopt_legacy_project_dir(root: &Path) -> std::io::Result<bool> {
+    let new = root.join(PROJECT_DIR);
+    let legacy = crate::compat::legacy_project_dir(root);
+    if new.exists() || !legacy.is_dir() {
+        return Ok(false);
+    }
+    std::fs::rename(&legacy, &new)?;
+    Ok(true)
 }
 
 /// Walk up from `start` to the first ancestor holding a `.avada/` directory or a
@@ -107,7 +136,7 @@ pub fn find_project_root<P: AsRef<Path>>(start: P) -> Option<ProjectRoot> {
             return None;
         }
         depth += 1;
-        if d.join(PROJECT_DIR).is_dir() {
+        if has_project_dir(d) {
             return Some(ProjectRoot {
                 dir: d.to_path_buf(),
                 marker: RootMarker::Avada,
@@ -182,7 +211,14 @@ pub fn write_project<P: AsRef<Path>>(
     root: P,
     workspace: &WorkspaceFile,
 ) -> Result<PathBuf, String> {
-    let path = project_file_path(root.as_ref());
+    let root = root.as_ref();
+    adopt_legacy_project_dir(root).map_err(|e| {
+        format!(
+            "{}: could not rename the pre-rename project directory: {e}",
+            root.join(PROJECT_DIR).display()
+        )
+    })?;
+    let path = root.join(PROJECT_DIR).join(PROJECT_FILE);
     let mut safe = workspace.clone();
     scrub_secrets(&mut safe);
     strip_uids(&mut safe);
@@ -502,6 +538,52 @@ mod tests {
     }
 
     // --- discovery ---
+
+    /// compat: a checkout carrying only `.hyperpanes/` (written by the old app) is
+    /// found, read from, and — on the first write — renamed to `.avada/`.
+    #[test]
+    fn a_legacy_hyperpanes_dir_is_discovered_read_and_adopted_on_write() {
+        let root = temp_root("legacy");
+        let legacy = crate::compat::legacy_project_dir(&root);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(
+            legacy.join(PROJECT_FILE),
+            serde_json::to_string(&with_panes()).unwrap(),
+        )
+        .unwrap();
+        let deep = root.join("src");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let found = find_project_root(&deep).expect("legacy dir counts as a root");
+        assert_eq!(found.marker, RootMarker::Avada);
+        assert_eq!(found.dir, root);
+        assert_eq!(project_file_path(&root), legacy.join(PROJECT_FILE));
+        let read = read_project_at(&root)
+            .expect("readable through the legacy path")
+            .expect("the legacy file is found");
+        assert_eq!(read.workspace.name.as_deref(), Some("tplx"));
+        assert_eq!(read.path, legacy.join(PROJECT_FILE));
+
+        write_project(&root, &with_panes()).expect("write adopts the directory");
+        assert!(!legacy.exists(), ".hyperpanes/ is renamed, not copied");
+        assert!(root.join(PROJECT_DIR).join(PROJECT_FILE).exists());
+        assert_eq!(
+            project_file_path(&root),
+            root.join(PROJECT_DIR).join(PROJECT_FILE)
+        );
+
+        // With both present the new one wins and the legacy one is left alone.
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join(PROJECT_FILE), "{}").unwrap();
+        assert_eq!(
+            project_file_path(&root),
+            root.join(PROJECT_DIR).join(PROJECT_FILE)
+        );
+        write_project(&root, &with_panes()).unwrap();
+        assert!(legacy.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn discovery_finds_the_avada_dir_from_a_nested_subdirectory() {

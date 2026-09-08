@@ -59,8 +59,7 @@ const DEFAULT_IDLE_GRACE_MS: u64 = 30_000;
 
 #[tracing::instrument(level = "debug", ret)]
 fn idle_grace() -> Duration {
-    let ms = std::env::var("AVADA_DAEMON_IDLE_MS")
-        .ok()
+    let ms = crate::compat::env_var("AVADA_DAEMON_IDLE_MS")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_IDLE_GRACE_MS);
     Duration::from_millis(ms)

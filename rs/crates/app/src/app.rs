@@ -1539,12 +1539,12 @@ impl App {
         // Test affordance (inert unless the env is set): panic once the app is up + autosaved, to
         // exercise the crash reporter end-to-end — hook → crash log → reporter dialog → relaunch →
         // session restore. Mirrors the `AVADA_MULTIWIN` / `AVADA_DEBUG` test hooks.
-        if self.ticks.get() == 220 && std::env::var_os("AVADA_TEST_PANIC").is_some() {
+        if self.ticks.get() == 220 && avada_core::compat::env_var_os("AVADA_TEST_PANIC").is_some() {
             panic!("AVADA_TEST_PANIC: simulated crash");
         }
         if !self.scaffold_done.get()
             && self.ticks.get() > 350 // ≈2.8 s at 8 ms/tick
-            && std::env::var_os("AVADA_MULTIWIN").is_some()
+            && avada_core::compat::env_var_os("AVADA_MULTIWIN").is_some()
         {
             if let Some(w0) = windows.first() {
                 let ready = {
@@ -2033,10 +2033,10 @@ impl App {
             PendingSeed::EmptyTab => {
                 st.add_pane(&self.mgr);
                 if self.first_seed.replace(false) {
-                    if std::env::var_os("AVADA_DEMO").is_some() {
+                    if avada_core::compat::env_var_os("AVADA_DEMO").is_some() {
                         crate::demo_seed(st, &self.mgr);
                     }
-                    if let Some(which) = std::env::var_os("AVADA_OPEN") {
+                    if let Some(which) = avada_core::compat::env_var_os("AVADA_OPEN") {
                         match which.to_string_lossy().as_ref() {
                             "palette" => {
                                 dispatch(st, Command::PaletteOpen, &self.mgr);
@@ -2139,7 +2139,7 @@ impl App {
         // `Workspace`, not `EmptyTab`, and so never reaches the match arm). `first_seed` is
         // already spent when the arm ran, which is what keeps this from firing twice.
         if self.first_seed.replace(false)
-            && std::env::var_os("AVADA_OPEN").is_some_and(|v| v == "leftpanel")
+            && avada_core::compat::env_var_os("AVADA_OPEN").is_some_and(|v| v == "leftpanel")
             && !st.left_panel_open
         {
             dispatch(st, Command::ToggleLeftPanel, &self.mgr);

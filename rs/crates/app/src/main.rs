@@ -151,7 +151,7 @@ pub(crate) mod perf {
     pub fn init() {
         let _ = START.get_or_init(Instant::now);
         let _ = PATH.get_or_init(|| {
-            std::env::var_os("AVADA_PERFLOG").map(|v| {
+            avada_core::compat::env_var_os("AVADA_PERFLOG").map(|v| {
                 let s = v.to_string_lossy();
                 if s.is_empty() || s == "1" {
                     std::env::temp_dir().join("avada-perf.log")
@@ -359,11 +359,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => {}
         }
 
+        // First launch after the rename: copy the `hyperpanes` app-support directory into
+        // the `avada` one (once, marker-guarded, never moving — the old install may still
+        // be running). Before `prefs::load` so the copied settings are the ones we boot
+        // with; logged once logging exists.
+        let migration = avada_core::compat::migrate_user_data();
+
         // Logging: one subscriber per process, file per role, level from the persisted
         // `logLevel` setting unless `AVADA_LOG` / `AVADA_DEBUG` override it.
         let level = prefs::load().log_level;
         avada_core::logging::init(log_role(&argv), &level);
         tracing::debug!(argv = ?argv, "process start");
+        migration.log();
     }
 
     // Crash-reporter mode: a fresh process spawned by the panic hook (or by the next launch when a
@@ -405,7 +412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         crate::crash::write_marker(&path);
         // Guard against recursion if the reporter itself panics (it sets this env on its child).
-        if std::env::var_os("AVADA_CRASH_CHILD").is_none() {
+        if avada_core::compat::env_var_os("AVADA_CRASH_CHILD").is_none() {
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::process::Command::new(exe)
                     .arg("--crash-report")
@@ -561,7 +568,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // single-instance gate above, so a dev/isolated instance gets its own daemon. A connect/spawn
     // failure falls back to in-process rather than blocking launch — the daemon is an enhancement,
     // never a hard dependency.
-    let want_daemon = match std::env::var("AVADA_SESSION_DAEMON").ok().as_deref() {
+    let want_daemon = match avada_core::compat::env_var("AVADA_SESSION_DAEMON").as_deref() {
         Some("1") => true,
         Some("0") => false,
         _ => true,

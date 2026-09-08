@@ -146,6 +146,23 @@ pub fn state_dir() -> PathBuf {
     }
 }
 
+/// Every (old, new) app-support directory pair the rename left behind, for
+/// [`crate::compat::migrate_user_data`]: one pair on Windows and macOS, up to three on
+/// Linux (config, data, state), each old path being the new one with the last
+/// component swapped for the pre-rename product name. Pure over the current env.
+#[tracing::instrument(level = "debug", ret)]
+pub fn legacy_dir_pairs() -> Vec<(PathBuf, PathBuf)> {
+    let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for new in [config_dir(), data_dir(), state_dir()] {
+        if pairs.iter().any(|(_, n)| *n == new) {
+            continue;
+        }
+        let old = new.with_file_name(crate::compat::LEGACY_PRODUCT_NAME);
+        pairs.push((old, new));
+    }
+    pairs
+}
+
 /// Discovery file the control server writes (port/token/pid/version/events URL).
 /// Runtime state → [`state_dir`].
 #[tracing::instrument(level = "debug", ret)]

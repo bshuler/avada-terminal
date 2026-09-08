@@ -147,8 +147,9 @@ contract type.
 - Full rename: repo, crates, bundle id (`to.avada.terminal`), app-support dir, env vars,
   project dotfiles, topic, manifest, pairing scheme, docs, mobile. Compatibility layer:
   read both env prefixes for two releases; migrate the app-support dir and keychain items on
-  first launch; treat `.avada` and `.avada` project files as one with a rename prompt;
-  users re-grant TCC permissions once.
+  first launch; treat `.hyperpanes` and `.avada` project files as one (the old directory is
+  renamed on the first write into that checkout); users re-grant TCC permissions once.
+  Details and the user-facing notes: `docs/rename-compat.md`.
 
 ---
 
@@ -279,9 +280,15 @@ Runs before any host work so that every new identifier is born as Avada. Four ag
   notarization profile names, sandbox bundle id, installer script.
 - **R3** prose and clients: `README.md`, `AGENTS.md`, `docs/`, `resources/`, skill files,
   `mobile/` (text and ids only; verified by CI, not locally — no Flutter on the dev machine).
-- **R4** (after R1) compat layer: app-support dir migration on first launch, keychain item
-  migration, both env prefixes for two releases, `.avada`/`.avada` equivalence with a
-  one-time rename prompt, TCC re-grant explanation in the first-launch notice.
+- **R4** (after R1) compat layer — DONE as `rs/crates/core/src/compat.rs`: app-support
+  dir copied on first launch (marker-guarded, never moved: the old install may still be
+  running), both env prefixes read and `HYPERPANES_*` twins injected into panes for two
+  releases, `.hyperpanes`/`.avada` equivalence (read both; renamed to `.avada` on the first
+  write rather than prompted — a prompt has no home in the CLI and headless paths, and the
+  rename is one git-visible change), legacy `hyperpanes-set` format and `.hyperpanes`
+  workspace suffix accepted, old process name accepted by the discovery guard. No keychain
+  items existed under the old name (the `keyring` dependency is still deferred), so there
+  is nothing to migrate there. TCC re-grant and stale-config notes: `docs/rename-compat.md`.
 - Orchestrator, last: `gh repo rename` (GitHub redirects the old name), directory rename on
   the dev machine, update `hyperpanes-buildinstall` worktree remote, memory file.
 

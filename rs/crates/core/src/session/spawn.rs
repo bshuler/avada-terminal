@@ -344,7 +344,7 @@ fn resolve_control_file_with(
             return Some(v.to_string());
         }
     }
-    env_lookup("AVADA_CONTROL_FILE").filter(|v| !v.is_empty())
+    crate::compat::lookup("AVADA_CONTROL_FILE", env_lookup).filter(|v| !v.is_empty())
 }
 
 /// Assemble the child's environment exactly as the TS `Session` constructor does:
@@ -420,6 +420,10 @@ pub fn build_env(inputs: &EnvInputs<'_>) -> EnvMap {
             env.insert("AVADA_CONTROL_FILE".into(), control_file.to_string());
         }
     }
+
+    // Two releases of `HYPERPANES_*` twins for every `AVADA_*` we set, so a user's
+    // hook script or MCP config written against the old name keeps working (compat).
+    crate::compat::mirror_legacy_env(&mut env);
 
     // `BROWSER` names the command a CLI tool runs to show the user a link, so pointing
     // it at our shim IS the URL-interception feature (Q3) — which means the value the
@@ -816,6 +820,51 @@ mod tests {
         assert_eq!(env.get("AVADA_PANE_ID").map(String::as_str), Some("pane-7"));
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
         assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+    }
+
+    /// compat: every `AVADA_*` we inject gets a `HYPERPANES_*` twin, so a hook script
+    /// written against the old name keeps finding its pane and control file.
+    #[test]
+    fn build_env_mirrors_avada_vars_under_the_legacy_prefix() {
+        let proc_env = map(&[]);
+        let integ = map(&[]);
+        let env = build_env(&EnvInputs {
+            process_env: &proc_env,
+            opts_env: None,
+            integration_env: &integ,
+            pane_id: Some("pane-7"),
+            control_file: Some("/data/control.json"),
+            browser_shim: None,
+        });
+        assert_eq!(
+            env.get("HYPERPANES_PANE_ID").map(String::as_str),
+            Some("pane-7")
+        );
+        assert_eq!(
+            env.get("HYPERPANES_CONTROL_FILE").map(String::as_str),
+            Some("/data/control.json")
+        );
+    }
+
+    /// compat: a parent pane started by the old app hands down `HYPERPANES_CONTROL_FILE`
+    /// only; the child must still find the control plane through it.
+    #[test]
+    fn resolve_control_file_reads_the_legacy_env_name() {
+        let legacy_only =
+            |n: &str| (n == "HYPERPANES_CONTROL_FILE").then(|| "/old/control.json".to_string());
+        assert_eq!(
+            resolve_control_file_with(None, legacy_only).as_deref(),
+            Some("/old/control.json")
+        );
+        let both = |n: &str| match n {
+            "AVADA_CONTROL_FILE" => Some("/new/control.json".to_string()),
+            "HYPERPANES_CONTROL_FILE" => Some("/old/control.json".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_control_file_with(None, both).as_deref(),
+            Some("/new/control.json")
+        );
     }
 
     #[test]

@@ -329,7 +329,9 @@ pub fn parse_cli_with(argv: &[String], exists_fn: impl Fn(&str) -> bool) -> Pars
             _ => {
                 let lower = a.to_lowercase();
                 if !a.starts_with('-')
-                    && (lower.ends_with(".json") || lower.ends_with(".avada"))
+                    && (lower.ends_with(".json")
+                        || lower.ends_with(".avada")
+                        || lower.ends_with(crate::compat::LEGACY_WORKSPACE_EXT))
                     && exists_fn(&a)
                 {
                     json_path = Some(resolve_path(&a));
@@ -671,6 +673,18 @@ mod tests {
         assert!(
             r.json_path.as_deref().unwrap().ends_with("dev.json"),
             "json_path should resolve to an absolute path ending in dev.json: {:?}",
+            r.json_path
+        );
+    }
+
+    /// compat: `avada ./dev.hyperpanes` still opens the file a user saved last week.
+    #[test]
+    fn captures_a_positional_legacy_hyperpanes_path_that_exists() {
+        let exists = |p: &str| p == "./dev.hyperpanes";
+        let r = parse_cli_with(&argv(&["./dev.hyperpanes"]), exists);
+        assert!(
+            r.json_path.as_deref().unwrap().ends_with("dev.hyperpanes"),
+            "json_path should resolve to the legacy-suffixed file: {:?}",
             r.json_path
         );
     }

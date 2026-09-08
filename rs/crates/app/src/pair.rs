@@ -146,7 +146,7 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
     };
     // Panes inherit AVADA_CONTROL_FILE set-but-EMPTY from the app; treat empty as
     // unset or `pair` run inside a pane resolves a blank path instead of the state dir.
-    let control_file = std::env::var_os("AVADA_CONTROL_FILE")
+    let control_file = avada_core::compat::env_var_os("AVADA_CONTROL_FILE")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(paths::control_json);

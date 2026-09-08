@@ -28,7 +28,7 @@ fn io_err(msg: impl Into<String>) -> io::Error {
 /// client. Errors when no control API is running / the file is unreadable.
 #[tracing::instrument(level = "debug")]
 pub fn connect() -> io::Result<Conn> {
-    let control_file = std::env::var_os("AVADA_CONTROL_FILE")
+    let control_file = avada_core::compat::env_var_os("AVADA_CONTROL_FILE")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(paths::control_json);

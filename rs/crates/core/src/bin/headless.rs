@@ -10,7 +10,10 @@
 //! Then run the MCP with the same `AVADA_CONTROL_FILE`.
 
 fn main() {
+    // See app/src/main.rs: the pre-rename data directory is copied in once, first.
+    let migration = avada_core::compat::migrate_user_data();
     avada_core::logging::init("headless", avada_core::logging::DEFAULT_LEVEL);
+    migration.log();
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {

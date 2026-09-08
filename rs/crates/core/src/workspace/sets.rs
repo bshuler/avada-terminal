@@ -119,7 +119,7 @@ pub fn parse_set_str(raw: &str) -> Result<WorkspaceSet, String> {
 
     let obj = value.as_object().unwrap();
     match obj.get("format").and_then(|f| f.as_str()) {
-        Some(SET_FORMAT) => {}
+        Some(SET_FORMAT) | Some(crate::compat::LEGACY_SET_FORMAT) => {}
         other => {
             return Err(format!(
                 "not a avada workspace set: \"format\" is {:?}, expected \"{SET_FORMAT}\"",
@@ -288,6 +288,19 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// compat: a set written by the pre-rename app carries `"format": "hyperpanes-set"`
+    /// and must still open; a rewrite tags it with the new format.
+    #[test]
+    fn opens_a_set_tagged_with_the_legacy_format() {
+        let set = sample();
+        let mut json = serde_json::to_value(SetEnvelope::wrap(set.clone())).unwrap();
+        json["format"] = serde_json::Value::String(crate::compat::LEGACY_SET_FORMAT.into());
+        assert_eq!(parse_set_str(&json.to_string()).unwrap(), set);
+        assert_eq!(SetEnvelope::wrap(set).format, SET_FORMAT);
+        json["format"] = serde_json::Value::String("someone-elses-set".into());
+        assert!(parse_set_str(&json.to_string()).is_err());
     }
 
     #[test]

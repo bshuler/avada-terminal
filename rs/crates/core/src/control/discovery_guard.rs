@@ -127,6 +127,7 @@ fn live_foreign_avada_owner(path: &Path, our_pid: u32) -> Option<Owner> {
 fn is_avada_name(name: &str) -> bool {
     let n = name.to_lowercase();
     n.contains("avada")
+        || n.contains(crate::compat::LEGACY_PRODUCT_NAME)
         || n.rsplit(['/', '\\', ' '])
             .any(|part| part.strip_suffix(".exe").unwrap_or(part) == "headless")
 }
@@ -442,6 +443,10 @@ mod tests {
         assert!(is_avada_name("avada /usr/bin/avada"));
         assert!(is_avada_name("headless ./target/debug/headless"));
         assert!(is_avada_name(r"C:\Program Files\avada\avada.exe"));
+        // compat: the pre-rename app may still be running against the same file.
+        assert!(is_avada_name(
+            "hyperpanes /Applications/Hyperpanes.app/Contents/MacOS/hyperpanes"
+        ));
         assert!(!is_avada_name("systemd /usr/lib/systemd/systemd"));
         assert!(!is_avada_name("chrome --headless=new"));
     }

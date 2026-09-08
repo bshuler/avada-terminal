@@ -283,7 +283,7 @@ fn short(id: &str) -> &str {
 /// Panes may inherit `AVADA_CONTROL_FILE` set-but-empty from the app; treat empty as unset.
 #[tracing::instrument(level = "debug", skip_all)]
 fn load_discovery() -> Result<Discovery, Box<dyn Error>> {
-    let path = std::env::var_os("AVADA_CONTROL_FILE")
+    let path = avada_core::compat::env_var_os("AVADA_CONTROL_FILE")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(avada_core::persistence::paths::control_json);

@@ -116,7 +116,7 @@ const CONN_QUEUE_CAP: usize = 1024;
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
 fn idle_grace() -> Duration {
-    idle_grace_from(std::env::var("AVADA_DAEMON_IDLE_MS").ok().as_deref())
+    idle_grace_from(crate::compat::env_var("AVADA_DAEMON_IDLE_MS").as_deref())
 }
 
 /// Pure parse of the idle-grace override (factored out so it's testable WITHOUT mutating the
