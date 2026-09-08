@@ -120,6 +120,22 @@ pub enum HostEvent {
         /// The whole set.
         routes: Vec<RouteDescriptor>,
     },
+    /// The module asked for a pane (`host.panes.spawn`). The host has already minted
+    /// `pane_id` and answered the module; opening the pane is the app's job. `kind` is
+    /// `file` (open `path` in the viewer) or `module` (a pane owned by the module,
+    /// showing `surface`); anything else the app does not know is a toast, not a pane.
+    PaneSpawn {
+        /// Which module.
+        module: ModuleId,
+        /// The id already handed back to the module.
+        pane_id: String,
+        /// What to open.
+        kind: String,
+        /// The path, for `kind: "file"`.
+        path: Option<String>,
+        /// The module surface, for `kind: "module"`.
+        surface: Option<String>,
+    },
 }
 
 /// Why a host operation failed.
@@ -254,6 +270,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Host {
     /// A host with `gate` deciding every capability check.
     pub fn new(config: HostConfig, gate: Arc<dyn CapabilityGate>) -> Host {
+        let config_root = config.workspace.as_ref().and_then(|w| w.root.clone());
         Host {
             inner: Arc::new(Inner {
                 config: Arc::new(config),
@@ -261,6 +278,7 @@ impl Host {
                     gate,
                     rail_events: Default::default(),
                     events: Default::default(),
+                    workspace_root: Mutex::new(config_root.map(std::path::PathBuf::from)),
                 }),
                 slots: Mutex::new(HashMap::new()),
                 licensing: Arc::new(Mutex::new(None)),
@@ -484,8 +502,55 @@ impl Host {
         workspace: Option<WorkspaceInfo>,
     ) -> Result<Value, HostError> {
         let ws = workspace.or_else(|| self.inner.config.workspace.clone());
+        // The filesystem scope follows the workspace. A module activated on a new
+        // workspace must not keep reading the old one's tree through `host.fs.*`.
+        if let Some(w) = &ws {
+            self.set_workspace_root(w.root.clone());
+        }
         self.slot(id)?
             .request(methods::MODULE_ACTIVATE, json!({ "workspace": ws }))
+    }
+
+    /// Point every module's `host.fs.*` scope at `root` (or at nothing). Called by
+    /// [`Host::activate`]; also available to an app that switches workspace without
+    /// re-activating.
+    pub fn set_workspace_root(&self, root: Option<String>) {
+        *lock(&self.inner.shared.workspace_root) = root.map(PathBuf::from);
+    }
+
+    /// The root `host.fs.*` is currently scoped to.
+    pub fn workspace_root(&self) -> Option<PathBuf> {
+        lock(&self.inner.shared.workspace_root).clone()
+    }
+
+    /// Send `module.event { kind, payload }` to every running module that subscribed to
+    /// `kind`. Returns how many modules were told.
+    ///
+    /// A notification, not a request: the host is announcing something that already
+    /// happened, and a module that is slow to react must not stall the UI thread that
+    /// emitted it. The count is the answer to "did anyone hear me" — the app uses it to
+    /// decide whether to fall back to a toast.
+    pub fn emit(&self, kind: &str, payload: Value) -> usize {
+        let slots: Vec<Arc<Slot>> = lock(&self.inner.slots).values().cloned().collect();
+        let mut told = 0;
+        for slot in slots {
+            if !slot.dispatcher.subscribed(kind) {
+                continue;
+            }
+            let Some(writer) = slot.writer() else {
+                continue;
+            };
+            let n = Notification::new(
+                methods::MODULE_EVENT,
+                json!({ "kind": kind, "payload": payload }),
+            );
+            let sent = lock(&writer).write_message(&Message::Notification(n));
+            match sent {
+                Ok(()) => told += 1,
+                Err(e) => tracing::warn!(module = %slot.id, %kind, "module.event: {e}"),
+            }
+        }
+        told
     }
 
     /// `module.deactivate`.

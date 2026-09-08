@@ -10,13 +10,16 @@
 use super::gate::{CapabilityGate, Decision};
 use super::host::HostEvent;
 use super::rail::{FanOut, RailEvent, RailState};
+use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::{self, required_capability};
 use avada_module_sdk::contract::{ErrorCode, Notification, Request, Response, RpcError};
 use avada_module_sdk::descriptor::{validate_table, RouteDescriptor, Scope};
 use avada_module_sdk::rail::{validate_entry, RegisterRail, SetRows};
 use avada_module_sdk::ModuleId;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -29,7 +32,16 @@ pub const SERVED: &[&str] = &[
     methods::HOST_PREFS_GET,
     methods::HOST_TOAST,
     methods::HOST_ROUTES_REGISTER,
+    methods::HOST_FS_LIST,
+    methods::HOST_FS_READ,
+    methods::HOST_PANES_SPAWN,
+    methods::HOST_EVENTS_SUBSCRIBE,
 ];
+
+/// The largest file `host.fs.read` will hand back. A module that wants a gigabyte of
+/// video does not want it as one JSON string, and the host would buffer all of it twice
+/// (bytes, then base64) before the writer ever saw a line.
+pub const MAX_READ: u64 = 8 * 1024 * 1024;
 
 /// One command a module registered (`host.command.register`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +127,11 @@ pub(crate) struct Shared {
     pub gate: Arc<dyn CapabilityGate>,
     pub rail_events: FanOut<RailEvent>,
     pub events: FanOut<HostEvent>,
+    /// The open workspace's root, when it has one. Every `host.fs.*` path is resolved
+    /// against it unless the module holds `fs.read_any`. Held here rather than read off
+    /// `HostConfig` because the root changes when the human switches workspace, and a
+    /// module that outlives the switch must not keep reading the old tree.
+    pub workspace_root: Mutex<Option<PathBuf>>,
 }
 
 /// Per-module dispatch state.
@@ -129,12 +146,37 @@ pub(crate) struct Dispatcher {
     pub prefs: Mutex<Prefs>,
     /// Control-plane routes the module registered, stamped with its id.
     pub routes: Mutex<Vec<RouteDescriptor>>,
+    /// Event kinds the module asked for (`host.events.subscribe`). The whole set;
+    /// subscribing again replaces it.
+    pub subscriptions: Mutex<BTreeSet<String>>,
 }
 
 /// `host.routes.register` params.
 #[derive(Deserialize)]
 struct RegisterRoutes {
     routes: Vec<RouteDescriptor>,
+}
+
+/// `host.fs.list` and `host.fs.read` params.
+#[derive(Deserialize)]
+struct PathParams {
+    path: String,
+}
+
+/// `host.panes.spawn` params.
+#[derive(Deserialize)]
+struct SpawnPane {
+    kind: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    surface: Option<String>,
+}
+
+/// `host.events.subscribe` params.
+#[derive(Deserialize)]
+struct Subscribe {
+    kinds: Vec<String>,
 }
 
 fn invalid_params(e: impl std::fmt::Display) -> RpcError {
@@ -159,6 +201,7 @@ impl Dispatcher {
             commands: Mutex::new(Vec::new()),
             prefs: Mutex::new(Prefs::load(data_dir)),
             routes: Mutex::new(Vec::new()),
+            subscriptions: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -202,12 +245,12 @@ impl Dispatcher {
             methods::HOST_PREFS_GET => Ok(self.lock_prefs().as_result()),
             methods::HOST_TOAST => self.toast(params),
             methods::HOST_ROUTES_REGISTER => self.routes_register(params),
-            methods::HOST_PANES_SPAWN
-            | methods::HOST_PANES_INPUT
-            | methods::HOST_FS_READ
+            methods::HOST_FS_LIST => self.fs_list(params),
+            methods::HOST_FS_READ => self.fs_read(params),
+            methods::HOST_PANES_SPAWN => self.panes_spawn(params),
+            methods::HOST_EVENTS_SUBSCRIBE => self.events_subscribe(params),
+            methods::HOST_PANES_INPUT
             | methods::HOST_FS_WRITE
-            | methods::HOST_FS_LIST
-            | methods::HOST_EVENTS_SUBSCRIBE
             | methods::HOST_KEYCHAIN_GET
             | methods::HOST_KEYCHAIN_SET => Err(unsupported(method)),
             other => Err(RpcError::new(
@@ -356,6 +399,153 @@ impl Dispatcher {
         Ok(Value::Null)
     }
 
+    /// Resolve a `host.fs.*` path.
+    ///
+    /// The scope is the workspace root, canonicalised on both sides so a `..` segment or
+    /// a symlink pointing out of the tree is caught by the same `starts_with` — checking
+    /// the spelling of the path a module sent would only catch the honest mistakes.
+    /// `fs.read_any` lifts the scope entirely; that is what the capability *is*, and the
+    /// human granted it at install time.
+    fn scoped(&self, path: &str) -> Result<PathBuf, RpcError> {
+        if path.trim().is_empty() {
+            return Err(invalid_params("path must not be empty"));
+        }
+        let raw = PathBuf::from(path);
+        if matches!(
+            self.shared.gate.check(&self.module, Capability::FsReadAny),
+            Decision::Allow
+        ) {
+            return Ok(raw);
+        }
+        let root = self
+            .shared
+            .workspace_root
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(root) = root else {
+            return Err(RpcError::new(
+                ErrorCode::CapabilityDenied,
+                "no workspace root to read within; `fs.read_any` is needed to read outside one",
+            ));
+        };
+        let root = root.canonicalize().map_err(|e| {
+            RpcError::new(
+                ErrorCode::CapabilityDenied,
+                format!("the workspace root cannot be resolved: {e}"),
+            )
+        })?;
+        let real = raw
+            .canonicalize()
+            .map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
+        if !real.starts_with(&root) {
+            return Err(RpcError::new(
+                ErrorCode::CapabilityDenied,
+                format!("`{path}` is outside the workspace root; `fs.read_any` reads outside it"),
+            ));
+        }
+        Ok(real)
+    }
+
+    /// `host.fs.list { path } -> { entries: [{ name, kind }] }`, sorted by name.
+    ///
+    /// Hidden entries are listed. Whether a dotfile belongs on screen is the module's
+    /// question — an explorer that hid them would be lying about what is on disk, and a
+    /// host that hid them would take that decision away from every module at once.
+    fn fs_list(&self, params: &Value) -> Result<Value, RpcError> {
+        let PathParams { path } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        let dir = self.scoped(&path)?;
+        let rd = std::fs::read_dir(&dir).map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
+        let mut entries: Vec<(String, &'static str)> = Vec::new();
+        for ent in rd.flatten() {
+            // `file_type` does not follow the link: a symlink is its own kind, so the
+            // module can decide whether to descend rather than being walked into a loop.
+            let kind = match ent.file_type() {
+                Ok(t) if t.is_symlink() => "symlink",
+                Ok(t) if t.is_dir() => "dir",
+                Ok(t) if t.is_file() => "file",
+                _ => "other",
+            };
+            entries.push((ent.file_name().to_string_lossy().into_owned(), kind));
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let entries: Vec<Value> = entries
+            .into_iter()
+            .map(|(name, kind)| json!({ "name": name, "kind": kind }))
+            .collect();
+        Ok(json!({ "entries": entries }))
+    }
+
+    /// `host.fs.read { path } -> { text } | { bytes_b64 }`.
+    ///
+    /// Text when the bytes are UTF-8, base64 when they are not, so a module that only
+    /// wanted to show source never has to think about encodings and one that wanted an
+    /// image still gets the bytes.
+    fn fs_read(&self, params: &Value) -> Result<Value, RpcError> {
+        let PathParams { path } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        let file = self.scoped(&path)?;
+        let len = std::fs::metadata(&file)
+            .map_err(|e| invalid_params(format!("`{path}`: {e}")))?
+            .len();
+        if len > MAX_READ {
+            return Err(invalid_params(format!(
+                "`{path}` is {len} bytes; `host.fs.read` stops at {MAX_READ}"
+            )));
+        }
+        let bytes = std::fs::read(&file).map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
+        match String::from_utf8(bytes) {
+            Ok(text) => Ok(json!({ "text": text })),
+            Err(e) => Ok(json!({
+                "bytes_b64": base64::engine::general_purpose::STANDARD.encode(e.as_bytes()),
+            })),
+        }
+    }
+
+    /// `host.panes.spawn { kind, path?, surface? } -> { pane_id }`.
+    ///
+    /// The id is minted here and returned at once; opening the pane is the app's job and
+    /// happens off the event stream. A module that had to wait for a window to exist
+    /// would block its own request loop on the UI thread's next frame.
+    fn panes_spawn(&self, params: &Value) -> Result<Value, RpcError> {
+        let SpawnPane {
+            kind,
+            path,
+            surface,
+        } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if kind.trim().is_empty() {
+            return Err(invalid_params("pane kind must not be empty"));
+        }
+        let pane_id = uuid::Uuid::new_v4().to_string();
+        self.shared.events.send(HostEvent::PaneSpawn {
+            module: self.module.clone(),
+            pane_id: pane_id.clone(),
+            kind,
+            path,
+            surface,
+        });
+        Ok(json!({ "pane_id": pane_id }))
+    }
+
+    /// `host.events.subscribe { kinds }`: the whole set, replacing any earlier one. An
+    /// empty set unsubscribes.
+    fn events_subscribe(&self, params: &Value) -> Result<Value, RpcError> {
+        let Subscribe { kinds } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if let Some(bad) = kinds.iter().find(|k| k.trim().is_empty()) {
+            let _ = bad;
+            return Err(invalid_params("event kind must not be empty"));
+        }
+        *self.subscriptions.lock().unwrap_or_else(|e| e.into_inner()) = kinds.into_iter().collect();
+        Ok(Value::Null)
+    }
+
+    /// Whether the module asked for `kind`; consulted by [`super::host::Host::emit`].
+    pub(crate) fn subscribed(&self, kind: &str) -> bool {
+        self.subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(kind)
+    }
+
     /// Replace the stored values (the host's side of "prefs set"), persist them, and
     /// hand back the `module.prefs.changed` params to send.
     pub(crate) fn set_prefs(&self, values: Map<String, Value>) -> std::io::Result<Value> {
@@ -388,6 +578,7 @@ pub(crate) mod tests {
     use crate::module::gate::DeclaredOnly;
     use crate::module::testkit;
     use avada_module_sdk::caps::Capability;
+    use avada_module_sdk::contract::methods::events as contract_events;
     use std::sync::mpsc::Receiver;
 
     pub(crate) struct Rig {
@@ -426,6 +617,7 @@ pub(crate) mod tests {
             gate: Arc::new(DeclaredOnly::from_record(&record)),
             rail_events: FanOut::default(),
             events: FanOut::default(),
+            workspace_root: Mutex::new(None),
         });
         let rail = shared.rail_events.subscribe();
         let events = shared.events.subscribe();
@@ -474,12 +666,8 @@ pub(crate) mod tests {
     fn unsupported_methods_say_so_after_the_gate() {
         let rig = rig(&all_caps());
         for m in [
-            methods::HOST_PANES_SPAWN,
             methods::HOST_PANES_INPUT,
-            methods::HOST_FS_READ,
             methods::HOST_FS_WRITE,
-            methods::HOST_FS_LIST,
-            methods::HOST_EVENTS_SUBSCRIBE,
             methods::HOST_KEYCHAIN_GET,
             methods::HOST_KEYCHAIN_SET,
         ] {
@@ -491,7 +679,7 @@ pub(crate) mod tests {
         let bare = super::tests::rig(&[]);
         let e = bare
             .d
-            .call(methods::HOST_FS_READ, &Value::Null)
+            .call(methods::HOST_FS_WRITE, &Value::Null)
             .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
     }
@@ -754,5 +942,257 @@ pub(crate) mod tests {
             .d
             .handle(&Request::new(8, methods::HOST_RAIL_REGISTER, Value::Null));
         assert_eq!(err.error.unwrap().kind(), ErrorCode::CapabilityDenied);
+    }
+
+    /// A rig whose `host.fs.*` scope is `dir`.
+    fn fs_rig(caps: &[Capability], dir: &Path) -> Rig {
+        let rig = rig(caps);
+        *rig.d.shared.workspace_root.lock().unwrap() = Some(dir.to_path_buf());
+        rig
+    }
+
+    fn list_names(v: &Value) -> Vec<String> {
+        v["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn fs_list_sorts_by_name_keeps_hidden_entries_and_names_the_kind() {
+        let dir = tempdir::Dir::new("fs-list");
+        let root = &dir.0;
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("b.txt"), "b").unwrap();
+        std::fs::write(root.join(".hidden"), "h").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("b.txt"), root.join("link")).unwrap();
+        let rig = fs_rig(&[Capability::FsRead], root);
+        let v = rig
+            .d
+            .call(
+                methods::HOST_FS_LIST,
+                &json!({ "path": root.to_string_lossy() }),
+            )
+            .unwrap();
+        let names = list_names(&v);
+        assert!(
+            names.contains(&".hidden".to_string()),
+            "hidden entries are the module's call, not the host's: {names:?}"
+        );
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "entries come back sorted by name");
+        let kind = |n: &str| {
+            v["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["name"] == n)
+                .map(|e| e["kind"].as_str().unwrap().to_string())
+                .unwrap()
+        };
+        assert_eq!(kind("src"), "dir");
+        assert_eq!(kind("b.txt"), "file");
+        #[cfg(unix)]
+        assert_eq!(
+            kind("link"),
+            "symlink",
+            "a link is its own kind, not the thing it points at"
+        );
+    }
+
+    #[test]
+    fn fs_read_is_scoped_to_the_workspace_root() {
+        let dir = tempdir::Dir::new("fs-scope");
+        let root = &dir.0;
+        let outside = tempdir::Dir::new("fs-outside");
+        std::fs::write(root.join("in.txt"), "inside").unwrap();
+        std::fs::write(outside.0.join("out.txt"), "outside").unwrap();
+        let rig = fs_rig(&[Capability::FsRead], root);
+        let read = |p: PathBuf| {
+            rig.d.call(
+                methods::HOST_FS_READ,
+                &json!({ "path": p.to_string_lossy() }),
+            )
+        };
+        assert_eq!(
+            read(root.join("in.txt")).unwrap(),
+            json!({ "text": "inside" })
+        );
+        let e = read(outside.0.join("out.txt")).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+        assert!(e.message.contains("fs.read_any"), "{}", e.message);
+        // `..` back out of the root is the same refusal, not a path-spelling check.
+        let e = read(
+            root.join("..")
+                .join(outside.0.file_name().unwrap())
+                .join("out.txt"),
+        )
+        .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_workspace_is_refused_where_it_points() {
+        let dir = tempdir::Dir::new("fs-link");
+        let outside = tempdir::Dir::new("fs-link-out");
+        std::fs::write(outside.0.join("secret"), "s").unwrap();
+        std::os::unix::fs::symlink(outside.0.join("secret"), dir.0.join("escape")).unwrap();
+        let rig = fs_rig(&[Capability::FsRead], &dir.0);
+        let e = rig
+            .d
+            .call(
+                methods::HOST_FS_READ,
+                &json!({ "path": dir.0.join("escape").to_string_lossy() }),
+            )
+            .unwrap_err();
+        assert_eq!(
+            e.kind(),
+            ErrorCode::CapabilityDenied,
+            "both sides are canonicalised, so the link resolves outside the root"
+        );
+    }
+
+    #[test]
+    fn without_a_root_fs_read_is_denied_and_read_any_lifts_the_scope() {
+        let outside = tempdir::Dir::new("fs-noroot");
+        std::fs::write(outside.0.join("f"), "x").unwrap();
+        let path = json!({ "path": outside.0.join("f").to_string_lossy() });
+        // No workspace root at all.
+        let bare = rig(&[Capability::FsRead]);
+        let e = bare.d.call(methods::HOST_FS_READ, &path).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+        assert!(e.message.contains("no workspace root"), "{}", e.message);
+        // `fs.read_any` reads anywhere, root or no root.
+        let any = rig(&[Capability::FsRead, Capability::FsReadAny]);
+        assert_eq!(
+            any.d.call(methods::HOST_FS_READ, &path).unwrap(),
+            json!({ "text": "x" })
+        );
+    }
+
+    #[test]
+    fn fs_read_caps_the_size_and_base64s_bytes_that_are_not_text() {
+        let dir = tempdir::Dir::new("fs-bytes");
+        std::fs::write(dir.0.join("bin"), [0xff, 0xfe, 0x00]).unwrap();
+        std::fs::write(dir.0.join("big"), vec![b'a'; (MAX_READ + 1) as usize]).unwrap();
+        let rig = fs_rig(&[Capability::FsRead], &dir.0);
+        let v = rig
+            .d
+            .call(
+                methods::HOST_FS_READ,
+                &json!({ "path": dir.0.join("bin").to_string_lossy() }),
+            )
+            .unwrap();
+        assert!(v.get("text").is_none());
+        assert_eq!(v["bytes_b64"], json!("//4A"));
+        let e = rig
+            .d
+            .call(
+                methods::HOST_FS_READ,
+                &json!({ "path": dir.0.join("big").to_string_lossy() }),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("stops at"), "{}", e.message);
+    }
+
+    #[test]
+    fn panes_spawn_mints_an_id_answers_it_and_announces_the_pane() {
+        let rig = rig(&[Capability::PanesSpawn]);
+        let v = rig
+            .d
+            .call(
+                methods::HOST_PANES_SPAWN,
+                &json!({ "kind": "file", "path": "/w/a.rs" }),
+            )
+            .unwrap();
+        let id = v["pane_id"].as_str().unwrap().to_string();
+        assert_eq!(id.len(), 36, "a uuid, not a counter: {id}");
+        match rig.events.recv().unwrap() {
+            HostEvent::PaneSpawn {
+                module,
+                pane_id,
+                kind,
+                path,
+                surface,
+            } => {
+                assert_eq!(module, testkit::module_id());
+                assert_eq!(
+                    pane_id, id,
+                    "the app opens the pane the module was told about"
+                );
+                assert_eq!(kind, "file");
+                assert_eq!(path.as_deref(), Some("/w/a.rs"));
+                assert_eq!(surface, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        // An empty kind is refused before anything is announced.
+        assert_eq!(
+            rig.d
+                .call(methods::HOST_PANES_SPAWN, &json!({ "kind": " " }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams
+        );
+        assert!(rig.events.try_recv().is_err());
+        // Without `panes.spawn` the gate answers first.
+        assert_eq!(
+            super::tests::rig(&[])
+                .d
+                .call(methods::HOST_PANES_SPAWN, &json!({ "kind": "file" }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::CapabilityDenied
+        );
+    }
+
+    #[test]
+    fn events_subscribe_records_the_whole_set_and_replaces_it() {
+        let rig = rig(&[Capability::EventsSubscribe]);
+        assert!(!rig.d.subscribed(contract_events::RAIL_QUERY));
+        rig.d
+            .call(
+                methods::HOST_EVENTS_SUBSCRIBE,
+                &json!({ "kinds": [contract_events::RAIL_QUERY, contract_events::FILES_REVEAL] }),
+            )
+            .unwrap();
+        assert!(rig.d.subscribed(contract_events::RAIL_QUERY));
+        assert!(rig.d.subscribed(contract_events::FILES_REVEAL));
+        assert!(!rig.d.subscribed("something.else"));
+        // Subscribing again replaces rather than adds.
+        rig.d
+            .call(
+                methods::HOST_EVENTS_SUBSCRIBE,
+                &json!({ "kinds": [contract_events::FILES_REVEAL] }),
+            )
+            .unwrap();
+        assert!(!rig.d.subscribed(contract_events::RAIL_QUERY));
+        // An empty set unsubscribes; an empty *name* is a mistake.
+        rig.d
+            .call(methods::HOST_EVENTS_SUBSCRIBE, &json!({ "kinds": [] }))
+            .unwrap();
+        assert!(!rig.d.subscribed(contract_events::FILES_REVEAL));
+        assert_eq!(
+            rig.d
+                .call(methods::HOST_EVENTS_SUBSCRIBE, &json!({ "kinds": [" "] }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams
+        );
+        // Without `events.subscribe` the gate answers first.
+        assert_eq!(
+            super::tests::rig(&[])
+                .d
+                .call(methods::HOST_EVENTS_SUBSCRIBE, &json!({ "kinds": [] }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::CapabilityDenied
+        );
     }
 }

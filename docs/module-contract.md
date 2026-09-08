@@ -288,6 +288,95 @@ tree without the module owning any widget; the host sends `module.row.activate`
 with the row's opaque `data` and the `Gesture` (click, double click, context
 menu, key).
 
+### 10.1 Selection and scroll
+
+`host.rows.set` carries no selection field, on purpose: a row list is the
+module's whole state and a second channel for "and this one is current" would
+be a second source of truth to keep in step. Instead the module puts the mark
+`selected` on the row it wants shown, and the host scrolls the first row
+carrying that mark into view whenever a new row set arrives. Marks the host
+does not recognise are still passed through and ignored, so a module may carry
+its own alongside it.
+
+### 10.2 The filter box
+
+Every module rail entry gets a host-owned filter text box above its rows. The
+host does not filter anything itself — each change emits `rail.query` (§10.4)
+to that entry's module, which answers with a new `host.rows.set`. A module that
+did not subscribe to `rail.query` simply never sees the typing, and its rows
+stand.
+
+### 10.3 Reading the workspace: `host.fs.list` and `host.fs.read`
+
+`host.fs.list { path } → { entries: [{ name, kind }] }` where `kind` is one of
+`dir`, `file`, `symlink`, `other`. Hidden entries **are** listed — hiding them
+is a view decision that belongs to the module — and the list is sorted by name.
+A symlink is reported as `symlink` whatever it points at; the host does not
+follow it to decide the kind.
+
+`host.fs.read { path } → { text }` when the bytes are UTF-8, and
+`{ bytes_b64 }` (standard base64) when they are not, so a module can read an
+image or a binary without a second method. Reads are capped at **8 MiB**
+(`rpc::MAX_READ`); a larger file is an `InvalidParams` error naming the size,
+not a truncated answer.
+
+Both methods need the `fs.read` capability and are **scoped to the open
+workspace root**: the host canonicalises the root and the requested path and
+refuses anything that lands outside, which covers `..` and a symlink whose
+target escapes. The refusal is `CapabilityDenied` (-32001) and its message
+names `fs.read_any`, the capability that lifts the scope entirely. A host with
+no workspace open denies every scoped read; `fs.read_any` still works, because
+a module holding it was never asking about the workspace.
+
+The scope follows the human: `Host::activate` with a new `WorkspaceInfo`
+retargets it for **every** running module at once, so a module that outlives a
+workspace switch cannot keep reading the tree the user has left.
+
+`host.fs.write` remains unsupported (`MethodNotFound`) — the capability exists
+in the manifest vocabulary, but no host serves it yet.
+
+### 10.4 Events: `host.events.subscribe` and `module.event`
+
+`host.events.subscribe { kinds: [string] }` records the whole set for the
+calling module and **replaces** any earlier set; subscribing to `[]` is how a
+module goes quiet. Requires `events.subscribe`.
+
+The host then sends `module.event` as a **notification** with
+`{ kind, payload }` to each live module that named `kind`. Delivery is
+best-effort and unordered with respect to other traffic; a module that is not
+running is skipped rather than queued. An unknown `kind` must be **ignored**,
+not answered with an error — a newer host has to be able to announce something
+an older module never heard of.
+
+The kinds live in `contract::methods::events`:
+
+| Const | `kind` | Payload |
+|---|---|---|
+| `events::RAIL_QUERY` | `rail.query` | `{ entry: String, query: String }` |
+| `events::FILES_REVEAL` | `files.reveal` | `{ path: String, line?: u32, col?: u32 }` |
+
+`rail.query` is the filter box under a tier-1 rail entry (§10.2).
+`files.reveal` is anything in the app that wants a path shown in a file tree —
+a link click, a "reveal in files" menu item, a pane's working directory. If no
+live module has subscribed, the app says so on a toast rather than silently
+dropping it.
+
+### 10.5 Opening panes: `host.panes.spawn`
+
+`host.panes.spawn { kind, path?, surface? } → { pane_id }`. The **host** mints
+the id (uuid v4) and answers immediately; the pane itself is opened later by
+the app, which consumes `HostEvent::PaneSpawn { module, pane_id, kind, path,
+surface }` off `Host::events()`. The module therefore has a usable id before
+any window exists, and a slow or busy UI never blocks the module.
+
+| `kind` | Meaning |
+|---|---|
+| `file` | open `path` in the host's own viewer |
+| `module` | a pane owned by the module, showing `surface` (§11) |
+
+A `kind` the app does not know becomes a toast, not a pane. Requires
+`panes.spawn`.
+
 ## 11. Pane kinds reserved for modules
 
 `avada_core::tools::kind::PaneKind::Module(ModulePaneRef)` is the pane a

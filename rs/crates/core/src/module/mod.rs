@@ -159,7 +159,7 @@ pub(crate) mod testkit {
     }
 
     /// Env var that turns this test binary into a module. Values: `normal`, `crash`,
-    /// `bad-manifest`, `commercial`, `no-cap`, `hang`, `silent`.
+    /// `bad-manifest`, `commercial`, `no-cap`, `hang`, `silent`, `events`.
     #[cfg(unix)]
     pub(crate) const MODE_ENV: &str = "AVADA_H1_FAKE_MODULE";
 
@@ -259,6 +259,17 @@ pub(crate) mod testkit {
             return;
         }
 
+        if mode == "events" {
+            // Ask for one kind only. The host must deliver `rail.query` and stay quiet
+            // about `files.reveal`, which proves the subscription set is honoured rather
+            // than every notification being broadcast.
+            conn.call(
+                methods::HOST_EVENTS_SUBSCRIBE,
+                json!({ "kinds": [methods::events::RAIL_QUERY] }),
+            )
+            .expect("events.subscribe");
+        }
+
         conn.call(
             methods::HOST_RAIL_REGISTER,
             serde_json::to_value(RegisterRail {
@@ -314,6 +325,18 @@ pub(crate) mod testkit {
                     }
                     return;
                 }
+                Message::Notification(n) if n.method == methods::MODULE_EVENT => {
+                    // Echo through the rail so the host test can see what arrived.
+                    let label = format!("event {} {}", n.params["kind"], n.params["payload"]);
+                    conn.call(
+                        methods::HOST_RAIL_REGISTER,
+                        serde_json::to_value(RegisterRail {
+                            entries: vec![entry(&label)],
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+                }
                 Message::Notification(n) if n.method == methods::MODULE_PREFS_CHANGED => {
                     // Echo the new values back through the rail so the test can see them.
                     let label = format!("prefs {}", n.params["values"]["theme"]);
@@ -339,6 +362,7 @@ mod host_tests {
     use super::testkit::{self, child_args, MODE_ENV};
     use super::*;
     use avada_module_sdk::caps::Capability;
+    use avada_module_sdk::contract::methods::events as contract_events;
     use avada_module_sdk::contract::ErrorCode;
     use avada_module_sdk::rail::{Gesture, RowActivate};
     use avada_module_sdk::rights::InstallRecord;
@@ -790,5 +814,98 @@ mod host_tests {
             Err(HostError::Unlicensed(reason)) => assert_eq!(reason, "no seat left"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn emit_reaches_the_subscribed_module_and_nobody_else() {
+        let r = rig(
+            &[
+                Capability::UiRail,
+                Capability::UiCommands,
+                Capability::EventsSubscribe,
+            ],
+            |_| {},
+        );
+        spawn(&r, "events").unwrap();
+        let id = r.record.module_id.clone();
+        // Drain registration + rows.
+        r.rail.recv_timeout(WAIT).unwrap();
+        r.rail.recv_timeout(WAIT).unwrap();
+
+        // A kind the module never named: nobody is told, and no rail traffic follows.
+        assert_eq!(
+            r.host.emit(
+                contract_events::FILES_REVEAL,
+                json!({ "path": "/w/README.md" })
+            ),
+            0
+        );
+
+        // The kind it did name arrives, payload intact.
+        assert_eq!(
+            r.host.emit(
+                contract_events::RAIL_QUERY,
+                json!({"entry":"files","query":"rea"})
+            ),
+            1
+        );
+        match r.rail.recv_timeout(WAIT).unwrap() {
+            RailEvent::Registered { entries, .. } => assert_eq!(
+                entries[0].label,
+                r#"event "rail.query" {"entry":"files","query":"rea"}"#
+            ),
+            other => panic!("{other:?}"),
+        }
+        r.host.shutdown(&id).unwrap();
+
+        // Dead modules are skipped rather than counted.
+        assert_eq!(r.host.emit(contract_events::RAIL_QUERY, json!({})), 0);
+    }
+
+    #[test]
+    fn a_module_that_never_subscribed_hears_nothing() {
+        let r = rig(&all_ui(), |_| {});
+        spawn(&r, "normal").unwrap();
+        let id = r.record.module_id.clone();
+        r.rail.recv_timeout(WAIT).unwrap();
+        r.rail.recv_timeout(WAIT).unwrap();
+        assert_eq!(r.host.emit(contract_events::RAIL_QUERY, json!({})), 0);
+        assert_eq!(r.host.emit(contract_events::FILES_REVEAL, json!({})), 0);
+        assert!(r.rail.try_recv().is_err());
+        r.host.shutdown(&id).unwrap();
+    }
+
+    #[test]
+    fn the_workspace_root_seeds_the_fs_scope_and_a_switch_retargets_it() {
+        let inside = Dir::new("ws-root");
+        let root = inside.0.join("w");
+        std::fs::create_dir_all(&root).unwrap();
+        let r = rig(&all_ui(), |c| {
+            c.workspace = Some(avada_module_sdk::contract::WorkspaceInfo {
+                id: "ws1".into(),
+                name: "One".into(),
+                root: Some(root.to_string_lossy().into_owned()),
+            });
+        });
+        assert_eq!(r.host.workspace_root(), Some(root.clone()));
+
+        // A workspace switch moves every module's filesystem scope with it, even for
+        // modules that were already running when the human switched.
+        let other = inside.0.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        spawn(&r, "normal").unwrap();
+        let id = r.record.module_id.clone();
+        r.host
+            .activate(
+                &id,
+                Some(avada_module_sdk::contract::WorkspaceInfo {
+                    id: "ws2".into(),
+                    name: "Two".into(),
+                    root: Some(other.to_string_lossy().into_owned()),
+                }),
+            )
+            .unwrap();
+        assert_eq!(r.host.workspace_root(), Some(other));
+        r.host.shutdown(&id).unwrap();
     }
 }

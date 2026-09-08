@@ -403,6 +403,22 @@ pub mod methods {
     pub const MODULE_ROUTE_INVOKE: &str = "module.route.invoke";
     /// Module: an event the module subscribed to (notification).
     pub const MODULE_EVENT: &str = "module.event";
+    /// The `kind`s a host may put on a `module.event` notification.
+    ///
+    /// The payload of `module.event` is `{ kind, payload }`; `kind` comes from here and
+    /// `payload` is the shape documented beside each constant. A module receives only the
+    /// kinds it named in `host.events.subscribe`, and unknown kinds are ignored rather
+    /// than an error — a newer host must be able to announce something an older module
+    /// never heard of.
+    pub mod events {
+        /// The filter box under a tier-1 rail entry changed.
+        /// Payload: `{ entry: String, query: String }`.
+        pub const RAIL_QUERY: &str = "rail.query";
+        /// Something asked for a path to be revealed in a file tree.
+        /// Payload: `{ path: String, line?: u32, col?: u32 }`.
+        pub const FILES_REVEAL: &str = "files.reveal";
+    }
+
     /// Module: prefs changed (notification). Params: `{ values }`.
     pub const MODULE_PREFS_CHANGED: &str = "module.prefs.changed";
     /// Module: shut down (notification). The module must exit within 5 s.
