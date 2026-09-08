@@ -237,21 +237,6 @@ fn states() -> Vec<(&'static str, Setup)> {
             install_modes(w);
             install_files(w);
         }),
-        ("left panel: git working tree", |w| {
-            install_modes(w);
-            open_working_tree(w, true);
-            let lp = w.global::<crate::LeftPanelAdapter>();
-            lp.set_git_staged(
-                std::rc::Rc::new(slint::VecModel::from(vec![git_row("sub/b.txt", "A")])).into(),
-            );
-            lp.set_git_untracked(
-                std::rc::Rc::new(slint::VecModel::from(vec![git_row("new.txt", "?")])).into(),
-            );
-        }),
-        ("left panel: git commit", |w| {
-            install_modes(w);
-            open_commit_view(w);
-        }),
         ("pane: data tree", |w| {
             install_view_pane_at(w, 7, "package.json", tree_rows(), (-1, -1), "", 14.0);
         }),
@@ -392,16 +377,6 @@ fn install_files(w: &crate::AppWindow) {
         .set_mode(crate::paneview::LEFT_MODE_RAIL);
 }
 
-fn git_row(path: &str, code: &str) -> crate::LeftGitRow {
-    let (detail, label) = path.rsplit_once('/').unwrap_or(("", path));
-    crate::LeftGitRow {
-        path: path.into(),
-        label: label.into(),
-        detail: detail.into(),
-        code: code.into(),
-        selected: false,
-    }
-}
 
 /// One node row as `viewpane::model_for` projects a data file: `check` is 1 open, 0
 /// folded, -1 for a scalar.
@@ -505,37 +480,6 @@ fn a_module_row_is_reached_by_its_label_and_says_whether_it_is_open() {
     });
 }
 
-/// A git row is reached by its path plus git's status letter, in the working tree and
-/// in a commit's file list alike; the file-name text a sighted user reads is untouched.
-#[test]
-fn a_git_row_is_reached_by_its_path_and_status() {
-    ui(|| {
-        let w = window();
-        open_working_tree(&w, true);
-        let row = only(&w, "sub/a.txt M", AccessibleRole::ListItem);
-        assert_eq!(row.accessible_description().as_deref(), Some("sub"));
-        assert_eq!(row.accessible_item_selected(), Some(false));
-        only(&w, "a.txt", AccessibleRole::Text);
-
-        w.global::<crate::LeftPanelAdapter>().set_git_changed(
-            std::rc::Rc::new(slint::VecModel::from(vec![crate::LeftGitRow {
-                selected: true,
-                ..git_row("sub/a.txt", "D")
-            }]))
-            .into(),
-        );
-        let row = only(&w, "sub/a.txt D", AccessibleRole::ListItem);
-        assert_eq!(row.accessible_item_selected(), Some(true));
-        assert!(
-            by_label(&w, "sub/a.txt M").is_empty(),
-            "the old status is gone"
-        );
-
-        let w = window();
-        open_commit_view(&w);
-        only(&w, "sub/a.txt M", AccessibleRole::ListItem);
-    });
-}
 
 // ===== lookup by label: the viewer panes =====
 

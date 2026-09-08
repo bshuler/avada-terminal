@@ -23,7 +23,7 @@ use crate::state::{Overlay, PaneState, State};
 use crate::theme;
 use crate::{
     AppWindow, ClaudeSessionItem, CtxTab, DividerItem, FramePaletteOption, HiRect, KeybindingItem,
-    LayoutOption, LeftGitRow, LeftModeRow, LeftPaneRow, LeftPanelAdapter,
+    LayoutOption, LeftModeRow, LeftPaneRow, LeftPanelAdapter,
     LeftSessionItem, LeftSessionRow, LeftSetRow, LeftTabRow, LeftWorkspaceRow, MenuEntry,
     PaletteItem, PaneItem, PaneViewRow, PrefBrowserRow, PrefOption, PrefToolRow, ProjectItem,
     TabItem, WorktreeRow,
@@ -107,11 +107,6 @@ pub struct Ui {
     pub lp_modes: Rc<VecModel<LeftModeRow>>,
     /// The current tool mode's resumable sessions, pre-sorted by (project, recency).
     pub lp_sessions: Rc<VecModel<LeftSessionItem>>,
-    pub lp_git_staged: Rc<VecModel<LeftGitRow>>,
-    pub lp_git_changed: Rc<VecModel<LeftGitRow>>,
-    pub lp_git_untracked: Rc<VecModel<LeftGitRow>>,
-    /// The files of the ONE commit the panel is showing, when a clicked hash put it there.
-    pub lp_git_commit_files: Rc<VecModel<LeftGitRow>>,
     /// Per-tab pane models for the tree, keyed by tab index and reused across ticks so each
     /// `LeftTabRow.panes` keeps a STABLE model identity — the same reason `wt_models` exists:
     /// rebuilding the inner repeater every frame would drop an in-flight click or, worse, the
@@ -173,10 +168,6 @@ impl Ui {
             lp_detached: Rc::new(VecModel::default()),
             lp_modes: Rc::new(VecModel::default()),
             lp_sessions: Rc::new(VecModel::default()),
-            lp_git_staged: Rc::new(VecModel::default()),
-            lp_git_changed: Rc::new(VecModel::default()),
-            lp_git_untracked: Rc::new(VecModel::default()),
-            lp_git_commit_files: Rc::new(VecModel::default()),
             lp_pane_models: RefCell::new(HashMap::new()),
             pref_tools: Rc::new(VecModel::default()),
             pref_browsers: Rc::new(VecModel::default()),
@@ -227,10 +218,6 @@ impl Ui {
         lp.set_detached(ModelRc::from(self.lp_detached.clone()));
         lp.set_modes(ModelRc::from(self.lp_modes.clone()));
         lp.set_sessions(ModelRc::from(self.lp_sessions.clone()));
-        lp.set_git_staged(ModelRc::from(self.lp_git_staged.clone()));
-        lp.set_git_changed(ModelRc::from(self.lp_git_changed.clone()));
-        lp.set_git_untracked(ModelRc::from(self.lp_git_untracked.clone()));
-        lp.set_git_commit_files(ModelRc::from(self.lp_git_commit_files.clone()));
     }
 }
 
@@ -724,16 +711,18 @@ fn build_dividers(state: &State, area: (f32, f32)) -> Vec<DividerItem> {
 
 /// Rebuild every UI model + scalar from `State` (the resync step). Called when
 /// `state.dirty` is set.
-/// Left-panel mode indices. WORKSPACE and GIT are fixed slots that no settings change can
-/// move: the favourited tools start at [`LEFT_MODE_TOOL_BASE`], so a mode index and
+/// Left-panel mode indices. WORKSPACE is the one fixed slot no settings change can move:
+/// the favourited tools start at [`LEFT_MODE_TOOL_BASE`], so a mode index and
 /// `mode_tools[mode - LEFT_MODE_TOOL_BASE]` mean the same thing in Rust and in Slint.
 ///
-/// There used to be a third built-in between them — the file explorer, mode 1. It is now
-/// the `bshuler/avada-files` module and lives on the rail ([`LEFT_MODE_RAIL`]) like any
-/// other module surface, so every index after it moved down by one.
+/// There used to be two more built-ins between them — the file explorer, and the git
+/// working tree after it. Both are modules now (`bshuler/avada-files`, `bshuler/avada-git`)
+/// and live on the rail ([`LEFT_MODE_RAIL`]) like any other module surface, so each removal
+/// moved every index after it down by one. That is the rule for the next one too: a built-in
+/// that leaves renumbers its successors, here AND in the `mode > 0` gates in
+/// `ui/leftpanel.slint`, which spell the same boundary as a literal.
 pub const LEFT_MODE_WORKSPACE: i32 = 0;
-pub const LEFT_MODE_GIT: i32 = 1;
-pub const LEFT_MODE_TOOL_BASE: i32 = 2;
+pub const LEFT_MODE_TOOL_BASE: i32 = 1;
 
 /// The mode a *module's* rail entry puts the panel into (track H4). Negative on purpose:
 /// the built-in modes are indices into `LeftPanelAdapter.modes` and the module entries are
@@ -816,12 +805,6 @@ pub fn fill_rail(app: &AppWindow, rail: &crate::leftpanel::ModuleRail) {
     ad.set_scroll_y(rail.scroll_y());
     ad.set_scroll_seq(rail.scroll_seq);
 }
-
-/// The GIT row's icon number. `LeftModeRow::icon` is a registry icon id when positive and
-/// 0 already means "the workspace grid", so a built-in glyph needs a value of its own —
-/// negative, because the registry will only ever grow upward. The strip tests this EXACTLY
-/// (not `< 0`), which is what keeps a second built-in distinguishable from the first.
-pub const LEFT_MODE_GIT_ICON: i32 = -2;
 
 /// How long the computed grid size must hold still before the pty is told about it.
 ///
@@ -1566,14 +1549,9 @@ pub fn resync(
                     icon: 0,
                     brand: crate::theme::accent_for(0, palette),
                 },
-                LeftModeRow {
-                    label: "Git".into(),
-                    icon: LEFT_MODE_GIT_ICON,
-                    brand: crate::theme::accent_for(0, palette),
-                },
             ];
             // The strip and this list are built from ONE filtered pass, so mode index n
-            // and `mode_tools[n - 2]` can never disagree — filtering twice is exactly how a
+            // and `mode_tools[n - LEFT_MODE_TOOL_BASE]` can never disagree — filtering twice is exactly how a
             // skipped unknown favourite would make the panel resume the wrong tool.
             let mode_tools: Vec<&'static str> = state
                 .settings
@@ -1625,91 +1603,6 @@ pub fn resync(
             // the belt for a mode the strip wrote itself.
             if lp.get_mode() == LEFT_MODE_RAIL && state.rail.active.is_none() {
                 lp.set_mode(LEFT_MODE_WORKSPACE);
-            }
-
-            // ---- mode 1: the working tree ----
-            // Also a stored projection: reading it runs `git status`, which happens on a
-            // real event (entering the mode, the refresh button) and never per frame.
-            if lp.get_mode() == LEFT_MODE_GIT {
-                let sel = state.git_sel.clone();
-                let git = &state.git;
-                lp.set_git_repo(git.is_repo());
-                lp.set_git_head(git.head_summary().into());
-                lp.set_git_root(
-                    git.root
-                        .as_ref()
-                        .and_then(|r| r.file_name())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                        .into(),
-                );
-                let project = |section: crate::gitpanel::Section| -> Vec<LeftGitRow> {
-                    git.section(section)
-                        .map(|r| LeftGitRow {
-                            path: r.path.as_str().into(),
-                            label: r.label.as_str().into(),
-                            detail: r.detail.as_str().into(),
-                            code: r.code.to_string().into(),
-                            selected: sel.as_deref() == Some(r.path.as_str()),
-                        })
-                        .collect()
-                };
-                let staged = project(crate::gitpanel::Section::Staged);
-                let changed = project(crate::gitpanel::Section::Changed);
-                let untracked = project(crate::gitpanel::Section::Untracked);
-                // The counts are formatted here, not concatenated in Slint: the panel draws
-                // strings, exactly as it does for `head_summary`.
-                lp.set_git_staged_title(
-                    format!(
-                        "{} · {}",
-                        crate::gitpanel::Section::Staged.title(),
-                        staged.len()
-                    )
-                    .into(),
-                );
-                lp.set_git_changed_title(
-                    format!(
-                        "{} · {}",
-                        crate::gitpanel::Section::Changed.title(),
-                        changed.len()
-                    )
-                    .into(),
-                );
-                lp.set_git_untracked_title(
-                    format!(
-                        "{} · {}",
-                        crate::gitpanel::Section::Untracked.title(),
-                        untracked.len()
-                    )
-                    .into(),
-                );
-                sync_model(&ui.lp_git_staged, staged);
-                sync_model(&ui.lp_git_changed, changed);
-                sync_model(&ui.lp_git_untracked, untracked);
-
-                // ---- and, over the top of it, ONE commit ----
-                // A commit is immutable, so this projection is a straight copy of what
-                // `load_commit` read once; nothing here can go stale while it is on screen.
-                lp.set_git_commit_open(state.git_commit.is_some());
-                if let Some(c) = state.git_commit.as_ref() {
-                    lp.set_git_commit_title(c.subject.as_str().into());
-                    lp.set_git_commit_meta(
-                        format!("{} · {} · {}", c.short, c.author, c.date).into(),
-                    );
-                    let files: Vec<LeftGitRow> = c
-                        .files
-                        .iter()
-                        .map(|f| LeftGitRow {
-                            path: f.path.as_str().into(),
-                            label: f.label.as_str().into(),
-                            detail: f.detail.as_str().into(),
-                            code: f.code.to_string().into(),
-                            selected: sel.as_deref() == Some(f.path.as_str()),
-                        })
-                        .collect();
-                    lp.set_git_commit_files_title(format!("Files · {}", files.len()).into());
-                    sync_model(&ui.lp_git_commit_files, files);
-                }
             }
 
             // ---- the current mode's session list ----
@@ -2014,16 +1907,14 @@ pub fn pump(
     }
 
     // ---- keep the left panel anchored on the SELECTED pane (K) ----
-    // Both the explorer and the git view describe the pane you are looking at, and focus
+    // A module surface on the rail describes the pane you are looking at, and focus
     // moves from a dozen places (clicks, drags, navigation, closing a pane, restoring a
     // workspace) — instrumenting every one of them would be a list that goes stale. One
     // guarded check per tick is the deterministic version: `sync_left_root` compares the
     // anchor cwd first and does nothing at all when it has not moved, so the quiet tick
     // costs a string compare and reads no filesystem. Closed panel, not even that.
     if state.left_panel_open {
-        use slint::ComponentHandle as _;
-        let mode = app.global::<crate::LeftPanelAdapter>().get_mode();
-        state.sync_left_root(mode);
+        state.sync_left_root();
     }
 
     // ---- keep the KEYBOARD on the selected pane (L) ----

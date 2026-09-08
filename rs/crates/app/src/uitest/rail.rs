@@ -56,8 +56,8 @@ fn marketplace() -> (ModuleId, RailEvent) {
     )
 }
 
-/// Put the panel in the state a module's registration leaves it in: the three built-in
-/// modes on the strip, plus whatever `rail` holds.
+/// Put the panel in the state a module's registration leaves it in: the built-in modes on
+/// the strip, plus whatever `rail` holds.
 fn install_rail(w: &crate::AppWindow, rail: &ModuleRail) {
     install_modes(w);
     fill_rail(w, rail);
@@ -91,15 +91,11 @@ fn module_entries_follow_the_built_in_modes_on_one_strip() {
             );
             found.absolute_position().x
         };
-        let (workspace, git) = (x("Workspace"), x("Git"));
+        let workspace = x("Workspace");
         let (market, tree) = (x("Marketplace"), x("Files (acme)"));
         assert!(
-            workspace < git,
-            "the built-ins keep their order: {workspace} {git}"
-        );
-        assert!(
-            git < market && market < tree,
-            "module entries follow the built-ins, in `order`: {git} {market} {tree}"
+            workspace < market && market < tree,
+            "module entries follow the built-in, in `order`: {workspace} {market} {tree}"
         );
     });
 }

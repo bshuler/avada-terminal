@@ -36,7 +36,31 @@ pub const SERVED: &[&str] = &[
     methods::HOST_FS_READ,
     methods::HOST_PANES_SPAWN,
     methods::HOST_EVENTS_SUBSCRIBE,
+    HOST_GIT_STATUS,
+    HOST_GIT_COMMIT,
 ];
+
+/// `host.git.status { path? } -> the working tree`, and…
+///
+/// …the reason these two are spelled here rather than imported from the SDK: the contract's
+/// `HOST_*` set is versioned, and `required_capability` therefore returns `None` for both —
+/// which means [`Dispatcher::gate`] would wave them straight through. Their arms check
+/// `git.read` themselves, the way `fs.read_any` is checked inside `scoped`, and
+/// `the_git_service_is_refused_without_git_read` is the test that keeps that honest.
+pub const HOST_GIT_STATUS: &str = "host.git.status";
+/// `host.git.commit { rev, path? } -> one commit and the files it touched`. See
+/// [`HOST_GIT_STATUS`] for why it is declared here.
+pub const HOST_GIT_COMMIT: &str = "host.git.commit";
+
+/// The `module.event` kind that asks a git module to show ONE commit, instead of the
+/// working tree. Payload: `{ root: String, rev: String, short: String }`.
+///
+/// Spelled here rather than beside `files.reveal` in the SDK's `contract::methods::events`
+/// for the same reason the two methods above are: this build's SDK revision predates the
+/// git module. It costs nothing to announce — the contract already says a host may emit a
+/// kind an older module never heard of, and that a module ignores what it does not know —
+/// but it belongs in the SDK the next time the contract moves.
+pub const GIT_COMMIT_EVENT: &str = "git.commit";
 
 /// The largest file `host.fs.read` will hand back. A module that wants a gigabyte of
 /// video does not want it as one JSON string, and the host would buffer all of it twice
@@ -163,6 +187,21 @@ struct PathParams {
     path: String,
 }
 
+/// `host.git.status` params. The path is optional — omitted means the workspace root.
+#[derive(Deserialize)]
+struct GitStatusParams {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// `host.git.commit` params.
+#[derive(Deserialize)]
+struct GitCommitParams {
+    rev: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
 /// `host.panes.spawn` params.
 #[derive(Deserialize)]
 struct SpawnPane {
@@ -249,6 +288,8 @@ impl Dispatcher {
             methods::HOST_FS_READ => self.fs_read(params),
             methods::HOST_PANES_SPAWN => self.panes_spawn(params),
             methods::HOST_EVENTS_SUBSCRIBE => self.events_subscribe(params),
+            HOST_GIT_STATUS => self.git_status(params),
+            HOST_GIT_COMMIT => self.git_commit(params),
             methods::HOST_PANES_INPUT
             | methods::HOST_FS_WRITE
             | methods::HOST_KEYCHAIN_GET
@@ -501,6 +542,128 @@ impl Dispatcher {
         }
     }
 
+    /// The `git.read` check the two git arms make for themselves. See [`HOST_GIT_STATUS`]
+    /// for why the shared [`Dispatcher::gate`] cannot make it for them.
+    fn require_git_read(&self) -> Result<(), RpcError> {
+        match self.shared.gate.check(&self.module, Capability::GitRead) {
+            Decision::Allow => Ok(()),
+            Decision::Deny | Decision::Ask => Err(RpcError::new(
+                ErrorCode::CapabilityDenied,
+                format!(
+                    "`{}` was not granted to this module",
+                    Capability::GitRead.name()
+                ),
+            )),
+        }
+    }
+
+    /// Which directory a git question is asked in. An omitted `path` means the workspace
+    /// root, which is the only repository a module has any business describing; a given
+    /// one goes through the same [`Dispatcher::scoped`] confinement `host.fs.*` uses, so
+    /// `git.read` never becomes a way to read a repository outside the workspace.
+    fn git_dir(&self, path: Option<String>) -> Result<PathBuf, RpcError> {
+        match path {
+            Some(p) if !p.trim().is_empty() => self.scoped(&p),
+            _ => self
+                .shared
+                .workspace_root
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .ok_or_else(|| {
+                    RpcError::new(
+                        ErrorCode::CapabilityDenied,
+                        "no workspace root to ask git about, and no path was given",
+                    )
+                }),
+        }
+    }
+
+    /// `host.git.status { path? } -> { repo, root, branch, upstream, ahead, behind,
+    /// summary, rows: [{ path, label, detail, code, section }] }`.
+    ///
+    /// `repo: false` rather than an error when the directory is in no repository: "there
+    /// is no repo here" is an ordinary answer a rail entry draws as an empty list, not a
+    /// failure a module should have to distinguish from a denied capability.
+    fn git_status(&self, params: &Value) -> Result<Value, RpcError> {
+        self.require_git_read()?;
+        let GitStatusParams { path } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        let dir = self.git_dir(path)?;
+        let Some(st) = crate::git::status_for(&dir) else {
+            return Ok(json!({
+                "repo": false, "root": Value::Null, "branch": "", "upstream": Value::Null,
+                "ahead": 0, "behind": 0, "summary": "", "rows": [],
+            }));
+        };
+        let rows: Vec<Value> = st
+            .rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "path": r.path,
+                    "label": r.label,
+                    "detail": r.detail,
+                    "code": r.code.to_string(),
+                    "section": r.section.wire(),
+                })
+            })
+            .collect();
+        Ok(json!({
+            "repo": true,
+            "root": st.root.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            "branch": st.branch,
+            "upstream": st.upstream,
+            "ahead": st.ahead,
+            "behind": st.behind,
+            "summary": st.head_summary(),
+            "rows": rows,
+        }))
+    }
+
+    /// `host.git.commit { rev, path? } -> { found, root, hash, short, subject, author,
+    /// date, files: [{ path, label, detail, code }] }`.
+    ///
+    /// `found: false` for a rev that names nothing — a module asked to show a commit it
+    /// cannot see says so in its own rows; it is not an RPC failure. And "names nothing"
+    /// includes `HEAD` and every other clever revision spelling: [`crate::git::resolve_commit`]
+    /// accepts a hex object name or a qualified ref and nothing else, because the rev a
+    /// module forwards ultimately came out of a pane's output.
+    fn git_commit(&self, params: &Value) -> Result<Value, RpcError> {
+        self.require_git_read()?;
+        let GitCommitParams { rev, path } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if rev.trim().is_empty() {
+            return Err(invalid_params("rev must not be empty"));
+        }
+        let dir = self.git_dir(path)?;
+        let Some(c) = crate::git::load_commit(&dir, &rev) else {
+            return Ok(json!({ "found": false }));
+        };
+        let files: Vec<Value> = c
+            .files
+            .iter()
+            .map(|f| {
+                json!({
+                    "path": f.path,
+                    "label": f.label,
+                    "detail": f.detail,
+                    "code": f.code.to_string(),
+                })
+            })
+            .collect();
+        Ok(json!({
+            "found": true,
+            "root": c.root.to_string_lossy(),
+            "hash": c.hash,
+            "short": c.short,
+            "subject": c.subject,
+            "author": c.author,
+            "date": c.date,
+            "files": files,
+        }))
+    }
+
     /// `host.panes.spawn { kind, path?, surface? } -> { pane_id }`.
     ///
     /// The id is minted here and returned at once; opening the pane is the app's job and
@@ -652,14 +815,125 @@ pub(crate) mod tests {
         ));
     }
 
+    /// The advertised set is the contract's, plus the git service. The exception is
+    /// spelled out rather than loosened away: anything else appearing in `SERVED` that the
+    /// contract does not name is a method somebody forgot to put through the SDK.
     #[test]
-    fn served_methods_are_a_subset_of_the_contract() {
+    fn served_methods_are_the_contract_plus_the_named_extensions() {
         for m in SERVED {
             assert!(
-                methods::HOST_REQUIRED_V1.contains(m),
-                "{m} is not in the contract"
+                methods::HOST_REQUIRED_V1.contains(m)
+                    || [HOST_GIT_STATUS, HOST_GIT_COMMIT].contains(m),
+                "{m} is not in the contract and is not a named extension"
             );
         }
+    }
+
+    /// The git arms are outside `required_capability`, so the shared gate cannot protect
+    /// them. This is the test that proves they protect themselves — delete their own
+    /// `require_git_read` call and this fails, which is the whole point of it existing.
+    #[test]
+    fn the_git_service_is_refused_without_git_read() {
+        let rig = rig(&all_caps());
+        for m in [HOST_GIT_STATUS, HOST_GIT_COMMIT] {
+            let e = rig
+                .d
+                .call(m, &json!({ "rev": "HEAD" }))
+                .expect_err("git.read is not in the contract's own capability set");
+            assert_eq!(e.kind(), ErrorCode::CapabilityDenied, "{m}");
+            assert!(e.message.contains("git.read"), "{m}: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn the_git_service_describes_the_workspace_and_a_commit_in_it() {
+        let rig = rig(&[Capability::GitRead]);
+        let root = rig._dir.0.clone();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .expect("git runs")
+        };
+        if !run(&["init", "-b", "trunk"]).status.success() {
+            return; // no git on this machine — nothing to assert against
+        }
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("committed.txt"), "one").unwrap();
+        run(&["add", "committed.txt"]);
+        run(&["commit", "-m", "the first thing"]);
+        std::fs::write(root.join("loose.txt"), "two").unwrap();
+        *rig.d.shared.workspace_root.lock().unwrap() = Some(root.clone());
+
+        let st = rig.d.call(HOST_GIT_STATUS, &json!({})).expect("status");
+        assert_eq!(st["repo"], json!(true));
+        assert_eq!(st["branch"], json!("trunk"));
+        assert_eq!(st["summary"], json!("trunk"));
+        let rows = st["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 1, "one untracked file and nothing else");
+        assert_eq!(rows[0]["path"], json!("loose.txt"));
+        assert_eq!(rows[0]["code"], json!("?"));
+        assert_eq!(
+            rows[0]["section"],
+            json!("untracked"),
+            "the section crosses the wire as its name, not as a number"
+        );
+        assert_eq!(rows[0]["detail"], json!(""));
+
+        // A hash, not `HEAD`: `resolve_commit` only accepts a hex object name or a
+        // qualified ref, because the rev a module forwards ultimately came out of a pane.
+        let hash = String::from_utf8(run(&["rev-parse", "HEAD"]).stdout).unwrap();
+        let c = rig
+            .d
+            .call(HOST_GIT_COMMIT, &json!({ "rev": hash.trim() }))
+            .expect("commit");
+        assert_eq!(c["found"], json!(true));
+        assert_eq!(c["subject"], json!("the first thing"));
+        let files = c["files"].as_array().expect("files");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], json!("committed.txt"));
+
+        // A rev that names nothing is an answer, not an error: the module draws "no such
+        // commit" rather than having to tell a bad hash from a denied capability.
+        let missing = rig
+            .d
+            .call(HOST_GIT_COMMIT, &json!({ "rev": "b".repeat(40) }))
+            .expect("a missing commit still answers");
+        assert_eq!(missing, json!({ "found": false }));
+
+        let e = rig
+            .d
+            .call(HOST_GIT_COMMIT, &json!({ "rev": " " }))
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+    }
+
+    /// `git.read` is not a licence to read any repository on the machine: a path outside
+    /// the workspace goes through the same confinement `host.fs.*` uses.
+    #[test]
+    fn the_git_service_stays_inside_the_workspace() {
+        let rig = rig(&[Capability::GitRead]);
+        let root = rig._dir.0.clone();
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+        *rig.d.shared.workspace_root.lock().unwrap() = Some(root.clone());
+        let outside = std::env::temp_dir();
+        let e = rig
+            .d
+            .call(
+                HOST_GIT_STATUS,
+                &json!({ "path": outside.to_string_lossy() }),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+        rig.d
+            .call(
+                HOST_GIT_STATUS,
+                &json!({ "path": root.join("inside").to_string_lossy() }),
+            )
+            .expect("a path inside the workspace is allowed");
     }
 
     #[test]

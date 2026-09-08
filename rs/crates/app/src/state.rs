@@ -252,6 +252,64 @@ pub const CLOSED_STACK_CAP: usize = 20;
 /// module currently providing one without either side naming the other.
 pub const FILES_ENTRY: &str = "files";
 
+/// The rail entry id a git module is expected to register. Named for the same reason
+/// [`FILES_ENTRY`] is: the app used to draw the working tree itself, and now only knows
+/// what to ask for. Anything that wants to show a commit finds whoever answers to `git`.
+pub const GIT_ENTRY: &str = "git";
+
+/// Which revision of which repository a module's row was listed from, as the row's own
+/// `data.git` object reported it.
+///
+/// The host cannot work this out for itself: a row is a path and a label, and whether that
+/// path is being shown as "changed since HEAD" or as "touched by abc1234" is a fact only
+/// the module projecting it knows. It says so, and the host's row menu then offers the diff
+/// the row actually means. Absent or malformed is simply "no diff verb" — a module that
+/// says nothing gets the ordinary file menu, which is the right outcome for every module
+/// that is not about git.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitOrigin {
+    /// The repository the row belongs to.
+    pub root: PathBuf,
+    /// The commit, or `None` for the working tree (diffed against HEAD).
+    pub rev: Option<String>,
+    /// How that commit is spelled in the menu ("abc1234"). Empty for the working tree.
+    pub short: String,
+}
+
+impl GitOrigin {
+    /// Read one from a row's `data.git`, or `None` when there isn't one.
+    ///
+    /// A missing `root` is the only hard requirement: without it there is no repository to
+    /// run anything in. Everything else degrades to the working tree, because a module that
+    /// sent half an object should get the conservative verb rather than a menu row that
+    /// spawns `git show` on an empty revision.
+    pub fn from_row(data: Option<&serde_json::Value>) -> Option<Self> {
+        let v = data?;
+        let root = v.get("root")?.as_str().filter(|r| !r.is_empty())?;
+        let rev = v
+            .get("rev")
+            .and_then(|r| r.as_str())
+            .filter(|r| !r.is_empty())
+            .map(|r| r.to_string());
+        let short = v
+            .get("short")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_string();
+        // A commit with no short form still needs a name in the menu; git's own default is
+        // the first seven characters, so use that rather than printing the whole hash.
+        let short = match (&rev, short.is_empty()) {
+            (Some(r), true) => r.chars().take(7).collect(),
+            _ => short,
+        };
+        Some(Self {
+            root: PathBuf::from(root),
+            rev,
+            short,
+        })
+    }
+}
+
 /// How many consecutive pump ticks may attempt to hand the keyboard to a newly selected pane
 /// before giving up (see [`State::sync_pane_keyboard_focus`]). The hand-off normally lands on
 /// the first or second: the first can arrive before Slint has instantiated the pane's element,
@@ -1499,27 +1557,15 @@ pub struct State {
     //
     // Named for what it is rather than for the panel that used to own it: the built-in file
     // explorer became the `bshuler/avada-files` module, but the *project* it was rooted at is
-    // still what the git panel reads and what a new pane inherits as its cwd.
+    // still what a git module reads and what a new pane inherits as its cwd.
     /// The project the human is looking at, not the whole disk. `None` until something needs
     /// it, when it is derived from the focused pane's cwd.
     pub project_root: Option<PathBuf>,
-    /// The focused pane's cwd that [`State::project_root`] was derived from. The git view is
+    /// The focused pane's cwd that [`State::project_root`] was derived from. The panel is
     /// anchored to the SELECTED pane (K), so this is what tells it the anchor has moved:
     /// while it still matches the focused pane, an explicitly chosen root is the human's and
     /// is left alone.
     pub project_root_from: Option<String>,
-    // ---- left panel: Git mode (J) ----
-    /// The working tree the panel last read, rooted at the window's project anchor, so the
-    /// two can never disagree about which project is on screen. A stored projection because
-    /// reading it means running `git status`: an event may, a frame may not.
-    pub git: crate::gitpanel::GitStatus,
-    /// The selected row, as a REPO-RELATIVE path (git's own identity for the file), because
-    /// a row index is a position and a rebuilt list moves positions around.
-    pub git_sel: Option<String>,
-    /// The commit the panel is showing INSTEAD of the working tree, after a hash was clicked
-    /// in a pane's output. `None` is the ordinary working-tree view. Loaded once on the click
-    /// and then held: a commit is immutable, so nothing can make this projection stale.
-    pub git_commit: Option<avada_core::git::Commit>,
     /// A one-shot request to switch the left panel to a given mode, consumed by the resync.
     /// The strip's selection lives in the UI as an `in-out` property (switching views is not
     /// a `State` mutation), so a command that needs to change it leaves a note instead of
@@ -1769,9 +1815,6 @@ impl State {
             ctx: None,
             project_root: None,
             project_root_from: None,
-            git: crate::gitpanel::GitStatus::none(),
-            git_commit: None,
-            git_sel: None,
             left_mode_request: None,
             rail: Default::default(),
             rail_requests: Vec::new(),
@@ -4926,20 +4969,11 @@ impl State {
             .filter(|c| !c.is_empty())
     }
 
-    /// The window's project root, deriving and remembering one on first use.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn project_root(&mut self) -> PathBuf {
-        if self.project_root.is_none() {
-            self.project_root = Some(self.default_project_root());
-        }
-        self.project_root.clone().unwrap_or_default()
-    }
-
-    /// Re-anchor the project (and with it the git view) on the SELECTED pane (K).
+    /// Re-anchor the project on the SELECTED pane (K).
     ///
-    /// Both left-panel views describe the pane you are looking at, so focusing a pane in a
-    /// different project moves them there. Three guards keep that from being expensive or
-    /// rude, in order:
+    /// Every module surface on the rail describes the pane you are looking at, so focusing a
+    /// pane in a different project moves them there. Three guards keep that from being
+    /// expensive or rude, in order:
     ///
     /// * the anchor cwd is compared first, so the common tick — nothing moved — costs one
     ///   string compare and touches no filesystem;
@@ -4949,19 +4983,12 @@ impl State {
     ///   alone and therefore survives until the selected pane itself changes: it is the
     ///   human's.
     ///
-    /// `mode` is the panel's current mode, because re-reading the working tree means running
-    /// `git`: it is spawned when the git view is the one on screen, and otherwise left for
-    /// [`Command::GitRefresh`](crate::command::Command::GitRefresh), which fires on every
-    /// entry into the mode anyway.
+    /// Nothing is re-read here beyond the root itself: a module hears the new root on its
+    /// next activation and decides for itself what that costs. This used to spawn `git` when
+    /// the working-tree mode was the one on screen, which is precisely the kind of decision
+    /// the host stopped making when that view became a module.
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn sync_left_root(&mut self, mode: i32) {
-        // A commit on screen pins the panel to the repository that commit came from. The
-        // anchor otherwise drags the root back to the focused pane the moment the panel is
-        // re-entered, and the header, the tree and the commit's rows would then be
-        // describing two different projects at once.
-        if self.git_commit.is_some() {
-            return;
-        }
+    pub fn sync_left_root(&mut self) {
         let cwd = self.focused_cwd();
         if self.project_root_from == cwd && self.project_root.is_some() {
             return;
@@ -4972,13 +4999,6 @@ impl State {
             return;
         }
         self.set_project_root(want);
-        if mode == crate::paneview::LEFT_MODE_GIT {
-            self.rebuild_git();
-        } else {
-            // Stale by construction: the next entry into the mode re-reads it.
-            self.git = crate::gitpanel::GitStatus::none();
-            self.git_sel = None;
-        }
     }
 
     // ---- the module rail (track H4) ----
@@ -5056,19 +5076,23 @@ impl State {
     /// own file menu over it, so a tier-1 module inherits the app's whole "Open in…" list
     /// (`docs/module-contract.md` §10.6) without shipping a single menu row. A row with no
     /// `path` still reaches the module; there is simply no host menu to draw for it.
+    ///
+    /// A row may also carry a `git` object ([`GitOrigin`]), which adds the diff verb to that
+    /// menu. That is how the git module gets a verb it is not allowed to perform: spawning
+    /// `git show` in a pane is running a command, and no module may do that — but the HOST
+    /// may, on a row whose own module said which revision the row came from.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn rail_context(&mut self, key: &str, row: &str, x: f32, y: f32) {
         self.rail_row(key, row, RailGesture::Context);
-        let path = self
+        let found = self
             .rail
             .rows(key)
             .iter()
             .find(|r| r.id == row)
-            .and_then(|r| r.data.get("path"))
-            .and_then(|p| p.as_str())
-            .map(PathBuf::from);
-        if let Some(path) = path {
-            self.open_file_context(&path, x, y);
+            .map(|r| (r.data.get("path").and_then(|p| p.as_str()).map(PathBuf::from),
+                      GitOrigin::from_row(r.data.get("git"))));
+        if let Some((Some(path), origin)) = found {
+            self.open_file_context_git(&path, origin, x, y);
         }
     }
 
@@ -5164,10 +5188,22 @@ impl State {
     /// name. The host names a contract, not a vendor.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn files_entry_key(&self) -> Option<String> {
+        self.entry_key(FILES_ENTRY)
+    }
+
+    /// The rail key of the entry a git module registered, if one is live.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn git_entry_key(&self) -> Option<String> {
+        self.entry_key(GIT_ENTRY)
+    }
+
+    /// The rail key of whichever live entry answers to `id`, by ENTRY id and not by module
+    /// id — see [`State::files_entry_key`] for why that is the identity that matters.
+    fn entry_key(&self, id: &str) -> Option<String> {
         self.rail
             .entries()
             .into_iter()
-            .find(|v| v.entry.id == FILES_ENTRY)
+            .find(|v| v.entry.id == id)
             .map(|v| v.key)
     }
 
@@ -5245,95 +5281,77 @@ impl State {
     /// without shipping one (`docs/module-contract.md` §10).
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn open_file_context(&mut self, path: &Path, x: f32, y: f32) {
-        self.ctx = Some(crate::contextmenu::file_menu(self, path, x, y));
-        self.dirty = true;
+        self.open_file_context_git(path, None, x, y);
     }
 
-    // ---- left panel: Git mode (J) ----
-    //
-    // A read-only view of one repository's working tree. It roots itself at
-    // [`State::project_root`], the same anchor a files module is handed, so the panel and
-    // the module can never disagree about which project you are looking at.
-    //
-    // Nothing watches the repository. The status is re-read when the
-    // mode is entered and when the header's refresh is pressed, and at no other time: a
-    // panel that shelled out to `git` on a timer would spawn a process behind a human who
-    // had walked away from the machine.
-
-    /// Re-run `git status` for the current root and store the projection.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn rebuild_git(&mut self) {
-        let root = self.project_root();
-        self.git = crate::gitpanel::status_for(&root.to_string_lossy()).unwrap_or_default();
-        // A path that is no longer reported cannot stay selected — the rows it would be
-        // highlighting are gone.
-        if self
-            .git_sel
-            .as_deref()
-            .is_some_and(|p| !self.git.rows.iter().any(|r| r.path == p))
-        {
-            self.git_sel = None;
-        }
-        self.dirty = true;
-    }
-
-    /// A single click on a git row: select it. Selecting is all a click does — the row's
-    /// verbs live on the double-click (open) and the row menu.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn git_click(&mut self, path: &str) {
-        self.git_sel = Some(path.to_string());
-        self.dirty = true;
-    }
-
-    /// The absolute path of a repo-relative git row, or `None` when there is no repo. Every
-    /// git row callback goes through here: what the UI holds is git's relative path, and
-    /// every command downstream (open, reveal, the file menu) speaks absolute paths.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn git_abs(&self, path: &str) -> Option<PathBuf> {
-        // The commit's own root is the fallback, not an alternative: the two agree whenever
-        // `git status` succeeded, and when it did not (no git, a broken index) the commit
-        // view still knows which repository it was loaded from, so its rows stay openable.
-        let root = self
-            .git
-            .root
-            .as_ref()
-            .or_else(|| self.git_commit.as_ref().map(|c| &c.root))?;
-        Some(root.join(path))
-    }
-
-    /// Show one commit in the panel, replacing the working-tree view. Returns `false` when
-    /// git cannot load it — a hash that resolved on hover can still be gone by the click
-    /// (a fetch --prune, a rebase), and a panel that cleared itself for nothing is worse
-    /// than one that stayed where it was.
+    /// [`State::open_file_context`], plus the revision the path was listed from.
     ///
-    /// The panel re-roots on the commit's repository on the way in. Clicking a hash printed
-    /// by a pane in another project otherwise leaves the header, the file tree and the rows
-    /// describing three different places at once.
+    /// Split rather than defaulted so the plain form stays the one every caller that has no
+    /// opinion about git reaches for — a filename clicked in a pane's output is a filename,
+    /// and nothing about it says which commit it came from.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn open_file_context_git(
+        &mut self,
+        path: &Path,
+        origin: Option<GitOrigin>,
+        x: f32,
+        y: f32,
+    ) {
+        self.ctx = Some(crate::contextmenu::file_menu(self, path, origin.as_ref(), x, y));
+        self.dirty = true;
+    }
+
+    // ---- git links (J) ----
+    //
+    // All that is left in the host of what used to be a whole GIT mode. The working tree is
+    // `bshuler/avada-git`'s to draw now; what stays here is the one thing a module cannot do
+    // for itself — turn a hash printed in a pane into a panel showing that commit.
+
+    /// Show one commit in whichever module owns the `git` rail entry: open the panel on that
+    /// entry and emit `git.commit`. The module loads the commit through `host.git.commit` and
+    /// projects its files, exactly as [`State::reveal_in_files`] does for a path.
+    ///
+    /// Returns `false` when git cannot resolve `hash` — a hash that was printed an hour ago
+    /// can be gone by the click (a fetch --prune, a rebase), and a panel that switched views
+    /// for nothing is worse than one that stayed where it was. Resolved HERE rather than in
+    /// the module because that answer decides whether the click did anything at all, and the
+    /// module's reply would arrive long after the caller needed to know.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn show_commit(&mut self, cwd: &str, hash: &str) -> bool {
         let Some(commit) = avada_core::git::load_commit(std::path::Path::new(cwd), hash) else {
             return false;
         };
+        let Some(key) = self.git_entry_key() else {
+            self.toast_active("install the Git module to show commits");
+            // The commit is real; there is simply nowhere to draw it. Reported as success so
+            // the caller does not ALSO claim the hash was bad, which would be a second and
+            // untrue explanation for the same nothing-happened.
+            return true;
+        };
+        // Re-root on the commit's own repository first. A hash printed by a pane in another
+        // project otherwise leaves the panel's header and its rows describing two places.
         if self.project_root.as_deref() != Some(commit.root.as_path()) {
             self.set_project_root(commit.root.clone());
         }
-        self.git_commit = Some(commit);
-        self.git_sel = None;
-        self.rebuild_git();
+        // Claim the follow-the-focused-pane anchor, for the same reason `reveal_in_files`
+        // does: the next tick would otherwise decide the panel had fallen behind and drag
+        // the root back to the focused pane, undoing this before the human's eye arrived.
+        self.project_root_from = self.focused_cwd();
+        self.rail_activate(&key);
+        self.emit_module_event(
+            avada_core::module::rpc::GIT_COMMIT_EVENT,
+            serde_json::json!({
+                "root": commit.root.display().to_string(),
+                "rev": commit.hash,
+                "short": commit.short,
+            }),
+        );
         self.left_panel_open = true;
-        self.left_mode_request = Some(crate::paneview::LEFT_MODE_GIT);
+        // Held open across the round trip, like a reveal: the module has to hear the event
+        // and push the commit's rows back before there is anything on screen to look at.
+        self.rail_scroll_hold = Some(std::time::Instant::now());
         self.dirty = true;
         true
-    }
-
-    /// Leave the commit view; the working tree is re-read on the way out because it may well
-    /// have moved while the commit was on screen.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn git_commit_close(&mut self) {
-        if self.git_commit.take().is_some() {
-            self.git_sel = None;
-            self.rebuild_git();
-        }
     }
 
     // ---- sidebar / projects ----
@@ -11469,66 +11487,52 @@ mod tool_session_location {
     }
 }
 
-/// The left panel's GIT mode (Request J) — the wiring between the panel and
-/// [`crate::gitpanel`], which the parser's own tests cannot see.
+/// What the host kept of Request J once the working tree left for `bshuler/avada-git`:
+/// the project anchor those rows are listed under, and the commit link that sends a hash
+/// clicked in a pane to whichever module answers to the `git` rail entry.
 #[cfg(test)]
-mod git_mode {
+mod git_links {
     use super::*;
 
     fn fresh() -> State {
         State::new(theme::load_font(1.0))
     }
 
+    fn module() -> avada_core::rights::ModuleId {
+        avada_core::rights::ModuleId::new("bshuler/avada-git").unwrap()
+    }
+
+    /// The wire payload of `host.rail.register`; `tier` is the SDK's `UiTier`, which this
+    /// crate cannot name.
+    fn entry(id: &str) -> avada_core::module::RailEntry {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "label": "Git", "tier": 1, "order": 0
+        }))
+        .unwrap()
+    }
+
     /// The mode strip and `mode_tools[mode - LEFT_MODE_TOOL_BASE]` only agree if the fixed
-    /// slots are exactly the ones the tools start after. Adding a third built-in without
-    /// moving the base would silently point every favourite one tool to the left — and so
-    /// would REMOVING one, which is what happened when the explorer became a module.
+    /// slots are exactly the ones the tools start after. Adding a built-in without moving
+    /// the base would silently point every favourite one tool to the left — and so would
+    /// REMOVING one, which is what happened twice, when the explorer and then the git view
+    /// became modules.
     #[test]
     fn the_fixed_modes_end_where_the_tools_begin() {
         use crate::paneview::*;
         assert_eq!(LEFT_MODE_WORKSPACE, 0);
-        assert_eq!(LEFT_MODE_GIT, 1);
-        assert_eq!(LEFT_MODE_TOOL_BASE, LEFT_MODE_GIT + 1);
+        assert_eq!(LEFT_MODE_TOOL_BASE, LEFT_MODE_WORKSPACE + 1);
         // A module surface never takes an index in this list: it is drawn from
         // `RailAdapter` at a mode of its own, below every built-in.
         assert!(LEFT_MODE_RAIL < LEFT_MODE_WORKSPACE);
     }
 
-    /// The icon sentinel is matched EXACTLY in Slint, so the built-in glyph needs a value
-    /// that collides neither with a registry icon id (which is positive) nor with the
-    /// workspace grid (which is 0). The folder sentinel `-1` went with the explorer; `-2`
-    /// deliberately did NOT move down to fill the hole, because the number is drawn on
-    /// screen by a Slint `if` and renumbering it buys nothing.
-    #[test]
-    fn each_built_in_glyph_has_its_own_sentinel() {
-        use crate::paneview::LEFT_MODE_GIT_ICON;
-        assert_eq!(LEFT_MODE_GIT_ICON, -2);
-    }
-
-    /// A git row carries git's REPO-RELATIVE path; everything downstream (opening the file,
-    /// the context menu) speaks the filesystem's. `git_abs` is the only place those meet.
-    #[test]
-    fn git_abs_resolves_a_row_against_the_repo_root() {
-        let mut st = fresh();
-        assert!(
-            st.git_abs("src/main.rs").is_none(),
-            "with no repository there is no path to resolve against"
-        );
-        st.git.root = Some(PathBuf::from("/tmp/repo"));
-        assert_eq!(
-            st.git_abs("src/main.rs"),
-            Some(PathBuf::from("/tmp/repo/src/main.rs"))
-        );
-    }
-
     /// The project anchor follows the SELECTED pane (K): it is derived from the focused
     /// pane's cwd, and moves when that pane's cwd moves to another project. A `cd` that
     /// stays inside the same repository derives the same root and must NOT re-root — that
-    /// would collapse the tree under a human who only changed directory, in the git view
-    /// and in whatever a files module has open at the same root.
+    /// would collapse the tree under a human who only changed directory, in whatever
+    /// module has a list open at that root.
     #[test]
     fn the_root_follows_the_selected_pane_but_not_a_cd_inside_it() {
-        use crate::paneview::LEFT_MODE_GIT;
         let base = std::env::temp_dir().join(format!("hp-anchor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (a, b) = (base.join("a"), base.join("b"));
@@ -11559,7 +11563,7 @@ mod git_mode {
         };
 
         set_cwd(&mut st, &a);
-        st.sync_left_root(LEFT_MODE_GIT);
+        st.sync_left_root();
         let root_a = st.project_root.clone().expect("rooted on the selected pane");
         assert!(
             root_a.ends_with("a"),
@@ -11567,15 +11571,15 @@ mod git_mode {
         );
 
         // A cd deeper into the SAME repository derives the same root, and a root that did
-        // not move is not re-applied — which is what keeps everything rooted on it, the git
-        // view and a module's open tree alike, from being rebuilt under the human.
+        // not move is not re-applied — which is what keeps a module's open tree from being
+        // rebuilt under the human.
         set_cwd(&mut st, &a.join("sub"));
-        st.sync_left_root(LEFT_MODE_GIT);
+        st.sync_left_root();
         assert_eq!(st.project_root.as_deref(), Some(root_a.as_path()));
 
         // A pane in a different project moves the panel there.
         set_cwd(&mut st, &b);
-        st.sync_left_root(LEFT_MODE_GIT);
+        st.sync_left_root();
         assert!(
             st.project_root.as_deref().is_some_and(|r| r.ends_with("b")),
             "rooted at {:?}, wanted the b repo",
@@ -11586,19 +11590,36 @@ mod git_mode {
         // selected pane itself moves.
         st.set_project_root(b.join("chosen"));
         let manual = st.project_root.clone().unwrap();
-        st.sync_left_root(LEFT_MODE_GIT);
-        st.sync_left_root(LEFT_MODE_GIT);
+        st.sync_left_root();
+        st.sync_left_root();
         assert_eq!(st.project_root.as_deref(), Some(manual.as_path()));
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// The panel roots itself at the window's project anchor, so it can never disagree with
-    /// the rest of the window about which project is on screen — and a selection that the
-    /// refreshed status no longer reports is dropped rather than left pointing at nothing.
+    /// A module is found by the ENTRY id it registered, never by its module id: `git` is a
+    /// role, and any module that fills it gets the commit links. The host has no opinion
+    /// about who publishes it.
     #[test]
-    fn rebuild_reads_the_project_root_and_drops_a_stale_selection() {
-        let root = std::env::temp_dir().join(format!("hp-state-git-{}", std::process::id()));
+    fn the_git_entry_is_found_by_role_not_by_publisher() {
+        let mut st = fresh();
+        assert_eq!(st.git_entry_key(), None, "nothing registered, nothing found");
+        st.apply_rail_event(avada_core::module::RailEvent::Registered {
+            module: module(),
+            entries: vec![entry(GIT_ENTRY)],
+        });
+        assert_eq!(
+            st.git_entry_key().as_deref(),
+            Some(crate::leftpanel::entry_key(&module(), GIT_ENTRY).as_str())
+        );
+    }
+
+    /// The whole commit link, end to end over a real repository: a hash printed in a pane
+    /// re-roots the panel on the commit's OWN repository, activates the git entry, and
+    /// emits the event the module answers by listing that commit's files.
+    #[test]
+    fn a_commit_link_re_roots_activates_and_announces_the_commit() {
+        let root = std::env::temp_dir().join(format!("hp-showcommit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let git = |args: &[&str]| {
@@ -11606,39 +11627,76 @@ mod git_mode {
                 .arg("-C")
                 .arg(&root)
                 .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
                 .output()
                 .expect("git runs")
         };
-        if !git(&["init", "-b", "trunk"]).status.success() {
-            let _ = std::fs::remove_dir_all(&root);
-            return; // no git on this machine — nothing to assert against
-        }
-        std::fs::write(root.join("loose.txt"), "hi").unwrap();
+        assert!(git(&["init", "-b", "trunk"]).status.success(), "git init");
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(root.join("a.txt"), "hi").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "the subject"]);
+        let out = git(&["rev-parse", "HEAD"]);
+        let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(!hash.is_empty(), "no commit hash");
+        let real = std::fs::canonicalize(&root).unwrap();
 
         let mut st = fresh();
-        st.project_root = Some(root.clone());
-        st.git_sel = Some("gone.txt".into());
-        st.rebuild_git();
+        st.apply_rail_event(avada_core::module::RailEvent::Registered {
+            module: module(),
+            entries: vec![entry(GIT_ENTRY)],
+        });
 
-        assert!(st.git.is_repo());
-        assert_eq!(st.git.branch, "trunk");
-        let un: Vec<_> = st
-            .git
-            .section(crate::gitpanel::Section::Untracked)
-            .map(|r| r.path.as_str())
-            .collect();
-        assert_eq!(un, vec!["loose.txt"]);
-        assert_eq!(
-            st.git_sel, None,
-            "a selection the refreshed status no longer reports must not survive it"
+        assert!(
+            !st.show_commit(&root.to_string_lossy(), "0000000000000000000000000000000000000000"),
+            "a hash git cannot resolve must report failure, so the caller can say so"
         );
 
-        // A selection git *does* report survives the same rebuild.
-        st.git_click("loose.txt");
-        st.rebuild_git();
-        assert_eq!(st.git_sel.as_deref(), Some("loose.txt"));
+        assert!(st.show_commit(&root.to_string_lossy(), &hash));
+        assert!(st.left_panel_open, "the link opens the panel it draws in");
+        assert_eq!(st.project_root.as_deref(), Some(real.as_path()));
+        assert_eq!(
+            st.rail.active.as_deref(),
+            Some(crate::leftpanel::entry_key(&module(), GIT_ENTRY).as_str())
+        );
+        let events = st.take_module_events();
+        let (kind, payload) = events.last().expect("the module was told");
+        assert_eq!(kind, avada_core::module::rpc::GIT_COMMIT_EVENT);
+        assert_eq!(payload["rev"], serde_json::json!(hash));
+        assert_eq!(payload["root"], serde_json::json!(real.display().to_string()));
+        assert_eq!(payload["short"], serde_json::json!(hash[..7].to_string()));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// With no git module installed the commit still RESOLVED, so the click is reported as
+    /// handled and explained by a toast. Reporting failure would make the caller add a
+    /// second, untrue explanation ("no such commit") for the same nothing-happened.
+    #[test]
+    fn a_commit_link_with_no_module_installed_explains_itself_once() {
+        let mut st = fresh();
+        let here = std::env::current_dir().expect("a cwd");
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&here)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git runs");
+        if !out.status.success() {
+            return; // not run from inside a repository
+        }
+        let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            st.show_commit(&here.to_string_lossy(), &hash),
+            "the commit is real; there is simply nowhere to draw it"
+        );
+        assert!(
+            st.take_module_events().is_empty(),
+            "nothing to announce it to"
+        );
     }
 }
 

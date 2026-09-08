@@ -105,22 +105,6 @@ pub enum Command {
     /// Make `0` the window's project root and reveal it (the row menu's "Open as Root" and
     /// "Browse Containing Folder").
     FilesSetRoot(String),
-    // ---- left panel: Git mode (J) ----
-    //
-    // Read-only: there is deliberately no Stage / Unstage / Discard here. The rows carry
-    // git's own REPO-RELATIVE path, which `State::git_abs` resolves against the repo root —
-    // the panel speaks git's identity for a file, and everything downstream speaks the
-    // filesystem's.
-    /// Single click on a git row: select it.
-    GitClick(String),
-    /// Double click on a git row: open it in a read-only view pane, exactly as the explorer
-    /// does — one behaviour for "open this file", reached from two lists.
-    GitOpen(String),
-    /// Right click on a git row: the explorer's own file menu, anchored at `1`, `2`.
-    GitContext(String, f32, f32),
-    /// Re-run `git status`. Nothing watches the repository, so this is how a human says "I
-    /// just committed something in a pane".
-    GitRefresh,
     // ---- left panel: the module rail (H4) ----
     /// A module entry on the mode strip was clicked. The payload is the entry KEY
     /// (`<owner/repo>#<entry-id>`), which is what the strip has and what routes the
@@ -152,17 +136,26 @@ pub enum Command {
         cwd: String,
         hash: String,
     },
-    /// Leave the commit view and go back to the working tree.
-    GitCommitClose,
-    /// Open a pane running `git show` for the commit on screen — the whole commit when the
-    /// argument is `None`, one file when it names one. A pane running git's own pager gives
-    /// the real, coloured diff; teaching the viewer to render one would give a worse copy.
-    GitCommitDiff(Option<String>),
-    /// The same verb for the *working tree*: `None` is everything that differs from HEAD,
-    /// `Some(rel)` is one file. Always against HEAD rather than switching between
-    /// `git diff` and `git diff --cached` by section, because a partially-staged file is in
-    /// both lists at once and the human clicking either row wants the whole change.
-    GitDiff(Option<String>),
+    /// Open a pane showing a diff. `rev` picks which one: `Some` is `git show` for that
+    /// commit, `None` is the working tree against HEAD. `path` is `None` for everything and
+    /// `Some(rel)` for one repo-relative file.
+    ///
+    /// One command for both, where there used to be two, because the panel that knew which
+    /// of the two it was showing has left for a module. What arrives now is a row plus the
+    /// revision its own module said it came from ([`crate::state::GitOrigin`]), and that is
+    /// a single question with a nullable answer, not two commands.
+    ///
+    /// The working tree is always compared against HEAD rather than switching between
+    /// `git diff` and `git diff --cached` by section: a partially-staged file is in both
+    /// lists at once, and the human clicking either row wants the whole change.
+    ///
+    /// A pane running git's own pager gives the real, coloured diff; teaching the file
+    /// viewer to render one would only give a worse copy.
+    GitDiff {
+        root: String,
+        rev: Option<String>,
+        path: Option<String>,
+    },
     /// Open `path` in a terminal pane running tool `tool` — "open in a terminal with vi".
     /// The pane is a `Tool` pane, so it gets the tool's brand and icon like any other.
     OpenPathWith {
@@ -709,30 +702,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::RailQuery(q) => state.rail_query(&q),
         // ---- module capability rights (H2) ----
         Command::Rights(cmd) => state.rights_apply(&cmd),
-        // ---- left panel: Git mode (J) ----
-        Command::GitRefresh => {
-            state.sync_left_root(crate::paneview::LEFT_MODE_GIT);
-            state.rebuild_git();
-        }
-        Command::GitClick(path) => state.git_click(&path),
-        Command::GitOpen(path) => {
-            // Resolved here and re-dispatched rather than duplicated: a git row and a
-            // module's file row must open a file the same way, and there is one path.
-            let Some(abs) = state.git_abs(&path) else {
-                return Effect::None;
-            };
-            return dispatch(
-                state,
-                Command::FilesOpen(abs.to_string_lossy().into_owned()),
-                mgr,
-            );
-        }
-        Command::GitContext(path, x, y) => {
-            if let Some(abs) = state.git_abs(&path) {
-                state.git_click(&path);
-                state.open_file_context(&abs, x, y);
-            }
-        }
+        // ---- git links (J) ----
         Command::ShowCommit { cwd, hash } => {
             if !state.show_commit(&cwd, &hash) {
                 state.toast_active(&format!(
@@ -741,52 +711,29 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                 ));
             }
         }
-        Command::GitCommitClose => state.git_commit_close(),
-        Command::GitCommitDiff(path) => {
-            let Some(c) = state.git_commit.as_ref() else {
-                return Effect::None;
+        Command::GitDiff { root, rev, path } => {
+            // `--color=always` in both shapes: once a pager is in the chain git no longer
+            // sees a terminal on its own end and turns colour off by itself.
+            let (mut cmd, name) = match &rev {
+                Some(rev) => (
+                    format!(
+                        "git -C {} show --color=always {}",
+                        quote_arg(&root),
+                        quote_arg(rev)
+                    ),
+                    rev.chars().take(7).collect::<String>(),
+                ),
+                None => (
+                    format!("git -C {} diff --color=always HEAD", quote_arg(&root)),
+                    "diff".to_string(),
+                ),
             };
-            let root = c.root.to_string_lossy().into_owned();
-            let short = c.short.clone();
-            // `git show` with git's own pager: the real diff, coloured the way the human's
-            // own git config colours it. `--color=always` because the pipe git sees is not a
-            // terminal from its point of view once a pager is in the chain.
-            let mut cmd = format!(
-                "git -C {} show --color=always {}",
-                quote_arg(&root),
-                quote_arg(&c.hash)
-            );
             let label = match &path {
                 Some(p) => {
                     cmd.push_str(&format!(" -- {}", quote_arg(p)));
-                    format!("{} · {}", short, p.rsplit('/').next().unwrap_or(p))
+                    format!("{} · {}", name, p.rsplit('/').next().unwrap_or(p))
                 }
-                None => format!("{} · diff", short),
-            };
-            state.add_pane_opts(
-                mgr,
-                NewPaneOpts {
-                    label: Some(label),
-                    cwd: Some(root),
-                    command: Some(cmd),
-                    ..Default::default()
-                },
-            );
-        }
-        Command::GitDiff(path) => {
-            let Some(root) = state.git.root.as_ref() else {
-                return Effect::None;
-            };
-            let root = root.to_string_lossy().into_owned();
-            // `--color=always` for the same reason `git show` needs it above: once a pager
-            // is in the chain git no longer sees a terminal and turns colour off by itself.
-            let mut cmd = format!("git -C {} diff --color=always HEAD", quote_arg(&root));
-            let label = match &path {
-                Some(p) => {
-                    cmd.push_str(&format!(" -- {}", quote_arg(p)));
-                    format!("diff · {}", p.rsplit('/').next().unwrap_or(p))
-                }
-                None => "diff".to_string(),
+                None => name,
             };
             state.add_pane_opts(
                 mgr,
@@ -1333,13 +1280,18 @@ mod restart_rebinds_the_control_alias_tests {
 }
 
 #[cfg(test)]
-mod git_commit_diff_tests {
-    //! End-to-end over "Show Diff": a real repository, a real commit, the real menu
-    //! builder, the real pick dispatch. Every link in this chain type-checks on its own
-    //! and the feature still misbehaved, which is exactly the seam a per-function unit
-    //! test cannot see. These tests never skip — a machine without git is a failure, not
-    //! a pass, because a silently-skipped test is indistinguishable from a green one.
+mod git_diff_tests {
+    //! End-to-end over "Show Diff": a real repository, a real row origin, the real menu
+    //! builder, the real pick dispatch. Every link in this chain type-checks on its own and
+    //! the feature still misbehaved, which is exactly the seam a per-function unit test
+    //! cannot see. These tests never skip — a machine without git is a failure, not a pass,
+    //! because a silently-skipped test is indistinguishable from a green one.
+    //!
+    //! The rows themselves now come from `bshuler/avada-git`, so what is under test here is
+    //! the half the host kept: a `data.git` object turning into a menu row, and that row
+    //! turning into a pane running the right git command.
     use super::*;
+    use crate::state::GitOrigin;
     use avada_core::session_manager::SessionManager;
     use std::path::PathBuf;
 
@@ -1398,32 +1350,54 @@ mod git_commit_diff_tests {
             .expect("rev-parse");
         let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
         assert!(!hash.is_empty(), "no commit hash");
-        // The panel resolves through `git rev-parse --show-toplevel`, which on macOS
+        // The service resolves through `git rev-parse --show-toplevel`, which on macOS
         // answers the real path (/private/var/...), not the symlinked /var/... one.
         let root = std::fs::canonicalize(&dir).expect("canonicalize");
         Repo { root, hash }
     }
 
-    /// Right-click a file row in the commit view, pick "Show Diff in <short>", and land in
-    /// a pane running `git show` scoped to that one file.
+    /// Open the host's row menu over `rel` as the git module would have described it, and
+    /// return the labels plus the state, so each test asserts on one menu.
+    fn menu_over(st: &mut State, r: &Repo, rel: &str, rev: Option<&str>) -> Vec<String> {
+        let origin = GitOrigin {
+            root: r.root.clone(),
+            rev: rev.map(str::to_string),
+            short: rev.map(|h| h[..7].to_string()).unwrap_or_default(),
+        };
+        let abs = if rel.is_empty() {
+            r.root.clone()
+        } else {
+            r.root.join(rel)
+        };
+        st.open_file_context_git(&abs, Some(origin), 10.0, 10.0);
+        st.ctx
+            .as_ref()
+            .expect("the row menu opened")
+            .entries
+            .iter()
+            .map(|e| e.label.to_string())
+            .collect()
+    }
+
+    fn spawned(st: &State) -> String {
+        st.active_tab()
+            .panes
+            .last()
+            .expect("the pick opened a pane")
+            .spawn_command
+            .clone()
+            .unwrap_or_default()
+    }
+
+    /// Right-click a file row the module listed for a commit, pick "Show Diff in <short>",
+    /// and land in a pane running `git show` scoped to that one file.
     #[tokio::test]
     async fn show_diff_on_a_commit_row_opens_a_pane_running_git_show() {
         let r = repo("row");
         let mgr = mgr();
         let mut st = fresh();
 
-        assert!(
-            st.show_commit(&r.root.to_string_lossy(), &r.hash),
-            "the commit view must load the commit we just made"
-        );
-
-        let abs = st
-            .git_abs("sub/a.txt")
-            .expect("a row resolves against the repo root");
-        st.open_file_context(&abs, 10.0, 10.0);
-
-        let menu = st.ctx.as_ref().expect("the row menu opened");
-        let labels: Vec<String> = menu.entries.iter().map(|e| e.label.to_string()).collect();
+        let labels = menu_over(&mut st, &r, "sub/a.txt", Some(&r.hash));
         let row = labels
             .iter()
             .position(|l| l.starts_with("Show Diff in"))
@@ -1432,112 +1406,140 @@ mod git_commit_diff_tests {
         let cmd = st.ctx_command(row).expect("the row carries a command");
         dispatch(&mut st, cmd, &mgr);
 
-        let pane = st
-            .active_tab()
-            .panes
-            .last()
-            .expect("the pick opened a pane");
-        let spawned = pane.spawn_command.clone().unwrap_or_default();
+        let out = spawned(&st);
         assert!(
-            spawned.contains("show") && spawned.contains(&r.hash) && spawned.contains("sub/a.txt"),
-            "the pane must run git show for this commit and file, got {spawned:?}"
+            out.contains("show") && out.contains(&r.hash) && out.contains("sub/a.txt"),
+            "the pane must run git show for this commit and file, got {out:?}"
         );
     }
 
-    /// The header button is the whole-commit variant of the same verb.
+    /// The repository-root row is the whole-commit variant of the same verb — which is
+    /// where the header button's job went when the header left with the panel.
     #[tokio::test]
-    async fn the_header_button_opens_the_whole_commit_diff() {
+    async fn the_root_row_opens_the_whole_commit_diff() {
         let r = repo("head");
         let mgr = mgr();
         let mut st = fresh();
-        assert!(st.show_commit(&r.root.to_string_lossy(), &r.hash));
-        dispatch(&mut st, Command::GitCommitDiff(None), &mgr);
-        let pane = st.active_tab().panes.last().expect("a pane opened");
-        let spawned = pane.spawn_command.clone().unwrap_or_default();
+        let labels = menu_over(&mut st, &r, "", Some(&r.hash));
+        let row = labels
+            .iter()
+            .position(|l| l.starts_with("Show Diff in"))
+            .unwrap_or_else(|| panic!("no Show Diff row; menu was {labels:?}"));
+        let cmd = st.ctx_command(row).expect("a command");
+        dispatch(&mut st, cmd, &mgr);
+        let out = spawned(&st);
         assert!(
-            spawned.contains("show") && spawned.contains(&r.hash),
-            "got {spawned:?}"
+            out.contains("show") && out.contains(&r.hash) && !out.contains(" -- "),
+            "got {out:?}"
         );
     }
-    /// The bug the user hit. They opened the git panel on a dirty tree — no commit view —
-    /// and there was no diff anywhere: not on the header, not on a row. Both of these
-    /// failed before `Command::GitDiff` existed.
+
+    /// The bug the user hit. They opened the panel on a dirty tree — no commit — and there
+    /// was no diff anywhere: not on the header, not on a row.
     #[tokio::test]
     async fn show_diff_on_a_working_tree_row_opens_a_pane_running_git_diff() {
         let r = repo("work");
         std::fs::write(r.root.join("sub/a.txt"), "changed\n").expect("dirty the tree");
         let mgr = mgr();
         let mut st = fresh();
-        st.set_project_root(r.root.clone());
-        st.rebuild_git();
-        assert!(st.git.is_repo(), "the panel found the repo");
-        assert!(
-            st.git.rows.iter().any(|w| w.path == "sub/a.txt"),
-            "git status saw the change; rows were {:?}",
-            st.git.rows.iter().map(|w| &w.path).collect::<Vec<_>>()
-        );
 
-        let abs = st
-            .git_abs("sub/a.txt")
-            .expect("a row resolves against the repo root");
-        st.open_file_context(&abs, 10.0, 10.0);
-        let menu = st.ctx.as_ref().expect("the row menu opened");
-        let labels: Vec<String> = menu.entries.iter().map(|e| e.label.to_string()).collect();
+        let labels = menu_over(&mut st, &r, "sub/a.txt", None);
         let row = labels
             .iter()
             .position(|l| l == "Show Diff")
             .unwrap_or_else(|| panic!("no Show Diff row; menu was {labels:?}"));
 
-        let cmd = st.ctx_command(row).expect("the row carries a command");
+        let cmd = st.ctx_command(row).expect("a command");
         dispatch(&mut st, cmd, &mgr);
-        let pane = st
-            .active_tab()
-            .panes
-            .last()
-            .expect("the pick opened a pane");
-        let spawned = pane.spawn_command.clone().unwrap_or_default();
+        let out = spawned(&st);
         assert!(
-            spawned.contains("diff") && spawned.contains("HEAD") && spawned.contains("sub/a.txt"),
-            "the pane should run git diff HEAD on that one file; got {spawned:?}"
+            out.contains("diff") && out.contains("HEAD") && out.contains("sub/a.txt"),
+            "the pane should run git diff HEAD on that one file; got {out:?}"
         );
     }
 
     #[tokio::test]
-    async fn the_working_tree_header_button_opens_the_whole_diff() {
+    async fn the_working_tree_root_row_opens_the_whole_diff() {
         let r = repo("workhead");
         std::fs::write(r.root.join("sub/a.txt"), "changed\n").expect("dirty the tree");
         let mgr = mgr();
         let mut st = fresh();
-        st.set_project_root(r.root.clone());
-        st.rebuild_git();
-        dispatch(&mut st, Command::GitDiff(None), &mgr);
-        let pane = st.active_tab().panes.last().expect("a pane opened");
-        let spawned = pane.spawn_command.clone().unwrap_or_default();
+        let labels = menu_over(&mut st, &r, "", None);
+        let row = labels
+            .iter()
+            .position(|l| l == "Show Diff")
+            .unwrap_or_else(|| panic!("no Show Diff row; menu was {labels:?}"));
+        let cmd = st.ctx_command(row).expect("a command");
+        dispatch(&mut st, cmd, &mgr);
+        let out = spawned(&st);
         assert!(
-            spawned.contains("diff") && spawned.contains("HEAD") && !spawned.contains(" -- "),
-            "the header button diffs the whole tree; got {spawned:?}"
+            out.contains("diff") && out.contains("HEAD") && !out.contains(" -- "),
+            "the root row diffs the whole tree; got {out:?}"
         );
     }
 
     /// An untracked file has nothing in HEAD to compare against, so the row must stay off
-    /// the menu rather than opening a pane that prints nothing.
+    /// the menu rather than opening a pane that prints nothing. Answered by asking git,
+    /// not by trusting the module's row: a module can say anything, and this one spawns a
+    /// process.
     #[tokio::test]
     async fn an_untracked_file_is_offered_no_diff() {
         let r = repo("untracked");
-        std::fs::write(r.root.join("sub/new.txt"), "brand new\n").expect("add an untracked file");
+        std::fs::write(r.root.join("sub/new.txt"), "brand new\n").expect("an untracked file");
         let mut st = fresh();
-        st.set_project_root(r.root.clone());
-        st.rebuild_git();
+        let labels = menu_over(&mut st, &r, "sub/new.txt", None);
         assert!(
-            st.git.rows.iter().any(|w| w.path == "sub/new.txt"),
-            "git status listed the untracked file"
+            !labels.iter().any(|l| l == "Show Diff"),
+            "an untracked file must not offer a diff; menu was {labels:?}"
         );
-        let abs = st.git_abs("sub/new.txt").expect("it resolves");
-        st.open_file_context(&abs, 10.0, 10.0);
-        let menu = st.ctx.as_ref().expect("the row menu opened");
+    }
+
+    /// A row with no `git` object at all — every other module's rows — gets the ordinary
+    /// file menu and no diff verb.
+    #[tokio::test]
+    async fn a_row_without_a_git_origin_is_offered_no_diff() {
+        let r = repo("plain");
+        let mut st = fresh();
+        st.open_file_context(&r.root.join("sub/a.txt"), 10.0, 10.0);
+        let labels: Vec<String> = st
+            .ctx
+            .as_ref()
+            .expect("the row menu opened")
+            .entries
+            .iter()
+            .map(|e| e.label.to_string())
+            .collect();
         assert!(
-            !menu.entries.iter().any(|e| e.label == "Show Diff"),
-            "an untracked file must not offer a diff"
+            !labels.iter().any(|l| l.starts_with("Show Diff")),
+            "menu was {labels:?}"
+        );
+    }
+
+    /// The parse the whole feature hangs off: what the module actually puts on the wire.
+    #[test]
+    fn a_row_git_object_becomes_an_origin() {
+        let o = GitOrigin::from_row(Some(&serde_json::json!({
+            "root": "/r", "rev": "0123456789abcdef", "short": "0123456",
+        })))
+        .expect("a complete object parses");
+        assert_eq!(o.root, PathBuf::from("/r"));
+        assert_eq!(o.rev.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(o.short, "0123456");
+
+        let w = GitOrigin::from_row(Some(&serde_json::json!({"root": "/r", "rev": null})))
+            .expect("the working tree needs only a root");
+        assert_eq!(w.rev, None);
+
+        // A rev with no short form still needs a name in the menu.
+        let s = GitOrigin::from_row(Some(&serde_json::json!({"root": "/r", "rev": "abcdef123456"})))
+            .expect("parses");
+        assert_eq!(s.short, "abcdef1");
+
+        assert_eq!(GitOrigin::from_row(None), None, "no object, no verb");
+        assert_eq!(
+            GitOrigin::from_row(Some(&serde_json::json!({"rev": "abc"}))),
+            None,
+            "no root means no repository to run anything in"
         );
     }
 }

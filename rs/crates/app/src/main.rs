@@ -34,7 +34,6 @@ mod datatree;
 mod devices;
 mod drag;
 mod filedrop;
-mod gitpanel;
 mod glow;
 mod highlight;
 mod history_scan;

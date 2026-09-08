@@ -4241,90 +4241,10 @@ impl App {
                 });
         }
 
-        // ---- left panel: Git mode (J) ----
-        // The rows carry git's REPO-RELATIVE path; `State::git_abs` resolves it. No Stage /
-        // Unstage / Discard: this view is read-only by design.
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_click(move |path| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitClick(path.to_string()));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_open(move |path| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitOpen(path.to_string()));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_context(move |path, x, y| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitContext(path.to_string(), x, y));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_refresh(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitRefresh);
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_diff(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitDiff(None));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_commit_close(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitCommitClose);
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_git_commit_diff(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::GitCommitDiff(None));
-                    }
-                });
-        }
         // `mode` is `in-out` and the strip writes it in Slint, so Rust would otherwise never
-        // learn the panel had been switched. Entering GIT runs `git status`, so the strip
-        // says so rather than leaving the resync to notice a mode it cannot see — the
-        // resync must never run a subprocess.
+        // learn the panel had been switched, and a module entry would stay on screen under
+        // a built-in's head. Nothing here runs a subprocess: every built-in mode left is a
+        // projection of state the host already holds.
         {
             let app = app.clone();
             let id = win.id;
@@ -4341,9 +4261,6 @@ impl App {
                     let leaving_rail = mode >= 0 && w.state.borrow().rail.active.is_some();
                     if leaving_rail {
                         app.run_command(&w, Command::RailBack);
-                    }
-                    if mode == crate::paneview::LEFT_MODE_GIT {
-                        app.run_command(&w, Command::GitRefresh);
                     }
                 });
         }
