@@ -1,4 +1,4 @@
-// The reusable terminal-pane UI for the native hyperpanes app.
+// The reusable terminal-pane UI for the native avada app.
 //
 // `TerminalPane` is the Wave-2 deliverable: a self-contained pane that displays the
 // terminal `surface` image (rendered by the Rust controller at physical resolution),
@@ -84,7 +84,7 @@ component SearchBtn inherits Rectangle {
 
 // ===== branded tool marks =====
 // One mark per registered CLI tool, keyed by `ToolDef.icon` — allocated in Rust from
-// `hyperpanes_core::tools::registry::TOOL_ICON_BASE` (40), which `theme::menu_icon::TOOL_BASE`
+// `avada_core::tools::registry::TOOL_ICON_BASE` (40), which `theme::menu_icon::TOOL_BASE`
 // mirrors and a cross-crate test pins. Same hard rule as the menu icons above: DRAWN GEOMETRY,
 // never a font glyph — a brand's own wordmark font is exactly the thing a Windows box won't
 // have, and it would fail as a hollow box rather than as a missing icon (df773005).
@@ -1003,7 +1003,7 @@ export component DemoWindow inherits Window {
     callback search-prev(int);
     callback search-closed(int);
 
-    title: "hyperpanes — terminal-widget demo";
+    title: "avada — terminal-widget demo";
     preferred-width: 1280px;
     preferred-height: 760px;
     background: #0f0f17;

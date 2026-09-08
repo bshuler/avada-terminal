@@ -1,5 +1,5 @@
 #!/bin/sh
-# GitHub Copilot CLI sessionStart / sessionEnd hook -> hyperpanes pane->conversation map.
+# GitHub Copilot CLI sessionStart / sessionEnd hook -> avada pane->conversation map.
 #
 # Register in ~/.copilot/settings.json (user scope) under BOTH events:
 #   { "hooks": {
@@ -22,23 +22,23 @@
 # end one has ("reason"). Erring towards "start" means an unrecognised payload records a
 # live conversation rather than deleting the record of one.
 #
-# When copilot runs inside a hyperpanes pane (HYPERPANES_PANE_ID in the pane env — the
+# When copilot runs inside a avada pane (AVADA_PANE_ID in the pane env — the
 # hook child inherits it, verified) this writes
 #   <state dir>/tool-sessions/copilot/<pane-id>.json = { "sessionId":..., "cwd":... }
 # on sessionStart and removes it on sessionEnd, so a marker exists exactly while a
 # conversation is live in that pane. The GUI's relaunch snapshot adopts the id as the
 # pane's tool session mark, letting a restored pane resume the same conversation.
-# (Path must mirror hyperpanes-core tools::session_hook::marker_dir.)
+# (Path must mirror avada-core tools::session_hook::marker_dir.)
 #
 # Outside a pane, or on any error, this exits 0 silently — a hook must never break the tool.
-[ -n "$HYPERPANES_PANE_ID" ] || { cat >/dev/null 2>&1; exit 0; }
+[ -n "$AVADA_PANE_ID" ] || { cat >/dev/null 2>&1; exit 0; }
 
 case "$(uname 2>/dev/null)" in
-  Darwin) base="$HOME/Library/Application Support/hyperpanes" ;;
-  *)      base="${XDG_STATE_HOME:-$HOME/.local/state}/hyperpanes" ;;
+  Darwin) base="$HOME/Library/Application Support/avada" ;;
+  *)      base="${XDG_STATE_HOME:-$HOME/.local/state}/avada" ;;
 esac
 
-HP_SESS_DIR="$base/tool-sessions/copilot" HP_PANE="$HYPERPANES_PANE_ID" python3 -c '
+HP_SESS_DIR="$base/tool-sessions/copilot" HP_PANE="$AVADA_PANE_ID" python3 -c '
 import json, os, sys
 
 try:

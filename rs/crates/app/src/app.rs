@@ -21,9 +21,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperpanes_core::layout::presets::DividerKind;
-use hyperpanes_core::session_manager::{AgentLiveness, SessionEvent, SessionManager};
-use hyperpanes_terminal_widget::{encode_key, keys};
+use avada_core::layout::presets::DividerKind;
+use avada_core::session_manager::{AgentLiveness, SessionEvent, SessionManager};
+use avada_terminal_widget::{encode_key, keys};
 
 use slint::platform::Key;
 use slint::{ComponentHandle, LogicalPosition};
@@ -67,8 +67,8 @@ const LEFT_PANEL_W: f32 = 300.0;
 /// this is what carries per-pane zoom, layout, focus and cwds across a plain relaunch).
 /// Best-effort: a failed write must never block quit.
 #[tracing::instrument(level = "debug", skip_all)]
-fn persist_last_session(file: &hyperpanes_core::workspace::model::WorkspaceFile) {
-    use hyperpanes_core::persistence::paths;
+fn persist_last_session(file: &avada_core::workspace::model::WorkspaceFile) {
+    use avada_core::persistence::paths;
     match serde_json::to_string_pretty(file) {
         Ok(json) => {
             if let Err(e) = paths::write_atomic(&paths::last_workspace_json(), json.as_bytes()) {
@@ -87,7 +87,7 @@ fn persist_last_session(file: &hyperpanes_core::workspace::model::WorkspaceFile)
 /// our headless one.
 ///
 /// The redirection matters more than it looks: the installer retires the previous bundle by
-/// renaming it into `/Applications/.hyperpanes-attic/…`, and `current_exe()` follows that
+/// renaming it into `/Applications/.avada-attic/…`, and `current_exe()` follows that
 /// rename. A GUI that has been running across an install therefore reports a path inside the
 /// attic — exec'ing it would relaunch the build the user just replaced, which is exactly the
 /// case this menu item exists to serve. Prefer the installed bundle whenever ours has been
@@ -101,13 +101,12 @@ fn relaunch_command() -> Option<String> {
             .ancestors()
             .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")))
         {
-            let installed = std::path::Path::new("/Applications/Hyperpanes.app");
-            let target =
-                if bundle.starts_with("/Applications/.hyperpanes-attic") && installed.is_dir() {
-                    installed
-                } else {
-                    bundle
-                };
+            let installed = std::path::Path::new("/Applications/Avada.app");
+            let target = if bundle.starts_with("/Applications/.avada-attic") && installed.is_dir() {
+                installed
+            } else {
+                bundle
+            };
             return Some(format!(
                 "sleep 2; exec /usr/bin/open '{}'",
                 target.display()
@@ -151,9 +150,9 @@ const CTX_REOPEN_CHAIN_ROW: i32 = -987654;
 pub enum PendingSeed {
     /// A brand-new window → spawn one fresh interactive shell pane.
     EmptyTab,
-    /// Seed window 0 from a CLI-resolved workspace (`hyperpanes -c …` or a positional `.json`),
+    /// Seed window 0 from a CLI-resolved workspace (`avada -c …` or a positional `.json`),
     /// materialised through [`State::load_workspace`] (tabs/panes/layout from the spec).
-    Workspace(Box<hyperpanes_core::workspace::model::WorkspaceFile>),
+    Workspace(Box<avada_core::workspace::model::WorkspaceFile>),
     /// Re-host a session detached from another window (replay-primed, no PTY restart).
     Adopt(DetachedPane),
     /// Re-host a whole tab (its panes + title/layout) detached from another window.
@@ -219,7 +218,7 @@ pub struct App {
     /// True until the very first window is seeded (so the demo/screenshot env seeding
     /// applies only once, to window 0).
     first_seed: Cell<bool>,
-    /// Guards the one-shot `HYPERPANES_MULTIWIN` screenshot scaffold.
+    /// Guards the one-shot `AVADA_MULTIWIN` screenshot scaffold.
     scaffold_done: Cell<bool>,
     /// True once the always-on **Hyperpane** tab has been accounted for — either found on a
     /// restored window or created. App-wide rather than per-window: it is one console for the
@@ -254,7 +253,7 @@ pub struct App {
     ai_feed: RefCell<std::collections::HashMap<String, (u64, std::time::Instant)>>,
     /// Per-pane leftover of the `BROWSER`-shim scan: an `openurl` reply can be split
     /// across two pty reads, so the tail of a chunk that might still be the start of one
-    /// is carried into the next. See [`hyperpanes_core::session::openurl`].
+    /// is carried into the next. See [`avada_core::session::openurl`].
     openurl_carry: RefCell<std::collections::HashMap<String, String>>,
     /// The embedded control HTTP+WS server host (default-OFF): publishes the live windows→
     /// tabs→panes tree into `core::control`'s read-model + applies inbound `/command`s to the
@@ -273,9 +272,8 @@ pub struct App {
     cadence_slow: Cell<bool>,
     /// Second-instance `{argv, cwd}` hand-offs from the single-instance server (the
     /// receiver end; the tokio-side handler sends). Drained on the UI thread each tick.
-    handoffs: RefCell<
-        Option<std::sync::mpsc::Receiver<hyperpanes_core::single_instance::HandoffMessage>>,
-    >,
+    handoffs:
+        RefCell<Option<std::sync::mpsc::Receiver<avada_core::single_instance::HandoffMessage>>>,
     /// Crash-recovery autosave (#2): when we last wrote the session snapshot, and the JSON we
     /// wrote — so [`App::autosave_session`] throttles to a few seconds and skips unchanged writes.
     last_autosave: Cell<Option<std::time::Instant>>,
@@ -312,7 +310,7 @@ impl App {
         // whose bundled script is missing simply registers nothing (see
         // `tools::session_hook`). Done here rather than lazily because the hook has to be
         // in place BEFORE the user starts a tool, not after we notice they did.
-        hyperpanes_core::tools::session_hook::ensure_registered();
+        avada_core::tools::session_hook::ensure_registered();
         Rc::new(App {
             mgr,
             windows: RefCell::new(Vec::new()),
@@ -349,11 +347,11 @@ impl App {
     /// Stamp each snapshotted pane that has a live Claude conversation with its session id
     /// (pane meta "claude.session"), so restore can `claude --resume` it when the session
     /// itself did not survive. The hook's marker files are keyed by the pane's external id
-    /// (`HYPERPANES_PANE_ID`): the control host's alias for a control-spawned pane, the
+    /// (`AVADA_PANE_ID`): the control host's alias for a control-spawned pane, the
     /// session uid itself for a GUI-native one — hence the lookup lives here, above both.
     #[tracing::instrument(level = "debug", skip_all)]
-    fn embed_claude_sessions(&self, file: &mut hyperpanes_core::workspace::model::WorkspaceFile) {
-        use hyperpanes_core::claude_panes;
+    fn embed_claude_sessions(&self, file: &mut avada_core::workspace::model::WorkspaceFile) {
+        use avada_core::claude_panes;
         let groups = match file.groups.as_mut() {
             Some(g) => g,
             None => return,
@@ -402,7 +400,7 @@ impl App {
     /// syscalls per pane, which is why it is throttled well off the pump's cadence.
     ///
     /// Chrome only — nothing here writes `spawn_command` / `spawn_args` or the persisted
-    /// [`PaneKind`](hyperpanes_core::tools::PaneKind).
+    /// [`PaneKind`](avada_core::tools::PaneKind).
     #[tracing::instrument(level = "debug", ret, skip(self, windows))]
     fn sniff_foreground(&self, windows: &[Rc<Window>]) {
         const EVERY: Duration = Duration::from_millis(750);
@@ -479,7 +477,7 @@ impl App {
     /// Two sources are consulted, in this order:
     ///
     /// 1. **The tool's own hook.** Claude, Cursor and Copilot all fire a session-start hook
-    ///    that inherits `HYPERPANES_PANE_ID` from the pane's environment and drops a marker
+    ///    that inherits `AVADA_PANE_ID` from the pane's environment and drops a marker
     ///    naming the conversation. This is a *report*, not a deduction, so it is read first
     ///    and it is read every pass — it lands within a second of the tool starting.
     /// 2. **The scan-and-diff fallback** (`tools::session_infer`), for a pane no hook spoke
@@ -537,8 +535,8 @@ impl App {
                 let mark = match tool.as_str() {
                     // Claude's marker predates the shared one and has its own shape and its
                     // own reader; it is the same fact.
-                    "claude" => hyperpanes_core::claude_panes::read_pane_session(&pane_id)
-                        .and_then(|s| {
+                    "claude" => {
+                        avada_core::claude_panes::read_pane_session(&pane_id).and_then(|s| {
                             // The marker's own cwd is the authority; the pane's live one is
                             // only a stand-in for the markers written before it carried one.
                             let dir = if s.cwd.is_empty() {
@@ -546,10 +544,11 @@ impl App {
                             } else {
                                 s.cwd.as_str()
                             };
-                            hyperpanes_core::tools::ToolSessionMark::new(&s.session_id, dir)
+                            avada_core::tools::ToolSessionMark::new(&s.session_id, dir)
                                 .map(|m| m.with_tool("claude"))
-                        }),
-                    other => hyperpanes_core::tools::session_hook::read_pane_mark(other, &pane_id),
+                        })
+                    }
+                    other => avada_core::tools::session_hook::read_pane_mark(other, &pane_id),
                 };
                 match mark {
                     Some(mark) => {
@@ -584,13 +583,13 @@ impl App {
         }
     }
 
-    /// Deliver queued speak-first prompts (see `hyperpanes_core::resume_queue`): for each
+    /// Deliver queued speak-first prompts (see `avada_core::resume_queue`): for each
     /// live Claude marker whose session has queued messages, type them into the owning pane.
     /// Readiness = the marker is a few seconds old (SessionStart fires early in boot; the
     /// TUI needs a beat before it accepts input). Deliver-once: `take_for` removes them.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn deliver_queued_prompts(&self) {
-        use hyperpanes_core::resume_queue;
+        use avada_core::resume_queue;
         const EVERY: Duration = Duration::from_secs(2);
         /// Markers younger than this may belong to a claude whose input box isn't up yet.
         const READY_AGE_SECS: u64 = 4;
@@ -604,7 +603,7 @@ impl App {
         if resume_queue::is_empty() {
             return;
         }
-        let dir = hyperpanes_core::persistence::paths::claude_sessions_dir();
+        let dir = avada_core::persistence::paths::claude_sessions_dir();
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return;
         };
@@ -613,7 +612,7 @@ impl App {
             let Some(pane_id) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let Some(marker) = hyperpanes_core::claude_panes::read_pane_session(pane_id) else {
+            let Some(marker) = avada_core::claude_panes::read_pane_session(pane_id) else {
                 continue;
             };
             let ready = entry
@@ -688,7 +687,7 @@ impl App {
     fn deliver_pending_goals(&self) {
         const READY_AGE_SECS: u64 = 4;
         const FALLBACK_SECS: u64 = 12;
-        let dir = hyperpanes_core::persistence::paths::claude_sessions_dir();
+        let dir = avada_core::persistence::paths::claude_sessions_dir();
         let windows: Vec<Rc<Window>> = self.windows.borrow().clone();
         for w in &windows {
             // Drain the ready goals under a short state borrow (nothing blocking held across it).
@@ -806,7 +805,7 @@ impl App {
             }
         }
         // Hand the control plane the schedule as it now stands, for `GET /loops` and
-        // `hyperpanes ctl loops`. After the poll so this tick's firing is already visible,
+        // `avada ctl loops`. After the poll so this tick's firing is already visible,
         // and outside the `for` so it also refreshes while the startup grace is holding the
         // loops back and nothing has fired at all.
         self.loops.publish(status_secs, restart_secs);
@@ -832,8 +831,8 @@ impl App {
             .control
             .pane_id_for_uid(&uid)
             .unwrap_or_else(|| uid.clone());
-        if let Some(s) = hyperpanes_core::claude_panes::read_pane_session(&pane_id) {
-            match hyperpanes_core::resume_queue::enqueue(&s.session_id, prompt) {
+        if let Some(s) = avada_core::claude_panes::read_pane_session(&pane_id) {
+            match avada_core::resume_queue::enqueue(&s.session_id, prompt) {
                 Ok(()) => {
                     tracing::info!(uid = %uid, session = %s.session_id, "status loop: prompt queued for the Hyperpane agent")
                 }
@@ -887,7 +886,7 @@ impl App {
                 .pane_id_for_uid(&uid)
                 .unwrap_or_else(|| uid.clone());
             let marker = (tool == "claude")
-                .then(|| hyperpanes_core::claude_panes::read_pane_session(&pane_id))
+                .then(|| avada_core::claude_panes::read_pane_session(&pane_id))
                 .flatten();
             let rebound =
                 w.state
@@ -926,8 +925,8 @@ impl App {
     fn session_snapshot(
         &self,
         wins: &[Rc<Window>],
-    ) -> Option<hyperpanes_core::workspace::model::WorkspaceFile> {
-        use hyperpanes_core::workspace::model::{WindowSpec, WorkspaceFile};
+    ) -> Option<avada_core::workspace::model::WorkspaceFile> {
+        use avada_core::workspace::model::{WindowSpec, WorkspaceFile};
         let mut files: Vec<(bool, WorkspaceFile)> = Vec::with_capacity(wins.len());
         for w in wins {
             let st = w.state.borrow();
@@ -1064,7 +1063,7 @@ impl App {
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn set_handoff_rx(
         &self,
-        rx: std::sync::mpsc::Receiver<hyperpanes_core::single_instance::HandoffMessage>,
+        rx: std::sync::mpsc::Receiver<avada_core::single_instance::HandoffMessage>,
     ) {
         *self.handoffs.borrow_mut() = Some(rx);
     }
@@ -1139,7 +1138,7 @@ impl App {
         // The file menu's "Open With" list comes from the OS, and asking costs a scan of
         // every installed application. Pay it here, off the UI thread, while the window is
         // still coming up — otherwise the first right-click on a file stalls for it.
-        std::thread::spawn(hyperpanes_core::open::warm_handlers);
+        std::thread::spawn(avada_core::open::warm_handlers);
         // macOS keeps the native traffic lights overlaid on the custom bar (see
         // window/macos.rs) — tell the UI so it pads past them and drops the custom
         // min/max/close cluster. Constant per build; Slint has no cfg of its own.
@@ -1321,7 +1320,7 @@ impl App {
         if windows.is_empty() {
             return;
         }
-        // Perf instrumentation (#1) — inert unless `HYPERPANES_PERFLOG` is set.
+        // Perf instrumentation (#1) — inert unless `AVADA_PERFLOG` is set.
         let perf_on = crate::perf::enabled();
         let t_tick = perf_on.then(std::time::Instant::now);
 
@@ -1484,7 +1483,7 @@ impl App {
         //     hosting, so the panel's DETACHED section can subtract them. Cheap (a string
         //     set over the live panes) and done once for all windows, before the renders
         //     that project it. M7: the same set is registered with the daemon's
-        //     cross-process claim registry, so other hyperpanes processes stop offering our
+        //     cross-process claim registry, so other avada processes stop offering our
         //     panes for adoption (only the diff goes on the wire, fire-and-forget).
         {
             let mut claims: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1539,13 +1538,13 @@ impl App {
         self.ticks.set(self.ticks.get() + 1);
         // Test affordance (inert unless the env is set): panic once the app is up + autosaved, to
         // exercise the crash reporter end-to-end — hook → crash log → reporter dialog → relaunch →
-        // session restore. Mirrors the `HYPERPANES_MULTIWIN` / `HYPERPANES_DEBUG` test hooks.
-        if self.ticks.get() == 220 && std::env::var_os("HYPERPANES_TEST_PANIC").is_some() {
-            panic!("HYPERPANES_TEST_PANIC: simulated crash");
+        // session restore. Mirrors the `AVADA_MULTIWIN` / `AVADA_DEBUG` test hooks.
+        if self.ticks.get() == 220 && std::env::var_os("AVADA_TEST_PANIC").is_some() {
+            panic!("AVADA_TEST_PANIC: simulated crash");
         }
         if !self.scaffold_done.get()
             && self.ticks.get() > 350 // ≈2.8 s at 8 ms/tick
-            && std::env::var_os("HYPERPANES_MULTIWIN").is_some()
+            && std::env::var_os("AVADA_MULTIWIN").is_some()
         {
             if let Some(w0) = windows.first() {
                 let ready = {
@@ -1683,7 +1682,7 @@ impl App {
                     let mut carries = self.openurl_carry.borrow_mut();
                     let carry = carries.entry(uid.clone()).or_default();
                     let (urls, rest) =
-                        hyperpanes_core::session::openurl::parse_osc_open_url(carry, &data);
+                        avada_core::session::openurl::parse_osc_open_url(carry, &data);
                     *carry = rest;
                     urls
                 };
@@ -2034,10 +2033,10 @@ impl App {
             PendingSeed::EmptyTab => {
                 st.add_pane(&self.mgr);
                 if self.first_seed.replace(false) {
-                    if std::env::var_os("HYPERPANES_DEMO").is_some() {
+                    if std::env::var_os("AVADA_DEMO").is_some() {
                         crate::demo_seed(st, &self.mgr);
                     }
-                    if let Some(which) = std::env::var_os("HYPERPANES_OPEN") {
+                    if let Some(which) = std::env::var_os("AVADA_OPEN") {
                         match which.to_string_lossy().as_ref() {
                             "palette" => {
                                 dispatch(st, Command::PaletteOpen, &self.mgr);
@@ -2053,7 +2052,7 @@ impl App {
                             // The left panel (workspace tree / library / sets / detached).
                             // Idempotent on purpose: `left_panel_open` is persisted, so a
                             // blind toggle would CLOSE the panel on any relaunch that
-                            // restored it open — the opposite of what HYPERPANES_OPEN means.
+                            // restored it open — the opposite of what AVADA_OPEN means.
                             "leftpanel" => {
                                 if !st.left_panel_open {
                                     dispatch(st, Command::ToggleLeftPanel, &self.mgr);
@@ -2081,9 +2080,7 @@ impl App {
                                 dispatch(st, Command::NewPane, &self.mgr);
                                 dispatch(
                                     st,
-                                    Command::SetLayout(
-                                        hyperpanes_core::layout::presets::Layout::Single,
-                                    ),
+                                    Command::SetLayout(avada_core::layout::presets::Layout::Single),
                                     &self.mgr,
                                 );
                             }
@@ -2109,9 +2106,7 @@ impl App {
                                 dispatch(st, Command::NewPane, &self.mgr);
                                 dispatch(
                                     st,
-                                    Command::SetLayout(
-                                        hyperpanes_core::layout::presets::Layout::Single,
-                                    ),
+                                    Command::SetLayout(avada_core::layout::presets::Layout::Single),
                                     &self.mgr,
                                 );
                                 dispatch(
@@ -2138,13 +2133,13 @@ impl App {
             PendingSeed::Done => {}
         }
 
-        // `HYPERPANES_OPEN=leftpanel` has to work on a RESTORED window too, not only on the
+        // `AVADA_OPEN=leftpanel` has to work on a RESTORED window too, not only on the
         // empty-tab scaffold above — the panel shows the workspace tree, so the launch that
         // most wants it open is exactly the one that restored a workspace (which seeds
         // `Workspace`, not `EmptyTab`, and so never reaches the match arm). `first_seed` is
         // already spent when the arm ran, which is what keeps this from firing twice.
         if self.first_seed.replace(false)
-            && std::env::var_os("HYPERPANES_OPEN").is_some_and(|v| v == "leftpanel")
+            && std::env::var_os("AVADA_OPEN").is_some_and(|v| v == "leftpanel")
             && !st.left_panel_open
         {
             dispatch(st, Command::ToggleLeftPanel, &self.mgr);
@@ -2248,13 +2243,12 @@ impl App {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn apply_handoff(self: &Rc<Self>, msg: hyperpanes_core::single_instance::HandoffMessage) {
-        use hyperpanes_core::cli::parse::{AttachAs, LaunchRouting};
-        use hyperpanes_core::workspace::model::WorkspaceFile;
+    fn apply_handoff(self: &Rc<Self>, msg: avada_core::single_instance::HandoffMessage) {
+        use avada_core::cli::parse::{AttachAs, LaunchRouting};
+        use avada_core::workspace::model::WorkspaceFile;
         tracing::debug!("second-instance handoff argv={:?}", msg.argv);
         self.wake();
-        let si =
-            hyperpanes_core::cli::routing::resolve_second_instance_windows(&msg.argv, &msg.cwd);
+        let si = avada_core::cli::routing::resolve_second_instance_windows(&msg.argv, &msg.cwd);
         tracing::debug!(
             "handoff resolved: windows={} routing={:?}",
             si.windows.len(),
@@ -3499,7 +3493,7 @@ impl App {
                         .borrow_mut()
                         .pane_link_activate(i as usize, x, y, ctrl);
                     match action {
-                        Some(hyperpanes_terminal_widget::LinkAction::Copy(path)) => {
+                        Some(avada_terminal_widget::LinkAction::Copy(path)) => {
                             // Copy via the pane's arboard clipboard + "Copied …" toast — NOT a
                             // `clip.exe` shell-out, whose blocking `child.wait()` froze the UI
                             // thread on every Ctrl+click (and showed no indicator).
@@ -3509,7 +3503,7 @@ impl App {
                         // Preferences → Browser — the OS default, one chosen browser, or the
                         // "Open link with…" chooser. `action` was read out of a borrow that
                         // ended with the statement above, so dispatching here is safe.
-                        Some(hyperpanes_terminal_widget::LinkAction::OpenUrl(url)) => {
+                        Some(avada_terminal_widget::LinkAction::OpenUrl(url)) => {
                             app.run_command(&win, Command::OpenLink(url));
                         }
                         // A clicked FILE path does not open anything by itself: it reveals
@@ -3517,18 +3511,14 @@ impl App {
                         // there what happens to it (viewer, markdown preview, vim, …).
                         // That choice is the whole point of routing through the panel
                         // instead of handing the path to the OS.
-                        Some(hyperpanes_terminal_widget::LinkAction::Reveal {
-                            path,
-                            line,
-                            col,
-                        }) => {
+                        Some(avada_terminal_widget::LinkAction::Reveal { path, line, col }) => {
                             app.run_command(&win, Command::RevealInFiles { path, line, col });
                         }
                         // A clicked COMMIT HASH goes to the left panel too, for the same
                         // reason: the panel can show the message, the files it touched, and
                         // hand each of those to the file menu — a `git show` fired straight
                         // at a pane would answer one question and close the door on the rest.
-                        Some(hyperpanes_terminal_widget::LinkAction::ShowCommit { cwd, hash }) => {
+                        Some(avada_terminal_widget::LinkAction::ShowCommit { cwd, hash }) => {
                             app.run_command(&win, Command::ShowCommit { cwd, hash });
                         }
                         None => {}
@@ -4172,7 +4162,7 @@ impl App {
                         st.settings
                             .tool_favorites
                             .iter()
-                            .filter_map(|f| hyperpanes_core::tools::by_id(f))
+                            .filter_map(|f| avada_core::tools::by_id(f))
                             .map(|t| t.id)
                             .nth(
                                 (mode as usize)
@@ -4212,9 +4202,9 @@ impl App {
                     if let Some(link) = row
                         .desktop
                         .as_deref()
-                        .and_then(hyperpanes_core::tools::claude_desktop::deep_link)
+                        .and_then(avada_core::tools::claude_desktop::deep_link)
                     {
-                        if let Err(e) = hyperpanes_core::open::open_url(&link) {
+                        if let Err(e) = avada_core::open::open_url(&link) {
                             tracing::warn!("could not raise Claude Desktop: {e}");
                         }
                         return;
@@ -4236,7 +4226,7 @@ impl App {
                         // shell line starts with an ABSOLUTE path (the resolved binary,
                         // possibly a human's own override), which is exactly the shape
                         // `PaneKind::for_command` cannot be relied on to recognise.
-                        kind: Some(hyperpanes_core::tools::PaneKind::Tool(tool_id.to_string())),
+                        kind: Some(avada_core::tools::PaneKind::Tool(tool_id.to_string())),
                         // The one place the conversation id is known for certain — the human
                         // just picked this row. Recording it here is what lets a relaunch
                         // re-resume THIS chat rather than starting the tool fresh; sniffing it
@@ -4727,7 +4717,7 @@ impl App {
                     match crate::update::apply_strategy() {
                         crate::update::ApplyStrategy::SilentInstaller => app.update.download(),
                         crate::update::ApplyStrategy::NotifyOnly => {
-                            if let Err(e) = hyperpanes_core::paths::os_open(RELEASES_PAGE) {
+                            if let Err(e) = avada_core::paths::os_open(RELEASES_PAGE) {
                                 app.update
                                     .set_error(format!("Couldn't open releases page: {e}"));
                             }
@@ -4739,7 +4729,7 @@ impl App {
                     // Unreachable on NotifyOnly platforms (nothing ever downloads), but keep
                     // the same releases-page behavior as a defensive backstop.
                     if crate::update::apply_strategy() == crate::update::ApplyStrategy::NotifyOnly {
-                        if let Err(e) = hyperpanes_core::paths::os_open(RELEASES_PAGE) {
+                        if let Err(e) = avada_core::paths::os_open(RELEASES_PAGE) {
                             app.update
                                 .set_error(format!("Couldn't open releases page: {e}"));
                         }
@@ -4783,7 +4773,7 @@ impl App {
                 // carrying the id as a string, because `pref_action` is the int-valued
                 // callback; an index the registry doesn't have is ignored, not guessed at.
                 if kind == 23 {
-                    if let Some(t) = hyperpanes_core::tools::TOOLS.get(arg.max(0) as usize) {
+                    if let Some(t) = avada_core::tools::TOOLS.get(arg.max(0) as usize) {
                         app.run_command(
                             &w,
                             Command::ApplySetting(crate::state::Setting::ToggleFavoriteTool(
@@ -4856,7 +4846,7 @@ impl App {
                 }
                 // Ambient-AI Ollama host/base-URL (13) + model (14) — live-configure the engine.
                 if kind == 13 || kind == 14 {
-                    use hyperpanes_core::ai::service::AiSettingsPatch;
+                    use avada_core::ai::service::AiSettingsPatch;
                     let patch = if kind == 13 {
                         AiSettingsPatch {
                             endpoint: Some(value.to_string()),
@@ -4880,7 +4870,7 @@ impl App {
                     let Ok(idx) = idx.parse::<usize>() else {
                         return;
                     };
-                    let Some(t) = hyperpanes_core::tools::TOOLS.get(idx) else {
+                    let Some(t) = avada_core::tools::TOOLS.get(idx) else {
                         return;
                     };
                     app.run_command(
@@ -5118,7 +5108,7 @@ fn fnv1a(s: &str) -> u64 {
 /// Mirror the ambient-AI engine status into a window's Preferences props: the enabled
 /// toggle, the host/model field seeds, and a human-readable status line.
 #[tracing::instrument(level = "debug", ret, skip(app))]
-fn apply_ai_status_props(app: &AppWindow, st: &hyperpanes_core::ai::service::AiStatus) {
+fn apply_ai_status_props(app: &AppWindow, st: &avada_core::ai::service::AiStatus) {
     app.set_pref_ai_enabled(st.enabled);
     app.set_pref_ai_host(st.endpoint.clone().into());
     app.set_pref_ai_model(st.model.clone().into());

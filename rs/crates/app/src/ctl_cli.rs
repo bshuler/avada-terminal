@@ -1,7 +1,7 @@
-//! `hyperpanes ctl …` — the workspace's own command line over the running control API.
+//! `avada ctl …` — the workspace's own command line over the running control API.
 //!
 //! This is the tool surface the always-on **Hyperpane** tab hands its agent (see
-//! `resources/claude/hyperpane/`). The MCP server (`hyperpanes-mcp`) is a separate npm package
+//! `resources/claude/hyperpane/`). The MCP server (`avada-mcp`) is a separate npm package
 //! and can't grow with this repo; a subcommand of the binary itself always matches the app it
 //! is talking to, needs no install step, and is reachable from any shell — including one inside
 //! a pane.
@@ -26,7 +26,7 @@ pub fn wants_ctl(argv: &[String]) -> bool {
 }
 
 const USAGE: &str = "\
-usage: hyperpanes ctl <verb> [args]
+usage: avada ctl <verb> [args]
 
   Discovery
     health                          is the control API up, and what does it allow
@@ -488,7 +488,7 @@ fn relative(at: Option<u64>, now: u64) -> String {
 // ---- argument plumbing ---------------------------------------------------------------------
 
 fn usage(msg: &str) -> ! {
-    eprintln!("usage: hyperpanes ctl {msg}");
+    eprintln!("usage: avada ctl {msg}");
     std::process::exit(2);
 }
 
@@ -582,9 +582,9 @@ mod tests {
 
     #[test]
     fn wants_ctl_only_matches_the_subcommand() {
-        assert!(wants_ctl(&s(&["hyperpanes", "ctl", "panes"])));
-        assert!(!wants_ctl(&s(&["hyperpanes"])));
-        assert!(!wants_ctl(&s(&["hyperpanes", "-c", "ctl"])));
+        assert!(wants_ctl(&s(&["avada", "ctl", "panes"])));
+        assert!(!wants_ctl(&s(&["avada"])));
+        assert!(!wants_ctl(&s(&["avada", "-c", "ctl"])));
     }
 
     #[test]

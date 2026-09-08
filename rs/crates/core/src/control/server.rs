@@ -120,7 +120,7 @@ pub struct Shared {
 
 impl Shared {
     /// Build the shared state. `allow_input` mirrors control-settings; `control_file` is both the
-    /// path written on start and the `HYPERPANES_CONTROL_FILE` injected into spawned panes.
+    /// path written on start and the `AVADA_CONTROL_FILE` injected into spawned panes.
     /// `speech_settings_path` is `speech.json`'s path — a real embedder passes
     /// [`paths::speech_json`](crate::persistence::paths::speech_json); tests pass a scratch
     /// path so `cargo test` never touches the developer's real settings file.

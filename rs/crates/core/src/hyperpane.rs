@@ -32,8 +32,8 @@ pub fn source_dir() -> Option<PathBuf> {
     let mut candidates = vec![exe_dir.join(&rel)];
     if let Some(prefix) = exe_dir.parent() {
         candidates.push(prefix.join("Resources").join("claude").join("hyperpane"));
-        candidates.push(prefix.join("share").join("hyperpanes").join(&rel));
-        candidates.push(prefix.join("lib").join("hyperpanes").join(&rel));
+        candidates.push(prefix.join("share").join("avada").join(&rel));
+        candidates.push(prefix.join("lib").join("avada").join(&rel));
     }
     candidates.into_iter().find(|c| c.is_dir())
 }
@@ -83,16 +83,16 @@ mod tests {
         let src = tmp.join("src");
         let dest = tmp.join("dest");
         let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(src.join(".claude/skills/hyperpanes")).unwrap();
-        fs::write(src.join(".claude/skills/hyperpanes/SKILL.md"), "new").unwrap();
-        fs::create_dir_all(dest.join(".claude/skills/hyperpanes")).unwrap();
-        fs::write(dest.join(".claude/skills/hyperpanes/SKILL.md"), "old").unwrap();
+        fs::create_dir_all(src.join(".claude/skills/avada")).unwrap();
+        fs::write(src.join(".claude/skills/avada/SKILL.md"), "new").unwrap();
+        fs::create_dir_all(dest.join(".claude/skills/avada")).unwrap();
+        fs::write(dest.join(".claude/skills/avada/SKILL.md"), "old").unwrap();
         fs::write(dest.join("notes.md"), "the agent's own notes").unwrap();
 
         copy_over(&src, &dest).unwrap();
 
         // App-owned file replaced, hidden `.claude/` subtree walked, user file untouched.
-        let skill = fs::read_to_string(dest.join(".claude/skills/hyperpanes/SKILL.md")).unwrap();
+        let skill = fs::read_to_string(dest.join(".claude/skills/avada/SKILL.md")).unwrap();
         assert_eq!(skill, "new");
         assert_eq!(
             fs::read_to_string(dest.join("notes.md")).unwrap(),

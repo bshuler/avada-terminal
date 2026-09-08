@@ -1,4 +1,4 @@
-//! `hyperpanes` — the native Slint GUI (Phase 4, Wave 1: **multi-window**).
+//! `avada` — the native Slint GUI (Phase 4, Wave 1: **multi-window**).
 //!
 //! This file is now a thin **bootstrap**: it owns the Tokio runtime + the one shared
 //! [`session_manager::SessionManager`], creates the app-level [`app::App`] window
@@ -61,7 +61,7 @@ mod worker;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperpanes_core::session_manager::{SessionEvent, SessionManager};
+use avada_core::session_manager::{SessionEvent, SessionManager};
 
 use slint::platform::Key;
 use slint::SharedString;
@@ -81,8 +81,8 @@ slint::include_modules!();
 pub static GUI_RESTARTING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// The log-file role for this invocation (`hyperpanes-<role>.log`, see
-/// `hyperpanes_core::logging`): the GUI, the session daemon, the crash dialog and the
+/// The log-file role for this invocation (`avada-<role>.log`, see
+/// `avada_core::logging`): the GUI, the session daemon, the crash dialog and the
 /// pipeable/worker command lines each get their own file so a `ctl` burst cannot roll the
 /// GUI's log out from under a bug report.
 #[tracing::instrument(level = "debug", ret)]
@@ -132,7 +132,7 @@ fn wants_kill_daemon(argv: &[String]) -> bool {
 }
 
 /// Lightweight perf instrumentation for the Wave-2 perf track (Task 17). Enabled by setting
-/// `HYPERPANES_PERFLOG` to a file path (or `1` / empty for a default temp path), so the
+/// `AVADA_PERFLOG` to a file path (or `1` / empty for a default temp path), so the
 /// startup-latency (#2) and scroll-region-throughput (#1) work can be measured before/after
 /// without an external profiler. Completely inert (one `OnceLock` load) when the env var is
 /// unset, so it costs nothing in normal runs. Single UI thread, so the tick aggregates live
@@ -151,10 +151,10 @@ pub(crate) mod perf {
     pub fn init() {
         let _ = START.get_or_init(Instant::now);
         let _ = PATH.get_or_init(|| {
-            std::env::var_os("HYPERPANES_PERFLOG").map(|v| {
+            std::env::var_os("AVADA_PERFLOG").map(|v| {
                 let s = v.to_string_lossy();
                 if s.is_empty() || s == "1" {
-                    std::env::temp_dir().join("hyperpanes-perf.log")
+                    std::env::temp_dir().join("avada-perf.log")
                 } else {
                     std::path::PathBuf::from(s.as_ref())
                 }
@@ -277,7 +277,7 @@ pub(crate) mod perf {
 }
 
 /// `--help`/`--version` classification, checked before ANY other mode (crash-report,
-/// session-daemon, single-instance gate, …) so `hyperpanes --help` always prints to stdout
+/// session-daemon, single-instance gate, …) so `avada --help` always prints to stdout
 /// and exits, instead of silently forwarding to a running primary instance or falling through
 /// to the GUI launch path.
 #[derive(Debug, PartialEq, Eq)]
@@ -288,7 +288,7 @@ enum InfoMode {
 
 /// Classifies `argv` as a `--help`/`--version` request, or `None` for anything else (including
 /// a bare GUI launch or a subcommand like `worker`/`pair`). Only looks at `argv[1]` — the first
-/// CLI arg after the program path — so e.g. `hyperpanes -c "echo --help"` isn't misclassified.
+/// CLI arg after the program path — so e.g. `avada -c "echo --help"` isn't misclassified.
 #[tracing::instrument(level = "debug", ret)]
 fn cli_info_mode(argv: &[String]) -> Option<InfoMode> {
     match argv.get(1).map(String::as_str) {
@@ -299,25 +299,25 @@ fn cli_info_mode(argv: &[String]) -> Option<InfoMode> {
 }
 
 const USAGE: &str = "\
-hyperpanes — tiled terminal workspace with AI-pane orchestration
+avada — tiled terminal workspace with AI-pane orchestration
 
 USAGE:
-    hyperpanes                    Launch the GUI (resumes the last session, or a workspace
+    avada                    Launch the GUI (resumes the last session, or a workspace
                                    file / -c command passed on the command line)
-    hyperpanes worker --queue <name> [--worker <id>] [--count N] [--worktree --base <committish>]
+    avada worker --queue <name> [--worker <id>] [--count N] [--worktree --base <committish>]
                        [--retry-window <secs>] [--nack-delay <ms>] -- <cmd> [args...]
                                    Drain a work queue by running <cmd> per claimed task
-    hyperpanes pair [--device <label>] [--ttl <30d|12h|90m|<ms>>]
+    avada pair [--device <label>] [--ttl <30d|12h|90m|<ms>>]
                                    Mint a per-device token and print pairing URLs + a QR code
-    hyperpanes devices             List paired mobile devices
-    hyperpanes revoke <label>      Revoke a paired device by label
-    hyperpanes attach [<pane>] [--resize] [--detach-key <key>]
+    avada devices             List paired mobile devices
+    avada revoke <label>      Revoke a paired device by label
+    avada attach [<pane>] [--resize] [--detach-key <key>]
                                    Render a live pane in THIS terminal (--list to see them)
-    hyperpanes ssh <status|enable|disable|authorize|keys|revoke|serve>
+    avada ssh <status|enable|disable|authorize|keys|revoke|serve>
                                    Manage the embedded SSH server, so a phone running Termius,
                                    Blink or plain ssh can attach to a pane (off by default,
                                    loopback-only, public-key auth; `ssh --help` for details)
-    hyperpanes control-mode [--session-name <n>] [--resize] [--no-dcs]
+    avada control-mode [--session-name <n>] [--resize] [--no-dcs]
                                    Serve the panes over tmux control mode (`tmux -CC`), for
                                    iTerm2 and the mobile tmux clients
 
@@ -332,13 +332,13 @@ FLAGS:
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // t0 for the perf log (#2 startup) — must be the very first thing so every mark is
-    // relative to process entry. Inert unless `HYPERPANES_PERFLOG` is set.
+    // relative to process entry. Inert unless `AVADA_PERFLOG` is set.
     perf::init();
     perf::mark("main: enter");
 
     // Pin the launch directory before ANY mode below can `set_current_dir` (the workspace
     // resolver, a tool spawn, the crash reporter). `state::resolve_new_pane_cwd` uses it as
-    // the fallback that makes `cd project && hyperpanes` open its terminals in `project`
+    // the fallback that makes `cd project && avada` open its terminals in `project`
     // instead of `$HOME`, and that only means anything if it is read at process entry.
     state::pin_launch_dir();
 
@@ -353,16 +353,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some(InfoMode::Version) => {
-                println!("hyperpanes {}", env!("CARGO_PKG_VERSION"));
+                println!("avada {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             None => {}
         }
 
         // Logging: one subscriber per process, file per role, level from the persisted
-        // `logLevel` setting unless `HYPERPANES_LOG` / `HYPERPANES_DEBUG` override it.
+        // `logLevel` setting unless `AVADA_LOG` / `AVADA_DEBUG` override it.
         let level = prefs::load().log_level;
-        hyperpanes_core::logging::init(log_role(&argv), &level);
+        avada_core::logging::init(log_role(&argv), &level);
         tracing::debug!(argv = ?argv, "process start");
     }
 
@@ -393,7 +393,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::panic::set_hook(Box::new(|info| {
         use std::io::Write;
         tracing::error!(panic = %info, "panic");
-        let path = std::env::temp_dir().join("hyperpanes-crash.log");
+        let path = std::env::temp_dir().join("avada-crash.log");
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -405,12 +405,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         crate::crash::write_marker(&path);
         // Guard against recursion if the reporter itself panics (it sets this env on its child).
-        if std::env::var_os("HYPERPANES_CRASH_CHILD").is_none() {
+        if std::env::var_os("AVADA_CRASH_CHILD").is_none() {
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::process::Command::new(exe)
                     .arg("--crash-report")
                     .arg(&path)
-                    .env("HYPERPANES_CRASH_CHILD", "1")
+                    .env("AVADA_CRASH_CHILD", "1")
                     .spawn();
             }
         }
@@ -427,7 +427,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // that outlives every GUI window, and the server is just another client of its
         // socket. Off unless the user enabled it, and never fatal to the daemon.
         ssh::spawn_with_daemon(&salt);
-        hyperpanes_core::session::daemon::run(&salt)?;
+        avada_core::session::daemon::run(&salt)?;
         return Ok(());
     }
 
@@ -437,10 +437,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // daemon's discovery use — so we kill the daemon that THIS install/dev build would attach
     // to (an isolated instance has its own).
     if wants_kill_daemon(&argv0) {
-        let salt = hyperpanes_core::persistence::paths::user_data_dir()
+        let salt = avada_core::persistence::paths::user_data_dir()
             .to_string_lossy()
             .into_owned();
-        match hyperpanes_core::session::daemon::kill_daemon(&salt) {
+        match avada_core::session::daemon::kill_daemon(&salt) {
             Ok(true) => tracing::debug!("kill-daemon: shut the running daemon down"),
             Ok(false) => tracing::debug!("kill-daemon: no daemon was running (no-op)"),
             Err(e) => tracing::debug!("kill-daemon: error {e}"),
@@ -457,7 +457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Everything below that is a plain command line — `pair`, `devices`, `revoke`, `attach`,
     // `ctl` — writes its answer to stdout, and whoever asked is entitled to stop reading it:
-    // `hyperpanes ctl panes | head -3` is an ordinary thing to type. Rust starts every process
+    // `avada ctl panes | head -3` is an ordinary thing to type. Rust starts every process
     // with SIGPIPE ignored so a closed pipe arrives as an `io::Error` rather than a signal, and
     // `println!` has nowhere to put that error but a panic — so the most routine shell idiom
     // there is ends in a backtrace and a crash dialog, for a condition every other Unix tool
@@ -490,13 +490,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // `ssh`: manage the embedded SSH server that lets a phone attach to a pane with no
-    // hyperpanes software on it (docs/mux-backend-plan.md M3).
+    // avada software on it (docs/mux-backend-plan.md M3).
     if ssh::wants_ssh(&argv0) {
         return ssh::run(&argv0).map_err(Into::into);
     }
 
     // `control-mode`: speak the SERVER half of tmux's control protocol on stdio, so iTerm2
-    // and the mobile tmux clients see hyperpanes panes as tmux panes (M4). Like `attach`,
+    // and the mobile tmux clients see avada panes as tmux panes (M4). Like `attach`,
     // a pure daemon client — no GUI, no single-instance gate.
     if control_mode_cli::wants_control_mode(&argv0) {
         return control_mode_cli::run(&argv0).map_err(Into::into);
@@ -524,14 +524,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_string());
-    let salt = hyperpanes_core::persistence::paths::user_data_dir()
+    let salt = avada_core::persistence::paths::user_data_dir()
         .to_string_lossy()
         .into_owned();
     let mut handoff_primary = None;
-    match hyperpanes_core::single_instance::acquire(&salt) {
-        Ok(hyperpanes_core::single_instance::Instance::Secondary(sec)) => {
+    match avada_core::single_instance::acquire(&salt) {
+        Ok(avada_core::single_instance::Instance::Secondary(sec)) => {
             tracing::debug!("single-instance: secondary, forwarding argv");
-            let msg = hyperpanes_core::single_instance::HandoffMessage { argv, cwd };
+            let msg = avada_core::single_instance::HandoffMessage { argv, cwd };
             let fwd = rt.block_on(async move { sec.forward(&msg).await });
             tracing::debug!("single-instance: forward -> {fwd:?}");
             // Don't wait for the runtime's worker threads on the way out — the hand-off
@@ -541,7 +541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fwd?;
             return Ok(());
         }
-        Ok(hyperpanes_core::single_instance::Instance::Primary(primary)) => {
+        Ok(avada_core::single_instance::Instance::Primary(primary)) => {
             tracing::debug!("single-instance: primary, serving hand-offs");
             handoff_primary = Some(primary);
         }
@@ -553,7 +553,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (etx, erx) = unbounded_channel::<SessionEvent>();
     // Backend selection (session-daemon-plan M4 — daemon DEFAULT-ON everywhere): sessions run in
-    // the PTY-owning daemon so they survive a GUI crash. Opt OUT with HYPERPANES_SESSION_DAEMON=0
+    // the PTY-owning daemon so they survive a GUI crash. Opt OUT with AVADA_SESSION_DAEMON=0
     // (forces today's in-process path); opt IN on any platform with =1. Default-on everywhere:
     // unix rides a UDS, Windows a named pipe, and on Windows the ConPTYs additionally live in a
     // pty-host process so a daemon upgrade never touches them. Selected ONCE here — the GUI's
@@ -561,7 +561,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // single-instance gate above, so a dev/isolated instance gets its own daemon. A connect/spawn
     // failure falls back to in-process rather than blocking launch — the daemon is an enhancement,
     // never a hard dependency.
-    let want_daemon = match std::env::var("HYPERPANES_SESSION_DAEMON").ok().as_deref() {
+    let want_daemon = match std::env::var("AVADA_SESSION_DAEMON").ok().as_deref() {
         Some("1") => true,
         Some("0") => false,
         _ => true,
@@ -578,7 +578,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // usual cause is a socket path over SUN_LEN (a long TMPDIR), which is
                 // fixable — but only by someone who has been told.
                 eprintln!(
-                    "hyperpanes: session daemon unavailable ({e}); running ptys in-process \
+                    "avada: session daemon unavailable ({e}); running ptys in-process \
                      — terminals will NOT survive restarting the app"
                 );
                 tracing::debug!(
@@ -595,8 +595,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // pane→conversation marker is written reliably — backing claude-resume and the goals
     // system's marker-gated delivery without the user hand-editing settings.json. Only touches
     // existing Claude config dirs; a missing bundled hook or any write error is a silent no-op.
-    if let Some(hook) = hyperpanes_core::claude_hook::bundled_hook_path() {
-        hyperpanes_core::claude_hook::ensure_registered(&hook);
+    if let Some(hook) = avada_core::claude_hook::bundled_hook_path() {
+        avada_core::claude_hook::ensure_registered(&hook);
     }
 
     // The app owns the window registry + the shared session stream.
@@ -616,13 +616,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Wire the launch seed: `hyperpanes -c "<cmd>" --shell … --cwd … --name …` (or a
-    // positional workspace `.hyperpanes`/`.json`) seeds the first window from that spec;
+    // Wire the launch seed: `avada -c "<cmd>" --shell … --cwd … --name …` (or a
+    // positional workspace `.avada`/`.json`) seeds the first window from that spec;
     // a bare launch falls back to the LAST SESSION (`last-workspace.json`, written when
     // the final window closes — see `app::persist_last_session`), so tabs/layout/per-pane
     // zoom survive a plain relaunch (#14). A first-ever launch (no last-session file)
     // stays an empty shell pane.
-    let seed = match hyperpanes_core::workspace::launch::resolve_launch_workspace(&argv, &cwd) {
+    let seed = match avada_core::workspace::launch::resolve_launch_workspace(&argv, &cwd) {
         Some(file) => PendingSeed::Workspace(Box::new(file)),
         None => PendingSeed::EmptyTab,
     };
@@ -636,7 +636,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = std::process::Command::new(exe)
                 .arg("--crash-report")
                 .arg(&log)
-                .env("HYPERPANES_CRASH_CHILD", "1")
+                .env("AVADA_CRASH_CHILD", "1")
                 .spawn();
         }
     }
@@ -683,7 +683,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Quit-vs-keep-alive (session-daemon-plan M3). Read the persisted preference fresh (it
     // may have been toggled this session) — default ON: "keep terminals running in the
-    // background when Hyperpanes closes".
+    // background when Avada closes".
     //
     //  * Daemon backend + keep-alive ON  → LEAVE the daemon (and its sessions) running, so a
     //    relaunch re-attaches the survivors (the whole point of the daemon). We do NOT call
@@ -710,10 +710,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Seed a richer workspace (2 tabs, several panes, non-default layouts) so a
-/// screenshot exercises the Wave-1 surface. Gated by `HYPERPANES_DEMO`.
+/// screenshot exercises the Wave-1 surface. Gated by `AVADA_DEMO`.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn demo_seed(st: &mut State, mgr: &SessionManager) {
-    use hyperpanes_core::layout::presets::Layout;
+    use avada_core::layout::presets::Layout;
     // tab 0: 3 panes in main-stack (shows the main divider + focus ring)
     dispatch(st, Command::NewPane, mgr);
     dispatch(st, Command::NewPane, mgr);
@@ -1033,7 +1033,7 @@ fn restore_default_sigpipe() {}
 
 #[cfg(test)]
 mod tests {
-    // `hyperpanes ctl panes | head -3` used to end in a panic and a crash dialog: Rust
+    // `avada ctl panes | head -3` used to end in a panic and a crash dialog: Rust
     // ignores SIGPIPE, so the closed pipe came back to `println!` as an error it could only
     // panic on. The disposition is restored for the print-and-exit CLIs and nothing else —
     // the daemon in particular must keep ignoring it, since a broken socket write there is a
@@ -1043,11 +1043,11 @@ mod tests {
         let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
         for yes in [
-            vec!["hyperpanes", "ctl", "panes"],
-            vec!["hyperpanes", "pair"],
-            vec!["hyperpanes", "devices"],
-            vec!["hyperpanes", "revoke", "phone"],
-            vec!["hyperpanes", "attach", "pane-1"],
+            vec!["avada", "ctl", "panes"],
+            vec!["avada", "pair"],
+            vec!["avada", "devices"],
+            vec!["avada", "revoke", "phone"],
+            vec!["avada", "attach", "pane-1"],
         ] {
             assert!(
                 super::pipeable_cli(&argv(&yes)),
@@ -1056,10 +1056,10 @@ mod tests {
         }
 
         for no in [
-            vec!["hyperpanes"],
-            vec!["hyperpanes", "--session-daemon", "/tmp/salt"],
-            vec!["hyperpanes", "worker", "--queue", "q"],
-            vec!["hyperpanes", "--kill-daemon"],
+            vec!["avada"],
+            vec!["avada", "--session-daemon", "/tmp/salt"],
+            vec!["avada", "worker", "--queue", "q"],
+            vec!["avada", "--kill-daemon"],
         ] {
             assert!(
                 !super::pipeable_cli(&argv(&no)),
@@ -1130,11 +1130,11 @@ mod tests {
     #[test]
     fn session_daemon_salt_parses_space_and_eq_forms() {
         assert_eq!(
-            session_daemon_salt(&argv(&["hyperpanes", "--session-daemon", "/data/dir"])),
+            session_daemon_salt(&argv(&["avada", "--session-daemon", "/data/dir"])),
             Some("/data/dir".to_string())
         );
         assert_eq!(
-            session_daemon_salt(&argv(&["hyperpanes", "--session-daemon=/data/dir"])),
+            session_daemon_salt(&argv(&["avada", "--session-daemon=/data/dir"])),
             Some("/data/dir".to_string())
         );
     }
@@ -1146,28 +1146,25 @@ mod tests {
     fn session_daemon_salt_passes_the_pty_host_marker_through_verbatim() {
         let marked = "/data/dir\u{1}pty-host";
         assert_eq!(
-            session_daemon_salt(&argv(&["hyperpanes", "--session-daemon", marked])),
+            session_daemon_salt(&argv(&["avada", "--session-daemon", marked])),
             Some(marked.to_string())
         );
         assert_eq!(
-            session_daemon_salt(&argv(&[
-                "hyperpanes",
-                &format!("--session-daemon={marked}")
-            ])),
+            session_daemon_salt(&argv(&["avada", &format!("--session-daemon={marked}")])),
             Some(marked.to_string())
         );
     }
 
     #[test]
     fn session_daemon_salt_is_none_for_a_normal_launch() {
-        assert_eq!(session_daemon_salt(&argv(&["hyperpanes"])), None);
+        assert_eq!(session_daemon_salt(&argv(&["avada"])), None);
         assert_eq!(
-            session_daemon_salt(&argv(&["hyperpanes", "-c", "ls", "--cwd", "/tmp"])),
+            session_daemon_salt(&argv(&["avada", "-c", "ls", "--cwd", "/tmp"])),
             None
         );
         // A bare flag with no following salt yields None (nothing to run a daemon for).
         assert_eq!(
-            session_daemon_salt(&argv(&["hyperpanes", "--session-daemon"])),
+            session_daemon_salt(&argv(&["avada", "--session-daemon"])),
             None
         );
     }
@@ -1176,10 +1173,10 @@ mod tests {
 
     #[test]
     fn kill_daemon_flag_is_detected() {
-        assert!(wants_kill_daemon(&argv(&["hyperpanes", "--kill-daemon"])));
+        assert!(wants_kill_daemon(&argv(&["avada", "--kill-daemon"])));
         // Tolerates other args around it.
         assert!(wants_kill_daemon(&argv(&[
-            "hyperpanes",
+            "avada",
             "--foo",
             "--kill-daemon",
             "bar"
@@ -1188,11 +1185,11 @@ mod tests {
 
     #[test]
     fn kill_daemon_flag_is_absent_on_a_normal_launch() {
-        assert!(!wants_kill_daemon(&argv(&["hyperpanes"])));
-        assert!(!wants_kill_daemon(&argv(&["hyperpanes", "-c", "ls"])));
+        assert!(!wants_kill_daemon(&argv(&["avada"])));
+        assert!(!wants_kill_daemon(&argv(&["avada", "-c", "ls"])));
         // Not confused by the daemon-RUN flag.
         assert!(!wants_kill_daemon(&argv(&[
-            "hyperpanes",
+            "avada",
             "--session-daemon",
             "/data"
         ])));
@@ -1204,7 +1201,7 @@ mod tests {
     fn cli_info_mode_detects_help() {
         for flag in ["--help", "-h", "help"] {
             assert_eq!(
-                cli_info_mode(&argv(&["hyperpanes", flag])),
+                cli_info_mode(&argv(&["avada", flag])),
                 Some(InfoMode::Help),
                 "flag {flag:?} not classified as Help"
             );
@@ -1215,7 +1212,7 @@ mod tests {
     fn cli_info_mode_detects_version() {
         for flag in ["--version", "-V"] {
             assert_eq!(
-                cli_info_mode(&argv(&["hyperpanes", flag])),
+                cli_info_mode(&argv(&["avada", flag])),
                 Some(InfoMode::Version),
                 "flag {flag:?} not classified as Version"
             );
@@ -1224,22 +1221,19 @@ mod tests {
 
     #[test]
     fn cli_info_mode_is_none_for_a_normal_launch() {
-        assert_eq!(cli_info_mode(&argv(&["hyperpanes"])), None);
+        assert_eq!(cli_info_mode(&argv(&["avada"])), None);
         assert_eq!(
-            cli_info_mode(&argv(&["hyperpanes", "-c", "ls", "--cwd", "/tmp"])),
+            cli_info_mode(&argv(&["avada", "-c", "ls", "--cwd", "/tmp"])),
             None
         );
         assert_eq!(
-            cli_info_mode(&argv(&["hyperpanes", "worker", "--queue", "q"])),
+            cli_info_mode(&argv(&["avada", "worker", "--queue", "q"])),
             None
         );
-        assert_eq!(cli_info_mode(&argv(&["hyperpanes", "pair"])), None);
-        assert_eq!(cli_info_mode(&argv(&["hyperpanes", "--kill-daemon"])), None);
+        assert_eq!(cli_info_mode(&argv(&["avada", "pair"])), None);
+        assert_eq!(cli_info_mode(&argv(&["avada", "--kill-daemon"])), None);
         // Only argv[1] is checked, not flags/args elsewhere on the line.
-        assert_eq!(
-            cli_info_mode(&argv(&["hyperpanes", "-c", "echo --help"])),
-            None
-        );
+        assert_eq!(cli_info_mode(&argv(&["avada", "-c", "echo --help"])), None);
     }
 
     // ---- Ctrl+Shift+P → palette, pinned at the ROUTER level (the full text→tok→chord

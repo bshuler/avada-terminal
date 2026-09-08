@@ -1,6 +1,6 @@
 # DPI sharpness at fractional scales — verification note (#11)
 
-**Date:** 2026-06-10 · **Build:** release `hyperpanes.exe` (branch `fanout/wave3-tests-polish`,
+**Date:** 2026-06-10 · **Build:** release `avada.exe` (branch `fanout/wave3-tests-polish`,
 includes the be55b25 1:1 terminal-surface fix) · **Verdict: already sharp — no fix needed.**
 
 ## What was checked

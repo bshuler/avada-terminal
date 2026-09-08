@@ -1,5 +1,5 @@
 [package]
-name = "hyperpanes"
+name = "avada"
 version = "0.0.36"
 edition = "2021"
 license = "MIT"
@@ -12,12 +12,12 @@ publish = false
 [workspace]
 
 [[bin]]
-name = "hyperpanes"
+name = "avada"
 path = "src/main.rs"
 
 [dependencies]
-hyperpanes-core = { path = "../core" }
-hyperpanes-terminal-widget = { path = "../terminal-widget" }
+avada-core = { path = "../core" }
+avada-terminal-widget = { path = "../terminal-widget" }
 # `raw-window-handle-06` exposes the native HWND (for the frameless-window Win32 glue).
 # Pinned to upstream slint-ui/slint master rev 9463a107 — back on upstream now that every fix we
 # carried in the fork has landed there: `PopupWindow.is-open` (#12000, merged; fixed in the compiler
@@ -61,13 +61,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 # Wave-2 preferences persistence (a small native-settings.json blob).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Log macros + `#[instrument]`; the subscriber is installed by hyperpanes_core::logging.
+# Log macros + `#[instrument]`; the subscriber is installed by avada_core::logging.
 tracing = "0.1"
 # Self-update (Task 8): a blocking GitHub-Releases check + installer download, run on a
 # dedicated background thread (never the UI thread). `blocking` over the already-present
 # (via core) reqwest; rustls-tls to avoid an OpenSSL build dep on Windows.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-# `hyperpanes pair` terminal QR for mobile-app pairing (pure Rust, no image backend).
+# `avada pair` terminal QR for mobile-app pairing (pure Rust, no image backend).
 qrcode = { version = "0.14", default-features = false }
 # Native Open/Save file dialogs: see the per-target rfd declarations below (Windows needs
 # no backend feature; Linux/macOS need one, so the dep is target-split).
@@ -141,7 +141,7 @@ opt-level = 1
 # ---------------------------------------------------------------------------
 # Linux distro packaging (deb via `cargo deb`, rpm via `cargo generate-rpm`).
 # Built by rs/packaging/{deb,rpm}.sh. FHS layout: the binary goes to /usr/bin and the
-# shell-integration scripts to /usr/share/hyperpanes/resources/shell-integration — found by
+# shell-integration scripts to /usr/share/avada/resources/shell-integration — found by
 # the prefix-relative candidate in core::shell_integration::shell_integration_dir(). Asset
 # `source` paths are relative to THIS manifest dir (rs/crates/app). Keep both asset lists in
 # sync; they mirror the AppDir that rs/packaging/appimage.sh assembles.
@@ -150,31 +150,31 @@ maintainer = "Eyal Mizrachi <eyal@sunsationsusa.com>"
 copyright = "2026 Eyalm321, MIT"
 section = "utils"
 priority = "optional"
-extended-description = "Hyperpanes is a native tiled terminal workspace with tabs-as-workspaces, pane drag/tear-off, clickable paths, and AI-pane orchestration over a control API."
+extended-description = "Avada is a native tiled terminal workspace with tabs-as-workspaces, pane drag/tear-off, clickable paths, and AI-pane orchestration over a control API."
 depends = "libc6, libfontconfig1, libfreetype6, libxkbcommon0"
 assets = [
-    ["target/release/hyperpanes", "/usr/bin/hyperpanes", "755"],
-    ["../../../resources/shell-integration/hp-init.sh", "/usr/share/hyperpanes/resources/shell-integration/hp-init.sh", "644"],
-    ["../../../resources/shell-integration/hp-init.ps1", "/usr/share/hyperpanes/resources/shell-integration/hp-init.ps1", "644"],
-    ["../../../resources/shell-integration/zdotdir/.zshenv", "/usr/share/hyperpanes/resources/shell-integration/zdotdir/.zshenv", "644"],
-    ["../../../resources/shell-integration/zdotdir/.zshrc", "/usr/share/hyperpanes/resources/shell-integration/zdotdir/.zshrc", "644"],
-    ["../../../resources/claude/hp-claude-session-hook.sh", "/usr/share/hyperpanes/resources/claude/hp-claude-session-hook.sh", "755"],
-    ["../../../resources/cursor/hp-cursor-session-hook.sh", "/usr/share/hyperpanes/resources/cursor/hp-cursor-session-hook.sh", "755"],
-    ["../../../resources/copilot/hp-copilot-session-hook.sh", "/usr/share/hyperpanes/resources/copilot/hp-copilot-session-hook.sh", "755"],
-    ["../../../resources/codex/hp-codex-session-hook.sh", "/usr/share/hyperpanes/resources/codex/hp-codex-session-hook.sh", "755"],
-    ["../../../resources/gemini/hp-gemini-session-hook.sh", "/usr/share/hyperpanes/resources/gemini/hp-gemini-session-hook.sh", "755"],
-    ["../../../resources/claude/goal-orchestrator/SKILL.md", "/usr/share/hyperpanes/resources/claude/goal-orchestrator/SKILL.md", "644"],
-    ["../../../resources/claude/goal-orchestrator/SPEC.md", "/usr/share/hyperpanes/resources/claude/goal-orchestrator/SPEC.md", "644"],
-    ["../../../resources/claude/goal-orchestrator/IMPL.md", "/usr/share/hyperpanes/resources/claude/goal-orchestrator/IMPL.md", "644"],
-    ["../../packaging/linux/hyperpanes.desktop", "/usr/share/applications/hyperpanes.desktop", "644"],
-    ["../../packaging/linux/hyperpanes-mime.xml", "/usr/share/mime/packages/hyperpanes.xml", "644"],
-    ["../../packaging/linux/icons/hicolor/16x16/apps/hyperpanes.png", "/usr/share/icons/hicolor/16x16/apps/hyperpanes.png", "644"],
-    ["../../packaging/linux/icons/hicolor/32x32/apps/hyperpanes.png", "/usr/share/icons/hicolor/32x32/apps/hyperpanes.png", "644"],
-    ["../../packaging/linux/icons/hicolor/48x48/apps/hyperpanes.png", "/usr/share/icons/hicolor/48x48/apps/hyperpanes.png", "644"],
-    ["../../packaging/linux/icons/hicolor/64x64/apps/hyperpanes.png", "/usr/share/icons/hicolor/64x64/apps/hyperpanes.png", "644"],
-    ["../../packaging/linux/icons/hicolor/128x128/apps/hyperpanes.png", "/usr/share/icons/hicolor/128x128/apps/hyperpanes.png", "644"],
-    ["../../packaging/linux/icons/hicolor/256x256/apps/hyperpanes.png", "/usr/share/icons/hicolor/256x256/apps/hyperpanes.png", "644"],
-    ["../../packaging/linux/icons/hicolor/512x512/apps/hyperpanes.png", "/usr/share/icons/hicolor/512x512/apps/hyperpanes.png", "644"],
+    ["target/release/avada", "/usr/bin/avada", "755"],
+    ["../../../resources/shell-integration/hp-init.sh", "/usr/share/avada/resources/shell-integration/hp-init.sh", "644"],
+    ["../../../resources/shell-integration/hp-init.ps1", "/usr/share/avada/resources/shell-integration/hp-init.ps1", "644"],
+    ["../../../resources/shell-integration/zdotdir/.zshenv", "/usr/share/avada/resources/shell-integration/zdotdir/.zshenv", "644"],
+    ["../../../resources/shell-integration/zdotdir/.zshrc", "/usr/share/avada/resources/shell-integration/zdotdir/.zshrc", "644"],
+    ["../../../resources/claude/hp-claude-session-hook.sh", "/usr/share/avada/resources/claude/hp-claude-session-hook.sh", "755"],
+    ["../../../resources/cursor/hp-cursor-session-hook.sh", "/usr/share/avada/resources/cursor/hp-cursor-session-hook.sh", "755"],
+    ["../../../resources/copilot/hp-copilot-session-hook.sh", "/usr/share/avada/resources/copilot/hp-copilot-session-hook.sh", "755"],
+    ["../../../resources/codex/hp-codex-session-hook.sh", "/usr/share/avada/resources/codex/hp-codex-session-hook.sh", "755"],
+    ["../../../resources/gemini/hp-gemini-session-hook.sh", "/usr/share/avada/resources/gemini/hp-gemini-session-hook.sh", "755"],
+    ["../../../resources/claude/goal-orchestrator/SKILL.md", "/usr/share/avada/resources/claude/goal-orchestrator/SKILL.md", "644"],
+    ["../../../resources/claude/goal-orchestrator/SPEC.md", "/usr/share/avada/resources/claude/goal-orchestrator/SPEC.md", "644"],
+    ["../../../resources/claude/goal-orchestrator/IMPL.md", "/usr/share/avada/resources/claude/goal-orchestrator/IMPL.md", "644"],
+    ["../../packaging/linux/avada.desktop", "/usr/share/applications/avada.desktop", "644"],
+    ["../../packaging/linux/avada-mime.xml", "/usr/share/mime/packages/avada.xml", "644"],
+    ["../../packaging/linux/icons/hicolor/16x16/apps/avada.png", "/usr/share/icons/hicolor/16x16/apps/avada.png", "644"],
+    ["../../packaging/linux/icons/hicolor/32x32/apps/avada.png", "/usr/share/icons/hicolor/32x32/apps/avada.png", "644"],
+    ["../../packaging/linux/icons/hicolor/48x48/apps/avada.png", "/usr/share/icons/hicolor/48x48/apps/avada.png", "644"],
+    ["../../packaging/linux/icons/hicolor/64x64/apps/avada.png", "/usr/share/icons/hicolor/64x64/apps/avada.png", "644"],
+    ["../../packaging/linux/icons/hicolor/128x128/apps/avada.png", "/usr/share/icons/hicolor/128x128/apps/avada.png", "644"],
+    ["../../packaging/linux/icons/hicolor/256x256/apps/avada.png", "/usr/share/icons/hicolor/256x256/apps/avada.png", "644"],
+    ["../../packaging/linux/icons/hicolor/512x512/apps/avada.png", "/usr/share/icons/hicolor/512x512/apps/avada.png", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -183,28 +183,28 @@ summary = "Tiled terminal workspace with AI-pane orchestration"
 auto-req = "no"
 requires = { fontconfig = "*", freetype = "*", libxkbcommon = "*" }
 assets = [
-    { source = "target/release/hyperpanes", dest = "/usr/bin/hyperpanes", mode = "0755" },
-    { source = "../../../resources/shell-integration/hp-init.sh", dest = "/usr/share/hyperpanes/resources/shell-integration/hp-init.sh", mode = "0644" },
-    { source = "../../../resources/shell-integration/hp-init.ps1", dest = "/usr/share/hyperpanes/resources/shell-integration/hp-init.ps1", mode = "0644" },
-    { source = "../../../resources/shell-integration/zdotdir/.zshenv", dest = "/usr/share/hyperpanes/resources/shell-integration/zdotdir/.zshenv", mode = "0644" },
-    { source = "../../../resources/shell-integration/zdotdir/.zshrc", dest = "/usr/share/hyperpanes/resources/shell-integration/zdotdir/.zshrc", mode = "0644" },
-    { source = "../../../resources/claude/hp-claude-session-hook.sh", dest = "/usr/share/hyperpanes/resources/claude/hp-claude-session-hook.sh", mode = "0755" },
-    { source = "../../../resources/cursor/hp-cursor-session-hook.sh", dest = "/usr/share/hyperpanes/resources/cursor/hp-cursor-session-hook.sh", mode = "0755" },
-    { source = "../../../resources/copilot/hp-copilot-session-hook.sh", dest = "/usr/share/hyperpanes/resources/copilot/hp-copilot-session-hook.sh", mode = "0755" },
-    { source = "../../../resources/codex/hp-codex-session-hook.sh", dest = "/usr/share/hyperpanes/resources/codex/hp-codex-session-hook.sh", mode = "0755" },
-    { source = "../../../resources/gemini/hp-gemini-session-hook.sh", dest = "/usr/share/hyperpanes/resources/gemini/hp-gemini-session-hook.sh", mode = "0755" },
-    { source = "../../../resources/claude/goal-orchestrator/SKILL.md", dest = "/usr/share/hyperpanes/resources/claude/goal-orchestrator/SKILL.md", mode = "0644" },
-    { source = "../../../resources/claude/goal-orchestrator/SPEC.md", dest = "/usr/share/hyperpanes/resources/claude/goal-orchestrator/SPEC.md", mode = "0644" },
-    { source = "../../../resources/claude/goal-orchestrator/IMPL.md", dest = "/usr/share/hyperpanes/resources/claude/goal-orchestrator/IMPL.md", mode = "0644" },
-    { source = "../../packaging/linux/hyperpanes.desktop", dest = "/usr/share/applications/hyperpanes.desktop", mode = "0644" },
-    { source = "../../packaging/linux/hyperpanes-mime.xml", dest = "/usr/share/mime/packages/hyperpanes.xml", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/16x16/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/16x16/apps/hyperpanes.png", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/32x32/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/32x32/apps/hyperpanes.png", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/48x48/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/48x48/apps/hyperpanes.png", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/64x64/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/64x64/apps/hyperpanes.png", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/128x128/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/128x128/apps/hyperpanes.png", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/256x256/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/256x256/apps/hyperpanes.png", mode = "0644" },
-    { source = "../../packaging/linux/icons/hicolor/512x512/apps/hyperpanes.png", dest = "/usr/share/icons/hicolor/512x512/apps/hyperpanes.png", mode = "0644" },
+    { source = "target/release/avada", dest = "/usr/bin/avada", mode = "0755" },
+    { source = "../../../resources/shell-integration/hp-init.sh", dest = "/usr/share/avada/resources/shell-integration/hp-init.sh", mode = "0644" },
+    { source = "../../../resources/shell-integration/hp-init.ps1", dest = "/usr/share/avada/resources/shell-integration/hp-init.ps1", mode = "0644" },
+    { source = "../../../resources/shell-integration/zdotdir/.zshenv", dest = "/usr/share/avada/resources/shell-integration/zdotdir/.zshenv", mode = "0644" },
+    { source = "../../../resources/shell-integration/zdotdir/.zshrc", dest = "/usr/share/avada/resources/shell-integration/zdotdir/.zshrc", mode = "0644" },
+    { source = "../../../resources/claude/hp-claude-session-hook.sh", dest = "/usr/share/avada/resources/claude/hp-claude-session-hook.sh", mode = "0755" },
+    { source = "../../../resources/cursor/hp-cursor-session-hook.sh", dest = "/usr/share/avada/resources/cursor/hp-cursor-session-hook.sh", mode = "0755" },
+    { source = "../../../resources/copilot/hp-copilot-session-hook.sh", dest = "/usr/share/avada/resources/copilot/hp-copilot-session-hook.sh", mode = "0755" },
+    { source = "../../../resources/codex/hp-codex-session-hook.sh", dest = "/usr/share/avada/resources/codex/hp-codex-session-hook.sh", mode = "0755" },
+    { source = "../../../resources/gemini/hp-gemini-session-hook.sh", dest = "/usr/share/avada/resources/gemini/hp-gemini-session-hook.sh", mode = "0755" },
+    { source = "../../../resources/claude/goal-orchestrator/SKILL.md", dest = "/usr/share/avada/resources/claude/goal-orchestrator/SKILL.md", mode = "0644" },
+    { source = "../../../resources/claude/goal-orchestrator/SPEC.md", dest = "/usr/share/avada/resources/claude/goal-orchestrator/SPEC.md", mode = "0644" },
+    { source = "../../../resources/claude/goal-orchestrator/IMPL.md", dest = "/usr/share/avada/resources/claude/goal-orchestrator/IMPL.md", mode = "0644" },
+    { source = "../../packaging/linux/avada.desktop", dest = "/usr/share/applications/avada.desktop", mode = "0644" },
+    { source = "../../packaging/linux/avada-mime.xml", dest = "/usr/share/mime/packages/avada.xml", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/16x16/apps/avada.png", dest = "/usr/share/icons/hicolor/16x16/apps/avada.png", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/32x32/apps/avada.png", dest = "/usr/share/icons/hicolor/32x32/apps/avada.png", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/48x48/apps/avada.png", dest = "/usr/share/icons/hicolor/48x48/apps/avada.png", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/64x64/apps/avada.png", dest = "/usr/share/icons/hicolor/64x64/apps/avada.png", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/128x128/apps/avada.png", dest = "/usr/share/icons/hicolor/128x128/apps/avada.png", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/256x256/apps/avada.png", dest = "/usr/share/icons/hicolor/256x256/apps/avada.png", mode = "0644" },
+    { source = "../../packaging/linux/icons/hicolor/512x512/apps/avada.png", dest = "/usr/share/icons/hicolor/512x512/apps/avada.png", mode = "0644" },
 ]
 
 # Headless Slint driver for the UI-layer end-to-end tests: builds the real component tree,

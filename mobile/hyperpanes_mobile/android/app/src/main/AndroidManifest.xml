@@ -4,7 +4,7 @@
     <!-- Pairing-QR scan (mobile_scanner). -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <application
-        android:label="hyperpanes"
+        android:label="Avada Terminal"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

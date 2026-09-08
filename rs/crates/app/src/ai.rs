@@ -18,12 +18,12 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use hyperpanes_core::ai::ollama::{OllamaClient, OllamaConfig};
-use hyperpanes_core::ai::service::{
+use avada_core::ai::ollama::{OllamaClient, OllamaConfig};
+use avada_core::ai::service::{
     AiPanePublish, AiProjectRef, AiService, AiSettings, AiSettingsPatch, AiStatus, JobOutcome,
     JobStep, OnStatus, PushMeta,
 };
-use hyperpanes_core::persistence::paths;
+use avada_core::persistence::paths;
 
 use tokio::sync::mpsc::{
     channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,

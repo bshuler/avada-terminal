@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use hyperpanes_core::control::readmodel::{PaneInfo, PaneStatus, ReadModel, TabInfo, WindowInfo};
+use avada_core::control::readmodel::{PaneInfo, PaneStatus, ReadModel, TabInfo, WindowInfo};
 
 fn pane(id: &str, uid: &str) -> PaneInfo {
     PaneInfo {
@@ -24,7 +24,7 @@ fn pane(id: &str, uid: &str) -> PaneInfo {
         status: PaneStatus::Running,
         exit_code: None,
         meta: None,
-        kind: hyperpanes_core::tools::PaneKind::Terminal,
+        kind: avada_core::tools::PaneKind::Terminal,
     }
 }
 

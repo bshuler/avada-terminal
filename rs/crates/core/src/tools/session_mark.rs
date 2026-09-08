@@ -2,17 +2,17 @@
 //!
 //! # Why this exists when `claude_panes` already did it
 //!
-//! Claude Code has a `SessionStart` hook, so Hyperpanes learns a Claude pane's live
+//! Claude Code has a `SessionStart` hook, so Avada learns a Claude pane's live
 //! conversation id from the outside and records it under `claude.session`. The ids still
 //! have to survive a relaunch for every *other* tool — so the mark here is the general
 //! form, written from any of three sources: a pane spawned out of the left panel's session
-//! list (Hyperpanes handed it one exact conversation), a per-tool session hook
+//! list (Avada handed it one exact conversation), a per-tool session hook
 //! ([`crate::tools::session_hook`] — cursor-agent and Copilot CLI have one too), or the
 //! scan-and-diff inference of last resort ([`crate::tools::session_infer`]).
 //!
 //! # Why the tool id is optional rather than absent
 //!
-//! For a pane Hyperpanes *spawned* as a tool the kind already answers "which tool": it
+//! For a pane Avada *spawned* as a tool the kind already answers "which tool": it
 //! rides in `meta["pane.kind"]` as [`crate::tools::PaneKind::Tool`], and storing the same
 //! fact twice invites the two copies to disagree. That reasoning holds exactly as long as
 //! the pane has a tool kind.

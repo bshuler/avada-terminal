@@ -63,8 +63,8 @@ pub struct InstanceNames {
 pub fn instance_names(salt: &str) -> InstanceNames {
     let h = format!("{:016x}", fnv1a64(salt));
     InstanceNames {
-        mutex: format!("Local\\hyperpanes.singleton.{h}"),
-        pipe: format!(r"\\.\pipe\hyperpanes.handoff.{h}"),
+        mutex: format!("Local\\avada.singleton.{h}"),
+        pipe: format!(r"\\.\pipe\avada.handoff.{h}"),
     }
 }
 
@@ -87,7 +87,7 @@ pub fn user_salt() -> String {
                 return format!("user:{}", user.to_lowercase());
             }
         }
-        "hyperpanes-default".to_string()
+        "avada-default".to_string()
     }
     #[cfg(not(windows))]
     {
@@ -106,7 +106,7 @@ pub fn user_salt() -> String {
                 return format!("user:{user}");
             }
         }
-        "hyperpanes-default".to_string()
+        "avada-default".to_string()
     }
 }
 
@@ -155,8 +155,8 @@ mod tests {
 
     #[test]
     fn instance_names_are_deterministic_for_a_salt() {
-        let a = instance_names("C:\\Users\\me\\AppData\\Roaming\\hyperpanes");
-        let b = instance_names("C:\\Users\\me\\AppData\\Roaming\\hyperpanes");
+        let a = instance_names("C:\\Users\\me\\AppData\\Roaming\\avada");
+        let b = instance_names("C:\\Users\\me\\AppData\\Roaming\\avada");
         assert_eq!(a, b);
     }
 
@@ -171,8 +171,8 @@ mod tests {
     #[test]
     fn names_use_the_expected_namespaces() {
         let n = instance_names("anything");
-        assert!(n.mutex.starts_with("Local\\hyperpanes.singleton."));
-        assert!(n.pipe.starts_with(r"\\.\pipe\hyperpanes.handoff."));
+        assert!(n.mutex.starts_with("Local\\avada.singleton."));
+        assert!(n.pipe.starts_with(r"\\.\pipe\avada.handoff."));
     }
 
     #[test]
@@ -193,11 +193,7 @@ mod tests {
     #[test]
     fn handoff_message_json_round_trips() {
         let msg = HandoffMessage {
-            argv: vec![
-                "hyperpanes".to_string(),
-                "--tab".to_string(),
-                ".".to_string(),
-            ],
+            argv: vec!["avada".to_string(), "--tab".to_string(), ".".to_string()],
             cwd: "C:\\work".to_string(),
         };
         let json = serde_json::to_string(&msg).unwrap();

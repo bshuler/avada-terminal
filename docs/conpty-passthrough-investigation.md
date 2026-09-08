@@ -6,10 +6,10 @@
 > and — important correction — the sideloaded 1.24 host does **NOT** repaint the scroll region
 > (1.0× inflation); what it doesn't fix is end-to-end delivery pacing. See §Addendum.
 
-**Question:** hyperpanes' `scrolling-region` (DECSTBM) terminal throughput is ~0.4 MB/s vs
+**Question:** avada' `scrolling-region` (DECSTBM) terminal throughput is ~0.4 MB/s vs
 Windows Terminal's ~33 MB/s (~80×). Is it fixable, how, and at what cost?
 
-**Short answer:** The 80× gap is **a Windows ConHost/ConPTY limitation, not a hyperpanes bug,
+**Short answer:** The 80× gap is **a Windows ConHost/ConPTY limitation, not a avada bug,
 and it is NOT fixable from our side by a flag, a dependency bump, or sideloading a newer ConPTY.**
 We empirically loaded the latest official redistributable ConPTY (the one that contains the big
 "passthrough" perf refactor) and the scroll-region case stayed at 0.2–0.4 MB/s. The one thing we
@@ -37,7 +37,7 @@ Track H's instrument already proved the mechanism: during a scroll-region run th
 ConHost, scraping its character grid into VT for the ConPTY master pipe, **re-renders the whole
 DECSTBM scroll region (cursor-home + ~20 lines) on every single scrolled line** instead of emitting
 an efficient scroll/index sequence. node is backpressured by conhost's *output-generation* rate, not
-by anything in hyperpanes: the app keeps up with the inflated 28 MB/s at ~38 % of one core and the
+by anything in avada: the app keeps up with the inflated 28 MB/s at ~38 % of one core and the
 grid scroll is O(1) (alacritty ring-rotate, measured by Track A). **The bottleneck is upstream of
 our process.**
 
@@ -99,8 +99,8 @@ relayouts/resizes it on the first render pump. (Relevant to option C below.)
   (latest stable **1.24.260512001**) and ships the matched `conpty.dll` (x64, 109 KB) +
   `OpenConsole.exe` (x64, 1.04 MB) pair that contains the #17510 passthrough refactor. WezTerm
   sideloads exactly this ([wezterm#7774](https://github.com/wezterm/wezterm/issues/7774)).
-- We downloaded it, deployed both files next to `hyperpanes.exe`, and **confirmed it loads**: a
-  process snapshot during a run shows our app (`hyperpanes.exe`) spawning
+- We downloaded it, deployed both files next to `avada.exe`, and **confirmed it loads**: a
+  process snapshot during a run shows our app (`avada.exe`) spawning
   `…\release\OpenConsole.exe` (v1.24.260512001) — the sideloaded host, not the in-box `conhost.exe`.
 - **Measured scroll-region throughput: 0.2 MB/s (in-box) → 0.3 MB/s (sideloaded 1.24).** Within
   noise. **The newest ConPTY does NOT fix the DECSTBM repaint.** This matches #7019 being
@@ -164,7 +164,7 @@ A fork buys nothing here. High effort, ~0 gain on the metric. **Rejected.**
    path in this environment. The sideload-vs-inbox numbers in Option B come from the GUI bench, where
    output flows (the 7.9/12.1 MB/s non-region cases prove it).
 2. **Sideload deployment** — downloaded `Microsoft.Windows.Console.ConPTY` 1.24.260512001, deployed
-   the x64 `conpty.dll`+`OpenConsole.exe` next to `hyperpanes.exe`, **confirmed it loads** (OpenConsole
+   the x64 `conpty.dll`+`OpenConsole.exe` next to `avada.exe`, **confirmed it loads** (OpenConsole
    spawned as our child), re-measured: **no win** (Option B).
 3. **Lazy screen mirror** — the double-parse elimination (Option D), shipped in
    `rs/crates/core/src/session_manager.rs` with tests. 375/375 core tests green.
@@ -188,7 +188,7 @@ A fork buys nothing here. High effort, ~0 gain on the metric. **Rejected.**
    for *Windows ConPTY itself*; every ConPTY-based emulator that uses the in-box host (including older
    conhost) hits it. The honest competitive story is "we match WT/Alacritty on normal output
    (scrolling/dense within run-to-run noise) and are bounded by Windows ConPTY on the DECSTBM
-   worst-case, same as any in-box-host app." It is not a hyperpanes regression.
+   worst-case, same as any in-box-host app." It is not a avada regression.
 
 ## Sources
 - [microsoft/terminal#7019 — pathological scroll-region redraw (closed: not planned)](https://github.com/microsoft/terminal/issues/7019)
@@ -322,7 +322,7 @@ So: 1.24 fixes #7019 for us but is irrelevant-to-harmful for startup; the startu
 on our side. Sections §G/§H are about #2 only.
 
 ### G. 2026-06-10 — startup: CreateProcessW of pwsh-into-ConPTY blocks ~1s (fixed by async spawn)
-Profiling the 2121 ms bench startup with `HYPERPANES_PERFLOG` + temporary core timings found the
+Profiling the 2121 ms bench startup with `AVADA_PERFLOG` + temporary core timings found the
 first pane's `mgr.create` blocking the startup path for **1.0–1.1 s, every launch** — and the
 entire cost is `CreateProcessW` into the pseudoconsole for **pwsh 7 specifically**:
 
@@ -367,7 +367,7 @@ Scanning is bounded (first 512 bytes, ≤3-byte cross-chunk carry, Windows-only)
 is never delayed and a child's own later queries still reach the widget for true-cursor answers.
 
 **Measured (child-runs-at, app launch → first child instruction):** bundled 1.24 host
-1231→**78 ms**; in-box 86 ms. Bench startup (3-run): hyperpanes **142 ms** vs WT 313 vs
+1231→**78 ms**; in-box 86 ms. Bench startup (3-run): avada **142 ms** vs WT 313 vs
 Alacritty 517 — from 2121 ms two days of fixes ago, and now the fastest of the three. pwsh's
 `CreateProcessW` no longer stalls (same handshake gate). The window itself appears at ~540 ms
 (wgpu device init — the only remaining startup block); the shell is already live behind it.

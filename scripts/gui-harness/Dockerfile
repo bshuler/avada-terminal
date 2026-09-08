@@ -1,4 +1,4 @@
-# Hyperpanes — a Linux box the GUI can be driven inside, with nobody watching.
+# Avada — a Linux box the GUI can be driven inside, with nobody watching.
 #
 # The point is autonomy: every input test I could otherwise only ask a human to
 # perform (type this, press that, drag this file onto that pane) happens in here

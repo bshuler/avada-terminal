@@ -4,7 +4,7 @@
 //
 // Why a .cmd wrapper? Terminals receive the workload differently: -e-style
 // terminals take an argv array (child_process quotes each element cleanly), but
-// hyperpanes takes a single command *string* that it re-parses through a shell —
+// avada takes a single command *string* that it re-parses through a shell —
 // and cmd.exe /c cannot reliably handle the \"-escaped quotes node-pty would
 // inject for a spaces-in-path node.exe. A .cmd file uses cmd-native quoting, which
 // IS reliable, so every terminal runs `cmd /c <wrapper>`: one quoting routine and
@@ -62,7 +62,7 @@ export function spawnTerminal(exe, args, { cwd = REPO_ROOT, env } = {}) {
 
 /**
  * Create a fresh throwaway data dir under the OS temp dir and return its path. Used to give each
- * measured hyperpanes (native or Electron) an ISOLATED userData/APPDATA so it starts as a clean,
+ * measured avada (native or Electron) an ISOLATED userData/APPDATA so it starts as a clean,
  * fresh instance — the native data dir keys on %APPDATA% and Electron's on --user-data-dir, so an
  * isolated dir avoids restoring a saved session and (for Electron) sidesteps the single-instance
  * lock that would otherwise forward the launch to a running instance. Caller cleans it up.
@@ -143,7 +143,7 @@ export function processesByName(names) {
 }
 
 /**
- * True if a NATIVE hyperpanes instance built from this repo is already up — a `hyperpanes.exe`
+ * True if a NATIVE avada instance built from this repo is already up — a `avada.exe`
  * whose executable path lives under `…\rs\crates\app\target\…` (the cargo build output). Replaces
  * the Electron-era `repoElectronRunning()` (which looked for `electron.exe` with the repo path).
  *
@@ -158,7 +158,7 @@ export function nativeRepoRunning() {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      "Get-CimInstance Win32_Process -Filter \"Name='hyperpanes.exe'\" | ForEach-Object { $_.ExecutablePath }"
+      "Get-CimInstance Win32_Process -Filter \"Name='avada.exe'\" | ForEach-Object { $_.ExecutablePath }"
     ],
     { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }
   );

@@ -6,7 +6,7 @@
 //! rather than hardcoded private-use codepoints, so the table tracks Slint exactly the
 //! way the encoder itself does.
 
-use hyperpanes_terminal_widget::encode_key;
+use avada_terminal_widget::encode_key;
 use slint::platform::Key;
 
 /// The `KeyEvent.text` Slint delivers for a special key (a private-use codepoint).

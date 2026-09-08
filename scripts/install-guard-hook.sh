@@ -3,7 +3,7 @@
 #
 # The repo-local wiring in .claude/settings.json only protects sessions whose
 # checkout contains it. A worktree on an older revision has no hook at all, which
-# is how `rm -rf /Applications/Hyperpanes.app` got submitted on 2026-09-02 with
+# is how `rm -rf /Applications/Avada.app` got submitted on 2026-09-02 with
 # nothing to refuse it (docs/live-session-safety.md). Installing the guard at
 # user level removes the dependency on what happens to be checked out.
 #
@@ -68,6 +68,6 @@ json.dump(d,open(settings,'w'),indent=2)
 print("wired PreToolUse/Bash hook")
 PY
 
-printf '%s' '{"tool_name":"Bash","tool_input":{"command":"rm -rf /Applications/Hyperpanes.app"}}' \
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"rm -rf /Applications/Avada.app"}}' \
   | python3 "$DEST" >/dev/null 2>&1 && { echo "SELFTEST FAILED: guard did not block rm" >&2; exit 1; }
-echo "selftest ok: guard blocks rm -rf /Applications/Hyperpanes.app"
+echo "selftest ok: guard blocks rm -rf /Applications/Avada.app"

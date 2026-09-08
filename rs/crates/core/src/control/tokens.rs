@@ -2,7 +2,7 @@
 //! compared in constant time via `subtle` (timingSafeEqual parity). Scoped tokens limit
 //! reach (uses `crate::control::scope`) with an optional TTL; mint via POST /tokens with
 //! NO privilege escalation (`scope::checkMintable`). A scoped token minted into a child's
-//! env must suppress `HYPERPANES_CONTROL_FILE` (see session::spawn).
+//! env must suppress `AVADA_CONTROL_FILE` (see session::spawn).
 //!
 //! Port of the token half of `src/main/control-server.ts`:
 //!   * `start()` mints the master token (`randomBytes(32).toString('hex')`) — [`random_token`].
@@ -57,7 +57,7 @@ fn to_hex(bytes: &[u8]) -> String {
 /// A paired device's credential: an unscoped (full-authority) token, distinct from the master,
 /// tagged with a human `label` so it can be listed and individually revoked. Unlike scoped
 /// tokens these are PERSISTED (`device-tokens.json`) and reloaded on start, so a phone paired
-/// via `hyperpanes pair` survives a host restart — mirroring how the master token is itself
+/// via `avada pair` survives a host restart — mirroring how the master token is itself
 /// persisted for remote binds.
 ///
 /// `ssh_key` carries the same device's SSH public key when it paired one — see
@@ -231,7 +231,7 @@ impl TokenStore {
         before - self.devices.len()
     }
 
-    /// Snapshot of paired devices as `(token, info)`, for listing (`hyperpanes devices`) and for
+    /// Snapshot of paired devices as `(token, info)`, for listing (`avada devices`) and for
     /// persisting the table to `device-tokens.json`. Every field of the record round-trips —
     /// dropping one here would silently un-pair whatever it held on the next rewrite.
     #[tracing::instrument(level = "debug", skip_all)]

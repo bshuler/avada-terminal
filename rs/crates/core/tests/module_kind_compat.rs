@@ -7,9 +7,9 @@
 //! build that understands a richer reference syntax must survive a round trip
 //! through this one.
 
-use hyperpanes_core::tools::kind::{ModulePaneRef, PaneKind, Version, META_KIND_KEY};
-use hyperpanes_core::workspace::io::{read_workspace, write_workspace};
-use hyperpanes_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
+use avada_core::tools::kind::{ModulePaneRef, PaneKind, Version, META_KIND_KEY};
+use avada_core::workspace::io::{read_workspace, write_workspace};
+use avada_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
 
 fn temp_file(tag: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
-  <mime-type type="application/x-hyperpanes">
-    <comment>Hyperpanes workspace</comment>
+  <mime-type type="application/x-avada">
+    <comment>Avada workspace</comment>
     <sub-class-of type="application/json"/>
-    <glob pattern="*.hyperpanes"/>
-    <icon name="hyperpanes"/>
+    <glob pattern="*.avada"/>
+    <icon name="avada"/>
   </mime-type>
 </mime-info>

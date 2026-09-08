@@ -1,5 +1,5 @@
 // Node wrapper around proctree.ps1: invoke it for a root PID and sum the tree.
-// Memory is reported in MiB (bytes / 1048576) to line up with hyperpanes'
+// Memory is reported in MiB (bytes / 1048576) to line up with avada'
 // metrics().totalMemoryMB (which is workingSetSize KB / 1024).
 
 import { spawnSync } from 'node:child_process';

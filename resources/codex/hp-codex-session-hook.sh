@@ -1,5 +1,5 @@
 #!/bin/sh
-# Codex CLI SessionStart / SessionEnd hook -> hyperpanes pane->conversation map.
+# Codex CLI SessionStart / SessionEnd hook -> avada pane->conversation map.
 #
 # Register in $CODEX_HOME/hooks.json (default ~/.codex/hooks.json) under BOTH events.
 # Codex takes Claude Code's nested matcher-group JSON, not cursor/copilot's flat one, and
@@ -12,7 +12,7 @@
 # worked and never fires) and NOT the project-scoped <cwd>/.codex/hooks.json, which did not
 # fire in testing. Codex also trust-gates hooks: the file above is only honoured after the
 # human approves it once inside codex (or with --dangerously-bypass-hook-trust). That is a
-# security control — hyperpanes writes the file and leaves the approval to the person.
+# security control — avada writes the file and leaves the approval to the person.
 #
 # codex pipes hook JSON on stdin. Verified against 0.151.0:
 #   SessionStart { "session_id": "<uuid>", "transcript_path": "…/rollout-<stamp>-<id>.jsonl",
@@ -23,23 +23,23 @@
 # `session_id` is the id `codex resume <id>` takes, and the id embedded in the rollout
 # filename that the Talk tailer searches the dated session tree for.
 #
-# When codex runs inside a hyperpanes pane (HYPERPANES_PANE_ID in the pane env — the hook
+# When codex runs inside a avada pane (AVADA_PANE_ID in the pane env — the hook
 # child inherits it, verified) this writes
 #   <state dir>/tool-sessions/codex/<pane-id>.json = { "sessionId":..., "cwd":... }
 # on SessionStart and removes it on SessionEnd, so a marker exists exactly while a
 # conversation is live in that pane. The GUI's relaunch snapshot adopts the id as the
 # pane's tool session mark, letting a restored pane resume the same conversation.
-# (Path must mirror hyperpanes-core tools::session_hook::marker_dir.)
+# (Path must mirror avada-core tools::session_hook::marker_dir.)
 #
 # Outside a pane, or on any error, this exits 0 silently — a hook must never break the tool.
-[ -n "$HYPERPANES_PANE_ID" ] || { cat >/dev/null 2>&1; exit 0; }
+[ -n "$AVADA_PANE_ID" ] || { cat >/dev/null 2>&1; exit 0; }
 
 case "$(uname 2>/dev/null)" in
-  Darwin) base="$HOME/Library/Application Support/hyperpanes" ;;
-  *)      base="${XDG_STATE_HOME:-$HOME/.local/state}/hyperpanes" ;;
+  Darwin) base="$HOME/Library/Application Support/avada" ;;
+  *)      base="${XDG_STATE_HOME:-$HOME/.local/state}/avada" ;;
 esac
 
-HP_SESS_DIR="$base/tool-sessions/codex" HP_PANE="$HYPERPANES_PANE_ID" python3 -c '
+HP_SESS_DIR="$base/tool-sessions/codex" HP_PANE="$AVADA_PANE_ID" python3 -c '
 import json, os, sys
 
 try:

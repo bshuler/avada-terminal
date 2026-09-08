@@ -4,7 +4,7 @@
 //! A Family A pane (terminal, and every tool pane) is backed by a pty and renders
 //! itself; there is nothing for the app to project beyond the surface image. A
 //! Family B pane has no pty at all (see D3: it mints a `view-N` uid and never
-//! reaches the [`SessionManager`](hyperpanes_core::session_manager::SessionManager)),
+//! reaches the [`SessionManager`](avada_core::session_manager::SessionManager)),
 //! so its content has to be *computed* — and that is what lives here.
 //!
 //! The design rule this module exists to enforce: **all of the parsing happens in
@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hyperpanes_core::tools::PaneKind;
+use avada_core::tools::PaneKind;
 use slint::{ModelRc, VecModel};
 
 use crate::theme;
@@ -303,7 +303,7 @@ pub fn view_title(kind: &PaneKind, target: Option<&str>) -> String {
     }
 }
 
-/// The last two path components ("hyperpanes/src"), or the whole path when it is
+/// The last two path components ("avada/src"), or the whole path when it is
 /// already that short. Never empty for a non-empty path — a bare "/" returns "/".
 #[tracing::instrument(level = "debug", ret)]
 fn tail_two(p: &Path) -> String {
@@ -345,7 +345,7 @@ pub fn list_dir(dir: &Path) -> Vec<ViewRow> {
     let mut skipped = 0usize;
     for ent in rd.flatten() {
         let name = ent.file_name().to_string_lossy().into_owned();
-        // Dotfiles are shown — this is a developer tool and `.git` / `.hyperpanes`
+        // Dotfiles are shown — this is a developer tool and `.git` / `.avada`
         // are exactly what its user is looking for.
         let md = match ent.metadata() {
             Ok(md) => md,

@@ -20,7 +20,7 @@ font fix is confirmed live: the app launches on Linux **and** macOS with no patc
 
 | # | Item | Status |
 |---|---|---|
-| 1 | zsh ZDOTDIR spawn wiring | **FIXED + live-verified** (Linux & macOS: spawned zsh reports OSC-7 cwd). `integration_for` Zsh branch spawns `zsh -i` with `ZDOTDIR=<dir>/zdotdir` (+`HYPERPANES_ZDOTDIR_ORIG`); all 3 packagers + build.rs ship `zdotdir/`. **Bonus root-cause**: `dispatch::spawn_pane` passed `integration: None`, so *every control-API pane* (MCP `open_pane` etc.) spawned without integration on all OSes — now wired like the GUI path. |
+| 1 | zsh ZDOTDIR spawn wiring | **FIXED + live-verified** (Linux & macOS: spawned zsh reports OSC-7 cwd). `integration_for` Zsh branch spawns `zsh -i` with `ZDOTDIR=<dir>/zdotdir` (+`AVADA_ZDOTDIR_ORIG`); all 3 packagers + build.rs ship `zdotdir/`. **Bonus root-cause**: `dispatch::spawn_pane` passed `integration: None`, so *every control-API pane* (MCP `open_pane` etc.) spawned without integration on all OSes — now wired like the GUI path. |
 | 2 | core `classify()` zsh branch | **FIXED** — `ShellKind::Zsh` (basename match), tests updated + zsh coverage added. |
 | 3 | `shell_integration_dir()` macOS bundle candidate | **FIXED** — `exe_dir/../Resources/shell-integration` added after the existing candidates (bundle.sh already shipped that copy). |
 | 4 | macOS palette chord dead | **ROOT-CAUSED, labels fixed, HITL for final confirm.** Slint swaps modifiers on Apple (`event_loop.rs`: Cmd→`control`, Ctrl→`meta` — "Match Qt's behavior"); KeyMsg doesn't carry `meta`, so physical Ctrl+Shift+P falls to the pty (the leaked P). The chord table's ctrl slot therefore already matches **Cmd+Shift+P**; new `CTRL_LABEL` renders chips/menus as `Cmd+…` on macOS (verified live in the context menu: `Cmd+F`). ⚠ Synthetic verification is impossible: peekaboo CGEvents bypass winit's `flagsChanged` modifier tracking — even Shift arrives `false` while the char is uppercase (traced live). T3's original "leak" finding was observed through the same channel. **HITL**: press Cmd+Shift+P on a real keyboard. |
@@ -35,7 +35,7 @@ font fix is confirmed live: the app launches on Linux **and** macOS with no patc
   salted by the **userData dir** (Electron parity — isolated/dev instances independent);
   a secondary forwards `{argv,cwd}` and exits 0; the primary drains hand-offs in `tick`
   and routes them (attach-as-tab / attach-as-panes via new `State::attach_panes_from_specs`
-  / new windows). Live-verified on **all three OSes** (`.hyperpanes` argv lands in the
+  / new windows). Live-verified on **all three OSes** (`.avada` argv lands in the
   primary; secondary exits 0).
 * **Session uids were per-window** (`pane-0` in every window) keying the *shared*
   SessionManager — a freshly spawned pane in any second window clobbered the first
@@ -70,7 +70,7 @@ Driving: Windows = local; Linux = WSLg (X11/XWayland); macOS = peekaboo daemon
 | pty echo + vim (no DSR interception) | ✔ (input→output event) | ✔ vim renders+quits | ✔ vim renders+quits |
 | clickable path | ✔(wave3y live) | ✔(T5 probe-verified hit-test) | HITL (pointer-synthesis limits) |
 | pane tear-off | ✔(waves, live) | ✔(T2 X11; Wayland fallback documented) | ✔(T3 live) |
-| `.hyperpanes` file open | ✔ (handoff smoke) | ✔ (smoke) | ✔ (smoke) |
+| `.avada` file open | ✔ (handoff smoke) | ✔ (smoke) | ✔ (smoke) |
 | second-instance handoff | ✔ **PASS** | ✔ **PASS** | ✔ **PASS** |
 | prefs shell picker + font render | ✔(wave2 G) | ✔(T4 GUI-verified on WSL) | ✔(T4/T6; Monaco.ttf) |
 | zsh pane OSC-7 cwd | n/a (no zsh) | ✔ **cwd reported** | ✔ **cwd reported** |
@@ -82,10 +82,10 @@ fallbacks are documented, interactive pass remains with the user).
 
 ## Part C-3 — packaging artifacts @ HEAD (0.0.6-rc1)
 
-* **AppImage**: `rs/packaging/out/hyperpanes-0.0.6-rc1-x86_64.AppImage` (built in WSL at
+* **AppImage**: `rs/packaging/out/avada-0.0.6-rc1-x86_64.AppImage` (built in WSL at
   final head) — smoke-launched isolated under WSLg: window + control.json, clean. Ships
   the zdotdir pair.
-* **dmg**: `rs/packaging/out/hyperpanes-0.0.6-rc1.dmg` (built on the mini, release
+* **dmg**: `rs/packaging/out/avada-0.0.6-rc1.dmg` (built on the mini, release
   profile) — staged .app smoke-launched isolated: clean, control.json written. Ships
   shell-integration (incl. zdotdir) in both MacOS/resources and Contents/Resources;
   the new `../Resources` lookup makes the idiomatic copy live.
@@ -95,11 +95,11 @@ fallbacks are documented, interactive pass remains with the user).
 ## Open items / hand-offs
 
 1. **HITL**: Cmd+Shift+P on a real macOS keyboard (expected to open the palette; labels
-   now say Cmd). If it fails, capture `$TMPDIR/hyperpanes-debug.log` with
-   `HYPERPANES_DEBUG=1` — the `key raw …` line shows the delivered modifiers.
+   now say Cmd). If it fails, capture `$TMPDIR/avada-debug.log` with
+   `AVADA_DEBUG=1` — the `key raw …` line shows the delivered modifiers.
 2. **HITL**: Wayland-native interactive pass (Linux box), clickable-path click on macOS.
 3. `routing::resolve_second_instance_windows` treats a bare relaunch as focus-only; the
    primary does not yet raise/focus its window on that (Slint has no raise API surfaced
    here) — cosmetic, noted in `apply_handoff`.
 4. Debug tracing added this wave (`key raw`, spawn/exit/handoff traces) is env-gated
-   behind `HYPERPANES_DEBUG` and left in deliberately.
+   behind `AVADA_DEBUG` and left in deliberately.

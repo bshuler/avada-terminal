@@ -2,7 +2,7 @@
 //! producing a renderer-agnostic [`GridSnapshot`] for the [`crate::render`] backends.
 //!
 //! Lifted from Spike A's `term_backend.rs`, but with the **PTY removed**: in the real
-//! app the live shell is owned by `hyperpanes_core::session_manager`, which hands us
+//! app the live shell is owned by `avada_core::session_manager`, which hands us
 //! already-batched UTF-8 output via `SessionEvent::Data`. So this type is a pure model:
 //!
 //!   * [`TermGrid::feed`] — advance the parser with raw session bytes.

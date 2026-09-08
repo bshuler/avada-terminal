@@ -33,14 +33,14 @@ export function detectAll() {
     const exePath = t.resolveExe();
     const installed = !!exePath;
     let note = t.driven ? '' : 'idle memory/CPU only';
-    if (t.id === 'hyperpanes') {
+    if (t.id === 'avada') {
       // Native Rust build.
       if (!installed) {
         note = 'not built — run: cargo build --release --manifest-path rs/crates/app/Cargo.toml';
       } else {
         note = [note, t.buildNote?.()].filter(Boolean).join('; ');
       }
-    } else if (t.id === 'hyperpanes-electron' && !installed) {
+    } else if (t.id === 'avada-electron' && !installed) {
       note = 'Electron baseline not built — git worktree add ../electron-baseline archive/electron && (cd it; npm ci && npm run build)';
     }
     const version = installed ? readVersion(t, exePath) : null;

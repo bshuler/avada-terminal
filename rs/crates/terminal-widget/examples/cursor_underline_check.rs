@@ -15,14 +15,14 @@
 //!
 //! Run: `cargo run --example cursor_underline_check` → writes `target/cursor_underline_check.png`.
 
-use hyperpanes_terminal_widget::{PaneRenderer, RenderOpts, SoftwareRenderer, TermGrid};
+use avada_terminal_widget::{PaneRenderer, RenderOpts, SoftwareRenderer, TermGrid};
 
 const GAP: u32 = 8;
 
 fn render_bytes(
     r: &mut SoftwareRenderer,
     grid: &TermGrid,
-    font: &mut hyperpanes_terminal_widget::Font,
+    font: &mut avada_terminal_widget::Font,
     cursor_on: bool,
 ) -> (Vec<u8>, u32, u32) {
     let snap = grid.snapshot();
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
         "C:/Windows/Fonts/consola.ttf"
     };
     let px = 28.0_f32;
-    let mut font = hyperpanes_terminal_widget::Font::from_path(font_path, px)?;
+    let mut font = avada_terminal_widget::Font::from_path(font_path, px)?;
     let (cw, ch) = (font.cell_w, font.cell_h);
 
     // One row: "Under" underlined, then " AB", with the cursor moved back over the 'A'

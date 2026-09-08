@@ -5,7 +5,7 @@
 //! **decoupled from the session transport**: the caller pumps it.
 //!
 //! ## Lifecycle (how the app-shell drives N of these)
-//! 1. Spawn/attach a session in `hyperpanes_core::session_manager` sized to your initial
+//! 1. Spawn/attach a session in `avada_core::session_manager` sized to your initial
 //!    `cols`×`rows`, and construct a `TerminalPane` of the same size.
 //! 2. On each `SessionEvent::Data { data, .. }` for this pane → [`feed`](Self::feed), then
 //!    drain [`take_replies`](Self::take_replies) and `SessionManager::write` them back
@@ -31,8 +31,8 @@ use crate::links::{
 use crate::render::{PaneRenderer, RenderOpts};
 use crate::search::{self, Match};
 use crate::selection::{self, Selection};
-use hyperpanes_core::git;
-use hyperpanes_core::paths::{self, ResolveResult};
+use avada_core::git;
+use avada_core::paths::{self, ResolveResult};
 use slint::Image;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -355,7 +355,7 @@ impl TerminalPane {
     // Plain click opens the file (editor / OS default); Ctrl/Cmd-click copies the resolved
     // absolute path. Paths are verified on disk (against this pane's cwd) before they linkify,
     // so prose tokens don't light up. The grid extraction lives in [`crate::links`]; resolve +
-    // open live in [`hyperpanes_core::paths`]. This is the renderer-side glue (Spike's
+    // open live in [`avada_core::paths`]. This is the renderer-side glue (Spike's
     // `Terminal.tsx` link provider, ported to the cell grid).
 
     /// Set this pane's working directory (the base for resolving relative path tokens). Clearing
@@ -744,7 +744,7 @@ impl TerminalPane {
     /// Grow `cand` across single spaces, in both directions, while the result keeps naming a
     /// real file.
     ///
-    /// `Artifact(/Users/bshuler/Library/Application Support/hyperpanes/lane-watch.html)` is one
+    /// `Artifact(/Users/bshuler/Library/Application Support/avada/lane-watch.html)` is one
     /// path, but nothing in the *text* says so: the space between `Application` and `Support` is
     /// indistinguishable from the space between two words of prose. Where such a path starts and
     /// ends is not a question the characters can answer — only `stat` can — which is why this
@@ -2168,14 +2168,14 @@ fn alt_scroll_arrows(delta_lines: i32, app_cursor: bool) -> Vec<u8> {
 ///    literal paste (caret at the end, no premature execution). Old shells (Windows PowerShell 5.1)
 ///    don't set the mode, so the CR-normalized text is sent bare — still the correct Enter handling.
 ///
-/// The rules themselves live in [`hyperpanes_core::session::paste::prepare_paste`], because
+/// The rules themselves live in [`avada_core::session::paste::prepare_paste`], because
 /// the GUI is not the only thing that pastes into a pane: dictation delivers a transcript
 /// through the session layer with no widget in the picture, and it was the one bulk-text
 /// path that had its own idea of how to do it — a minute of speech reached the pane split
 /// across tty reads, and all but the last read was dropped by the receiving TUI. One
 /// definition, so there is nowhere for a second one to drift.
 fn prepare_paste(text: &str, bracketed: bool) -> String {
-    hyperpanes_core::session::paste::prepare_paste(text, bracketed)
+    avada_core::session::paste::prepare_paste(text, bracketed)
 }
 
 /// One row of a multi-row TUI input, see [`TerminalPane::hard_input_rows`].
@@ -2993,7 +2993,7 @@ mod tests {
     }
 
     /// A plain click on a URL hands it back rather than launching it: which browser gets the
-    /// link is a Hyperpanes preference this crate can't see, and a widget that opened the OS
+    /// link is a Avada preference this crate can't see, and a widget that opened the OS
     /// default itself would silently bypass "ask each time".
     #[test]
     fn plain_click_hands_the_url_back_unopened() {

@@ -1392,7 +1392,7 @@ export component OverlayLayer inherits Rectangle {
             HorizontalLayout {
                 spacing: 8px;
                 Text {
-                    text: "hyperpanes";
+                    text: "avada";
                     color: Theme.text;
                     font-size: 15px;
                     font-weight: 700;
@@ -1487,14 +1487,14 @@ export component OverlayLayer inherits Rectangle {
 
             // ---- background terminals (session-daemon M3) ----
             PrefToggle {
-                label: "Keep terminals running in the background when Hyperpanes closes";
+                label: "Keep terminals running in the background when Avada closes";
                 on: root.keep-alive;
                 // 22, not 21 — 21 is the Terminal page's copy-on-select. See the code table
                 // over `on_pref_action` in app.rs before allocating a new one.
                 toggled(v) => { root.pref-action(22, v ? 1 : 0); }
             }
             Text {
-                text: "leaves your terminal sessions alive after you quit so they're restored on the next launch — turn off to stop every terminal when Hyperpanes closes";
+                text: "leaves your terminal sessions alive after you quit so they're restored on the next launch — turn off to stop every terminal when Avada closes";
                 color: Theme.faint;
                 font-size: 11px;
             }
@@ -1631,7 +1631,7 @@ export component OverlayLayer inherits Rectangle {
 
             Text { text: "Opening links"; color: Theme.faint; font-size: 11px; }
             Text {
-                text: "When a tool running in a pane opens a URL, Hyperpanes decides where it goes.";
+                text: "When a tool running in a pane opens a URL, Avada decides where it goes.";
                 color: Theme.subtext;
                 font-size: 11px;
                 wrap: word-wrap;

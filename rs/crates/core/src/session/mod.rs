@@ -5,7 +5,7 @@
 /// Adopting a pty master handed over by a predecessor daemon (unix only).
 #[cfg(unix)]
 pub mod adopt;
-/// The `hyperpanes attach` client core (M2): protocol + detach-key + resize policy, with no
+/// The `avada attach` client core (M2): protocol + detach-key + resize policy, with no
 /// tty or stdio in it — the app crate supplies those, and M3's SSH channel will supply its own.
 pub mod attach;
 pub mod batcher;
@@ -15,7 +15,7 @@ pub mod build_id;
 /// The cross-process session claim registry (M7): who is hosting which uid right now.
 pub mod claims;
 /// The tmux **control-mode** (`-CC`) server surface (M4): a pure protocol encoder and state
-/// machine that presents hyperpanes panes to iTerm2 and the mobile tmux clients as native
+/// machine that presents avada panes to iTerm2 and the mobile tmux clients as native
 /// tmux panes. No I/O — the app crate and M3's SSH channel each supply their own transport.
 pub mod control_mode;
 pub mod cwd;

@@ -33,9 +33,9 @@ Measured 2026-09-07 at `d1f3efb`.
 
 | Suite | Count | Command |
 |---|---|---|
-| `uitest` (headless Slint, end to end) | 75 | `cd rs/crates/app && cargo test --bin hyperpanes uitest` |
-| app crate, total | 641 | `cd rs/crates/app && cargo test --bin hyperpanes` |
-| core crate | 1282 | `cd rs && cargo test -p hyperpanes-core --lib -- --skip permissions` |
+| `uitest` (headless Slint, end to end) | 75 | `cd rs/crates/app && cargo test --bin avada uitest` |
+| app crate, total | 641 | `cd rs/crates/app && cargo test --bin avada` |
+| core crate | 1282 | `cd rs && cargo test -p avada-core --lib -- --skip permissions` |
 
 `permissions::*` hangs forever on this Mac — the `--skip` is not optional.
 
@@ -73,7 +73,7 @@ Measured 2026-09-07 at `d1f3efb`.
 ### The test harness
 
 `src/uitest.rs` builds the real `AppWindow` headlessly and drives it through Slint's own
-hit-testing. Its constraints are recorded in the `hyperpanes-ui-e2e-harness` memory; the ones
+hit-testing. Its constraints are recorded in the `avada-ui-e2e-harness` memory; the ones
 that bite when writing new view-pane tests:
 
 - Controls are addressable by **accessible label**, element id, role, or a predicate — nothing
@@ -143,7 +143,7 @@ These are not suggestions. An agent that deviates must say so explicitly and why
    `assert_eq!(found.len(), 1)` breaks.
 9. **Mutation-check every new assertion** (§7). An assertion never observed failing is not a
    test.
-10. **Never touch `/Applications/Hyperpanes.app`**, never `pkill` anything daemon-ish, never
+10. **Never touch `/Applications/Avada.app`**, never `pkill` anything daemon-ish, never
     front an app or inject synthetic input. `scripts/guard-live-sessions.py` enforces this; if
     it fires, stop rather than work around it.
 
@@ -362,7 +362,7 @@ control plane, and a keybinding with neither is dead.
 rots; this is the difference between fixing the problem once and fixing it.
 
 **Known already-recorded gaps to fold in:** talk + TTS are **faked, never live-verified**; two
-crash defects are open (see the `hyperpanes-open-items` memory). Neither is in scope to *fix*
+crash defects are open (see the `avada-open-items` memory). Neither is in scope to *fix*
 here, but both belong in the matrix with an honest verdict rather than being quietly omitted.
 
 ---

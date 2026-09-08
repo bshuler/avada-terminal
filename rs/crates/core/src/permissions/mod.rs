@@ -1,4 +1,4 @@
-//! The OS-rights seam: what Hyperpanes may need permission for, whether it has it, and
+//! The OS-rights seam: what Avada may need permission for, whether it has it, and
 //! how to take the user to the place where they can grant it.
 //!
 //! Nothing in the app needs any of these on day one. The point of landing the seam early

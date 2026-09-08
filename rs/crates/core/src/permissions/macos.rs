@@ -151,7 +151,7 @@ pub fn status(right: Right) -> Grant {
         // bundle, which is how the test binary runs. Notifications' answer is also async.
         //
         // Automation is not one grant at all: TCC keys it per (this app, target app) pair,
-        // so "does Hyperpanes have Automation" has no single answer to give. The pane the
+        // so "does Avada have Automation" has no single answer to give. The pane the
         // deep link opens is the one that lists them.
         Right::Notifications | Right::Microphone | Right::Automation => Grant::Undetermined,
     }

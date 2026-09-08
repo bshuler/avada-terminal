@@ -1,6 +1,6 @@
-//! `hyperpanes devices` (list paired mobile clients) and `hyperpanes revoke <label>` (drop one).
+//! `avada devices` (list paired mobile clients) and `avada revoke <label>` (drop one).
 //! Both drive the running control server's `/devices` endpoint as a local, master-authenticated
-//! client — the same trust boundary as `hyperpanes pair`. See docs/mobile-client-plan.md.
+//! client — the same trust boundary as `avada pair`. See docs/mobile-client-plan.md.
 
 use crate::control_cli;
 
@@ -14,7 +14,7 @@ pub fn wants_revoke(argv: &[String]) -> bool {
     argv.get(1).map(|a| a == "revoke").unwrap_or(false)
 }
 
-/// `hyperpanes devices` — print each paired device's label + expiry (tokens are never shown).
+/// `avada devices` — print each paired device's label + expiry (tokens are never shown).
 #[tracing::instrument(level = "debug", ret)]
 pub fn run_list() -> std::io::Result<()> {
     let conn = control_cli::connect().unwrap_or_else(|e| {
@@ -44,7 +44,7 @@ pub fn run_list() -> std::io::Result<()> {
         .cloned()
         .unwrap_or_default();
     if devices.is_empty() {
-        println!("No paired devices. Run `hyperpanes pair` to add one.");
+        println!("No paired devices. Run `avada pair` to add one.");
         return Ok(());
     }
     println!("Paired devices:");
@@ -59,11 +59,11 @@ pub fn run_list() -> std::io::Result<()> {
     Ok(())
 }
 
-/// `hyperpanes revoke <label>` — revoke every device carrying that label.
+/// `avada revoke <label>` — revoke every device carrying that label.
 #[tracing::instrument(level = "debug", ret)]
 pub fn run_revoke(argv: &[String]) -> std::io::Result<()> {
     let Some(label) = argv.get(2).filter(|s| !s.is_empty()) else {
-        eprintln!("usage: hyperpanes revoke <label>   (see `hyperpanes devices` for labels)");
+        eprintln!("usage: avada revoke <label>   (see `avada devices` for labels)");
         std::process::exit(2);
     };
     let conn = control_cli::connect().unwrap_or_else(|e| {

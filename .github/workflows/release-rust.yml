@@ -1,10 +1,10 @@
 name: Release (Rust native)
 
-# Build + publish the NATIVE Rust app (`rs/crates/app`, binary `hyperpanes`) for all
+# Build + publish the NATIVE Rust app (`rs/crates/app`, binary `avada`) for all
 # three desktop OSes and attach every artifact to ONE GitHub Release:
 #   * windows-latest → rs/packaging/build-installer.ps1      → rs/packaging/dist/*-setup.exe
-#   * ubuntu-latest  → rs/packaging/{appimage,deb,rpm}.sh <version> → rs/packaging/out/hyperpanes-<version>{.AppImage,.deb,.rpm}
-#   * macos-latest   → rs/packaging/macos/bundle.sh <version> → rs/packaging/out/hyperpanes-<version>.dmg
+#   * ubuntu-latest  → rs/packaging/{appimage,deb,rpm}.sh <version> → rs/packaging/out/avada-<version>{.AppImage,.deb,.rpm}
+#   * macos-latest   → rs/packaging/macos/bundle.sh <version> → rs/packaging/out/avada-<version>.dmg
 # (script paths/argv per docs/ports-seams.md §3 — <version> arrives WITHOUT the `v`.)
 #
 # Topology: version → test (3-OS gate) → release (created ONCE) → 3 parallel build jobs
@@ -313,9 +313,9 @@ jobs:
         run: |
           shopt -s failglob
           cp build/app/outputs/flutter-apk/app-release.apk \
-             "hyperpanes-mobile-${{ needs.version.outputs.version }}.apk"
+             "avada-mobile-${{ needs.version.outputs.version }}.apk"
           gh release upload "${{ needs.version.outputs.tag }}" \
-            "hyperpanes-mobile-${{ needs.version.outputs.version }}.apk" --clobber
+            "avada-mobile-${{ needs.version.outputs.version }}.apk" --clobber
 
   # iOS — UNSIGNED (no Apple team on CI): the zipped Runner.app installs via Xcode or
   # a re-signing sideloader (AltStore/Sideloadly). A signed IPA needs local Xcode.
@@ -346,6 +346,6 @@ jobs:
         run: |
           shopt -s failglob
           cd build/ios/iphoneos
-          zip -qry "hyperpanes-mobile-ios-${{ needs.version.outputs.version }}-unsigned.zip" Runner.app
+          zip -qry "avada-mobile-ios-${{ needs.version.outputs.version }}-unsigned.zip" Runner.app
           gh release upload "${{ needs.version.outputs.tag }}" \
-            "hyperpanes-mobile-ios-${{ needs.version.outputs.version }}-unsigned.zip" --clobber
+            "avada-mobile-ios-${{ needs.version.outputs.version }}-unsigned.zip" --clobber

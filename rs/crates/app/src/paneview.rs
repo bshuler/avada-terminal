@@ -5,12 +5,12 @@
 
 use std::time::{Duration, Instant};
 
-use hyperpanes_core::layout::presets::{
+use avada_core::layout::presets::{
     compute_tiles, effective_layout, DividerKind, Layout, Orientation,
 };
-use hyperpanes_core::session_manager::SessionManager;
-use hyperpanes_core::tools::PaneKind;
-use hyperpanes_terminal_widget::{cells_for_px, RenderOpts};
+use avada_core::session_manager::SessionManager;
+use avada_core::tools::PaneKind;
+use avada_terminal_widget::{cells_for_px, RenderOpts};
 
 use slint::{Color, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -134,7 +134,7 @@ pub struct Ui {
     /// session that never opens it never touches the filesystem for this.
     pub tool_detected: RefCell<Option<HashMap<&'static str, String>>>,
     /// Same one-shot treatment for the installed-browser list.
-    pub browsers_found: RefCell<Option<Vec<hyperpanes_core::open::BrowserApp>>>,
+    pub browsers_found: RefCell<Option<Vec<avada_core::open::BrowserApp>>>,
 }
 
 impl Ui {
@@ -1472,13 +1472,13 @@ pub fn resync(
                 .settings
                 .tool_favorites
                 .iter()
-                .filter_map(|id| hyperpanes_core::tools::by_id(id))
+                .filter_map(|id| avada_core::tools::by_id(id))
                 .map(|t| t.id)
                 .collect();
             mode_rows.extend(
                 mode_tools
                     .iter()
-                    .filter_map(|id| hyperpanes_core::tools::by_id(id))
+                    .filter_map(|id| avada_core::tools::by_id(id))
                     .map(|t| LeftModeRow {
                         label: t.name.into(),
                         icon: t.icon as i32,
@@ -2038,12 +2038,12 @@ pub fn pump(
             let mut cache = ui.tool_detected.borrow_mut();
             let detected = cache.get_or_insert_with(|| {
                 let none = std::collections::BTreeMap::new();
-                hyperpanes_core::tools::detect::resolve_all(&none)
+                avada_core::tools::detect::resolve_all(&none)
                     .into_iter()
                     .map(|(id, r)| (id, r.path.display().to_string()))
                     .collect()
             });
-            let rows: Vec<PrefToolRow> = hyperpanes_core::tools::TOOLS
+            let rows: Vec<PrefToolRow> = avada_core::tools::TOOLS
                 .iter()
                 .map(|t| PrefToolRow {
                     id: t.id.into(),
@@ -2067,7 +2067,7 @@ pub fn pump(
         // ---- Browser page ----
         {
             let mut cache = ui.browsers_found.borrow_mut();
-            let found = cache.get_or_insert_with(hyperpanes_core::open::list_browsers);
+            let found = cache.get_or_insert_with(avada_core::open::list_browsers);
             let rows: Vec<PrefBrowserRow> = found
                 .iter()
                 .map(|b| PrefBrowserRow {
@@ -2122,7 +2122,7 @@ pub fn pump(
         // `isAiPane && idle` gate. "Is this an agent" now has two answers and either will
         // do: the pane's merged tool identity (authoritative for a pane spawned AS a tool,
         // which may never print a title at all) or the title sniff (which catches the
-        // agents that do). Before the first, a `hyperpanes claude` pane sat there quiet and
+        // agents that do). Before the first, a `avada claude` pane sat there quiet and
         // unglowing because nothing had written a title for it to match.
         let is_agent = !matches!(tool_row[i].0, PaneKind::Terminal)
             || crate::glow::is_ai_pane(&ps.shell_title);
@@ -2245,7 +2245,7 @@ mod pty_resize_tests {
     //! it ran — which is precisely what a restart-to-see-changes is supposed to preserve.
     use super::*;
     use crate::state::DetachedPane;
-    use hyperpanes_core::tools::PaneKind;
+    use avada_core::tools::PaneKind;
 
     fn fresh() -> State {
         State::new(crate::theme::load_font(1.0))

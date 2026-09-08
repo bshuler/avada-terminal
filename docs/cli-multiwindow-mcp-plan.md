@@ -1,15 +1,15 @@
 # Plan — expanded CLI, launch-time multi-window, and an MCP control surface
 
-Roadmap for three connected workstreams. Two live in **this repo** (hyperpanes); the
+Roadmap for three connected workstreams. Two live in **this repo** (avada); the
 **MCP server is a separate project** that sits on top of the control surface we add here.
 
 **Locked design decisions (2026-06-05):**
 
 1. **MCP scope — both, phased.** Phase 1 is stateless launch-config generation (compose
-   a workspace + shell out to `hyperpanes`). Phase 2 adds live control of a running
+   a workspace + shell out to `avada`). Phase 2 adds live control of a running
    instance (read/inspect panes, send input, mutate layout).
 2. **Instance model — single canonical process.** Add `app.requestSingleInstanceLock()`;
-   a second `hyperpanes …` invocation (and every MCP call) routes into the *running*
+   a second `avada …` invocation (and every MCP call) routes into the *running*
    process and adds windows/tabs instead of starting a rival process.
 3. **CLI scope — per-pane flags + `--tab` / `--window` separators.** Full multi-tab /
    multi-window parity with the JSON format; JSON stays the canonical format for large
@@ -29,7 +29,7 @@ Sequence: **schema + single-instance → CLI → control API → MCP (P1 then P2
 
 **M0, M1, M2 BUILT & static-verified** (typecheck + 108 unit tests + `electron-vite build`
 all green); **manual GUI pass still pending**. M3/M4 (the separate MCP project) not started —
-handoff doc in OS temp (`hyperpanes-mcp-handoff.md`).
+handoff doc in OS temp (`avada-mcp-handoff.md`).
 
 - **M0** — `WindowSpec` layer + `windowsOf` normalizer (`src/main/workspace.ts`,
   `src/renderer/types.ts`); `requestSingleInstanceLock` + `second-instance` routing
@@ -54,7 +54,7 @@ split fractions), `mainFraction` (Main+Stack split), and `focused`/`zoomed` (pan
 so a launched/restored tab reproduces its exact split + which pane is focused/maximized.
 `groupFromSpec` consumes them (defensively validated → defaults on bad input; auto layout
 stays equal); `specFromGroup` emits them only when non-default. Mirrored in the MCP schema
-(`C:\hyperpanes-mcp\src\schema.ts`) + flagged CLI-lossy in `compile-cli.ts`. JSON/file launch
+(`C:\avada-mcp\src\schema.ts`) + flagged CLI-lossy in `compile-cli.ts`. JSON/file launch
 only — no CLI flags. Still not settable: nothing left on the wish-list; per-pane zoom + split
 ratios + intra-tab focus are now all expressible.
 
@@ -112,7 +112,7 @@ Work:
   seed (multiple tabs + active index), not just the single-`GroupPayload` tear-off seed.
   Main computes the window list and calls `spawnWindow` once per `WindowSpec`;
   `workspace:getInitial` stays as the fallback for the very first window only.
-- Default routing: **DONE (2026-06-07).** A second `hyperpanes …` now **attaches into the
+- Default routing: **DONE (2026-06-07).** A second `avada …` now **attaches into the
   focused window** by default (content lands as new tabs); `--new-window` (or any `--window`
   separator) forces a new window, and `--attach[=focused|last|<id>]` / `--into-current` +
   `--as tab|panes` make the target/unit explicit. `parseCli` emits a `LaunchRouting`;
@@ -131,7 +131,7 @@ Rewrite `parseCli` into a small **window → tab → pane** state machine. Separ
 segment the pane stream:
 
 ```bash
-hyperpanes \
+avada \
   --window --name app --layout main-stack \
     -c "npm run dev" -l server --color "#e5484d" --cwd ./app --shell pwsh \
     -c "tail -f log"  -l logs   --font 12 \
@@ -178,7 +178,7 @@ A loopback control server in `main`, **off by default** behind a setting.
 Stateless; depends only on the M1 CLI. No running-app dependency — ships first.
 
 - Tools: `build_workspace(spec) → writes/returns JSON`, `launch_workspace(path|spec)` →
-  spawns `hyperpanes`, `list_layouts`, `validate_workspace`.
+  spawns `avada`, `list_layouts`, `validate_workspace`.
 - Essentially typed codegen + shell-out, with the `windows`/`groups`/`panes` schema as the
   contract.
 

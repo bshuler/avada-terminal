@@ -65,12 +65,12 @@ function resolver(exeNames, searchDirs = []) {
 // `cmd /c <wrapper>` argv used by every -e-style driven terminal.
 const CMD_RUN = (wrapperPath) => ['cmd', '/c', wrapperPath];
 
-// ---- hyperpanes (native Rust) ----
+// ---- avada (native Rust) ----
 
 // The native GUI binary built by `cargo build --release --manifest-path rs/crates/app/Cargo.toml`.
 // Prefer release; fall back to a debug build if that's all that exists (noted in the report).
-const NATIVE_RELEASE = join(REPO_ROOT, 'rs', 'crates', 'app', 'target', 'release', 'hyperpanes.exe');
-const NATIVE_DEBUG = join(REPO_ROOT, 'rs', 'crates', 'app', 'target', 'debug', 'hyperpanes.exe');
+const NATIVE_RELEASE = join(REPO_ROOT, 'rs', 'crates', 'app', 'target', 'release', 'avada.exe');
+const NATIVE_DEBUG = join(REPO_ROOT, 'rs', 'crates', 'app', 'target', 'debug', 'avada.exe');
 
 function resolveNativeExe() {
   if (existsSync(NATIVE_RELEASE)) return NATIVE_RELEASE;
@@ -90,7 +90,7 @@ function nativeVersion() {
   }
 }
 
-// ---- hyperpanes (Electron baseline) ----
+// ---- avada (Electron baseline) ----
 //
 // The installed production app is now the NATIVE build (Electron was retired), so the Electron
 // baseline comes from a `git worktree` of branch `archive/electron` built next to this one:
@@ -112,7 +112,7 @@ function electronVersion() {
 // ---- Windows Terminal version ----
 //
 // `wt.exe --version` has no stdout output — it OPENS the GUI About dialog. Probing it that way
-// pops a window on every `detect.mjs` (which runs on every `run.mjs`, even `--only=hyperpanes`).
+// pops a window on every `detect.mjs` (which runs on every `run.mjs`, even `--only=avada`).
 // Read the version from the installed Store package instead — no UI, best-effort.
 function wtVersion() {
   try {
@@ -135,16 +135,16 @@ export const TERMINALS = [
     // still sampled IDLE-only (memoryIdleOnly) — a fresh instance with one default-shell pane, which
     // is the clean apples-to-apples figure and avoids the "last pane exits → window closes → app
     // quits" race a driven memory sample would hit. Every launch uses an isolated %APPDATA%.
-    id: 'hyperpanes',
-    name: 'hyperpanes (native)',
+    id: 'avada',
+    name: 'avada (native)',
     wingetId: null,
-    exeNames: ['hyperpanes.exe'],
+    exeNames: ['avada.exe'],
     searchDirs: [],
     versionArgs: null,
     fixedVersion: nativeVersion,
     driven: true,
     memoryIdleOnly: true,
-    procMatch: ['hyperpanes.exe'],
+    procMatch: ['avada.exe'],
     suites: DRIVEN_SUITES,
     resolveExe: resolveNativeExe,
     // Driven form: CLI-seed a pane that runs the bench wrapper via cmd.exe (mirrors the retired
@@ -179,8 +179,8 @@ export const TERMINALS = [
     // an isolated --user-data-dir gives a fresh instance (and its own single-instance lock keyed on
     // that dir, so a running installed copy won't capture it). Idle-only, to compare apples-to-apples
     // with the native idle figure (both: fresh instance, one default pane, no in-pane workload).
-    id: 'hyperpanes-electron',
-    name: 'hyperpanes (Electron)',
+    id: 'avada-electron',
+    name: 'avada (Electron)',
     wingetId: null,
     exeNames: ['electron.exe'],
     searchDirs: [],
@@ -214,7 +214,7 @@ export const TERMINALS = [
     resolveExe: resolver(['wt.exe'], [join(LOCALAPPDATA, 'Microsoft', 'WindowsApps')]),
     launch({ wrapperPath }) {
       // Bare form (wrapperPath null, e.g. `--idle-bare`): open a new window with the default
-      // profile shell so WT can serve as an idle-memory reference alongside the hyperpanes apps.
+      // profile shell so WT can serve as an idle-memory reference alongside the avada apps.
       if (!wrapperPath) return { exe: this.resolveExe(), args: ['-w', 'new'] };
       return { exe: this.resolveExe(), args: ['-w', 'new', '--', ...CMD_RUN(wrapperPath)] };
     }

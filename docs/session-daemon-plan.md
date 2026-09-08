@@ -1,6 +1,6 @@
 # Session daemon — true process survival across a GUI crash (#3)
 
-**Goal.** When the hyperpanes GUI crashes (or is killed, or the user relaunches), the shells and
+**Goal.** When the avada GUI crashes (or is killed, or the user relaunches), the shells and
 programs running in panes should **keep running** and be **re-attached** on the next launch — not
 re-spawned. Today the PTYs are children of the GUI process, so a GUI crash SIGHUPs them and they die.
 True survival requires a separate, long-lived **session daemon** that owns the PTYs; the GUI becomes a
@@ -42,19 +42,19 @@ attach a second client, assert replay. Only the final visual re-attach (M2) need
 ## Target architecture
 
 ```
-            ┌───────────────────────────── hyperpanes GUI (client) ─────────────────────────────┐
+            ┌───────────────────────────── avada GUI (client) ─────────────────────────────┐
             │  SessionManager  ── same API ──>  DaemonClient                                      │
             │     (events)  <── UnboundedSender<SessionEvent> ── reader thread                    │
             └───────────────────────────────────┬───────────────────────────────────────────────┘
                                                  │  framed protocol over UDS / named pipe
                           (GUI crash cuts this line; everything below survives)
-            ┌───────────────────────────────────┴──────────── hyperpanesd (daemon) ──────────────┐
+            ┌───────────────────────────────────┴──────────── avadad (daemon) ──────────────┐
             │  SessionRegistry { uid -> Session{ Pty(ConPTY/unix), Replay, Screen, cwd, counters }}│
             │  owns the PTY children · buffers output · multiplexes to attached clients            │
             └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- The daemon is a **mode of the same binary** (`hyperpanes --session-daemon <salt>`), spawned
+- The daemon is a **mode of the same binary** (`avada --session-daemon <salt>`), spawned
   **detached** by the first GUI launch (so it outlives the GUI). One daemon per data-dir (salted lock,
   reusing the single-instance machinery). It idle-exits after a grace period with **no sessions AND no
   clients**.
@@ -99,15 +99,15 @@ lock-step upgrades are fine — no third-party compat burden).
 
 ## Daemon lifecycle & discovery
 
-- **Discovery/lock:** reuse `single_instance` — a flock'd `hyperpanesd-<salt>.lock` + a
-  `hyperpanesd-<salt>.sock` under the runtime dir. Salt = the user-data dir (same as the GUI gate), so
+- **Discovery/lock:** reuse `single_instance` — a flock'd `avadad-<salt>.lock` + a
+  `avadad-<salt>.sock` under the runtime dir. Salt = the user-data dir (same as the GUI gate), so
   an isolated/dev instance gets its own daemon and never collides with the installed app.
 - **Spawn:** on `SessionManager::new`, try to connect; if no daemon, `Command::new(current_exe)
   .arg("--session-daemon").arg(salt)` **detached** (`setsid` + null stdio on unix; `DETACHED_PROCESS`
   on Windows), then retry-connect with backoff.
 - **Idle exit:** the daemon exits when it has 0 sessions and 0 clients for `GRACE` (e.g. 30 s) — so it
   doesn't linger forever, but survives the seconds between a GUI crash and relaunch.
-- **Explicit control:** a `Shutdown` admin message + a `hyperpanes --kill-daemon` for clean teardown;
+- **Explicit control:** a `Shutdown` admin message + a `avada --kill-daemon` for clean teardown;
   the GUI's "Quit" can leave the daemon running (sessions persist) or shut it down per a preference.
 
 ## Reconnect / re-attach (the payoff — M2)
@@ -124,7 +124,7 @@ On GUI launch with a live daemon:
 
 ## Windows *(built — see `mux-backend-plan.md` M1 for the upgrade story)*
 
-- Transport: named pipe (`\\.\pipe\hyperpanesd.<hash>`), same FNV-1a salt token as the unix socket
+- Transport: named pipe (`\\.\pipe\avadad.<hash>`), same FNV-1a salt token as the unix socket
   name. `session/transport.rs` is the only cfg'd layer; the whole client above it is shared.
 - One-daemon-per-salt: `first_pipe_instance(true)` — the OS grants the name to one server and gives
   everyone else `ERROR_ACCESS_DENIED`, mapped to `AddrInUse` so it reads like the unix flock. No
@@ -149,14 +149,14 @@ user SID). No network surface. Same trust boundary as the existing single-instan
   current `SessionManager` internals into a `SessionRegistry`; `--session-daemon` mode that listens,
   owns the registry, handles create/write/resize/kill, streams events, serves replay/screen.
   Headless integration test: client lib drives the daemon over a temp socket.
-- **M1 — `DaemonSessionManager` behind `HYPERPANES_SESSION_DAEMON=1`.** API-compatible client with the
+- **M1 — `DaemonSessionManager` behind `AVADA_SESSION_DAEMON=1`.** API-compatible client with the
   shadow-state + mirror-buffer scheme above; daemon spawn/discovery/connect; reader thread → the GUI's
   existing `SessionEvent` channel. In-process path stays the default.
 - **M2 — reconnect & re-attach.** Record session uid (+ spawn command) in the autosave snapshot; on
   launch, attach surviving sessions and replay into fresh grids. **The crash-survival demo.**
 - **M3 — lifecycle hardening.** idle-exit, daemon crash/restart, proto-version handshake, Windows named
   pipes ✅, `--kill-daemon`, quit-vs-keep-alive preference, socket perms.
-- **M4 — default on.** Flip `HYPERPANES_SESSION_DAEMON` to default; keep the in-process path as a
+- **M4 — default on.** Flip `AVADA_SESSION_DAEMON` to default; keep the in-process path as a
   `--no-daemon` fallback (headless/CI, or daemon-spawn failure).
 
 ## Risks / open questions
@@ -188,7 +188,7 @@ build in a worktree, verify, commit incrementally, hand back the branch for revi
 
 | Track | Branch | Depends on | Verify (headless) |
 | --- | --- | --- | --- |
-| **M0** daemon core | `daemon/m0-core` | — | `cargo test -p hyperpanes-core` incl. a daemon+client loopback test |
+| **M0** daemon core | `daemon/m0-core` | — | `cargo test -p avada-core` incl. a daemon+client loopback test |
 | **Prep** snapshot uid+cmd | `daemon/prep-snapshot` | — | `cargo test` (core + app); round-trip test for the new `PaneSpec` fields |
 | **M1** client SessionManager | `daemon/m1-client` | M0 | core tests + keystroke→echo bench vs in-process |
 | **M2** reconnect/re-attach | `daemon/m2-reattach` | M1, Prep | GUI manual: kill GUI, relaunch, process still alive |

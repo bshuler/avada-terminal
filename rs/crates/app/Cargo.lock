@@ -516,6 +516,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "avada"
+version = "0.0.36"
+dependencies = [
+ "arboard",
+ "avada-core",
+ "avada-terminal-widget",
+ "i-slint-backend-testing",
+ "i-slint-core",
+ "image",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "png",
+ "qrcode",
+ "rand 0.10.2",
+ "raw-window-handle",
+ "reqwest",
+ "rfd",
+ "russh",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "ssh-key",
+ "tokio",
+ "tracing",
+ "windows",
+ "x11rb",
+]
+
+[[package]]
+name = "avada-core"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "avada-module-sdk",
+ "axum",
+ "cpal",
+ "directories",
+ "futures-util",
+ "hmac 0.12.1",
+ "hound",
+ "libc",
+ "portable-pty",
+ "rand 0.10.2",
+ "reqwest",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "whisper-rs",
+ "windows",
+]
+
+[[package]]
 name = "avada-module-sdk"
 version = "0.1.0"
 dependencies = [
@@ -525,6 +588,24 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "avada-terminal-widget"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "arboard",
+ "avada-core",
+ "bytemuck",
+ "etagere",
+ "slint",
+ "slint-build",
+ "swash",
+ "tokio",
+ "tracing",
+ "wgpu",
 ]
 
 [[package]]
@@ -2727,87 +2808,6 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "hyperpanes"
-version = "0.0.36"
-dependencies = [
- "arboard",
- "hyperpanes-core",
- "hyperpanes-terminal-widget",
- "i-slint-backend-testing",
- "i-slint-core",
- "image",
- "libc",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "png",
- "qrcode",
- "rand 0.10.2",
- "raw-window-handle",
- "reqwest",
- "rfd",
- "russh",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "ssh-key",
- "tokio",
- "tracing",
- "windows",
- "x11rb",
-]
-
-[[package]]
-name = "hyperpanes-core"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "avada-module-sdk",
- "axum",
- "cpal",
- "directories",
- "futures-util",
- "hmac 0.12.1",
- "hound",
- "libc",
- "portable-pty",
- "rand 0.10.2",
- "reqwest",
- "rusqlite",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "whisper-rs",
- "windows",
-]
-
-[[package]]
-name = "hyperpanes-terminal-widget"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "arboard",
- "bytemuck",
- "etagere",
- "hyperpanes-core",
- "slint",
- "slint-build",
- "swash",
- "tokio",
- "tracing",
- "wgpu",
 ]
 
 [[package]]

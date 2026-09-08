@@ -203,9 +203,9 @@ pub fn open_path_with(launcher: &str, path: &Path) -> Result<(), String> {
 // substituted at generation time because the fallback differs per OS.
 #[cfg_attr(windows, allow(dead_code))]
 const UNIX_SHIM: &str = r#"#!/bin/sh
-# hyperpanes browser shim — generated on launch; edits here are overwritten.
+# avada browser shim — generated on launch; edits here are overwritten.
 #
-# Exported as $BROWSER into every pane's pty. Hands each URL back to hyperpanes over
+# Exported as $BROWSER into every pane's pty. Hands each URL back to avada over
 # the pane's OWN terminal, which is why there is no socket, port or token in here: the
 # tty already says which pane asked, and only a process holding that tty can speak.
 for url do
@@ -213,10 +213,10 @@ for url do
 	# complaint comes from the *shell* running the redirect, not from printf, so only a
 	# nested shell's stderr can be silenced — and a stray line on the tool's stderr is
 	# exactly what a shim must never produce.
-	if (printf '\033]1337;HyperpanesOpenURL=%s\007' "$url" > /dev/tty) 2>/dev/null; then
+	if (printf '\033]1337;AvadaOpenURL=%s\007' "$url" > /dev/tty) 2>/dev/null; then
 		continue
 	fi
-	# No controlling terminal — a detached child, or a tool run outside hyperpanes
+	# No controlling terminal — a detached child, or a tool run outside avada
 	# entirely. Hand the link to the OS rather than swallowing it.
 	$OPENER "$url" > /dev/null 2>&1 &
 done
@@ -280,7 +280,7 @@ pub fn ensure_browser_shim() -> std::io::Result<PathBuf> {
 }
 
 /// Point a pane's per-pane env at the `BROWSER` shim, so a tool running in that pane
-/// hands its links back to hyperpanes instead of straight to the OS.
+/// hands its links back to avada instead of straight to the OS.
 ///
 /// [`crate::session::spawn::build_env`] can take the shim as an input, but the one path
 /// that reaches it — `session_manager::build_spec` — deliberately supplies `None`,
@@ -378,7 +378,7 @@ mod tests {
     fn generating_the_shim_yields_an_executable_script() {
         let p = ensure_browser_shim().expect("shim");
         let body = std::fs::read_to_string(&p).expect("read back");
-        assert!(body.contains("HyperpanesOpenURL"), "{body}");
+        assert!(body.contains("AvadaOpenURL"), "{body}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -397,13 +397,10 @@ mod tests {
     /// checks that the generated script and the scanner were written from the same idea.
     #[test]
     fn the_shim_emits_what_the_scanner_parses() {
-        let emitted = "\u{1b}]1337;HyperpanesOpenURL=https://round.test/x\u{07}";
+        let emitted = "\u{1b}]1337;AvadaOpenURL=https://round.test/x\u{07}";
         let (urls, _) = crate::session::openurl::parse_osc_open_url("", emitted);
         assert_eq!(urls, vec!["https://round.test/x"]);
-        assert!(
-            UNIX_SHIM.contains("]1337;HyperpanesOpenURL=%s"),
-            "{UNIX_SHIM}"
-        );
+        assert!(UNIX_SHIM.contains("]1337;AvadaOpenURL=%s"), "{UNIX_SHIM}");
     }
 
     #[test]

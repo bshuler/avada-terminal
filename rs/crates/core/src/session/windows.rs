@@ -7,7 +7,7 @@
 //! [`session::transport`](crate::session::transport)). Only three things differ, and they are
 //! all here:
 //!
-//! * [`pipe_name`] — the salted `\\.\pipe\hyperpanesd.<hash>` name, derived exactly like the
+//! * [`pipe_name`] — the salted `\\.\pipe\avadad.<hash>` name, derived exactly like the
 //!   unix socket path (FNV-1a of the salt → 16-hex token), so client and daemon agree on one
 //!   endpoint per salt without re-hashing.
 //! * [`bind_first_instance`] — the one-daemon-per-salt gate. On unix that is an `flock` on a
@@ -59,7 +59,7 @@ const DEFAULT_IDLE_GRACE_MS: u64 = 30_000;
 
 #[tracing::instrument(level = "debug", ret)]
 fn idle_grace() -> Duration {
-    let ms = std::env::var("HYPERPANES_DAEMON_IDLE_MS")
+    let ms = std::env::var("AVADA_DAEMON_IDLE_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_IDLE_GRACE_MS);
@@ -83,13 +83,13 @@ fn fnv1a64(s: &str) -> u64 {
 #[tracing::instrument(level = "debug", ret)]
 pub fn pipe_name(salt: &str) -> String {
     let h = format!("{:016x}", fnv1a64(salt));
-    format!(r"\\.\pipe\hyperpanesd.{h}")
+    format!(r"\\.\pipe\avadad.{h}")
 }
 
 /// Suffix that turns a salt into its **pty-host** salt.
 ///
 /// The pty-host is not a new kind of process: it is a daemon like any other, run as
-/// `hyperpanes --session-daemon <salt><marker>`, and it is what actually owns the ConPTYs. A
+/// `avada --session-daemon <salt><marker>`, and it is what actually owns the ConPTYs. A
 /// daemon whose salt carries this marker serves an in-process
 /// [`SessionRegistry`](crate::session_manager::SessionRegistry); one whose salt does not
 /// proxies to the host. So the marker is the whole of the mode switch, and [`pipe_name`] gives
@@ -150,7 +150,7 @@ impl Lifecycle {
 }
 
 /// Run the Windows daemon for `salt`, blocking until exit — the `#[cfg(windows)]` body behind
-/// `hyperpanes --session-daemon <salt>`. Builds a Tokio runtime (pty drivers need it), claims
+/// `avada --session-daemon <salt>`. Builds a Tokio runtime (pty drivers need it), claims
 /// the salt's pipe as its **first instance** (the one-daemon-per-salt gate), arms the idle
 /// monitor, then serves forever.
 ///
@@ -254,7 +254,7 @@ fn bind_first_instance(pipe: &str) -> io::Result<NamedPipeServer> {
         Ok(server) => Ok(server),
         Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED) => Err(io::Error::new(
             io::ErrorKind::AddrInUse,
-            format!("a hyperpanes daemon already serves {pipe}"),
+            format!("a avada daemon already serves {pipe}"),
         )),
         Err(e) => Err(e),
     }
@@ -938,7 +938,7 @@ mod tests {
     // it serves — the two roles must never contend for one name.
     #[test]
     fn host_salt_is_distinguishable_and_separately_addressed() {
-        let salt = "C:\\Users\\x\\AppData\\Roaming\\hyperpanes";
+        let salt = "C:\\Users\\x\\AppData\\Roaming\\avada";
         let host = host_salt(salt);
 
         assert!(!is_host_salt(salt), "a plain salt is not a host salt");
@@ -1010,7 +1010,7 @@ mod tests {
             &ClientMsg::Create(SpawnSpec {
                 uid: Some("pane-e2e".into()),
                 shell: Some("cmd.exe".into()),
-                args: Some(vec!["/c".into(), "echo hyperpanes-ok".into()]),
+                args: Some(vec!["/c".into(), "echo avada-ok".into()]),
                 cols: Some(80),
                 rows: Some(24),
                 ..Default::default()
@@ -1023,7 +1023,7 @@ mod tests {
         assert!(matches!(created, DaemonMsg::Created { uid } if uid == "pane-e2e"));
 
         assert!(
-            output_contains(&conn, Duration::from_secs(10), "hyperpanes-ok"),
+            output_contains(&conn, Duration::from_secs(10), "avada-ok"),
             "the ConPTY's output should stream back as Data events"
         );
 

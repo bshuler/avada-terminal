@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.hyperpanes.hyperpanes_mobile"
+    namespace = "dev.avada.hyperpanes_mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -18,7 +18,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "dev.hyperpanes.hyperpanes_mobile"
+        applicationId = "dev.avada.hyperpanes_mobile"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

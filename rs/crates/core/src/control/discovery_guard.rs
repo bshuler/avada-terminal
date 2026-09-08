@@ -1,7 +1,7 @@
 //! Discovery-file ownership guard — a second instance must not silently take over a
 //! `control.json` owned by a live instance.
 //!
-//! `core/src/app.rs:44-46` resolves the control file as `HYPERPANES_CONTROL_FILE` over
+//! `core/src/app.rs:44-46` resolves the control file as `AVADA_CONTROL_FILE` over
 //! the XDG-derived default — and every spawned pane INHERITS that variable pointing at
 //! the LIVE file (`session::spawn`), so a dev/test build booted from an agent pane with
 //! only `XDG_STATE_HOME` overridden still targets the live `control.json`. Before this
@@ -14,7 +14,7 @@
 //! ownership.
 //!
 //! The guard, run before `run_server` claims the file: the file is refused ONLY when it
-//! records a pid that is alive, is not ours, and verifiably looks like a hyperpanes
+//! records a pid that is alive, is not ours, and verifiably looks like a avada
 //! process. Everything else claims cleanly — missing/corrupt file, our own pid
 //! (in-process `ControlHost` restart), a dead pid (crashed owner — stale recovery needs
 //! no manual cleanup), a live pid whose identity cannot be read, or a live pid that is
@@ -71,7 +71,7 @@ pub fn recorded_pid(path: &Path) -> Option<u32> {
     read_owner(path).map(|o| o.pid)
 }
 
-/// Refuse to claim `path` if it is owned by a live hyperpanes instance other than
+/// Refuse to claim `path` if it is owned by a live avada instance other than
 /// `our_pid` (retrying briefly in case that owner is mid-exit). See the module docs
 /// for the full claim/refuse matrix — everything short of a verified live foreign
 /// owner claims.
@@ -89,7 +89,7 @@ async fn ensure_claimable_with(
 ) -> io::Result<()> {
     let deadline = std::time::Instant::now() + total;
     loop {
-        let Some(owner) = live_foreign_hyperpanes_owner(path, our_pid) else {
+        let Some(owner) = live_foreign_avada_owner(path, our_pid) else {
             return Ok(());
         };
         if std::time::Instant::now() >= deadline {
@@ -104,16 +104,16 @@ async fn ensure_claimable_with(
 }
 
 /// `Some(owner)` only when the file records a pid that is alive, is not ours, AND
-/// verifiably looks like a hyperpanes process. `None` (claimable) for everything
+/// verifiably looks like a avada process. `None` (claimable) for everything
 /// else, including a live pid with unreadable identity — the guard fails open.
 #[tracing::instrument(level = "debug")]
-fn live_foreign_hyperpanes_owner(path: &Path, our_pid: u32) -> Option<Owner> {
+fn live_foreign_avada_owner(path: &Path, our_pid: u32) -> Option<Owner> {
     let owner = read_owner(path)?;
     if owner.pid == our_pid || !pid_alive(owner.pid) {
         return None;
     }
     match process_name(owner.pid) {
-        Some(name) if is_hyperpanes_name(&name) => Some(owner),
+        Some(name) if is_avada_name(&name) => Some(owner),
         // Alive but some unrelated program (recycled pid), or alive with unreadable
         // identity (permissions, exotic platform): fail open, claim.
         _ => None,
@@ -121,12 +121,12 @@ fn live_foreign_hyperpanes_owner(path: &Path, our_pid: u32) -> Option<Owner> {
 }
 
 /// Does a process name/path look like one of ours? Matches the installed GUI
-/// (`/usr/bin/hyperpanes`), dev builds living under a `hyperpanes` checkout, and the
-/// core `headless` bin (whose basename carries no "hyperpanes").
+/// (`/usr/bin/avada`), dev builds living under a `avada` checkout, and the
+/// core `headless` bin (whose basename carries no "avada").
 #[tracing::instrument(level = "debug", ret)]
-fn is_hyperpanes_name(name: &str) -> bool {
+fn is_avada_name(name: &str) -> bool {
     let n = name.to_lowercase();
-    n.contains("hyperpanes")
+    n.contains("avada")
         || n.rsplit(['/', '\\', ' '])
             .any(|part| part.strip_suffix(".exe").unwrap_or(part) == "headless")
 }
@@ -134,14 +134,14 @@ fn is_hyperpanes_name(name: &str) -> bool {
 #[tracing::instrument(level = "debug", ret, skip(owner))]
 fn refusal_message(path: &Path, owner: &Owner) -> String {
     format!(
-        "refusing to overwrite control file {path}: a live hyperpanes instance owns it \
+        "refusing to overwrite control file {path}: a live avada instance owns it \
          (pid {pid}, port {port}, version {version}). Starting against the shared file \
          would hijack the live control plane — agents on the recorded port/token then \
          fail with 'fetch failed' / 'unauthorized' / 'no such pane' (see \
          docs/agent-recovery.md). To run an isolated dev instance, relaunch with both \
-         env vars set: XDG_STATE_HOME=<dir> HYPERPANES_CONTROL_FILE=<dir>/control.json \
-         <your-binary> (HYPERPANES_CONTROL_FILE overrides the XDG-derived default — \
-         core/src/app.rs:44-46). If pid {pid} is not a hyperpanes instance, delete \
+         env vars set: XDG_STATE_HOME=<dir> AVADA_CONTROL_FILE=<dir>/control.json \
+         <your-binary> (AVADA_CONTROL_FILE overrides the XDG-derived default — \
+         core/src/app.rs:44-46). If pid {pid} is not a avada instance, delete \
          {path} and retry.",
         path = path.display(),
         pid = owner.pid,
@@ -313,17 +313,17 @@ mod tests {
         Shared::new(sessions, false, "0.0.0", control, speech)
     }
 
-    /// A live process that LOOKS like hyperpanes: `sleep` behind a symlink named
-    /// `hyperpanes` (comm and argv0 follow the invoked path). A symlink, not a copy:
+    /// A live process that LOOKS like avada: `sleep` behind a symlink named
+    /// `avada` (comm and argv0 follow the invoked path). A symlink, not a copy:
     /// copying opens the target for write, and that fd inherited across another
     /// test's concurrent fork makes exec fail with ETXTBSY. Kill+reap when done.
     #[cfg(unix)]
-    fn fake_hyperpanes(dir: &Path, secs: &str) -> std::process::Child {
+    fn fake_avada(dir: &Path, secs: &str) -> std::process::Child {
         let sleep_bin = ["/usr/bin/sleep", "/bin/sleep"]
             .iter()
             .find(|p| Path::new(p).exists())
             .expect("no sleep binary");
-        let fake = dir.join("hyperpanes");
+        let fake = dir.join("avada");
         std::os::unix::fs::symlink(sleep_bin, &fake).unwrap();
         std::process::Command::new(&fake).arg(secs).spawn().unwrap()
     }
@@ -354,11 +354,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // Pid reuse fails OPEN: pid 1 is alive but is init/systemd, not hyperpanes — a
+    // Pid reuse fails OPEN: pid 1 is alive but is init/systemd, not avada — a
     // recycled pid must never brick a legitimate launch forever.
     #[cfg(unix)]
     #[tokio::test]
-    async fn live_foreign_non_hyperpanes_pid_is_claimed() {
+    async fn live_foreign_non_avada_pid_is_claimed() {
         let dir = scratch("pid-reuse");
         let path = write_control(&dir, 1);
         assert!(claimable_now(&path, std::process::id()).await);
@@ -367,9 +367,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn live_hyperpanes_pid_refuses_and_the_message_is_actionable() {
+    async fn live_avada_pid_refuses_and_the_message_is_actionable() {
         let dir = scratch("refuse");
-        let mut child = fake_hyperpanes(&dir, "30");
+        let mut child = fake_avada(&dir, "30");
         let path = write_control(&dir, child.id());
         let err = ensure_claimable_with(&path, std::process::id(), Duration::ZERO, Duration::ZERO)
             .await
@@ -389,7 +389,7 @@ mod tests {
         );
         // …and the exact copy-pasteable isolation recipe + the precedence rule.
         assert!(
-            msg.contains("XDG_STATE_HOME=<dir> HYPERPANES_CONTROL_FILE=<dir>/control.json"),
+            msg.contains("XDG_STATE_HOME=<dir> AVADA_CONTROL_FILE=<dir>/control.json"),
             "gives the exact env line: {msg}"
         );
         assert!(
@@ -401,15 +401,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // The restartApp overlap: the recorded owner is a live hyperpanes process that is
+    // The restartApp overlap: the recorded owner is a live avada process that is
     // on its way out. The bounded retry outlasts it and the claim proceeds — the
     // incoming instance of a restart is never refused. (Same-flavor restarts are also
     // serialized by the single_instance flock before this guard even runs.)
     #[cfg(unix)]
     #[tokio::test]
-    async fn exiting_hyperpanes_owner_is_claimed_after_retry() {
+    async fn exiting_avada_owner_is_claimed_after_retry() {
         let dir = scratch("restart");
-        let mut child = fake_hyperpanes(&dir, "1");
+        let mut child = fake_avada(&dir, "1");
         let path = write_control(&dir, child.id());
         let started = std::time::Instant::now();
         ensure_claimable_with(
@@ -438,25 +438,23 @@ mod tests {
     }
 
     #[test]
-    fn hyperpanes_names_match_and_strangers_do_not() {
-        assert!(is_hyperpanes_name("hyperpanes /usr/bin/hyperpanes"));
-        assert!(is_hyperpanes_name("headless ./target/debug/headless"));
-        assert!(is_hyperpanes_name(
-            r"C:\Program Files\hyperpanes\hyperpanes.exe"
-        ));
-        assert!(!is_hyperpanes_name("systemd /usr/lib/systemd/systemd"));
-        assert!(!is_hyperpanes_name("chrome --headless=new"));
+    fn avada_names_match_and_strangers_do_not() {
+        assert!(is_avada_name("avada /usr/bin/avada"));
+        assert!(is_avada_name("headless ./target/debug/headless"));
+        assert!(is_avada_name(r"C:\Program Files\avada\avada.exe"));
+        assert!(!is_avada_name("systemd /usr/lib/systemd/systemd"));
+        assert!(!is_avada_name("chrome --headless=new"));
     }
 
     // Acceptance A: instance B (this test's server) cannot overwrite a control file
-    // owned by live instance A (a real running process named hyperpanes). Before the
+    // owned by live instance A (a real running process named avada). Before the
     // guard, run_server served forever after silently clobbering the file — this test
     // then failed on the timeout.
     #[cfg(unix)]
     #[tokio::test]
     async fn run_server_refuses_a_control_file_owned_by_a_live_foreign_pid() {
         let dir = scratch("server-refuse");
-        let mut child = fake_hyperpanes(&dir, "30");
+        let mut child = fake_avada(&dir, "30");
         let path = write_control(&dir, child.id());
         let before = std::fs::read_to_string(&path).unwrap();
         let res = tokio::time::timeout(
@@ -505,7 +503,7 @@ mod tests {
     #[tokio::test]
     async fn isolated_dev_file_claims_cleanly_and_leaves_the_shared_file_alone() {
         let dir = scratch("server-isolated");
-        let mut child = fake_hyperpanes(&dir, "30"); // stand-in live owner of the shared file
+        let mut child = fake_avada(&dir, "30"); // stand-in live owner of the shared file
         let shared_file = write_control(&dir, child.id());
         let live_before = std::fs::read_to_string(&shared_file).unwrap();
         let isolated = dir.join("isolated").join("control.json");

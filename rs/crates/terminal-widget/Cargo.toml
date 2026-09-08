@@ -1,5 +1,5 @@
 [package]
-name = "hyperpanes-terminal-widget"
+name = "avada-terminal-widget"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.85"
@@ -11,7 +11,7 @@ publish = false
 
 [dependencies]
 # The headless core: consumed as a dependency (session_manager owns the live PTYs).
-hyperpanes-core = { path = "../core" }
+avada-core = { path = "../core" }
 
 # Slint UI + its wgpu interop seam. `unstable-wgpu-29` exposes `slint::wgpu_29`
 # (texture import via Image::try_from + a shared Device/Queue);

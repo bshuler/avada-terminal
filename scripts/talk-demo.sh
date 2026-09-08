@@ -8,7 +8,7 @@ A="${TALK_DEMO_DIR:-$(mktemp -d /tmp/hp-talk-demo.XXXXXX)}"
 rm -rf "$A"; mkdir -p "$A/state" "$A/config" "$A/data" "$A/proj" "$A/claude"
 UTT="$A/utterances.txt"
 
-[ -x "$REPO/rs/target/debug/headless" ] || (cd "$REPO/rs" && cargo build --locked -p hyperpanes-core --bin headless) || exit 1
+[ -x "$REPO/rs/target/debug/headless" ] || (cd "$REPO/rs" && cargo build --locked -p avada-core --bin headless) || exit 1
 
 cat > "$A/speak.sh" <<'EOF'
 #!/bin/sh
@@ -27,8 +27,8 @@ chmod +x "$A/speak.sh"
 # settings and session markers, which is a demo that proves nothing.
 export HOME="$A/home"
 case "$(uname -s)" in
-  Darwin) CFG="$A/home/Library/Application Support/hyperpanes"; ST="$CFG" ;;
-  *)      CFG="$A/config/hyperpanes";                           ST="$A/state/hyperpanes" ;;
+  Darwin) CFG="$A/home/Library/Application Support/avada"; ST="$CFG" ;;
+  *)      CFG="$A/config/avada";                           ST="$A/state/avada" ;;
 esac
 mkdir -p "$CFG" "$ST"
 
@@ -37,13 +37,13 @@ mkdir -p "$CFG" "$ST"
 printf '{"commandTemplate":["/bin/sh","%s","{text}"]}\n' "$A/speak.sh" > "$CFG/speech.json"
 
 CJ="$ST/control.json"
-# HYPERPANES_CONTROL_FILE leaks in from this pane's env and would clobber the LIVE app's
+# AVADA_CONTROL_FILE leaks in from this pane's env and would clobber the LIVE app's
 # discovery file — pin it into the sandbox explicitly.
 # A fresh sandbox has no control-settings.json, so `allowInput` defaults OFF. Turn it on
 # explicitly rather than inheriting whatever the developer happens to have enabled.
-env -u HYPERPANES_PANE_ID \
+env -u AVADA_PANE_ID \
   XDG_STATE_HOME="$A/state" XDG_CONFIG_HOME="$A/config" XDG_DATA_HOME="$A/data" \
-  HYPERPANES_CONTROL_FILE="$CJ" HYPERPANES_MSG_NUDGE=0 HYPERPANES_ALLOW_INPUT=1 \
+  AVADA_CONTROL_FILE="$CJ" AVADA_MSG_NUDGE=0 AVADA_ALLOW_INPUT=1 \
   "$REPO/rs/target/debug/headless" > "$A/headless.log" 2>&1 &
 HPID=$!
 trap 'kill $HPID 2>/dev/null' EXIT

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Claude Code SessionStart / SessionEnd hook -> hyperpanes pane->conversation map.
+# Claude Code SessionStart / SessionEnd hook -> avada pane->conversation map.
 #
 # Register in ~/.claude/settings.json under BOTH events:
 #   "hooks": {
@@ -8,22 +8,22 @@
 #   }
 #
 # Claude pipes hook JSON (session_id, cwd, hook_event_name, ...) on stdin. When the
-# claude runs inside a hyperpanes pane (HYPERPANES_PANE_ID in the pane env), this writes
+# claude runs inside a avada pane (AVADA_PANE_ID in the pane env), this writes
 #   <state dir>/claude-sessions/<pane-id>.json = { "sessionId":..., "cwd":..., "configDir":... }
 # on SessionStart and removes it on SessionEnd — so a marker exists exactly while a
 # conversation is live in that pane. The GUI's relaunch snapshot embeds the id, letting a
 # restored pane `claude --resume` the same conversation in the same directory.
-# (Path must mirror hyperpanes-core persistence::paths::claude_sessions_dir.)
+# (Path must mirror avada-core persistence::paths::claude_sessions_dir.)
 #
 # Outside a pane, or on any error, this exits 0 silently — a hook must never break claude.
-[ -n "$HYPERPANES_PANE_ID" ] || { cat >/dev/null 2>&1; exit 0; }
+[ -n "$AVADA_PANE_ID" ] || { cat >/dev/null 2>&1; exit 0; }
 
 case "$(uname 2>/dev/null)" in
-  Darwin) base="$HOME/Library/Application Support/hyperpanes" ;;
-  *)      base="${XDG_STATE_HOME:-$HOME/.local/state}/hyperpanes" ;;
+  Darwin) base="$HOME/Library/Application Support/avada" ;;
+  *)      base="${XDG_STATE_HOME:-$HOME/.local/state}/avada" ;;
 esac
 
-HP_SESS_DIR="$base/claude-sessions" HP_PANE="$HYPERPANES_PANE_ID" python3 -c '
+HP_SESS_DIR="$base/claude-sessions" HP_PANE="$AVADA_PANE_ID" python3 -c '
 import json, os, sys
 
 try:

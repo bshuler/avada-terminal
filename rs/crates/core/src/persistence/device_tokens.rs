@@ -1,6 +1,6 @@
 //! Paired-device token persistence — `device-tokens.json` in the state dir, beside
 //! `control.json`. Each record is a full-authority (unscoped) bearer token handed to one mobile
-//! client by `hyperpanes pair`, tagged with a human `label` and an optional expiry.
+//! client by `avada pair`, tagged with a human `label` and an optional expiry.
 //!
 //! Unlike scoped tokens (in-memory, cleared on stop), device tokens must survive a host restart
 //! so a phone paired once stays paired — the same guarantee the master token gets from its own
@@ -13,13 +13,13 @@
 use crate::persistence::paths;
 use serde::{Deserialize, Serialize};
 
-/// One paired device: its bearer `token`, a human `label` (`hyperpanes devices` shows it,
-/// `hyperpanes revoke <label>` drops it), and an optional ms-epoch `expires_at` (`None` = never).
+/// One paired device: its bearer `token`, a human `label` (`avada devices` shows it,
+/// `avada revoke <label>` drops it), and an optional ms-epoch `expires_at` (`None` = never).
 ///
 /// `ssh_key` is the same device's **SSH public key**, in `authorized_keys` line form, when it
-/// paired one (`hyperpanes pair --ssh-key …`). The embedded SSH server (mux backend M3) reads
+/// paired one (`avada pair --ssh-key …`). The embedded SSH server (mux backend M3) reads
 /// this table as its per-device key list, which is what makes one pairing and one revocation
-/// cover both doors: `hyperpanes revoke <label>` drops the record, and with it both the bearer
+/// cover both doors: `avada revoke <label>` drops the record, and with it both the bearer
 /// token the mobile app carries and the public key the phone's SSH client offers. A TTL applies
 /// to both for the same reason. The field is optional and additive — a device paired before M3,
 /// or one that only speaks the control API, simply has none.

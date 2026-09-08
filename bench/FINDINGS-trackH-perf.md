@@ -7,7 +7,7 @@ machine, this session (absolute values run high vs the documented `FINDINGS-nati
 baseline because the box was under build/AV load throughout — read the **before/after deltas**, not the
 absolutes).
 
-A new, zero-cost-when-off perf instrument was added to do the measuring: set `HYPERPANES_PERFLOG=<path>`
+A new, zero-cost-when-off perf instrument was added to do the measuring: set `AVADA_PERFLOG=<path>`
 (or `1`) and the app logs timestamped startup milestones + a `[tick/s]` line each second of activity
 (events, bytes fed, MB/s, renders, drain/render/busy ms-per-second). It is inert (one `OnceLock` load)
 when the env var is unset. This is how the findings below were proven, and it stays in the tree for the
@@ -24,7 +24,7 @@ Repro (stable methodology — the default 16 MB payload exceeds the 60 s timeout
 `n/a`; use a smaller payload + longer timeout):
 
 ```
-node bench/run.mjs --only=hyperpanes --suite=throughput --cases=scrolling-region --bytes=2 --runs=2 --timeout=120000
+node bench/run.mjs --only=avada --suite=throughput --cases=scrolling-region --bytes=2 --runs=2 --timeout=120000
 ```
 
 What the `[tick/s]` log shows during a scrolling-region run (node input throttled to **0.4 MB/s**):

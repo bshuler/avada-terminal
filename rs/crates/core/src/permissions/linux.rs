@@ -13,7 +13,7 @@
 //! `ScreenCast` interface has no "do I already have this" call — a grant is a session token
 //! handed back by a picker the user just answered, not state we can read — and the remaining
 //! rights are ungated for a native build, so there is no state to read at all. A Flatpak or
-//! Snap of Hyperpanes would change that; if one is ever shipped, this file is where the
+//! Snap of Avada would change that; if one is ever shipped, this file is where the
 //! sandbox-aware answers go.
 
 use super::{Grant, Right};

@@ -1,4 +1,4 @@
-// The hyperpanes multi-tab workspace shell (Phase 3, Wave 1).
+// The avada multi-tab workspace shell (Phase 3, Wave 1).
 //
 //   frameless Window  →  TopBar  (brand · tab strip · hud · tools · window controls)
 //                     →  PaneView (active tab's tiled TerminalPanes + resize dividers
@@ -30,7 +30,7 @@ export { Theme }
 export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, KeybindingItem, MenuEntry, CtxTab, KeyMsg, HiRect, HistoryUi, ReminderItem, RemindersAdapter, ReminderCustom, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter }
 
 export component AppWindow inherits Window {
-    title: "hyperpanes";
+    title: "avada";
     preferred-width: 1280px;
     preferred-height: 800px;
     min-width: 480px;
@@ -110,7 +110,7 @@ export component AppWindow inherits Window {
     // the update-* trio mirror the off-thread updater's live status (phase/message/progress).
     in property <string> pref-app-version: "";
     in property <bool> pref-auto-update: false;
-    // session-daemon M3: "keep terminals running in the background when Hyperpanes closes".
+    // session-daemon M3: "keep terminals running in the background when Avada closes".
     in property <bool> pref-keep-alive: true;
     in property <bool> pref-confirm-close: true;
     in property <string> pref-update-status: "";

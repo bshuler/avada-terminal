@@ -1,4 +1,4 @@
-//! `hyperpanes pair` — print pairing info for the mobile app (docs/mobile-client-plan.md).
+//! `avada pair` — print pairing info for the mobile app (docs/mobile-client-plan.md).
 //!
 //! Reads the running app's `control.json` (port + master token), mints a per-device token off it
 //! via the control API so the master never leaves the machine, figures
@@ -14,7 +14,7 @@
 use std::net::UdpSocket;
 use std::path::Path;
 
-use hyperpanes_core::persistence::{control_settings, paths};
+use avada_core::persistence::{control_settings, paths};
 
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn wants_pair(argv: &[String]) -> bool {
@@ -28,13 +28,13 @@ struct PairOpts {
     ttl_ms: Option<i64>,
     /// The device's SSH public key in `authorized_keys` line form, when `--ssh-key` was given.
     /// It rides in the same device record as the bearer token, which is what lets the embedded
-    /// SSH server (mux backend M3) accept the phone and lets one `hyperpanes revoke <label>`
+    /// SSH server (mux backend M3) accept the phone and lets one `avada revoke <label>`
     /// close both doors under one label and one TTL.
     ssh_key: Option<String>,
 }
 
 impl PairOpts {
-    /// `hyperpanes pair [--device <label>] [--ttl <30d|12h|90m|<ms>>] [--ssh-key <key|path>]`.
+    /// `avada pair [--device <label>] [--ttl <30d|12h|90m|<ms>>] [--ssh-key <key|path>]`.
     /// Label defaults to the machine hostname; TTL omitted = never expires (the master-token
     /// guarantee).
     #[tracing::instrument(level = "debug", skip_all)]
@@ -136,24 +136,24 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
     let opts = match PairOpts::parse(argv) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("hyperpanes pair: {e}");
+            eprintln!("avada pair: {e}");
             eprintln!(
-                "usage: hyperpanes pair [--device <label>] [--ttl <30d|12h|90m|<ms>>] \
+                "usage: avada pair [--device <label>] [--ttl <30d|12h|90m|<ms>>] \
                  [--ssh-key <key|path/to/key.pub>]"
             );
             std::process::exit(2);
         }
     };
-    // Panes inherit HYPERPANES_CONTROL_FILE set-but-EMPTY from the app; treat empty as
+    // Panes inherit AVADA_CONTROL_FILE set-but-EMPTY from the app; treat empty as
     // unset or `pair` run inside a pane resolves a blank path instead of the state dir.
-    let control_file = std::env::var_os("HYPERPANES_CONTROL_FILE")
+    let control_file = std::env::var_os("AVADA_CONTROL_FILE")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(paths::control_json);
     let Some((port, token)) = read_discovery(&control_file) else {
         eprintln!(
             "No running control API found ({}).\n\
-             Start hyperpanes and enable Preferences → Control API, then re-run `hyperpanes pair`.",
+             Start avada and enable Preferences → Control API, then re-run `avada pair`.",
             control_file.display()
         );
         std::process::exit(1);
@@ -163,13 +163,13 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
     let bound_remote = settings.bind_address.is_some();
     let hosts = candidate_hosts(settings.bind_address.as_deref());
 
-    println!("hyperpanes pairing — control API on port {port}\n");
+    println!("avada pairing — control API on port {port}\n");
     if !bound_remote {
         println!(
             "⚠ control server is bound to 127.0.0.1 (loopback only) — a phone CANNOT connect yet.\n\
              Add a bind address to {}:\n\
              {{ \"enabled\": true, \"allowInput\": true, \"bindAddress\": \"<this machine's Tailscale/LAN IP>\", \"port\": {port} }}\n\
-             then toggle Preferences → Control API (or restart), and re-run `hyperpanes pair`.\n\
+             then toggle Preferences → Control API (or restart), and re-run `avada pair`.\n\
              Prefer a Tailscale IP (100.x.y.z): WireGuard-encrypted, no open LAN ports.\n",
             paths::control_settings_json().display()
         );
@@ -179,7 +179,7 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
     }
 
     // Mint a per-device token via the control API so the MASTER token never leaves this machine.
-    // The phone carries only this named, revocable credential (`hyperpanes devices` / `revoke`).
+    // The phone carries only this named, revocable credential (`avada devices` / `revoke`).
     let device_token = match mint_device(port, settings.bind_address.as_deref(), &token, &opts) {
         Ok(t) => t,
         Err(e) => {
@@ -204,7 +204,7 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
         println!("  {u}");
     }
     if let Some(best) = urls.first() {
-        println!("\nScan with the hyperpanes mobile app:\n");
+        println!("\nScan with the avada mobile app:\n");
         match qr_text(best) {
             Some(qr) => println!("{qr}"),
             None => println!("(QR render failed — paste the URL manually)"),
@@ -214,7 +214,7 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
 }
 
 /// After pairing a key, say what it is now good for: the SSH front door, on its own port, which
-/// has to be switched on separately. `hyperpanes revoke <label>` still takes both away at once.
+/// has to be switched on separately. `avada revoke <label>` still takes both away at once.
 #[tracing::instrument(level = "debug", skip_all)]
 fn print_ssh_hint(hosts: &[String], label: &str) {
     let host = hosts.first().map(String::as_str).unwrap_or("127.0.0.1");
@@ -225,8 +225,8 @@ fn print_ssh_hint(hosts: &[String], label: &str) {
     println!(
         "this device's SSH key is paired too — any SSH client holding it can attach:\n\
         \n  ssh -p {port} {host}\n\
-        \nThe SSH server is separate and off by default: `hyperpanes ssh enable`, and it binds\n\
-         127.0.0.1 unless you also set allowRemote. `hyperpanes revoke {label}` drops the key\n\
+        \nThe SSH server is separate and off by default: `avada ssh enable`, and it binds\n\
+         127.0.0.1 unless you also set allowRemote. `avada revoke {label}` drops the key\n\
          and the token together.\n"
     );
 }
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn ssh_key_is_validated_at_the_terminal_and_stored_canonically() {
         let argv = |extra: &[&str]| {
-            let mut v = vec!["hyperpanes".to_string(), "pair".to_string()];
+            let mut v = vec!["avada".to_string(), "pair".to_string()];
             v.extend(extra.iter().map(|s| s.to_string()));
             v
         };

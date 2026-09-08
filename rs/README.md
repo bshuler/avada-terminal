@@ -1,6 +1,6 @@
-# hyperpanes — native Rust rewrite (`rs/`)
+# avada — native Rust rewrite (`rs/`)
 
-Native (Slint) rewrite of hyperpanes, Windows-first. See the master plan at
+Native (Slint) rewrite of avada, Windows-first. See the master plan at
 `C:\Users\Admin\.claude\plans\effervescent-giggling-conway.md`.
 
 This tree is being built via **fan-out** (parallel agents, one per track). The
@@ -10,7 +10,7 @@ files outside your track's ownership (see your `FANOUT-HANDOFF.md`).
 
 ## Layout
 
-- `crates/core/` — `hyperpanes-core`, the headless Phase-1 core (no GUI). Pure
+- `crates/core/` — `avada-core`, the headless Phase-1 core (no GUI). Pure
   modules ported 1:1 from `../src/main`, each with mirrored tests.
 - `spikes/terminal-render/` — Phase-0 Spike A: GPU terminal-in-Slint (go/no-go).
 - `spikes/tearoff/` — Phase-0 Spike B: cross-window live tear-off (go/no-go).

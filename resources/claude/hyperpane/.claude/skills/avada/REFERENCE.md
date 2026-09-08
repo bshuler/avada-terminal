@@ -1,10 +1,10 @@
-# `hyperpanes ctl` reference
+# `avada ctl` reference
 
 Every verb is a thin wrapper over one HTTP route on the loopback control API. Machine verbs print
 JSON on stdout; `tabs`, `panes` and `read` print text, because their job is to be read. A non-2xx
 response prints to stderr and exits 1; a usage error exits 2.
 
-Call it as `hyperpanes ctl <verb>`.
+Call it as `avada ctl <verb>`.
 
 ## Discovery
 
@@ -152,7 +152,7 @@ Routes not covered by a named verb:
 
 `0` success · `1` the server refused, or is not running · `2` bad usage.
 
-"Start hyperpanes and enable Preferences → Control API" means the discovery file
+"Start avada and enable Preferences → Control API" means the discovery file
 (`control.json`) is missing — the API is off. That is a setting for the user to change; say so
 rather than working around it.
 

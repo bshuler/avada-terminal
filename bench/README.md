@@ -1,18 +1,18 @@
-# hyperpanes terminal benchmark harness
+# avada terminal benchmark harness
 
-Measures **hyperpanes** against other Windows terminals on the same machine, so the
+Measures **avada** against other Windows terminals on the same machine, so the
 "did the native rewrite deliver the memory win?" question (and future regressions) rest
 on numbers rather than estimates. It is **detect-only**: it never installs, updates, or
 otherwise mutates your system — it benchmarks whatever is already built/installed.
 
-The primary target is the **native Rust** hyperpanes (`rs/crates/app`). The pre-rewrite
+The primary target is the **native Rust** avada (`rs/crates/app`). The pre-rewrite
 **Electron** build is an optional baseline (built from branch `archive/electron`).
 
 Suites: **memory** (idle WS/Private + idle CPU — the headline) for every app, plus
 **throughput** and **startup** for terminals that expose a run-a-command CLI. A **manual**
 input-latency procedure (Typometer) is documented below.
 
-> **The native hyperpanes is measured idle-only.** Its GUI binary (v0.0.1) ignores CLI
+> **The native avada is measured idle-only.** Its GUI binary (v0.0.1) ignores CLI
 > argv and has no run-a-command flag, so the harness cannot inject an in-pane workload — it
 > launches a fresh instance (one default-shell pane) and samples idle memory + CPU.
 > Throughput/startup-in-pane are therefore n/a for native until the GUI wires CLI launch
@@ -28,22 +28,22 @@ via the npm scripts in `bench/` (run them from inside `bench/`):
 node bench/detect.mjs                 # …or:  cd bench; npm run bench:detect
 
 # 2. The headline native-vs-Electron(-vs-WT) idle comparison
-node bench/run.mjs --only=hyperpanes,hyperpanes-electron,wt --suite=memory --idle-bare --label=native-vs-electron
+node bench/run.mjs --only=avada,avada-electron,wt --suite=memory --idle-bare --label=native-vs-electron
 ```
 
 `npm run bench` with no flags benchmarks every detected terminal with all applicable
 suites at `--runs=5`. Output lands in `bench/results/` (gitignored).
 
-### The native hyperpanes row
+### The native avada row
 
-The native app has **no `hyperpanes` command on PATH**; the harness resolves the cargo
+The native app has **no `avada` command on PATH**; the harness resolves the cargo
 build output. Build it first:
 
 ```powershell
 cargo build --release --manifest-path rs/crates/app/Cargo.toml
 ```
 
-It prefers `rs/crates/app/target/release/hyperpanes.exe` and falls back to a `debug`
+It prefers `rs/crates/app/target/release/avada.exe` and falls back to a `debug`
 build (noted in the report — debug is slower/larger and not a fair comparison target).
 Each measured native launch gets an **isolated throwaway `%APPDATA%`** so it starts as a
 clean fresh instance (the data dir keys on `%APPDATA%`).
@@ -61,13 +61,13 @@ cd ../electron-baseline; npm ci; npm run build      # → out/main/index.js
 The harness then runs it in dev mode (the worktree's `electron` binary + `out/main/index.js`),
 launched with an isolated `--user-data-dir`, which spawns the real multi-process Electron
 tree (main + GPU + renderer + utility helpers) that the proctree walk sums. If the worktree
-isn't built, the `hyperpanes (Electron)` row is simply absent (detect shows how to build it).
+isn't built, the `avada (Electron)` row is simply absent (detect shows how to build it).
 
 ## Flags
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--only=ids` | all detected | comma-separated terminal ids (`hyperpanes,hyperpanes-electron,wt,wezterm,alacritty,rio,conemu,tabby,hyper,wave`) |
+| `--only=ids` | all detected | comma-separated terminal ids (`avada,avada-electron,wt,wezterm,alacritty,rio,conemu,tabby,hyper,wave`) |
 | `--suite=...` | `throughput,startup,memory` | which suites to run |
 | `--runs=N` | `5` | repetitions per measurement (median kept) |
 | `--cases=...` | all six | throughput cases (`dense,scrolling,scrolling-region,alt-screen,unicode,cursor-motion`) |
@@ -105,7 +105,7 @@ isn't built, the `hyperpanes (Electron)` row is simply absent (detect shows how 
 ## How invocation works (and why)
 
 Terminals receive the workload differently. `-e`-style terminals take an argv array;
-hyperpanes takes a single command *string* it re-parses through a shell. To get one
+avada takes a single command *string* it re-parses through a shell. To get one
 reliable quoting path, the harness writes a per-run `.cmd` wrapper (cmd-native quoting
 is robust for the spaces-in-path `node.exe`) and every terminal runs `cmd /c
 <wrapper>`. The wrapper invokes the harness's own Node (`process.execPath`) so every
@@ -116,7 +116,7 @@ terminal runs an identical interpreter.
 1. **Native is idle-only.** The native GUI ignores CLI argv and has no run-a-command
    flag, so it can't be driven; only idle memory/CPU of a fresh instance are measured.
    Throughput/startup are n/a for native until the GUI wires CLI launch.
-2. **Isolated fresh instances.** Each hyperpanes launch uses an isolated data dir
+2. **Isolated fresh instances.** Each avada launch uses an isolated data dir
    (native: throwaway `%APPDATA%`; Electron: `--user-data-dir <temp>`) so it never hands
    off to a running copy. The Electron baseline is the `archive/electron` worktree run in
    dev mode — also idle-only, so the comparison is apples-to-apples.

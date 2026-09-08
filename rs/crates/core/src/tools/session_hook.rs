@@ -54,7 +54,7 @@
 //! # Why a hook beats every other signal
 //!
 //! It is the only signal that is not an inference. The tool names its own conversation id,
-//! in the tool's own words, in a process whose environment carries `HYPERPANES_PANE_ID` —
+//! in the tool's own words, in a process whose environment carries `AVADA_PANE_ID` —
 //! so the pane→conversation binding is a fact rather than a correlation. That is why a
 //! hook-written mark outranks the scan-and-diff inference in
 //! [`crate::tools::session_infer`], and why that module exists only for tools with no hook.
@@ -68,7 +68,7 @@
 //! The five POSIX hooks are `/bin/sh` wrappers around `python3`, which is neither present
 //! nor invocable that way on a default Windows install — and their state directory is
 //! computed with `uname`, which under a Git-Bash-ish shell resolves to the XDG path rather
-//! than `%APPDATA%\hyperpanes`, so shipping them there would write markers nowhere the
+//! than `%APPDATA%\avada`, so shipping them there would write markers nowhere the
 //! reader looks. Windows therefore gets one PowerShell script,
 //! `resources/hooks/hp-session-hook.ps1`, told which tool it is running for on the command
 //! line — see [`windows_hook_command`]. The five payload shapes are small enough to be a
@@ -240,7 +240,7 @@ struct HookMarker {
 /// The mark `tool_id`'s hook has recorded for `pane_id`, if any.
 ///
 /// The mark is stamped with the tool because the pane this answers for is, by definition,
-/// one nobody spawned as a tool: a pane Hyperpanes launched with `cursor-agent` already
+/// one nobody spawned as a tool: a pane Avada launched with `cursor-agent` already
 /// carries `PaneKind::Tool`, whereas the pane a hook rescues is the one where the human
 /// typed the tool's name into a shell and the persisted kind stayed `Terminal`.
 ///
@@ -288,8 +288,8 @@ fn bundled_script(dir: &str, script: &str) -> Option<PathBuf> {
     let mut candidates = vec![exe_dir.join(&rel)];
     if let Some(prefix) = exe_dir.parent() {
         candidates.push(prefix.join("Resources").join(dir).join(script));
-        candidates.push(prefix.join("share").join("hyperpanes").join(&rel));
-        candidates.push(prefix.join("lib").join("hyperpanes").join(&rel));
+        candidates.push(prefix.join("share").join("avada").join(&rel));
+        candidates.push(prefix.join("lib").join("avada").join(&rel));
     }
     candidates.into_iter().find(|p| p.is_file())
 }
@@ -717,13 +717,13 @@ mod tests {
         // that most people get. Nothing surfaces a hook's exit status, so either mistake
         // reads as "the tool just doesn't resume".
         let cmd = windows_hook_command(
-            Path::new(r"C:\Program Files\Hyperpanes\resources\hooks\hp-session-hook.ps1"),
+            Path::new(r"C:\Program Files\Avada\resources\hooks\hp-session-hook.ps1"),
             "codex",
         );
         assert_eq!(
             cmd,
             "powershell -NoProfile -ExecutionPolicy Bypass -File \
-             \"C:\\Program Files\\Hyperpanes\\resources\\hooks\\hp-session-hook.ps1\" -Tool codex"
+             \"C:\\Program Files\\Avada\\resources\\hooks\\hp-session-hook.ps1\" -Tool codex"
         );
 
         // One script serves every tool, so the `-Tool` argument is the only thing telling

@@ -36,5 +36,5 @@ desync). To bump: download
 `https://www.nuget.org/api/v2/package/Microsoft.Windows.Console.ConPTY/<version>` (a zip),
 take `runtimes/win-x64/native/conpty.dll` + `build/native/runtimes/x64/OpenConsole.exe`,
 replace both files here, update this README's version, and re-run the bench
-(`node bench/run.mjs --only=hyperpanes --suite=throughput`) to confirm no regression.
+(`node bench/run.mjs --only=avada --suite=throughput`) to confirm no regression.
 WezTerm ships the same pair the same way (wezterm#7774).

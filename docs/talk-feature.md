@@ -14,7 +14,7 @@ the headless binary (see "Verifying" below). Generalized past Claude-only and Un
 
 ## Which tools can talk, and why not all of them
 
-Talk needs the tool's own record of what it said. Five tools keep one Hyperpanes can bind to a
+Talk needs the tool's own record of what it said. Five tools keep one Avada can bind to a
 pane and tail:
 
 | Tool | Pane→session binding | Transcript | Record shape |
@@ -36,7 +36,7 @@ Three things about codex specifically, each of which cost a wrong first guess:
   not cursor/copilot's flat `{"command":…}`, and its event names are **PascalCase**
   (`SessionStart`/`SessionEnd`). An event under the wrong casing is never called, with no
   error. `HookShape` in `tools::session_hook` exists for exactly this split.
-* Hooks are **trust-gated**. Hyperpanes writes `hooks.json`; codex then asks the human to
+* Hooks are **trust-gated**. Avada writes `hooks.json`; codex then asks the human to
   approve it once, and until they do the hook does not run (the escape hatch,
   `--dangerously-bypass-hook-trust`, is for testing). That is a security control, so the
   approval is left to the person at the keyboard — nothing here forges a trust record.
@@ -78,7 +78,7 @@ The POSIX hooks are `/bin/sh` wrappers around `python3`. Neither part survives a
 Windows install: `/bin/sh` is not there, `python3` is not on `PATH` (the Store stub that *is*
 opens a shop page rather than running), and the state directory those scripts compute with
 `uname` resolves under a Git-Bash-ish shell to the XDG path rather than
-`%APPDATA%\hyperpanes` — so shipping them there would write markers to a directory the
+`%APPDATA%\avada` — so shipping them there would write markers to a directory the
 reader never looks in, and, like every unregistered or failed hook, would do it silently.
 
 Windows therefore registers **one** script, `resources/hooks/hp-session-hook.ps1`, told which
@@ -213,7 +213,7 @@ to a one-time GUI notice + no-op; nothing crashes and the toggle still round-tri
 | macOS | `say` | always present |
 | Windows | PowerShell `System.Speech` | `Speak` is synchronous, so the process exits when the utterance ends — which is what the queue's one-at-a-time contract needs |
 
-The Windows backend passes the utterance in the environment (`HYPERPANES_SPEECH_TEXT`), never
+The Windows backend passes the utterance in the environment (`AVADA_SPEECH_TEXT`), never
 on the command line: a `-Command` string would have to survive both PowerShell's parser and
 Windows' single-string argv, and an assistant reply is arbitrary text. The `PATH` probe is
 `PATHEXT`-aware there — `powershell` on disk is `powershell.EXE`.
@@ -228,7 +228,7 @@ Windows' single-string argv, and an assistant reply is arbitrary text. The `PATH
 - Persistence: `PaneSpec.talk` in the workspace snapshot (`workspace/model.rs`), written by
   `to_session_file`/`to_workspace_file` and restored on relaunch.
 
-## MCP tools (hyperpanes-mcp)
+## MCP tools (avada-mcp)
 
 `set_talk {paneId, enabled}`, `set_speech {muted?, focusedOnly?}`, `stop_speech {}` — thin
 wrappers over the commands above (`src/control-tools.ts`).
@@ -236,7 +236,7 @@ wrappers over the commands above (`src/control-tools.ts`).
 ## Verifying
 
 `scripts/talk-demo.sh` boots an ISOLATED headless instance (XDG overrides +
-`HYPERPANES_CONTROL_FILE` pinned into the sandbox — the env var otherwise leaks in from a pane
+`AVADA_CONTROL_FILE` pinned into the sandbox — the env var otherwise leaks in from a pane
 and clobbers the live app's discovery file), fakes two panes' session markers + transcripts,
 points `commandTemplate` at an evidence-file writer, and asserts: talk toggles are observable
 in `/state`; interleaved appends to two transcripts come out as serialized, pane-labelled,

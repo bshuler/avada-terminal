@@ -10,7 +10,7 @@
 //!   * camelCase field names, `skip_serializing_if = "Option::is_none"` on every optional
 //!     (an unset field is OMITTED, never `null`), declaration order = canonical file order,
 //!     so a canonical file round-trips byte-identically through 2-space pretty printing;
-//!   * a **versioned container** ([`SetEnvelope`]) `{ "format": "hyperpanes-set",
+//!   * a **versioned container** ([`SetEnvelope`]) `{ "format": "avada-set",
 //!     "version": 1, "set": {…} }` — the reader also accepts a bare legacy [`WorkspaceSet`]
 //!     object ("version 0"), a wrong `format` or a too-new `version` is a clear error;
 //!   * member paths are resolved relative to the set file's own directory on read, exactly
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// The magic `format` discriminator of a versioned workspace-set container.
-pub const SET_FORMAT: &str = "hyperpanes-set";
+pub const SET_FORMAT: &str = "avada-set";
 /// The newest set-envelope `version` this build reads, and the version it writes.
 pub const SET_VERSION: u32 = 1;
 
@@ -34,7 +34,7 @@ pub const SET_VERSION: u32 = 1;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetMember {
-    /// Path to the member workspace file (`.hyperpanes` or legacy `.json`). A relative path
+    /// Path to the member workspace file (`.avada` or legacy `.json`). A relative path
     /// is resolved against the set file's own directory on read (see [`resolve_members`]),
     /// so a set + its workspaces stay movable as a folder.
     pub path: String,
@@ -56,7 +56,7 @@ pub struct WorkspaceSet {
     pub members: Vec<SetMember>,
 }
 
-/// The versioned on-disk container: `{ "format": "hyperpanes-set", "version": 1,
+/// The versioned on-disk container: `{ "format": "avada-set", "version": 1,
 /// "set": { … } }`. Field declaration order is the canonical file order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetEnvelope {
@@ -122,7 +122,7 @@ pub fn parse_set_str(raw: &str) -> Result<WorkspaceSet, String> {
         Some(SET_FORMAT) => {}
         other => {
             return Err(format!(
-                "not a hyperpanes workspace set: \"format\" is {:?}, expected \"{SET_FORMAT}\"",
+                "not a avada workspace set: \"format\" is {:?}, expected \"{SET_FORMAT}\"",
                 other.unwrap_or("<non-string>")
             ));
         }
@@ -132,19 +132,17 @@ pub fn parse_set_str(raw: &str) -> Result<WorkspaceSet, String> {
         Some(v) => {
             return Err(format!(
                 "workspace set version {v} is newer than this build understands \
-                 (max {SET_VERSION}) — update hyperpanes to open it"
+                 (max {SET_VERSION}) — update avada to open it"
             ));
         }
         None => {
-            return Err(
-                "hyperpanes workspace set is missing a numeric \"version\" field".to_string(),
-            );
+            return Err("avada workspace set is missing a numeric \"version\" field".to_string());
         }
     }
     let set = obj
         .get("set")
         .cloned()
-        .ok_or_else(|| "hyperpanes workspace set is missing the \"set\" payload".to_string())?;
+        .ok_or_else(|| "avada workspace set is missing the \"set\" payload".to_string())?;
     serde_json::from_value(set).map_err(|e| format!("invalid workspace set payload: {e}"))
 }
 
@@ -281,11 +279,11 @@ mod tests {
             name: "Morning".into(),
             members: vec![
                 SetMember {
-                    path: "/ws/dev.hyperpanes".into(),
+                    path: "/ws/dev.avada".into(),
                     name: Some("dev".into()),
                 },
                 SetMember {
-                    path: "/ws/ops.hyperpanes".into(),
+                    path: "/ws/ops.avada".into(),
                     name: None,
                 },
             ],
@@ -306,10 +304,10 @@ mod tests {
         let json = serde_json::to_string_pretty(&SetEnvelope::wrap(sample())).unwrap();
         assert_eq!(
             json,
-            "{\n  \"format\": \"hyperpanes-set\",\n  \"version\": 1,\n  \"set\": {\n    \
+            "{\n  \"format\": \"avada-set\",\n  \"version\": 1,\n  \"set\": {\n    \
              \"name\": \"Morning\",\n    \"members\": [\n      {\n        \
-             \"path\": \"/ws/dev.hyperpanes\",\n        \"name\": \"dev\"\n      },\n      {\n        \
-             \"path\": \"/ws/ops.hyperpanes\"\n      }\n    ]\n  }\n}"
+             \"path\": \"/ws/dev.avada\",\n        \"name\": \"dev\"\n      },\n      {\n        \
+             \"path\": \"/ws/ops.avada\"\n      }\n    ]\n  }\n}"
         );
     }
 
@@ -324,17 +322,17 @@ mod tests {
 
     #[test]
     fn rejects_a_wrong_format_or_future_version() {
-        let wrong = r#"{ "format": "hyperpanes", "version": 1, "set": { "name": "x" } }"#;
+        let wrong = r#"{ "format": "avada", "version": 1, "set": { "name": "x" } }"#;
         assert!(parse_set_str(wrong)
             .unwrap_err()
-            .contains("not a hyperpanes workspace set"));
-        let future = r#"{ "format": "hyperpanes-set", "version": 99, "set": { "name": "x" } }"#;
+            .contains("not a avada workspace set"));
+        let future = r#"{ "format": "avada-set", "version": 99, "set": { "name": "x" } }"#;
         assert!(parse_set_str(future)
             .unwrap_err()
             .contains("newer than this build"));
-        let versionless = r#"{ "format": "hyperpanes-set", "set": { "name": "x" } }"#;
+        let versionless = r#"{ "format": "avada-set", "set": { "name": "x" } }"#;
         assert!(parse_set_str(versionless).unwrap_err().contains("version"));
-        let payloadless = r#"{ "format": "hyperpanes-set", "version": 1 }"#;
+        let payloadless = r#"{ "format": "avada-set", "version": 1 }"#;
         assert!(parse_set_str(payloadless)
             .unwrap_err()
             .contains("\"set\" payload"));
@@ -356,7 +354,7 @@ mod tests {
         let set = WorkspaceSet {
             name: "rel".into(),
             members: vec![SetMember {
-                path: "ws/a.hyperpanes".into(),
+                path: "ws/a.avada".into(),
                 name: None,
             }],
         };
@@ -364,7 +362,7 @@ mod tests {
         let back = read_set(&p).unwrap();
         assert_eq!(
             back.members[0].path,
-            dir.join("ws/a.hyperpanes").to_string_lossy()
+            dir.join("ws/a.avada").to_string_lossy()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -413,7 +411,7 @@ mod tests {
     #[test]
     fn load_members_reads_workspaces_and_skips_stale_references() {
         let dir = temp_dir("members");
-        let ws = dir.join("dev.hyperpanes");
+        let ws = dir.join("dev.avada");
         let file = WorkspaceFile {
             name: Some("dev".into()),
             groups: Some(vec![GroupSpec {
@@ -435,7 +433,7 @@ mod tests {
                     name: None,
                 },
                 SetMember {
-                    path: dir.join("gone.hyperpanes").to_string_lossy().into_owned(),
+                    path: dir.join("gone.avada").to_string_lossy().into_owned(),
                     name: None,
                 },
             ],

@@ -21,7 +21,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use hyperpanes_terminal_widget::ui::{DemoWindow, PaneVisual};
+use avada_terminal_widget::ui::{DemoWindow, PaneVisual};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, Model};
 

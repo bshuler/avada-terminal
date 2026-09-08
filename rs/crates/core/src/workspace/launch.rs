@@ -75,7 +75,7 @@ mod tests {
     use super::*;
 
     fn argv(rest: &[&str]) -> Vec<String> {
-        let mut v = vec!["/path/to/hyperpanes".to_string()];
+        let mut v = vec!["/path/to/avada".to_string()];
         v.extend(rest.iter().map(|s| s.to_string()));
         v
     }

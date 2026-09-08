@@ -1373,7 +1373,7 @@ fn open_new_goal(w: &crate::AppWindow, field: i32) {
     w.set_goal_field(field);
     w.set_goal_chips(
         std::rc::Rc::new(slint::VecModel::from(vec![
-            slint::SharedString::from("hyperpanes"),
+            slint::SharedString::from("avada"),
             slint::SharedString::from("opus"),
             slint::SharedString::from("sonnet"),
             slint::SharedString::from("haiku"),
@@ -1426,7 +1426,7 @@ fn the_goal_chips_are_a_tab_strip() {
         open_new_goal(&w, 2);
 
         for (name, value) in [
-            ("Project", "hyperpanes"),
+            ("Project", "avada"),
             ("Orch", "opus"),
             ("Spec", "sonnet"),
             ("Impl", "haiku"),
@@ -1688,7 +1688,7 @@ fn install_projects(w: &crate::AppWindow, history: bool, segment: i32) {
     }));
     let projects = std::rc::Rc::new(slint::VecModel::from(vec![
         crate::ProjectItem {
-            name: "hyperpanes".into(),
+            name: "avada".into(),
             worktrees: worktrees.into(),
             sessions: sessions.into(),
             has_history: history,
@@ -1721,7 +1721,7 @@ fn a_project_row_is_a_named_expandable_list_item() {
         let w = window();
         install_projects(&w, false, 0);
 
-        let row = only(&w, "hyperpanes", AccessibleRole::ListItem);
+        let row = only(&w, "avada", AccessibleRole::ListItem);
         assert_eq!(row.accessible_expandable(), Some(true));
         assert_eq!(
             row.accessible_expanded(),
@@ -1771,11 +1771,11 @@ fn the_chevron_unfolds_that_project_and_nothing_else() {
             "a collapsed project shows none of its worktrees"
         );
 
-        let tip = "Expand hyperpanes — worktrees and Claude history";
+        let tip = "Expand avada — worktrees and Claude history";
         click(&w, &only(&w, tip, AccessibleRole::Button));
 
         assert_eq!(
-            only(&w, "hyperpanes", AccessibleRole::ListItem).accessible_expanded(),
+            only(&w, "avada", AccessibleRole::ListItem).accessible_expanded(),
             Some(true)
         );
         assert_eq!(
@@ -1789,7 +1789,7 @@ fn the_chevron_unfolds_that_project_and_nothing_else() {
             "…and the main checkout says why it cannot"
         );
         assert_eq!(
-            by_role(&w, "Collapse hyperpanes", AccessibleRole::Button).len(),
+            by_role(&w, "Collapse avada", AccessibleRole::Button).len(),
             1,
             "the chevron now offers the opposite gesture"
         );
@@ -1812,7 +1812,7 @@ fn the_worktrees_and_history_segments_are_a_tab_strip() {
             &w,
             &only(
                 &w,
-                "Expand hyperpanes — worktrees and Claude history",
+                "Expand avada — worktrees and Claude history",
                 AccessibleRole::Button,
             ),
         );
@@ -1847,7 +1847,7 @@ fn a_project_without_history_gets_no_segmented_bar() {
             &w,
             &only(
                 &w,
-                "Expand hyperpanes — worktrees and Claude history",
+                "Expand avada — worktrees and Claude history",
                 AccessibleRole::Button,
             ),
         );
@@ -1873,7 +1873,7 @@ fn the_history_segment_swaps_worktrees_for_sessions() {
             &w,
             &only(
                 &w,
-                "Expand hyperpanes — worktrees and Claude history",
+                "Expand avada — worktrees and Claude history",
                 AccessibleRole::Button,
             ),
         );
@@ -1906,7 +1906,7 @@ fn the_project_menu_names_every_colour_swatch() {
         let seen = log.clone();
         w.on_recolor_project(move |i, s| seen.borrow_mut().push((i, s)));
 
-        right_click(&w, &only(&w, "hyperpanes", AccessibleRole::ListItem));
+        right_click(&w, &only(&w, "avada", AccessibleRole::ListItem));
 
         for name in [
             "Red", "Orange", "Green", "Blue", "Purple", "Pink", "Teal", "Yellow",
@@ -1944,7 +1944,7 @@ fn the_project_menu_removes_the_project_it_names() {
 
         right_click(&w, &only(&w, "claude-standards", AccessibleRole::ListItem));
         assert!(
-            by_role(&w, "Remove project hyperpanes", AccessibleRole::Button).is_empty(),
+            by_role(&w, "Remove project avada", AccessibleRole::Button).is_empty(),
             "the menu belongs to the row that opened it"
         );
 
@@ -2043,7 +2043,7 @@ fn view_flag(kind: i32) -> bool {
 /// the real enum so the flag and the kind can never drift apart again.
 #[test]
 fn the_is_view_flag_matches_the_kind_it_claims() {
-    use hyperpanes_core::tools::PaneKind;
+    use avada_core::tools::PaneKind;
 
     // An exhaustive match over the enum: a variant added without a line in `all` below
     // fails to compile here rather than quietly skipping the assertion.
@@ -2117,7 +2117,7 @@ fn a_listing_row_is_a_named_selectable_list_item() {
         install_view_pane(
             &w,
             2,
-            "code/hyperpanes",
+            "code/avada",
             vec![
                 listing(1, "src", "", true),
                 listing(2, "README.md", "2.1 kB · 3d", false),
@@ -2153,7 +2153,7 @@ fn clicking_a_listing_row_opens_the_row_it_names() {
         install_view_pane(
             &w,
             2,
-            "code/hyperpanes",
+            "code/avada",
             vec![
                 listing(1, "src", "", true),
                 listing(1, "scripts", "", true),
@@ -2349,7 +2349,7 @@ fn the_markdown_preview_names_its_blocks_including_the_wordless_ones() {
             4,
             "README.md",
             vec![
-                md(4, "Hyperpanes"),
+                md(4, "Avada"),
                 md(16, "A terminal multiplexer."),
                 md(10, ""),
                 md(12, ""),
@@ -2358,7 +2358,7 @@ fn the_markdown_preview_names_its_blocks_including_the_wordless_ones() {
             "",
         );
 
-        only(&w, "Hyperpanes", AccessibleRole::ListItem);
+        only(&w, "Avada", AccessibleRole::ListItem);
         only(&w, "A terminal multiplexer.", AccessibleRole::ListItem);
         only(&w, "Horizontal rule", AccessibleRole::ListItem);
         only(&w, "Diagram", AccessibleRole::ListItem);

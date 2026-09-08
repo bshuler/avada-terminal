@@ -190,10 +190,7 @@ mod win_tests {
     // again — proving the release path that lets a new launch become primary.
     #[test]
     fn named_mutex_detects_an_existing_holder() {
-        let name = format!(
-            "Local\\hyperpanes.test.mutex.{:?}",
-            std::thread::current().id()
-        );
+        let name = format!("Local\\avada.test.mutex.{:?}", std::thread::current().id());
         let (g1, a1) = create_named_mutex(&name).unwrap();
         assert!(!a1, "first create should be the fresh owner");
         let (g2, a2) = create_named_mutex(&name).unwrap();
@@ -210,7 +207,7 @@ mod win_tests {
     #[tokio::test]
     async fn pipe_round_trips_a_handoff_message() {
         let pipe = format!(
-            r"\\.\pipe\hyperpanes.test.handoff.{:?}",
+            r"\\.\pipe\avada.test.handoff.{:?}",
             std::thread::current().id()
         );
         let mut server = ServerOptions::new()
@@ -220,7 +217,7 @@ mod win_tests {
 
         let sent = HandoffMessage {
             argv: vec![
-                "hyperpanes".to_string(),
+                "avada".to_string(),
                 "--new-window".to_string(),
                 "C:\\proj".to_string(),
             ],

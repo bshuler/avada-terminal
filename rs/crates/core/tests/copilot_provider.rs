@@ -22,9 +22,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use hyperpanes_core::claude_history::{HistorySource, ProjectOrigin};
-use hyperpanes_core::tools::history::copilot::{store_exists, CopilotProvider, TOOL_ID};
-use hyperpanes_core::tools::history::{ResumeBlocked, SessionProvider, ToolSession};
+use avada_core::claude_history::{HistorySource, ProjectOrigin};
+use avada_core::tools::history::copilot::{store_exists, CopilotProvider, TOOL_ID};
+use avada_core::tools::history::{ResumeBlocked, SessionProvider, ToolSession};
 use rusqlite::{params, Connection};
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -412,7 +412,7 @@ fn a_machine_without_copilot_scans_to_nothing() {
 }
 
 /// Numbers, not assertions — run it deliberately:
-/// `cargo test -p hyperpanes-core --test copilot_provider -- --ignored --nocapture`
+/// `cargo test -p avada-core --test copilot_provider -- --ignored --nocapture`
 #[test]
 #[ignore = "reports numbers from the machine's real ~/.copilot store"]
 fn report_real_store_numbers() {

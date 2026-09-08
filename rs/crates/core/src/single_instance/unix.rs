@@ -54,10 +54,10 @@ fn runtime_dir() -> PathBuf {
 #[tracing::instrument(level = "debug", ret)]
 fn unix_names(salt: &str) -> UnixNames {
     let h = format!("{:016x}", fnv1a64(salt));
-    let lock = runtime_dir().join(format!("hyperpanes.singleton.{h}.lock"));
+    let lock = runtime_dir().join(format!("avada.singleton.{h}.lock"));
     #[cfg(target_os = "linux")]
     {
-        let name = format!("hyperpanes.handoff.{h}");
+        let name = format!("avada.handoff.{h}");
         UnixNames {
             lock,
             endpoint: format!("@{name}"),
@@ -66,7 +66,7 @@ fn unix_names(salt: &str) -> UnixNames {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let socket = runtime_dir().join(format!("hyperpanes.handoff.{h}.sock"));
+        let socket = runtime_dir().join(format!("avada.handoff.{h}.sock"));
         UnixNames {
             lock,
             endpoint: socket.to_string_lossy().into_owned(),
@@ -310,7 +310,7 @@ mod unix_tests {
 
         let sent = HandoffMessage {
             argv: vec![
-                "hyperpanes".to_string(),
+                "avada".to_string(),
                 "--new-window".to_string(),
                 "/home/me/proj".to_string(),
             ],

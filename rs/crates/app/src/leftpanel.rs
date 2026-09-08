@@ -12,7 +12,7 @@
 //! * **LIBRARY** — the saved workspaces under [`library_dir`]. Cached in a thread-local and
 //!   rescanned on the panel's closed→open edge, the same shape `sidebar.rs` uses for its
 //!   project scans, so the projection never stats the disk on every tick.
-//! * **SETS** — the saved workspace *sets* under [`hyperpanes_core::persistence::paths::sets_dir`]
+//! * **SETS** — the saved workspace *sets* under [`avada_core::persistence::paths::sets_dir`]
 //!   (mux plan M6): a named group of workspaces opened as one batch. Cached and rescanned
 //!   on exactly the same edge as the library, since the two directories are siblings and a
 //!   set write drops member files into the library's.
@@ -27,10 +27,10 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use hyperpanes_core::persistence::paths::{self as paths, data_dir};
-use hyperpanes_core::session_manager::SessionManager;
-use hyperpanes_core::tools::PaneKind;
-use hyperpanes_core::workspace::sets;
+use avada_core::persistence::paths::{self as paths, data_dir};
+use avada_core::session_manager::SessionManager;
+use avada_core::tools::PaneKind;
+use avada_core::workspace::sets;
 
 /// How long after a session's last output its liveness dot stays fully lit before fading
 /// to the floor. 30s matches the "is this thing doing something right now?" question the
@@ -244,7 +244,7 @@ pub fn library() -> Vec<LibraryEntry> {
     LIB_CACHE.with(|c| c.borrow().clone())
 }
 
-/// Scan `dir` for `*.hyperpanes` / `*.json` workspaces, newest first. Unreadable or
+/// Scan `dir` for `*.avada` / `*.json` workspaces, newest first. Unreadable or
 /// malformed files are skipped rather than shown as broken rows. Split out from
 /// [`refresh_library`] so it can be tested against a temp directory.
 #[tracing::instrument(level = "debug", ret)]
@@ -262,10 +262,10 @@ pub fn scan_library(dir: &Path) -> Vec<LibraryEntry> {
             .and_then(|e| e.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        if ext != "hyperpanes" && ext != "json" {
+        if ext != "avada" && ext != "json" {
             continue;
         }
-        let Some(file) = hyperpanes_core::workspace::io::read_workspace(&path) else {
+        let Some(file) = avada_core::workspace::io::read_workspace(&path) else {
             continue;
         };
         let stem = path
@@ -302,11 +302,11 @@ pub fn scan_library(dir: &Path) -> Vec<LibraryEntry> {
 /// than growing a second wording of the same idea.
 #[tracing::instrument(level = "debug", skip_all)]
 fn describe_workspace(
-    file: &hyperpanes_core::workspace::model::WorkspaceFile,
+    file: &avada_core::workspace::model::WorkspaceFile,
     mtime: u64,
     now: u64,
 ) -> String {
-    let groups = hyperpanes_core::workspace::io::windows_of(Some(file))
+    let groups = avada_core::workspace::io::windows_of(Some(file))
         .into_iter()
         .next()
         .map(|w| w.groups)
@@ -328,30 +328,30 @@ fn describe_workspace(
     out
 }
 
-/// Write `file` into the library under `name` (sanitised, `.hyperpanes` appended), creating
+/// Write `file` into the library under `name` (sanitised, `.avada` appended), creating
 /// the directory if needed, and refresh the cache. Returns the path written, or `None` if
 /// the directory or the file could not be written. A name that collides gets `-2`, `-3`, …
 /// appended, so saving twice never silently overwrites the earlier snapshot.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn save_to_library(
     name: &str,
-    file: &hyperpanes_core::workspace::model::WorkspaceFile,
+    file: &avada_core::workspace::model::WorkspaceFile,
 ) -> Option<PathBuf> {
     let dir = library_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
     }
     let base = sanitize_name(name);
-    let mut path = dir.join(format!("{base}.hyperpanes"));
+    let mut path = dir.join(format!("{base}.avada"));
     let mut n = 2;
     while path.exists() {
-        path = dir.join(format!("{base}-{n}.hyperpanes"));
+        path = dir.join(format!("{base}-{n}.avada"));
         n += 1;
         if n > 999 {
             return None;
         }
     }
-    if !hyperpanes_core::workspace::io::write_workspace(&path, file) {
+    if !avada_core::workspace::io::write_workspace(&path, file) {
         return None;
     }
     refresh_library();
@@ -504,7 +504,7 @@ thread_local! {
 /// from the app's pump, before the per-window renders that project the panel.
 ///
 /// **M7:** this also registers those uids with the daemon's cross-process claim registry, so
-/// that *other* hyperpanes processes stop offering them for adoption. Only the difference
+/// that *other* avada processes stop offering them for adoption. Only the difference
 /// from the previous publish goes on the wire, and it goes fire-and-forget: a claim on a
 /// pane we already host is not contested, and the GUI pump must never block on the daemon.
 /// The contested case — adopting an orphan — takes the blocking path in
@@ -536,7 +536,7 @@ fn set_window_claims(held: HashSet<String>) {
     WINDOW_CLAIMS.with(|c| *c.borrow_mut() = held);
 }
 
-/// Uids claimed by a hyperpanes process *other than this one* — a session another window,
+/// Uids claimed by a avada process *other than this one* — a session another window,
 /// in another process, is currently hosting.
 ///
 /// Answered from the claim snapshot the daemon pushes to every client whenever the picture
@@ -695,15 +695,15 @@ pub const TOOL_SCAN_TTL_MS: u64 = 20_000;
 /// overrides (it was built with them), so the verdict here honours them.
 #[tracing::instrument(level = "debug", ret, skip(provider))]
 pub fn scan_with(
-    provider: &mut dyn hyperpanes_core::tools::history::SessionProvider,
+    provider: &mut dyn avada_core::tools::history::SessionProvider,
 ) -> Vec<ScannedSession> {
-    use hyperpanes_core::tools::history::ResumePlan;
+    use avada_core::tools::history::ResumePlan;
     let now = crate::glow::now_epoch_ms();
     let sessions = provider.scan();
     // One pass over Claude Desktop's store for the whole scan, not one per row — and only
     // for the tool that has a desktop app at all. Every other tool's rows get `None`.
     let desktop = if provider.id() == "claude" {
-        hyperpanes_core::tools::claude_desktop::scan()
+        avada_core::tools::claude_desktop::scan()
     } else {
         HashMap::new()
     };
@@ -733,7 +733,7 @@ pub fn scan_with(
 /// The row's first line: the transcript's summary, its first user message, or — when a
 /// transcript carries neither — the head of its id, so a row is never blank.
 #[tracing::instrument(level = "debug", ret)]
-fn session_label(s: &hyperpanes_core::tools::history::ToolSession) -> String {
+fn session_label(s: &avada_core::tools::history::ToolSession) -> String {
     for candidate in [s.summary.trim(), s.first_user.trim()] {
         if !candidate.is_empty() {
             return candidate.chars().take(120).collect();
@@ -745,7 +745,7 @@ fn session_label(s: &hyperpanes_core::tools::history::ToolSession) -> String {
 /// The row's second line for a resumable session: branch · messages · age. Each part is
 /// dropped when unknown rather than shown empty.
 #[tracing::instrument(level = "debug", ret)]
-fn session_detail(s: &hyperpanes_core::tools::history::ToolSession, now: u64) -> String {
+fn session_detail(s: &avada_core::tools::history::ToolSession, now: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(b) = s.branch.as_deref().filter(|b| !b.is_empty()) {
         parts.push(b.to_string());
@@ -847,7 +847,7 @@ pub fn tool_session(tool_id: &str, id: &str) -> Option<ScannedSession> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyperpanes_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
+    use avada_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
 
     #[test]
     fn liveness_decays_over_the_window() {
@@ -868,7 +868,7 @@ mod tests {
         // A tool the registry knows resolves to ITS icon kind — the registry's own number,
         // not one this module invents — so the tree hands `ToolIcon` exactly what the pane
         // header hands it and the two draw the same mark.
-        for t in hyperpanes_core::tools::registry::TOOLS {
+        for t in avada_core::tools::registry::TOOLS {
             let kind = PaneKind::Tool(t.id.to_string());
             assert_eq!(
                 pane_mark_kind(&kind),
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(marks.len(), n, "two pane marks share a number");
         // …and every registry kind stays in the other half, which is what lets
         // `PaneMark` dispatch on the sign alone.
-        for t in hyperpanes_core::tools::registry::TOOLS {
+        for t in avada_core::tools::registry::TOOLS {
             assert!(t.icon as i32 > 0);
         }
     }
@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn a_marks_ink_is_the_tools_brand_and_the_panes_accent_otherwise() {
         let accent = slint::Color::from_rgb_u8(1, 2, 3);
-        let claude = hyperpanes_core::tools::registry::by_id("claude").unwrap();
+        let claude = avada_core::tools::registry::by_id("claude").unwrap();
         assert_eq!(
             pane_mark_ink(&PaneKind::Tool("claude".into()), accent),
             slint::Color::from_rgb_u8(claude.brand.0, claude.brand.1, claude.brand.2)
@@ -1125,16 +1125,16 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // a valid workspace, a valid one with no name, a non-workspace extension, and junk
-        assert!(hyperpanes_core::workspace::io::write_workspace(
-            dir.join("one.hyperpanes"),
+        assert!(avada_core::workspace::io::write_workspace(
+            dir.join("one.avada"),
             &wf(Some("alpha"), vec![2])
         ));
-        assert!(hyperpanes_core::workspace::io::write_workspace(
+        assert!(avada_core::workspace::io::write_workspace(
             dir.join("two.json"),
             &wf(None, vec![1, 1])
         ));
         std::fs::write(dir.join("notes.txt"), b"not a workspace").unwrap();
-        std::fs::write(dir.join("broken.hyperpanes"), b"{{{").unwrap();
+        std::fs::write(dir.join("broken.avada"), b"{{{").unwrap();
 
         let rows = scan_library(&dir);
         assert_eq!(rows.len(), 2, "only the two readable workspaces: {rows:?}");
@@ -1162,7 +1162,7 @@ mod tests {
             dir.join("morning.json"),
             &sets::WorkspaceSet {
                 name: "Morning".to_string(),
-                members: vec![member("a.hyperpanes"), member("b.hyperpanes")],
+                members: vec![member("a.avada"), member("b.avada")],
             }
         ));
         // A set whose stored name is blank falls back to the file stem, like the library.
@@ -1170,7 +1170,7 @@ mod tests {
             dir.join("unnamed.json"),
             &sets::WorkspaceSet {
                 name: String::new(),
-                members: vec![member("c.hyperpanes")],
+                members: vec![member("c.avada")],
             }
         ));
         std::fs::write(dir.join("broken.json"), b"{{{").unwrap();
@@ -1202,8 +1202,8 @@ mod tests {
 
     // ---- tool modes: the per-tool resumable-session list -------------------------------
 
-    use hyperpanes_core::claude_history::{HistorySource, ProjectOrigin};
-    use hyperpanes_core::tools::history::{
+    use avada_core::claude_history::{HistorySource, ProjectOrigin};
+    use avada_core::tools::history::{
         ResumeBlocked, ResumeCommand, ResumePlan, SessionProvider, ToolSession,
     };
 

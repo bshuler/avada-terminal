@@ -1,5 +1,5 @@
 <#
-  Windows session hook for every CLI agent hyperpanes knows -> pane->conversation map.
+  Windows session hook for every CLI agent avada knows -> pane->conversation map.
 
   The POSIX hooks are five separate `resources/<tool>/hp-<tool>-session-hook.sh` scripts.
   This is one script for all five, because on Windows the per-tool part is four lines of a
@@ -31,11 +31,11 @@
   distinction the .sh scripts draw — a difference that is load-bearing, since a tool that
   spells its start event with the other casing must not be read as an end.
 
-  Marker path must mirror hyperpanes-core tools::session_hook::marker_dir, which on Windows
-  is %APPDATA%\hyperpanes\tool-sessions\<tool>\<pane-id>.json — claude alone predates that
-  layout and keeps %APPDATA%\hyperpanes\claude-sessions\<pane-id>.json.
+  Marker path must mirror avada-core tools::session_hook::marker_dir, which on Windows
+  is %APPDATA%\avada\tool-sessions\<tool>\<pane-id>.json — claude alone predates that
+  layout and keeps %APPDATA%\avada\claude-sessions\<pane-id>.json.
 
-  Outside a hyperpanes pane, or on any error at all, this exits 0 having done nothing: a
+  Outside a avada pane, or on any error at all, this exits 0 having done nothing: a
   hook that fails must never take the agent down with it.
 #>
 param([Parameter(Mandatory = $true)][string]$Tool)
@@ -45,7 +45,7 @@ param([Parameter(Mandatory = $true)][string]$Tool)
 $raw = ''
 try { $raw = [Console]::In.ReadToEnd() } catch { }
 
-$pane = $env:HYPERPANES_PANE_ID
+$pane = $env:AVADA_PANE_ID
 if ([string]::IsNullOrEmpty($pane)) { exit 0 }
 # The pane id becomes a filename, so it may not steer one. Same gate as read_pane_mark's.
 if ($pane -match '[\\/]' -or $pane.Contains('..')) { exit 0 }
@@ -108,7 +108,7 @@ switch ($Tool) {
 # Joined a segment at a time rather than with a literal separator in the string, so the
 # separator is always the platform's own — the script is Windows-only in practice, but it is
 # exercised on macOS, and a literal `\` there becomes part of a filename instead.
-$dir = Join-Path $appdata 'hyperpanes'
+$dir = Join-Path $appdata 'avada'
 foreach ($seg in $sub) { $dir = Join-Path $dir $seg }
 $path = Join-Path $dir "$pane.json"
 

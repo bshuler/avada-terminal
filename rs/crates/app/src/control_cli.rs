@@ -8,7 +8,7 @@ use std::io;
 use std::net::IpAddr;
 use std::time::Duration;
 
-use hyperpanes_core::persistence::{control_settings, paths};
+use avada_core::persistence::{control_settings, paths};
 
 /// A live connection to the local control server: `base` URL, the master `token`, the listen
 /// `port`, and a blocking HTTP client.
@@ -23,18 +23,18 @@ fn io_err(msg: impl Into<String>) -> io::Error {
     io::Error::other(msg.into())
 }
 
-/// Read `{ port, token }` from `control.json` (honouring `HYPERPANES_CONTROL_FILE`, treating an
+/// Read `{ port, token }` from `control.json` (honouring `AVADA_CONTROL_FILE`, treating an
 /// empty value as unset like the rest of the CLI), resolve the reachable base URL, and build the
 /// client. Errors when no control API is running / the file is unreadable.
 #[tracing::instrument(level = "debug")]
 pub fn connect() -> io::Result<Conn> {
-    let control_file = std::env::var_os("HYPERPANES_CONTROL_FILE")
+    let control_file = std::env::var_os("AVADA_CONTROL_FILE")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(paths::control_json);
     let raw = std::fs::read_to_string(&control_file).map_err(|e| {
         io_err(format!(
-            "no running control API ({}): {e}.\nStart hyperpanes and enable Preferences → Control API.",
+            "no running control API ({}): {e}.\nStart avada and enable Preferences → Control API.",
             control_file.display()
         ))
     })?;
@@ -85,7 +85,7 @@ fn bracket(host: &str) -> String {
     }
 }
 
-/// A sensible default label for a freshly-paired device: the machine's hostname (so `hyperpanes
+/// A sensible default label for a freshly-paired device: the machine's hostname (so `avada
 /// devices` reads meaningfully), falling back to `device` when it can't be determined.
 #[tracing::instrument(level = "debug", ret)]
 pub fn default_device_label() -> String {

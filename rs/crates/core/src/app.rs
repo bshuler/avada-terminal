@@ -7,8 +7,8 @@
 //! Exposes `run()` for the headless daemon bin (and, later, for the Slint app to embed).
 //!
 //! Env overrides (for the MCP acceptance gate against an isolated userData dir):
-//!   * `HYPERPANES_CONTROL_FILE`  — discovery file path (also injected into spawned panes).
-//!   * `HYPERPANES_ALLOW_INPUT`   — `1`/`true`/`yes` forces `allowInput` on (else from settings).
+//!   * `AVADA_CONTROL_FILE`  — discovery file path (also injected into spawned panes).
+//!   * `AVADA_ALLOW_INPUT`   — `1`/`true`/`yes` forces `allowInput` on (else from settings).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -43,12 +43,12 @@ struct MetaUpdate {
 /// launch workspace, and serve the loopback control API until the process exits.
 #[tracing::instrument(level = "debug", ret)]
 pub async fn run(version: &str) -> io::Result<()> {
-    let control_file = std::env::var_os("HYPERPANES_CONTROL_FILE")
+    let control_file = std::env::var_os("AVADA_CONTROL_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(paths::control_json);
 
     let settings = control_settings::load();
-    let allow_input = settings.allow_input || env_truthy("HYPERPANES_ALLOW_INPUT");
+    let allow_input = settings.allow_input || env_truthy("AVADA_ALLOW_INPUT");
 
     // The central engine. All PTYs live here; panes/windows just reference uids.
     let (etx, erx) = unbounded_channel::<SessionEvent>();

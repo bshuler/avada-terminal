@@ -166,7 +166,7 @@ jobs:
   # Linux stays a full `cargo build` (it also proves the link step and is the cheapest leg);
   # macOS and Windows run `cargo check --bins`, which is what actually type-checks the per-OS
   # code without paying for codegen of the whole GPU stack on the slowest runners. `--bins`,
-  # not the default: `hyperpanes` is a binary-only package and a bare `--lib` errors out.
+  # not the default: `avada` is a binary-only package and a bare `--lib` errors out.
   build-gui:
     name: build-gui (${{ matrix.os }})
     needs: changes

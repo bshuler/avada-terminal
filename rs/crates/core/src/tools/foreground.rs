@@ -163,7 +163,7 @@ pub fn tool_for_foreground_name(raw: &str) -> Option<&'static ToolDef> {
 ///
 /// On Windows this is always `None`, and the honesty matters more than the symmetry:
 /// ConPTY has no process group and no `tcgetpgrp`. A console's attached processes are
-/// reachable through `GetConsoleProcessList`, but Hyperpanes drives ConPTY through a
+/// reachable through `GetConsoleProcessList`, but Avada drives ConPTY through a
 /// pseudoconsole handle rather than by attaching a console of its own, so there is
 /// nothing to ask. A Windows pane keeps the title-and-command inference it has today;
 /// this module declines rather than guessing.
@@ -745,7 +745,7 @@ mod tests {
         ///
         /// `#[ignore]`d because it depends on a tool being installed and on launching it
         /// being harmless. Run with:
-        ///   cargo test -p hyperpanes-core foreground -- --ignored --nocapture
+        ///   cargo test -p avada-core foreground -- --ignored --nocapture
         #[test]
         #[ignore]
         fn a_real_tool_in_a_real_pty_resolves_to_its_registry_entry() {

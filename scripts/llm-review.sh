@@ -8,7 +8,7 @@
 #
 # RUNTIME REQUIREMENT: this must run where `claude` is installed AND already logged in —
 # i.e. a SELF-HOSTED runner on a machine with an authenticated Claude Code (or the local
-# hyperpanes worker-pool pipeline). A cloud GitHub-hosted runner has no Claude Code session,
+# avada worker-pool pipeline). A cloud GitHub-hosted runner has no Claude Code session,
 # so `claude` will be missing or unauthenticated and the gate FAILS CLOSED (blocks the merge).
 #
 # CONTRACT (this is real and the workflow depends on it — do not change the shape):

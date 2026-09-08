@@ -6,7 +6,7 @@
 //!
 //! | | unix | Windows |
 //! |---|---|---|
-//! | endpoint | `$XDG_RUNTIME_DIR/hyperpanes/<hash>.sock` | `\\.\pipe\hyperpanesd.<hash>` |
+//! | endpoint | `$XDG_RUNTIME_DIR/avada/<hash>.sock` | `\\.\pipe\avadad.<hash>` |
 //! | client connection | [`UnixStream`](std::os::unix::net::UnixStream) | a [`File`](std::fs::File) opened on the pipe |
 //! | one-per-salt gate | `flock` on a sibling `.lock` | `first_pipe_instance` on the pipe name |
 //!
@@ -261,9 +261,9 @@ mod tests {
     // the property that lets a client and a daemon find each other without passing an address.
     #[test]
     fn endpoint_for_is_stable_per_salt_and_distinct_across_salts() {
-        let a = endpoint_for("/home/x/.local/share/hyperpanes");
-        let b = endpoint_for("/home/x/.local/share/hyperpanes");
-        let c = endpoint_for("/home/x/.local/share/hyperpanes-dev");
+        let a = endpoint_for("/home/x/.local/share/avada");
+        let b = endpoint_for("/home/x/.local/share/avada");
+        let c = endpoint_for("/home/x/.local/share/avada-dev");
 
         assert_eq!(a, b, "the same salt always resolves to the same endpoint");
         assert_ne!(a, c, "a dev/isolated user-data dir gets its own daemon");
@@ -274,9 +274,9 @@ mod tests {
     #[test]
     fn endpoint_new_round_trips_verbatim() {
         let raw = if cfg!(windows) {
-            r"\\.\pipe\hyperpanesd.0123456789abcdef"
+            r"\\.\pipe\avadad.0123456789abcdef"
         } else {
-            "/run/user/1000/hyperpanes/0123456789abcdef.sock"
+            "/run/user/1000/avada/0123456789abcdef.sock"
         };
         assert_eq!(Endpoint::new(raw).as_str(), raw);
         assert_eq!(Endpoint::new(raw).to_string(), raw);

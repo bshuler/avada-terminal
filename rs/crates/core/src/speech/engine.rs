@@ -18,11 +18,11 @@ const QUEUE_CAP: usize = 64;
 /// lock across a blocking wait.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Environment variable [`Backend::Sapi`] passes the utterance through.
-const SAPI_TEXT_VAR: &str = "HYPERPANES_SPEECH_TEXT";
+const SAPI_TEXT_VAR: &str = "AVADA_SPEECH_TEXT";
 /// `Speak` is synchronous, so the process exits when the utterance finishes — which
 /// is what the queue's "one at a time" contract needs.
 const SAPI_SCRIPT: &str = "Add-Type -AssemblyName System.Speech; \
-(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak($env:HYPERPANES_SPEECH_TEXT)";
+(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak($env:AVADA_SPEECH_TEXT)";
 
 /// The TTS backend a pane's speech is rendered through.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn the_platform_has_a_backend_to_fall_back_on() {
-        // Every platform hyperpanes ships on can speak without configuration. If this
+        // Every platform avada ships on can speak without configuration. If this
         // fails on a new target, that target needs a `detect` branch, not an exemption.
         assert_ne!(
             detect(&SpeechSettings::default()),
@@ -628,7 +628,7 @@ mod tests {
         #[cfg(windows)]
         let known = "powershell";
         assert!(on_path(known), "{known} not found on PATH");
-        assert!(!on_path("hyperpanes-definitely-not-a-real-command"));
+        assert!(!on_path("avada-definitely-not-a-real-command"));
     }
 
     fn scratch_dir(tag: &str) -> std::path::PathBuf {

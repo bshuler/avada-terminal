@@ -53,8 +53,7 @@ impl DictationService {
     #[tracing::instrument(level = "debug")]
     pub fn new(settings_path: PathBuf) -> Self {
         let settings = stt::load(&settings_path);
-        let wav_dir =
-            std::env::temp_dir().join(format!("hyperpanes-dictation-{}", std::process::id()));
+        let wav_dir = std::env::temp_dir().join(format!("avada-dictation-{}", std::process::id()));
         let archive = crate::persistence::paths::state_dir().join("dictation");
         DictationService {
             settings_path,

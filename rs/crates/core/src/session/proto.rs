@@ -95,7 +95,7 @@ pub struct SpawnSpec {
     pub env: Option<EnvMap>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
-    /// The owning pane's stable id → `HYPERPANES_PANE_ID`.
+    /// The owning pane's stable id → `AVADA_PANE_ID`.
     #[serde(default)]
     pub pane_id: Option<String>,
     /// Resolved shell-integration leading args (interactive branch only). Empty → none.
@@ -104,7 +104,7 @@ pub struct SpawnSpec {
     /// Resolved shell-integration env (interactive branch only). Empty → none.
     #[serde(default)]
     pub integration_env: EnvMap,
-    /// Path to `control.json` → `HYPERPANES_CONTROL_FILE`. `None` → not injected.
+    /// Path to `control.json` → `AVADA_CONTROL_FILE`. `None` → not injected.
     #[serde(default)]
     pub control_file: Option<String>,
 }

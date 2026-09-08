@@ -6,7 +6,7 @@
 //! (a 214/255 foreground on an 18/255 background at 14px). It then compares the brightest pixel
 //! of each letter's cell. Before the fix the `i` cell peaked at 81 against its neighbours' 214.
 
-use hyperpanes_terminal_widget::{
+use avada_terminal_widget::{
     Font, GridSnapshot, PaneRenderer, RenderCell, RenderOpts, SoftwareRenderer,
 };
 

@@ -7,7 +7,7 @@
 //!   conversation, so a long-running agent gets a fresh process and a fresh context window.
 //!
 //! Both loops are *schedules*, not timers: the next firing time of each is written to
-//! `loops.json` in the state directory whenever it changes, and read back when Hyperpanes
+//! `loops.json` in the state directory whenever it changes, and read back when Avada
 //! starts. A restart of the app therefore resumes the loops where they were rather than
 //! starting a new 15-minute / 24-hour countdown, and a firing that fell into a stretch when
 //! the app was not running is caught up (once) after a short grace period at startup — the
@@ -17,7 +17,7 @@
 //! Each loop also records *when it last actually fired*, in the same file. That is the only
 //! way to answer "did the restart loop run last night?" after the fact — a schedule alone
 //! says when the next one is due, not whether the previous one happened — and it is what
-//! [`Loops::publish`] puts on `GET /loops` and `hyperpanes ctl loops` for a headless check.
+//! [`Loops::publish`] puts on `GET /loops` and `avada ctl loops` for a headless check.
 //!
 //! This module owns the *when*: [`Loops::poll`] is called from the app tick and answers
 //! which loops are due. The *what* — prompting the Hyperpane pane, restarting the monitored
@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hyperpanes_core::control::readmodel::{LoopInfo, LoopsInfo};
-use hyperpanes_core::persistence::paths;
+use avada_core::control::readmodel::{LoopInfo, LoopsInfo};
+use avada_core::persistence::paths;
 use serde::{Deserialize, Serialize};
 
 /// How long after the app started a loop may fire — its panes need to be restored and
@@ -420,7 +420,7 @@ pub fn unix_now() -> u64 {
 ///
 /// `prefix` is an environment assignment with its trailing space (`CLAUDE_CONFIG_DIR='…' `)
 /// or empty; `session` is the tool's own resume key when one is known. A tool whose resume
-/// shape [`hyperpanes_core::tools::resume_args`] does not vouch for starts fresh rather
+/// shape [`avada_core::tools::resume_args`] does not vouch for starts fresh rather
 /// than with a guessed flag.
 #[tracing::instrument(level = "debug", ret)]
 pub fn restart_line(
@@ -431,7 +431,7 @@ pub fn restart_line(
     session: Option<&str>,
 ) -> String {
     let args = session
-        .and_then(|id| hyperpanes_core::tools::resume_args(tool_id, id))
+        .and_then(|id| avada_core::tools::resume_args(tool_id, id))
         .unwrap_or_default();
     let mut cmd = format!("{prefix}{bin}");
     for a in &args {

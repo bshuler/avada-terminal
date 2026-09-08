@@ -1,4 +1,4 @@
-package dev.hyperpanes.hyperpanes_mobile
+package dev.avada.hyperpanes_mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

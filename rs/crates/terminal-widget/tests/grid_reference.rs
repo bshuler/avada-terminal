@@ -12,7 +12,7 @@
 //! (The earlier "scroll-region is in flight on a sibling track" carve-out is over — the
 //! wave-2 DECSTBM work landed, so the region contract is locked in here too.)
 
-use hyperpanes_terminal_widget::{GridSnapshot, TermGrid};
+use avada_terminal_widget::{GridSnapshot, TermGrid};
 
 /// The visible text of one grid row (`'\0'`/blank cells render as spaces), trailing
 /// blanks trimmed so equality reads naturally.

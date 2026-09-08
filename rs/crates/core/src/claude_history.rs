@@ -6,13 +6,13 @@
 //! Verified against the live `~/.claude/projects` layout on this machine:
 //!
 //! ```text
-//! C:\hyperpanes                          -> C--hyperpanes
-//! C:\hyperpanes.fanout\track19-history   -> C--hyperpanes-fanout-track19-history
+//! C:\avada                          -> C--avada
+//! C:\avada.fanout\track19-history   -> C--avada-fanout-track19-history
 //! C:\canora\.claude-worktrees\festive-…  -> C--canora--claude-worktrees-festive-…
 //! ```
 //!
-//! Note the `.` in `hyperpanes.fanout` is encoded too (the folder is `…hyperpanes-fanout…`,
-//! NOT `…hyperpanes.fanout…`), and runs are **not** collapsed — `:` then `\` becomes `--`.
+//! Note the `.` in `avada.fanout` is encoded too (the folder is `…avada-fanout…`,
+//! NOT `…avada.fanout…`), and runs are **not** collapsed — `:` then `\` becomes `--`.
 //! So the rule is simply: keep `[A-Za-z0-9]`, map everything else to `-`.
 //!
 //! The reader is intentionally cheap. It lists the `*.jsonl` files, takes each file's mtime
@@ -928,11 +928,11 @@ mod tests {
 
     #[test]
     fn encodes_paths_like_claude_code() {
-        assert_eq!(encode_path_str("C:\\hyperpanes"), "C--hyperpanes");
-        // The `.` is encoded too — the live folder is `…hyperpanes-fanout…`, not `….fanout…`.
+        assert_eq!(encode_path_str("C:\\avada"), "C--avada");
+        // The `.` is encoded too — the live folder is `…avada-fanout…`, not `….fanout…`.
         assert_eq!(
-            encode_path_str("C:\\hyperpanes.fanout\\track19-history"),
-            "C--hyperpanes-fanout-track19-history"
+            encode_path_str("C:\\avada.fanout\\track19-history"),
+            "C--avada-fanout-track19-history"
         );
         // Runs are not collapsed: `\` then `.` becomes `--`.
         assert_eq!(
@@ -948,8 +948,8 @@ mod tests {
 
     #[test]
     fn encode_project_dir_matches_string_form() {
-        let p = Path::new("C:\\hyperpanes");
-        assert_eq!(encode_project_dir(p), "C--hyperpanes");
+        let p = Path::new("C:\\avada");
+        assert_eq!(encode_project_dir(p), "C--avada");
     }
 
     // ---- sessions_in_dir against synthetic transcripts ----
@@ -1027,8 +1027,8 @@ mod tests {
     #[test]
     fn resolves_through_encoded_subdir() {
         let projects_root = temp_dir("root");
-        let project = Path::new("C:\\hyperpanes");
-        let encoded = projects_root.join("C--hyperpanes");
+        let project = Path::new("C:\\avada");
+        let encoded = projects_root.join("C--avada");
         std::fs::create_dir_all(&encoded).unwrap();
         std::fs::write(
             encoded.join("sess-1.jsonl"),
@@ -1352,8 +1352,8 @@ mod tests {
     #[test]
     fn real_projects_dir_does_not_panic() {
         // Whatever the machine has (or doesn't), this must never panic and must return sane
-        // rows. On the dev box this exercises the live `C--hyperpanes` transcripts.
-        let sessions = sessions_for_project(Path::new("C:\\hyperpanes"));
+        // rows. On the dev box this exercises the live `C--avada` transcripts.
+        let sessions = sessions_for_project(Path::new("C:\\avada"));
         for s in &sessions {
             assert!(!s.id.is_empty());
             assert!(s.summary.chars().count() <= SUMMARY_MAX);

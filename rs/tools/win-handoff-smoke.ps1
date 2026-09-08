@@ -1,19 +1,19 @@
-# Windows second-instance handoff smoke: isolated primary + .hyperpanes secondary.
+# Windows second-instance handoff smoke: isolated primary + .avada secondary.
 $iso = "$env:TEMP\hp-ho-win"
 Remove-Item -Recurse -Force $iso -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force "$iso\hyperpanes" | Out-Null
-Set-Content "$iso\hyperpanes\control-settings.json" '{ "enabled": true, "allowInput": false }'
-Set-Content "$iso\ho.hyperpanes" '{"format":"hyperpanes","version":1,"workspace":{"groups":[{"title":"win-ho","panes":[{"label":"ho"}]}]}}'
+New-Item -ItemType Directory -Force "$iso\avada" | Out-Null
+Set-Content "$iso\avada\control-settings.json" '{ "enabled": true, "allowInput": false }'
+Set-Content "$iso\ho.avada" '{"format":"avada","version":1,"workspace":{"groups":[{"title":"win-ho","panes":[{"label":"ho"}]}]}}'
 $env:APPDATA = $iso
-Remove-Item Env:HYPERPANES_CONTROL_FILE -ErrorAction SilentlyContinue
-Remove-Item Env:HYPERPANES_PANE_ID -ErrorAction SilentlyContinue
-$bin = "$PSScriptRoot\..\crates\app\target\debug\hyperpanes.exe"
+Remove-Item Env:AVADA_CONTROL_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:AVADA_PANE_ID -ErrorAction SilentlyContinue
+$bin = "$PSScriptRoot\..\crates\app\target\debug\avada.exe"
 $p = Start-Process -FilePath $bin -PassThru
 Start-Sleep 8
-$p2 = Start-Process -FilePath $bin -ArgumentList "$iso\ho.hyperpanes" -PassThru
+$p2 = Start-Process -FilePath $bin -ArgumentList "$iso\ho.avada" -PassThru
 $exited = $p2.WaitForExit(15000)
 Start-Sleep 3
-$c = Get-Content "$iso\hyperpanes\control.json" | ConvertFrom-Json
+$c = Get-Content "$iso\avada\control.json" | ConvertFrom-Json
 $h = @{ Authorization = "Bearer $($c.token)" }
 $s = Invoke-RestMethod -Uri ("http://127.0.0.1:" + $c.port + "/state") -Headers $h
 $titles = ($s.windows | ForEach-Object { $_.tabs } | ForEach-Object { $_.title }) -join ', '

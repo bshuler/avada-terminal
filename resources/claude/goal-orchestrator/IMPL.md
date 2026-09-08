@@ -32,12 +32,12 @@ the spec is a higher-tier (opus/fable) model and is live. This is the "plan big,
 trade — one cheap round-trip buys an opus-grade decision without taking the build off sonnet.
 
 - Your advisor's pane id is in the payload (the spec agent stamped `advisor=<paneId>`); your own
-  pane id is `$HYPERPANES_PANE_ID`. Pass both **verbatim** — don't add or strip a `pane-` prefix
+  pane id is `$AVADA_PANE_ID`. Pass both **verbatim** — don't add or strip a `pane-` prefix
   (the API tolerates either spelling now, but only the exact id is guaranteed to be your queue).
 - Ask one tight, decidable question — propose your answer, don't write an essay:
-  `send_message {to:"<advisor paneId>", from:"$HYPERPANES_PANE_ID", body:"<HP_TASK_ID>: <the fork,
+  `send_message {to:"<advisor paneId>", from:"$AVADA_PANE_ID", body:"<HP_TASK_ID>: <the fork,
   the options, which you'd pick and why>"}`.
-- Poll for the reply: `read_messages {paneId:"$HYPERPANES_PANE_ID", after:<last seq>}` a few times;
+- Poll for the reply: `read_messages {paneId:"$AVADA_PANE_ID", after:<last seq>}` a few times;
   when it answers, continue on sonnet with that guidance.
 - **Bounded, never hang.** One or two consults, not a conversation. If no reply comes in a
   reasonable window, act on your best judgment and **say so in your summary** (so the spec agent

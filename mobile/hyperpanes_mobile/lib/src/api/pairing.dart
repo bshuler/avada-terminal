@@ -1,4 +1,4 @@
-/// Pairing-URL parsing — the mobile half of the host's `hyperpanes pair` output.
+/// Pairing-URL parsing — the mobile half of the host's `avada pair` output.
 ///
 /// Canonical form (keep in sync with `rs/crates/app/src/pair.rs`):
 ///   `hp://<host>:<port>/?token=<token>&v=1`
@@ -6,7 +6,7 @@
 /// `host:port` (token supplied separately in the connect form).
 library;
 
-/// One saved/parsed host connection: everything needed to reach a hyperpanes
+/// One saved/parsed host connection: everything needed to reach a avada
 /// control API.
 class HostPairing {
   const HostPairing({

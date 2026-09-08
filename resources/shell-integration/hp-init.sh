@@ -1,11 +1,11 @@
-# Hyperpanes shell integration (bash / git-bash / zsh).
+# Avada shell integration (bash / git-bash / zsh).
 #
 # Sourcing mechanism per shell (deploy path: resources/shell-integration/ next to
 # the binary — same as Windows):
 #   bash:  spawned as `bash --rcfile <this file> -i`. --rcfile REPLACES ~/.bashrc,
 #          so step 1 below sources the user's startup first, then chains in cwd
 #          reporting via PROMPT_COMMAND.
-#   zsh:   spawned as `ZDOTDIR=<dir>/zdotdir HYPERPANES_ZDOTDIR_ORIG=$ZDOTDIR zsh -i`.
+#   zsh:   spawned as `ZDOTDIR=<dir>/zdotdir AVADA_ZDOTDIR_ORIG=$ZDOTDIR zsh -i`.
 #          The bundled zdotdir/.zshenv + .zshrc chain-load the user's real zsh
 #          startup (restoring their ZDOTDIR) and then source THIS file, which hooks
 #          cwd reporting via a precmd hook (zsh ignores PROMPT_COMMAND).
@@ -26,7 +26,7 @@ fi
 # git-bash $PWD is an MSYS path like /c/Users/me, which the app maps to C:\Users\me.
 # The body is bash+zsh portable: ${var:offset:length}, printf -v, and "'$c" numeric
 # conversion all work in both.
-__hyperpanes_osc7() {
+__avada_osc7() {
   local d="${PWD}"
   local enc="" c i hex
   for (( i=0; i<${#d}; i++ )); do
@@ -49,14 +49,14 @@ __hyperpanes_osc7() {
 # Strictly additive: a compliant 133 terminal understands A/C/D; others ignore them.
 # precmd: emit D (for the command that just finished) then A. $? MUST be captured
 # FIRST, before anything else clobbers it.
-__hyperpanes_osc133_precmd() {
+__avada_osc133_precmd() {
   local code=$?
   if [ -n "${__hp_ran:-}" ]; then printf '\033]133;D;%s\007' "$code"; fi
   printf '\033]133;A\007'
   __hp_ran=1
 }
 # preexec analogue: emit C right before a command runs.
-__hyperpanes_osc133_preexec() {
+__avada_osc133_preexec() {
   printf '\033]133;C\007'
 }
 
@@ -69,7 +69,7 @@ __hyperpanes_osc133_preexec() {
 # app into its own transient unit under app-graphical.slice: its memory can't
 # pressure the pane's cgroup, an oomd kill hits only the app, and app and pane
 # survive each other's death. Guarded: absent on non-systemd hosts (git-bash, macOS).
-if [ -z "${HYPERPANES_NO_GUI_HELPER:-}" ] && command -v systemd-run >/dev/null 2>&1; then
+if [ -z "${AVADA_NO_GUI_HELPER:-}" ] && command -v systemd-run >/dev/null 2>&1; then
   hp-gui() {
     if [ $# -eq 0 ]; then
       echo "usage: hp-gui <command> [args...]   # detached, own cgroup, survives pane close" >&2
@@ -83,45 +83,45 @@ fi
 if [ -n "$ZSH_VERSION" ]; then
   # zsh has no PROMPT_COMMAND — hook precmd instead. add-zsh-hook is idempotent;
   # fall back to a guarded precmd_functions append if it is unavailable.
-  if autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd __hyperpanes_osc7 2>/dev/null; then
-    add-zsh-hook precmd __hyperpanes_osc133_precmd 2>/dev/null
-    add-zsh-hook preexec __hyperpanes_osc133_preexec 2>/dev/null
+  if autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd __avada_osc7 2>/dev/null; then
+    add-zsh-hook precmd __avada_osc133_precmd 2>/dev/null
+    add-zsh-hook preexec __avada_osc133_preexec 2>/dev/null
   else
     case " ${precmd_functions[*]} " in
-      *" __hyperpanes_osc7 "*) : ;;
-      *) precmd_functions+=(__hyperpanes_osc7) ;;
+      *" __avada_osc7 "*) : ;;
+      *) precmd_functions+=(__avada_osc7) ;;
     esac
     case " ${precmd_functions[*]} " in
-      *" __hyperpanes_osc133_precmd "*) : ;;
-      *) precmd_functions+=(__hyperpanes_osc133_precmd) ;;
+      *" __avada_osc133_precmd "*) : ;;
+      *) precmd_functions+=(__avada_osc133_precmd) ;;
     esac
     case " ${preexec_functions[*]} " in
-      *" __hyperpanes_osc133_preexec "*) : ;;
-      *) preexec_functions+=(__hyperpanes_osc133_preexec) ;;
+      *" __avada_osc133_preexec "*) : ;;
+      *) preexec_functions+=(__avada_osc133_preexec) ;;
     esac
   fi
 else
   # bash: chain into PROMPT_COMMAND idempotently (don't double-add on re-source).
   case "$PROMPT_COMMAND" in
-    *__hyperpanes_osc7*) : ;;
-    *) PROMPT_COMMAND="__hyperpanes_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+    *__avada_osc7*) : ;;
+    *) PROMPT_COMMAND="__avada_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
   esac
   case "$PROMPT_COMMAND" in
-    *__hyperpanes_osc133_precmd*) : ;;
-    *) PROMPT_COMMAND="__hyperpanes_osc133_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+    *__avada_osc133_precmd*) : ;;
+    *) PROMPT_COMMAND="__avada_osc133_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
   esac
   # bash: the DEBUG trap is the preexec analogue. Chain idempotently, preserving any
   # existing DEBUG trap, and only fire for an interactive command (skip the trap that
   # runs for PROMPT_COMMAND itself by guarding on BASH_COMMAND not being the prompt cmd).
   if [ -z "${__hp_debug_hooked:-}" ]; then
     __hp_prev_debug_trap="$(trap -p DEBUG)"
-    __hyperpanes_debug_trap() {
+    __avada_debug_trap() {
       case "$BASH_COMMAND" in
-        __hyperpanes_osc7*|__hyperpanes_osc133_precmd*) : ;;
-        *) __hyperpanes_osc133_preexec ;;
+        __avada_osc7*|__avada_osc133_precmd*) : ;;
+        *) __avada_osc133_preexec ;;
       esac
     }
-    trap '__hyperpanes_debug_trap' DEBUG
+    trap '__avada_debug_trap' DEBUG
     __hp_debug_hooked=1
   fi
 fi

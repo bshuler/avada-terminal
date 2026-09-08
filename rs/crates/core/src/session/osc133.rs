@@ -11,7 +11,7 @@
 //!    * `ESC ] 133 ; B ST`          — end of prompt / start of typed command (ignored)
 //!    * `ESC ] 133 ; C ST`          — command output begins (command is now running)
 //!    * `ESC ] 133 ; D ; <code> ST` — command finished, with its exit code
-//! 2. **Agent liveness — hyperpanes-private `OSC 9 ; hp ; …`** (beside the existing
+//! 2. **Agent liveness — avada-private `OSC 9 ; hp ; …`** (beside the existing
 //!    `OSC 9 ; 9 ; <cwd>` cwd convention), for long-running TUI agents that never
 //!    return to a shell prompt:
 //!    * `ESC ] 9 ; hp ; state=busy ST`

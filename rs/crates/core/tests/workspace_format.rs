@@ -11,10 +11,8 @@
 //!   * forward-tolerance: unknown JSON keys are ignored, not fatal;
 //!   * the no-`null` / omitted-optionals contract a hand-edited file relies on.
 
-use hyperpanes_core::workspace::io::{has_panes, read_workspace, windows_of, write_workspace};
-use hyperpanes_core::workspace::model::{
-    GroupSpec, PaneSpec, WindowBounds, WindowSpec, WorkspaceFile,
-};
+use avada_core::workspace::io::{has_panes, read_workspace, windows_of, write_workspace};
+use avada_core::workspace::model::{GroupSpec, PaneSpec, WindowBounds, WindowSpec, WorkspaceFile};
 use std::collections::BTreeMap;
 
 /// A unique temp path per test so parallel tests never collide.

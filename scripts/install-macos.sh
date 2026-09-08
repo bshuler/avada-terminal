@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Hyperpanes — install a built Hyperpanes.app into /Applications without killing
+# Avada — install a built Avada.app into /Applications without killing
 # the running session daemon.
 #
-#   scripts/install-macos.sh [<source Hyperpanes.app>] [--dest <path>]
-#     default source: rs/packaging/out/macos-stage/Hyperpanes.app
-#     default dest:   /Applications/Hyperpanes.app
+#   scripts/install-macos.sh [<source Avada.app>] [--dest <path>]
+#     default source: rs/packaging/out/macos-stage/Avada.app
+#     default dest:   /Applications/Avada.app
 #
 # Why this script exists at all
 # ----------------------------
@@ -14,7 +14,7 @@
 # *out of the installed bundle*, and macOS kills a process whose code-signed
 # executable is unlinked underneath it. So the obvious install —
 #
-#     rm -rf /Applications/Hyperpanes.app && ditto new /Applications/...
+#     rm -rf /Applications/Avada.app && ditto new /Applications/...
 #
 # — destroys every running program in every pane, which is exactly the failure
 # the daemon was built to prevent. It is a one-line mistake with no warning and
@@ -35,20 +35,20 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --dest exists so install-macos.test.sh can exercise the swap, the lock and the
 # attic against a throwaway directory. Real installs take the default.
-DEST="/Applications/Hyperpanes.app"
+DEST="/Applications/Avada.app"
 SRC=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dest) DEST="${2:-}"; shift 2 ;;
         -h|--help)
-            echo "usage: install-macos.sh [<source Hyperpanes.app>] [--dest <path>]"; exit 0 ;;
+            echo "usage: install-macos.sh [<source Avada.app>] [--dest <path>]"; exit 0 ;;
         *) SRC="$1"; shift ;;
     esac
 done
-SRC="${SRC:-$REPO_ROOT/rs/packaging/out/macos-stage/Hyperpanes.app}"
+SRC="${SRC:-$REPO_ROOT/rs/packaging/out/macos-stage/Avada.app}"
 DEST_DIR="$(dirname -- "$DEST")"
-ATTIC="$DEST_DIR/.hyperpanes-attic"
-STAGE="$DEST_DIR/.Hyperpanes.app.incoming"
+ATTIC="$DEST_DIR/.avada-attic"
+STAGE="$DEST_DIR/.Avada.app.incoming"
 KEEP_RETIRED=2   # attic bundles kept even when nothing runs from them
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -60,7 +60,7 @@ note() { echo "==> $*"; }
 [[ -d "$SRC" ]] || die "no such bundle: $SRC
        build one first:  bash rs/packaging/macos/bundle.sh <version>"
 SRC="$(cd -- "$SRC" && pwd)"
-[[ -x "$SRC/Contents/MacOS/hyperpanes" ]] || die "$SRC has no Contents/MacOS/hyperpanes"
+[[ -x "$SRC/Contents/MacOS/avada" ]] || die "$SRC has no Contents/MacOS/avada"
 [[ "$SRC" == "$DEST" ]] && die "source and destination are the same path"
 
 # PlistBuddy prints its "File Doesn't Exist, Will Create:" chatter on stdout and
@@ -85,7 +85,7 @@ fi
 # this script took the user's sessions with it, and that has to be an error, not
 # a shrug. The GUI is listed too but only for the report — losing it is cheap.
 daemon_pids() { pgrep -f -- '--session-daemon' 2>/dev/null || true; }
-gui_pids() { pgrep -f "^$DEST/Contents/MacOS/hyperpanes$" 2>/dev/null || true; }
+gui_pids() { pgrep -f "^$DEST/Contents/MacOS/avada$" 2>/dev/null || true; }
 
 BEFORE_DAEMONS="$(daemon_pids)"
 note "installing $VERSION"
@@ -117,7 +117,7 @@ if [[ -e "$DEST" ]]; then
     # Second resolution is not enough on its own: two installs inside one second
     # collide, and `mv` onto an existing directory moves the bundle *inside* it
     # rather than failing.
-    RETIRED_BASE="$ATTIC/Hyperpanes-$OLD_VERSION-$(date +%Y%m%d%H%M%S)"
+    RETIRED_BASE="$ATTIC/Avada-$OLD_VERSION-$(date +%Y%m%d%H%M%S)"
     RETIRED="$RETIRED_BASE.app"
     n=1
     while [[ -e "$RETIRED" ]]; do

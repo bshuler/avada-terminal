@@ -4,19 +4,19 @@
 set -u
 ISO=${1:-/tmp/hp-smoke-mac}
 RS=$(cd "$(dirname "$0")/.." && pwd)
-BIN="$RS/crates/app/target/debug/hyperpanes"
-APPDIR="$ISO/home/Library/Application Support/hyperpanes"
+BIN="$RS/crates/app/target/debug/avada"
+APPDIR="$ISO/home/Library/Application Support/avada"
 rm -rf "$ISO"
 mkdir -p "$APPDIR"
 printf '%s' '{ "enabled": true, "allowInput": true }' > "$APPDIR/control-settings.json"
-run() { env -u HYPERPANES_CONTROL_FILE -u HYPERPANES_PANE_ID HOME="$ISO/home" "$@"; }
+run() { env -u AVADA_CONTROL_FILE -u AVADA_PANE_ID HOME="$ISO/home" "$@"; }
 run nohup "$BIN" > "$ISO/app.log" 2>&1 &
 echo $! > "$ISO/pid.txt"
 sleep 10
 CJ="$APPDIR/control.json"
 if [ ! -f "$CJ" ]; then
   echo "NO control.json — app failed to start:"; tail -10 "$ISO/app.log"
-  tail -5 "${TMPDIR:-/tmp}/hyperpanes-crash.log" 2>/dev/null
+  tail -5 "${TMPDIR:-/tmp}/avada-crash.log" 2>/dev/null
   exit 1
 fi
 echo "=== parity probe ==="

@@ -2,7 +2,7 @@
 //! `resolveSpawn` / `buildArgs` / `resolveWindowsCommand` / `defaultShell`, including
 //! the PATHEXT/PATH search for a direct, no-shell `args[]` spawn (P4a) and the
 //! scoped-control-token env suppression (a scoped child must NOT see
-//! `HYPERPANES_CONTROL_FILE`). Pure + unit-testable.
+//! `AVADA_CONTROL_FILE`). Pure + unit-testable.
 //!
 //! The fs- and platform-touching entry points (`resolve_windows_command`,
 //! `resolve_spawn`, `default_shell`) are thin wrappers over `*_with` cores that take
@@ -301,27 +301,27 @@ pub struct EnvInputs<'a> {
     pub opts_env: Option<&'a EnvMap>,
     /// Shell-integration env (TS `integration.env`); empty when not integrated.
     pub integration_env: &'a EnvMap,
-    /// Owning pane id → injected as `HYPERPANES_PANE_ID` (agent-orchestration A).
+    /// Owning pane id → injected as `AVADA_PANE_ID` (agent-orchestration A).
     pub pane_id: Option<&'a str>,
-    /// Path to `control.json` — set as `HYPERPANES_CONTROL_FILE` UNLESS a scoped
-    /// `HYPERPANES_CONTROL_TOKEN` was injected (scoped child must not read master).
+    /// Path to `control.json` — set as `AVADA_CONTROL_FILE` UNLESS a scoped
+    /// `AVADA_CONTROL_TOKEN` was injected (scoped child must not read master).
     /// `None` (or empty) omits the var entirely rather than injecting an empty string
     /// — see [`resolve_control_file`], which callers should use to produce this.
     pub control_file: Option<&'a str>,
     /// Path to the generated `BROWSER` shim — set as `BROWSER` so a tool in this pane
-    /// hands its links back to hyperpanes instead of straight to the OS. `None` leaves
+    /// hands its links back to avada instead of straight to the OS. `None` leaves
     /// `BROWSER` exactly as inherited. See [`crate::open::ensure_browser_shim`], which
     /// callers should use to produce this.
     pub browser_shim: Option<&'a str>,
 }
 
-/// Resolve the `HYPERPANES_CONTROL_FILE` value for a spawned child: `explicit` (e.g.
+/// Resolve the `AVADA_CONTROL_FILE` value for a spawned child: `explicit` (e.g.
 /// `SpawnOptions.control_file`) wins if non-empty; otherwise fall back to this
-/// process's own `HYPERPANES_CONTROL_FILE` env var if non-empty; otherwise the
+/// process's own `AVADA_CONTROL_FILE` env var if non-empty; otherwise the
 /// default `control.json` path — the same discovery default every consumer
 /// (worker/pair/MCP) assumes, and absent-while-control-is-off by contract — so
 /// GUI-native panes are self-describing too. Never an empty string a child might
-/// mistake for "unset but present" (see `hyperpanes pair`'s workaround for that
+/// mistake for "unset but present" (see `avada pair`'s workaround for that
 /// symptom).
 #[tracing::instrument(level = "debug", ret)]
 pub fn resolve_control_file(explicit: Option<&str>) -> Option<String> {
@@ -344,12 +344,12 @@ fn resolve_control_file_with(
             return Some(v.to_string());
         }
     }
-    env_lookup("HYPERPANES_CONTROL_FILE").filter(|v| !v.is_empty())
+    env_lookup("AVADA_CONTROL_FILE").filter(|v| !v.is_empty())
 }
 
 /// Assemble the child's environment exactly as the TS `Session` constructor does:
 /// merge `process.env` ◁ `opts.env` ◁ `integrationEnv`, force `TERM`/`COLORTERM`,
-/// drop Electron's leaked `GOOGLE_API_KEY`, inject `HYPERPANES_PANE_ID`, and point at
+/// drop Electron's leaked `GOOGLE_API_KEY`, inject `AVADA_PANE_ID`, and point at
 /// the control discovery file ONLY when no scoped token is present.
 /// Environment variables an agent harness sets on its own children to say "you are running
 /// inside a tool call, not at a human's terminal". Inheriting one into a pane makes the tool
@@ -389,7 +389,7 @@ pub fn build_env(inputs: &EnvInputs<'_>) -> EnvMap {
     }
 
     // An agent harness marks its own child processes so nested copies of the tool can tell
-    // they are not the top-level session. Hyperpanes launched FROM inside such a child (a
+    // they are not the top-level session. Avada launched FROM inside such a child (a
     // terminal opened by an agent, a `cargo run` in an agent's shell) inherits those marks
     // and would hand them to every pane it spawns — so `claude` in a pane comes up with
     // transcript saving disabled, believing itself to be somebody's subprocess. The pane is
@@ -408,16 +408,16 @@ pub fn build_env(inputs: &EnvInputs<'_>) -> EnvMap {
     }
 
     if let Some(pane_id) = inputs.pane_id {
-        env.insert("HYPERPANES_PANE_ID".into(), pane_id.to_string());
+        env.insert("AVADA_PANE_ID".into(), pane_id.to_string());
     }
 
     // A pane handed a SCOPED control token via env (capability scoping, leg F) must
     // NOT also be able to read the master token from control.json — so only point at
     // the discovery file when no scoped token was injected, and only when a
     // (non-empty) path is actually known.
-    if !env.contains_key("HYPERPANES_CONTROL_TOKEN") {
+    if !env.contains_key("AVADA_CONTROL_TOKEN") {
         if let Some(control_file) = inputs.control_file.filter(|v| !v.is_empty()) {
-            env.insert("HYPERPANES_CONTROL_FILE".into(), control_file.to_string());
+            env.insert("AVADA_CONTROL_FILE".into(), control_file.to_string());
         }
     }
 
@@ -779,7 +779,7 @@ mod tests {
             control_file: None,
             browser_shim: None,
         });
-        assert!(!env.contains_key("HYPERPANES_CONTROL_FILE"));
+        assert!(!env.contains_key("AVADA_CONTROL_FILE"));
     }
 
     #[test]
@@ -794,7 +794,7 @@ mod tests {
             control_file: Some(""),
             browser_shim: None,
         });
-        assert!(!env.contains_key("HYPERPANES_CONTROL_FILE"));
+        assert!(!env.contains_key("AVADA_CONTROL_FILE"));
     }
 
     #[test]
@@ -810,13 +810,10 @@ mod tests {
             browser_shim: None,
         });
         assert_eq!(
-            env.get("HYPERPANES_CONTROL_FILE").map(String::as_str),
+            env.get("AVADA_CONTROL_FILE").map(String::as_str),
             Some("/data/control.json")
         );
-        assert_eq!(
-            env.get("HYPERPANES_PANE_ID").map(String::as_str),
-            Some("pane-7")
-        );
+        assert_eq!(env.get("AVADA_PANE_ID").map(String::as_str), Some("pane-7"));
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
         assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
     }
@@ -825,7 +822,7 @@ mod tests {
     fn build_env_suppresses_control_file_for_a_scoped_child() {
         let proc_env = map(&[]);
         let integ = map(&[]);
-        let opts = map(&[("HYPERPANES_CONTROL_TOKEN", "scoped-abc")]);
+        let opts = map(&[("AVADA_CONTROL_TOKEN", "scoped-abc")]);
         let env = build_env(&EnvInputs {
             process_env: &proc_env,
             opts_env: Some(&opts),
@@ -835,10 +832,10 @@ mod tests {
             browser_shim: None,
         });
         assert_eq!(
-            env.get("HYPERPANES_CONTROL_TOKEN").map(String::as_str),
+            env.get("AVADA_CONTROL_TOKEN").map(String::as_str),
             Some("scoped-abc")
         );
-        assert!(!env.contains_key("HYPERPANES_CONTROL_FILE"));
+        assert!(!env.contains_key("AVADA_CONTROL_FILE"));
     }
 
     #[test]

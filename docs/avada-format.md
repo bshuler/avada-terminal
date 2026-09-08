@@ -1,14 +1,14 @@
-# The `.hyperpanes` workspace format — design & options
+# The `.avada` workspace format — design & options
 
 **Status:** design doc / decision aid for the maintainer. **No code is changed by this
 document.** It (1) documents the *current* workspace-file schema and how it is opened and
-saved, (2) lays out three options for a dedicated `.hyperpanes` extension with tradeoffs and
+saved, (2) lays out three options for a dedicated `.avada` extension with tradeoffs and
 a recommendation, (3) gives the Windows file-association snippet so a double-clicked
 workspace opens in the app, and (4) lists the exact implementation touch-points for whichever
 option is chosen.
 
 The app round-trips workspaces as plain **JSON**. Option (b) below — the versioned container
-(`{"format": "hyperpanes", "version": 1, "workspace": {…}}`) — has since **shipped**: the
+(`{"format": "avada", "version": 1, "workspace": {…}}`) — has since **shipped**: the
 writer emits the envelope and the reader accepts both it and a bare `WorkspaceFile` object
 (legacy, treated as "version 0"). Sections 2-3 are preserved as the decision record; read
 them as history, not as a description of today's reader. Everything below is grounded in the
@@ -149,13 +149,13 @@ the workspace one:
 
 ```json
 {
-  "format": "hyperpanes-set",
+  "format": "avada-set",
   "version": 1,
   "set": {
     "name": "Morning Routine",
     "members": [
-      { "path": "workspaces/morning-routine-1.hyperpanes", "name": "editor" },
-      { "path": "workspaces/morning-routine-2.hyperpanes" }
+      { "path": "workspaces/morning-routine-1.avada", "name": "editor" },
+      { "path": "workspaces/morning-routine-2.avada" }
     ]
   }
 }
@@ -182,23 +182,23 @@ re-attach-or-spawn decision described above. Schema: `rs/crates/core/src/workspa
 
 The positional path is captured in `parse.rs` only when the argument **(case-insensitively) ends in `.json` *and* the file exists**, then resolved to an absolute path (`parse.rs` lines ~319-326). `read_workspace` reads the file, `serde_json::from_str`s it into `WorkspaceFile`, rejects a contentless file (`has_panes`), and resolves relative pane `cwd`s against the file's own directory.
 
-**Open (GUI / double-click + drag).** The native GUI seeds from argv at startup (`-c …` or a `.json` positional → `load_workspace`); a bare `hyperpanes` with no args stays an empty shell pane (`resolve_cli_workspace` intentionally skips the last-session fallback). So a double-clicked file reaches the app as `argv[1]` and flows through the same positional-path capture.
+**Open (GUI / double-click + drag).** The native GUI seeds from argv at startup (`-c …` or a `.json` positional → `load_workspace`); a bare `avada` with no args stays an empty shell pane (`resolve_cli_workspace` intentionally skips the last-session fallback). So a double-clicked file reaches the app as `argv[1]` and flows through the same positional-path capture.
 
 **Save.** `io::write_workspace` serializes pretty (2-space) and writes the file; `windows_of` normalises any in-memory `WorkspaceFile` into the flat window list the launcher seeds from. Session auto-save targets `last-workspace.json`.
 
-**Takeaway:** the *only* thing tying a file to the app is the **`.json` suffix check in `parse.rs`** (and the equivalent check in the GUI argv bootstrap). There is no content sniffing, no magic header, and no version field. Any `.hyperpanes` story has to start there. *(Historical: the envelope of option (b) has since shipped, so the reader does now sniff `format`/`version` — while still accepting a bare object.)*
+**Takeaway:** the *only* thing tying a file to the app is the **`.json` suffix check in `parse.rs`** (and the equivalent check in the GUI argv bootstrap). There is no content sniffing, no magic header, and no version field. Any `.avada` story has to start there. *(Historical: the envelope of option (b) has since shipped, so the reader does now sniff `format`/`version` — while still accepting a bare object.)*
 
 ---
 
-## 3. Options for a dedicated `.hyperpanes` extension
+## 3. Options for a dedicated `.avada` extension
 
-### (a) Rename-only alias — accept `.hyperpanes` as JSON
+### (a) Rename-only alias — accept `.avada` as JSON
 
-Treat `.hyperpanes` as a second accepted suffix for the *exact same* JSON payload. No schema
+Treat `.avada` as a second accepted suffix for the *exact same* JSON payload. No schema
 change: the file is still a `WorkspaceFile` object; only the extension allow-list widens.
 
 - **Pros:** smallest possible change (one extension check in `parse.rs` + the GUI bootstrap, plus the installer association); existing `.json` files keep working; nothing to migrate.
-- **Cons:** no version marker, so a future breaking schema change still can't be detected or migrated cleanly; the extension is purely cosmetic; a `.hyperpanes` file and a `.json` file are indistinguishable by content (no magic header), so misnamed files can't be diagnosed.
+- **Cons:** no version marker, so a future breaking schema change still can't be detected or migrated cleanly; the extension is purely cosmetic; a `.avada` file and a `.json` file are indistinguishable by content (no magic header), so misnamed files can't be diagnosed.
 
 ### (b) Versioned container — **RECOMMENDED**
 
@@ -206,7 +206,7 @@ Wrap the existing payload in a thin envelope with a self-identifying header and 
 
 ```json
 {
-  "format": "hyperpanes",
+  "format": "avada",
   "version": 1,
   "workspace": {
     "name": "dev",
@@ -218,7 +218,7 @@ Wrap the existing payload in a thin envelope with a self-identifying header and 
 (Or inline the payload fields alongside `format`/`version` — a flattened envelope — if you
 prefer fewer levels of nesting. Either way the discriminators are `format` + `version`.)
 
-- **Pros:** a **magic header** (`"format": "hyperpanes"`) lets the loader positively identify a workspace and reject look-alikes with a clear error; the **`version`** integer is the hook for real migrations (load v1, upgrade in memory, save v2) without guessing; still plain UTF-8 JSON — hand-editable, diff-friendly, copy-pasteable; can be introduced **backward-compatibly** by having the reader accept *both* a bare `WorkspaceFile` (legacy `.json`, treated as "version 0") and the wrapped form, and having the writer emit the wrapped form for `.hyperpanes`.
+- **Pros:** a **magic header** (`"format": "avada"`) lets the loader positively identify a workspace and reject look-alikes with a clear error; the **`version`** integer is the hook for real migrations (load v1, upgrade in memory, save v2) without guessing; still plain UTF-8 JSON — hand-editable, diff-friendly, copy-pasteable; can be introduced **backward-compatibly** by having the reader accept *both* a bare `WorkspaceFile` (legacy `.json`, treated as "version 0") and the wrapped form, and having the writer emit the wrapped form for `.avada`.
 - **Cons:** slightly more code than (a) — a small envelope type plus a branch in the reader/writer; two accepted on-disk shapes during the compatibility window; the byte-identical round-trip contract has to be re-stated for the envelope (trivial, since it's still serde + 2-space pretty).
 
 ### (c) Binary capsule — **REJECTED**
@@ -242,21 +242,21 @@ A packed binary file (e.g. length-prefixed header + bincode/MessagePack/compress
 **Recommendation:** ship **(b)**. It costs little more than (a), is still plain JSON, and buys
 the one thing (a) can't: a versioned, migratable, self-identifying format. If you want to land
 the extension *today* and the envelope *later*, (a) is a valid stepping stone — accept
-`.hyperpanes` now, then layer the `format`/`version` envelope on in a follow-up without
+`.avada` now, then layer the `format`/`version` envelope on in a follow-up without
 changing the extension again.
 
 ---
 
 ## 4. Windows file association (NSIS)
 
-So a double-clicked `*.hyperpanes` opens in the app, register a ProgID and point its
+So a double-clicked `*.avada` opens in the app, register a ProgID and point its
 `shell\open\command` at the binary with `"%1"` (the clicked path, delivered as `argv[1]`).
 
 The brief's conceptual mapping is:
 
 ```
-HKCR\.hyperpanes            (default) = Hyperpanes.Workspace
-HKCR\Hyperpanes.Workspace\shell\open\command  (default) = "$INSTDIR\hyperpanes.exe" "%1"
+HKCR\.avada            (default) = Avada.Workspace
+HKCR\Avada.Workspace\shell\open\command  (default) = "$INSTDIR\avada.exe" "%1"
 ```
 
 **Important — match the per-user installer.** `installer.nsi` is a *per-user* install
@@ -266,13 +266,13 @@ machine-wide `HKEY_CLASSES_ROOT`/`HKLM` would require admin and contradict the i
 design. Snippet to add (using the existing shipped `icon.ico` for the file icon):
 
 ```nsis
-; ----- .hyperpanes file association (per-user: HKCU\Software\Classes == per-user HKCR) -----
-!define WS_EXT    ".hyperpanes"
-!define WS_PROGID "Hyperpanes.Workspace"
+; ----- .avada file association (per-user: HKCU\Software\Classes == per-user HKCR) -----
+!define WS_EXT    ".avada"
+!define WS_PROGID "Avada.Workspace"
 
 ; --- in Section "Install" (after the binary + icon are in $INSTDIR) ---
   WriteRegStr HKCU "Software\Classes\${WS_EXT}"   "" "${WS_PROGID}"
-  WriteRegStr HKCU "Software\Classes\${WS_PROGID}" "" "Hyperpanes Workspace"
+  WriteRegStr HKCU "Software\Classes\${WS_PROGID}" "" "Avada Workspace"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}\DefaultIcon"        "" "$INSTDIR\icon.ico,0"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}\shell\open\command" "" '"$INSTDIR\${MAIN_BINARY}" "%1"'
   ; Tell the shell the association table changed so the icon/verb apply immediately (optional).
@@ -286,7 +286,7 @@ design. Snippet to add (using the existing shipped `icon.ico` for the file icon)
 ```
 
 Notes:
-- `${MAIN_BINARY}` is already defined as `hyperpanes.exe` and `icon.ico` is already shipped to
+- `${MAIN_BINARY}` is already defined as `avada.exe` and `icon.ico` is already shipped to
   `$INSTDIR` by the install section — no new files needed.
 - `System::Call` uses the `System` plugin bundled with NSIS; the `SHChangeNotify` calls are a
   nicety (refresh icons without a re-login) and can be dropped if you want zero plugin use.
@@ -298,13 +298,13 @@ Notes:
 For the recommended **option (b)**, the change surface is small and localized:
 
 1. **`cli/parse.rs`** — widen the positional-path capture (currently `ends_with(".json")`, ~line
-   321) to also accept `.hyperpanes`. Without this, a double-clicked `.hyperpanes` arrives as
+   321) to also accept `.avada`. Without this, a double-clicked `.avada` arrives as
    `argv[1]` but is **silently ignored** by the parser. Keep accepting `.json`.
 2. **GUI argv bootstrap (app crate, seed-from-argv)** — the same extension allow-list applies to
-   the GUI's `.json` → `load_workspace` path; widen it to `.hyperpanes` too.
-3. **`workspace/io.rs`** — `read_workspace`: detect the envelope (`format == "hyperpanes"`), read
+   the GUI's `.json` → `load_workspace` path; widen it to `.avada` too.
+3. **`workspace/io.rs`** — `read_workspace`: detect the envelope (`format == "avada"`), read
    `version`, and deserialize the inner payload; accept a bare `WorkspaceFile` as legacy
-   ("version 0") for backward compat. `write_workspace`: emit the envelope for `.hyperpanes`
+   ("version 0") for backward compat. `write_workspace`: emit the envelope for `.avada`
    targets (keep emitting bare JSON for `.json`, or migrate writes — your call). Re-assert the
    byte-identical 2-space round-trip for the envelope type. A small `WorkspaceEnvelope { format,
    version, workspace }` serde struct lives naturally next to `WorkspaceFile` in `model.rs`.

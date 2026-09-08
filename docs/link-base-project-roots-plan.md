@@ -221,8 +221,8 @@ fixture style:
   observe through a link test: feed `docs/x.md` into the new pane with cwd elsewhere and
   a temp project root holding `docs/x.md`, `link_at` → hit.
 
-Run: `cd rs/crates/app && cargo test --bin hyperpanes project_roots` then the full
-`cargo test --bin hyperpanes` (625 passing before this work).
+Run: `cd rs/crates/app && cargo test --bin avada project_roots` then the full
+`cargo test --bin avada` (625 passing before this work).
 
 ### Step 6. Verify the whole
 
@@ -233,7 +233,7 @@ cd /Users/bshuler/code/hyperpanes/rs/crates/core && cargo test
 cd /Users/bshuler/code/hyperpanes/rs/crates/terminal-widget && cargo test --lib
 ```
 ```bash
-cd /Users/bshuler/code/hyperpanes/rs/crates/app && cargo test --bin hyperpanes && cargo build
+cd /Users/bshuler/code/hyperpanes/rs/crates/app && cargo test --bin avada && cargo build
 ```
 
 Live check (do not install to /Applications unless asked; run the built binary from
@@ -242,7 +242,7 @@ Live check (do not install to /Applications unless asked; run the built binary f
 `/Users/bshuler/code/hyperpanes/rs/crates/core/src/git.rs`. Then print
 `echo README.md` with two projects that both have one: expect dark. Then
 `cd /Users/bshuler/code/hyperpanes && echo README.md` in the same pane: expect the
-hyperpanes copy (the screen broke the tie).
+avada copy (the screen broke the tie).
 
 ### Step 7. Commit
 

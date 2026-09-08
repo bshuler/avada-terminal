@@ -1,4 +1,4 @@
-# Hyperpanes rendering fixture
+# Avada rendering fixture
 
 This file exists to be looked at, not read. Every construct the markdown preview
 knows how to draw appears below at least once, and the prose paragraphs are

@@ -1,13 +1,13 @@
 //! The embedded SSH server — mux backend **M3** (`docs/mux-backend-plan.md`).
 //!
-//! The point of the milestone: a phone with *no hyperpanes software on it* — Termius, Blink,
+//! The point of the milestone: a phone with *no avada software on it* — Termius, Blink,
 //! or plain `ssh` — points at this port and lands in a live pane. There is no shell behind the
 //! channel: an opened session runs the M2 attach client
-//! ([`hyperpanes_core::session::attach`]) directly, so an SSH viewer sees exactly what the
+//! ([`avada_core::session::attach`]) directly, so an SSH viewer sees exactly what the
 //! desktop sees and detaching leaves the pane running.
 //!
 //! ```text
-//!   phone ──ssh──▶ server.rs (russh)  ──▶ bridge.rs ──▶ attach.rs ──uds──▶ hyperpanesd
+//!   phone ──ssh──▶ server.rs (russh)  ──▶ bridge.rs ──▶ attach.rs ──uds──▶ avadad
 //!                  auth: keys.rs           channel↔pty     (M2, reused verbatim)
 //!                  policy: config.rs
 //! ```
@@ -33,17 +33,17 @@
 //! # Two ways a client key gets in
 //!
 //! `mux-backend-plan.md` asks for "per-device public keys reusing the existing
-//! `device-tokens.json` + `hyperpanes pair` flow". What is reusable there is the **device
+//! `device-tokens.json` + `avada pair` flow". What is reusable there is the **device
 //! registry**, not the credential: a device token is a bearer secret, while an SSH client
 //! authenticates by proving possession of a private key it never hands over. So the key travels
-//! *in the device record* rather than being derived from it — `hyperpanes pair --ssh-key
+//! *in the device record* rather than being derived from it — `avada pair --ssh-key
 //! ~/.ssh/id_ed25519.pub` stores the public key alongside the bearer token in
-//! `device-tokens.json`, and one `hyperpanes revoke <label>` shuts both doors at once, under one
+//! `device-tokens.json`, and one `avada revoke <label>` shuts both doors at once, under one
 //! label and one TTL. An expired pairing stops authenticating over SSH on the same millisecond it
 //! stops authenticating over the control API.
 //!
 //! The operator-managed `authorized_keys`-format file ([`config::SshPaths::authorized_keys`],
-//! driven by `hyperpanes ssh authorize|keys|revoke`) remains a second, independent source, for
+//! driven by `avada ssh authorize|keys|revoke`) remains a second, independent source, for
 //! the laptop-to-desktop case that never pairs a phone. [`keys::Authorizer`] reads both on every
 //! authentication attempt and fails **closed** if either is unreadable or badly permissioned.
 //!
@@ -66,7 +66,7 @@ pub mod keys;
 #[cfg(unix)]
 pub mod server;
 
-/// True for `hyperpanes ssh …`. Only `argv[1]`, so `hyperpanes -c "ssh box"` still launches
+/// True for `avada ssh …`. Only `argv[1]`, so `avada -c "ssh box"` still launches
 /// the GUI and runs ssh in a pane.
 #[tracing::instrument(level = "debug", ret)]
 pub fn wants_ssh(argv: &[String]) -> bool {
@@ -74,39 +74,39 @@ pub fn wants_ssh(argv: &[String]) -> bool {
 }
 
 const SSH_USAGE: &str = "\
-hyperpanes ssh — the embedded SSH front door (attach to a pane from a phone)
+avada ssh — the embedded SSH front door (attach to a pane from a phone)
 
 USAGE:
-    hyperpanes ssh status                 Show settings, bind address, host key, allowed keys
-    hyperpanes ssh enable [--port N] [--bind ADDR] [--allow-remote] [--allow-resize]
+    avada ssh status                 Show settings, bind address, host key, allowed keys
+    avada ssh enable [--port N] [--bind ADDR] [--allow-remote] [--allow-resize]
                                           Turn the server on (and adjust settings)
-    hyperpanes ssh disable                Turn the server off
-    hyperpanes ssh authorize <key|path> [--label NAME]
+    avada ssh disable                Turn the server off
+    avada ssh authorize <key|path> [--label NAME]
                                           Allow a client public key (an authorized_keys line,
                                           a .pub file's contents, or a path to one)
-    hyperpanes ssh keys                   List the allowed client keys (both sources)
-    hyperpanes ssh revoke <label|fingerprint>
+    avada ssh keys                   List the allowed client keys (both sources)
+    avada ssh revoke <label|fingerprint>
                                           Remove a key from the authorized-keys FILE. A key that
                                           came from a paired device is dropped with
-                                          `hyperpanes revoke <label>` instead.
-    hyperpanes ssh serve                  Run the listener in the foreground (for testing)
+                                          `avada revoke <label>` instead.
+    avada ssh serve                  Run the listener in the foreground (for testing)
 
 NOTES:
     The server binds 127.0.0.1 and is off until you enable it. Binding anything else needs
     BOTH \"bind\" and \"allowRemote\": true — prefer a Tailscale address over 0.0.0.0.
     Auth is public key only; there is no password auth and no shell behind the channel.
     Keys come from two places: this file, and any device paired with
-    `hyperpanes pair --ssh-key <key>` (revoked together with its token by `hyperpanes revoke`).
+    `avada pair --ssh-key <key>` (revoked together with its token by `avada revoke`).
 ";
 
-/// `hyperpanes ssh <subcommand>`.
+/// `avada ssh <subcommand>`.
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
 pub fn run(argv: &[String]) -> std::io::Result<()> {
     match run_inner(argv) {
         Ok(()) => Ok(()),
         Err(msg) => {
-            eprintln!("hyperpanes ssh: {msg}");
+            eprintln!("avada ssh: {msg}");
             std::process::exit(1);
         }
     }
@@ -117,10 +117,10 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
 #[tracing::instrument(level = "debug", ret)]
 pub fn run(_argv: &[String]) -> std::io::Result<()> {
     eprintln!(
-        "hyperpanes ssh is not available on Windows.\n\
+        "avada ssh is not available on Windows.\n\
          The attach client cannot half-close a named pipe, so an SSH client hanging up would \
          leak a thread and a daemon connection per session. See rs/crates/app/src/ssh/mod.rs. \
-         Attaching locally (`hyperpanes attach`) works on every platform."
+         Attaching locally (`avada attach`) works on every platform."
     );
     std::process::exit(2);
 }
@@ -178,7 +178,7 @@ fn run_inner(argv: &[String]) -> Result<(), String> {
                 }
                 println!(
                     "SSH server enabled on {}. It starts with the session daemon — restart \
-                     hyperpanes (or run `hyperpanes ssh serve`) to listen now.",
+                     avada (or run `avada ssh serve`) to listen now.",
                     s.resolve_bind()?
                 );
                 if s.is_remote_exposed() {
@@ -192,8 +192,8 @@ fn run_inner(argv: &[String]) -> Result<(), String> {
                 if allowed.live_len(keys::now_ms()) == 0 {
                     println!(
                         "No client keys are authorized yet, so nobody can connect. Add one \
-                         with `hyperpanes ssh authorize ~/.ssh/id_ed25519.pub`, or pair a \
-                         device with `hyperpanes pair --ssh-key ~/.ssh/id_ed25519.pub`."
+                         with `avada ssh authorize ~/.ssh/id_ed25519.pub`, or pair a \
+                         device with `avada pair --ssh-key ~/.ssh/id_ed25519.pub`."
                     );
                 }
             } else {
@@ -204,7 +204,7 @@ fn run_inner(argv: &[String]) -> Result<(), String> {
         "authorize" => {
             let arg = rest
                 .first()
-                .ok_or("usage: hyperpanes ssh authorize <key|path/to/key.pub> [--label NAME]")?;
+                .ok_or("usage: avada ssh authorize <key|path/to/key.pub> [--label NAME]")?;
             let mut label = None;
             let mut i = 1;
             while i < rest.len() {
@@ -234,7 +234,7 @@ fn run_inner(argv: &[String]) -> Result<(), String> {
         "revoke" => {
             let needle = rest
                 .first()
-                .ok_or("usage: hyperpanes ssh revoke <label|fingerprint>")?;
+                .ok_or("usage: avada ssh revoke <label|fingerprint>")?;
             let n = keys::revoke_key(&paths.authorized_keys, needle)?;
             match n {
                 0 => {
@@ -249,7 +249,7 @@ fn run_inner(argv: &[String]) -> Result<(), String> {
                     {
                         println!(
                             "Some authorized keys belong to paired devices. Drop one (key and \
-                             token together) with `hyperpanes revoke <label>`."
+                             token together) with `avada revoke <label>`."
                         );
                     }
                 }
@@ -259,7 +259,7 @@ fn run_inner(argv: &[String]) -> Result<(), String> {
             Ok(())
         }
         "serve" => {
-            let salt = hyperpanes_core::persistence::paths::user_data_dir()
+            let salt = avada_core::persistence::paths::user_data_dir()
                 .to_string_lossy()
                 .into_owned();
             server::serve_blocking(&paths, &salt, true)
@@ -397,14 +397,12 @@ pub(crate) mod testutil {
         }
     }
 
-    /// Create `$TMPDIR/hyperpanes-ssh-test-<tag>-<pid>-<n>/`.
+    /// Create `$TMPDIR/avada-ssh-test-<tag>-<pid>-<n>/`.
     pub fn tmpdir(tag: &str) -> TmpDir {
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "hyperpanes-ssh-test-{tag}-{}-{n}",
-            std::process::id()
-        ));
+        let p =
+            std::env::temp_dir().join(format!("avada-ssh-test-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).expect("create temp dir");
         TmpDir(p)
@@ -421,12 +419,12 @@ mod tests {
 
     #[test]
     fn wants_ssh_only_fires_on_the_subcommand() {
-        assert!(wants_ssh(&argv(&["hyperpanes", "ssh"])));
-        assert!(wants_ssh(&argv(&["hyperpanes", "ssh", "status"])));
-        assert!(!wants_ssh(&argv(&["hyperpanes"])));
-        assert!(!wants_ssh(&argv(&["hyperpanes", "attach"])));
+        assert!(wants_ssh(&argv(&["avada", "ssh"])));
+        assert!(wants_ssh(&argv(&["avada", "ssh", "status"])));
+        assert!(!wants_ssh(&argv(&["avada"])));
+        assert!(!wants_ssh(&argv(&["avada", "attach"])));
         // A pane running ssh must not be hijacked into our subcommand.
-        assert!(!wants_ssh(&argv(&["hyperpanes", "-c", "ssh box"])));
+        assert!(!wants_ssh(&argv(&["avada", "-c", "ssh box"])));
     }
 
     /// `status`/`keys` must name where each key came from, because that is what tells a user
@@ -435,7 +433,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_key_listing_names_each_source_and_flags_a_lapsed_pairing() {
-        use hyperpanes_core::persistence::device_tokens::{save_to, DeviceRecord};
+        use avada_core::persistence::device_tokens::{save_to, DeviceRecord};
 
         let dir = testutil::tmpdir("print-keys");
         let paths = config::SshPaths::under(dir.path());

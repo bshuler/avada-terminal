@@ -51,7 +51,7 @@ pub fn load_or_create_host_key(path: &Path) -> Result<(PrivateKey, bool), String
                     .map_err(|e| format!("{}: unreadable SSH host key: {e}", path.display()))?;
                 if key.is_encrypted() {
                     return Err(format!(
-                        "{}: the SSH host key is passphrase-encrypted. hyperpanes has no way to \
+                        "{}: the SSH host key is passphrase-encrypted. avada has no way to \
                          prompt for it from a background daemon; move the file aside and let it \
                          generate a fresh one, or decrypt it with `ssh-keygen -p`.",
                         path.display()
@@ -64,7 +64,7 @@ pub fn load_or_create_host_key(path: &Path) -> Result<(PrivateKey, bool), String
         }
         match generate_host_key(path) {
             Ok(key) => return Ok((key, true)),
-            // Lost the race with another hyperpanes process — go round and read theirs.
+            // Lost the race with another avada process — go round and read theirs.
             Err(GenerateError::Exists) if attempt == 0 => continue,
             Err(GenerateError::Exists) => {
                 return Err(format!(
@@ -109,7 +109,7 @@ fn generate_host_key(path: &Path) -> Result<PrivateKey, GenerateError> {
     // `PrivateKey`, which zeroizes itself on drop.
     seed.fill(0);
 
-    let key = PrivateKey::new(KeypairData::Ed25519(keypair), "hyperpanes")
+    let key = PrivateKey::new(KeypairData::Ed25519(keypair), "avada")
         .map_err(|e| GenerateError::Other(format!("could not build a host key: {e}")))?;
     debug_assert_eq!(key.algorithm(), Algorithm::Ed25519);
 
@@ -177,7 +177,7 @@ pub fn host_fingerprint(key: &PrivateKey) -> String {
 }
 
 /// A human label for a key: its `authorized_keys` comment when it has one, else its
-/// fingerprint. Used in logs and in `hyperpanes ssh keys`.
+/// fingerprint. Used in logs and in `avada ssh keys`.
 #[tracing::instrument(level = "debug", ret)]
 pub fn label_for(key: &PublicKey) -> String {
     let comment = key.comment().as_str_lossy().trim().to_string();
@@ -374,17 +374,17 @@ pub fn parse_public_key(input: &str) -> Result<PublicKey, String> {
 /// key gets added and, more importantly, in how it gets taken away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
-    /// The operator-managed `ssh-authorized-keys` file — added by `hyperpanes ssh authorize`,
-    /// removed by `hyperpanes ssh revoke`.
+    /// The operator-managed `ssh-authorized-keys` file — added by `avada ssh authorize`,
+    /// removed by `avada ssh revoke`.
     File,
     /// A paired device in `device-tokens.json` that carries an `sshKey` — added by
-    /// `hyperpanes pair --ssh-key`, removed by `hyperpanes revoke <label>`, which drops the
+    /// `avada pair --ssh-key`, removed by `avada revoke <label>`, which drops the
     /// bearer token and the SSH key together because they are one record.
     Device,
 }
 
 impl KeySource {
-    /// One word for `hyperpanes ssh keys` / `status`.
+    /// One word for `avada ssh keys` / `status`.
     #[tracing::instrument(level = "debug", ret)]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -408,7 +408,7 @@ pub struct AuthorizedEntry {
 
 impl AuthorizedEntry {
     /// Whether a paired device's TTL has run out at `now_ms`. Inclusive at the instant, matching
-    /// [`hyperpanes_core::persistence::device_tokens::DeviceRecord::is_expired`] so the SSH door
+    /// [`avada_core::persistence::device_tokens::DeviceRecord::is_expired`] so the SSH door
     /// and the control-API door shut at exactly the same millisecond.
     #[tracing::instrument(level = "debug", ret)]
     pub fn is_expired(&self, now_ms: i64) -> bool {
@@ -426,7 +426,7 @@ impl AuthorizedEntry {
 ///
 /// This is what the server consults on each `publickey` attempt. It is rebuilt per attempt (both
 /// files are small, and an authentication is rare and already expensive) so that revoking a key —
-/// by editing the file or by `hyperpanes revoke` — takes effect on the next connection with no
+/// by editing the file or by `avada revoke` — takes effect on the next connection with no
 /// restart. Any *error* reading a source is fatal to that load: an unreadable or badly-permissioned
 /// key file must deny everyone, never silently admit everyone.
 #[derive(Debug, Default, Clone)]
@@ -476,7 +476,7 @@ impl Authorizer {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(format!("{}: {e}", path.display())),
         }
-        for rec in hyperpanes_core::persistence::device_tokens::load_from(path) {
+        for rec in avada_core::persistence::device_tokens::load_from(path) {
             let Some(text) = rec.ssh_key.as_deref() else {
                 continue; // paired for the control API only — no SSH key, no SSH access
             };
@@ -748,7 +748,7 @@ mod tests {
     // ---- Authorizer: the two key sources, resolved together --------------------------------
 
     use crate::ssh::config::SshPaths;
-    use hyperpanes_core::persistence::device_tokens::{save_to, DeviceRecord};
+    use avada_core::persistence::device_tokens::{save_to, DeviceRecord};
 
     fn device(label: &str, key: &PublicKey, expires_at: Option<i64>) -> DeviceRecord {
         DeviceRecord {
@@ -776,7 +776,7 @@ mod tests {
             .expect("the paired key must authorize");
         assert_eq!(hit.source, KeySource::Device);
         // The DEVICE label names it, not the key's own comment — that is the label the user
-        // types into `hyperpanes revoke`.
+        // types into `avada revoke`.
         assert_eq!(hit.label, "phone");
         assert_eq!(hit.describe(), "phone (device)");
         assert_eq!(authz.live_len(10_000), 1);
@@ -798,7 +798,7 @@ mod tests {
         // Inclusive at the instant, exactly like the control API's own token expiry.
         assert!(authz.authorize(phone.public_key(), 5_000).is_none());
         assert_eq!(authz.live_len(5_000), 0);
-        // Still in `entries` so `hyperpanes ssh status` can say EXPIRED rather than go silent.
+        // Still in `entries` so `avada ssh status` can say EXPIRED rather than go silent.
         assert_eq!(authz.entries.len(), 1);
     }
 

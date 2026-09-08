@@ -1,13 +1,13 @@
 // Render collected results into Markdown: detection table, one table per suite
-// (hyperpanes highlighted), and the fairness caveats footer.
+// (avada highlighted), and the fairness caveats footer.
 
 export const CAVEATS = [
-  'The NATIVE hyperpanes (the Rust rewrite) is benchmarked **idle only**: its GUI binary (v0.0.1) ignores CLI argv and has no run-a-command flag, so the harness cannot inject an in-pane workload — only idle memory/CPU of a fresh instance (one default-shell pane) are measured. Throughput and startup-in-pane are therefore n/a for native until the GUI wires CLI launch (the parser + single-instance gate already exist in core + the headless daemon).',
-  'Each measured hyperpanes (native or Electron) is launched with an ISOLATED data dir — native via a throwaway `%APPDATA%`, Electron via `--user-data-dir <temp>` — so it starts as a clean fresh instance and does not hand off to a running copy. The Electron baseline is the INSTALLED app; it is also measured idle-only so the comparison is apples-to-apples (fresh instance, one default pane, no workload).',
+  'The NATIVE avada (the Rust rewrite) is benchmarked **idle only**: its GUI binary (v0.0.1) ignores CLI argv and has no run-a-command flag, so the harness cannot inject an in-pane workload — only idle memory/CPU of a fresh instance (one default-shell pane) are measured. Throughput and startup-in-pane are therefore n/a for native until the GUI wires CLI launch (the parser + single-instance gate already exist in core + the headless daemon).',
+  'Each measured avada (native or Electron) is launched with an ISOLATED data dir — native via a throwaway `%APPDATA%`, Electron via `--user-data-dir <temp>` — so it starts as a clean fresh instance and does not hand off to a running copy. The Electron baseline is the INSTALLED app; it is also measured idle-only so the comparison is apples-to-apples (fresh instance, one default pane, no workload).',
   'Memory is a Win32_Process tree-walk (Working Set + Private Bytes) summed from the spawned root PID — this captures Electron’s multi-process tree (main + GPU + renderer + utility helpers) and the native app’s single process. It can miss a reused host process (Windows Terminal shares one host across windows, and `wt.exe` is a launcher stub that may exit) or include unrelated windows.',
   'Idle CPU is sampled by diffing each process’s total processor time over a fixed window (default 2 s) and summing the tree; it is expressed as percent of one core (so it can exceed 100). It is a short idle snapshot, sensitive to background animation/rendering, not a sustained average.',
   'Throughput (PTY backpressure, vtebench’s model) and startup ("process launch → command running in a pane") apply only to terminals with a run-a-command CLI (the Electron build, Windows Terminal, …). A terminal that buffers a large PTY read can ack bytes before rendering, under-reporting render cost; it is the accepted proxy, not a pixel-accurate timer.',
-  'Config-only terminals (Tabby, Hyper, Wave) and the native hyperpanes have no run-a-command flag, so they are launched bare and report **idle memory/CPU only**.',
+  'Config-only terminals (Tabby, Hyper, Wave) and the native avada have no run-a-command flag, so they are launched bare and report **idle memory/CPU only**.',
   'Input latency is NOT automated here. Use the manual Typometer procedure in the README for that.',
   'Kitty and Ghostty have no Windows build and are excluded.',
   'Run on AC power with other apps closed; results are medians/single idle snapshots but still machine- and load-dependent.'
@@ -23,7 +23,7 @@ function table(headers, rows) {
   return [head, sep, body].join('\n');
 }
 
-const label = (row) => (row.id === 'hyperpanes' ? `**${row.name}**` : row.name);
+const label = (row) => (row.id === 'avada' ? `**${row.name}**` : row.name);
 
 function detectSection(detect = []) {
   const rows = detect.map((d) => [
@@ -82,7 +82,7 @@ function memorySection(mem) {
 
 export function renderReport(data) {
   const parts = [];
-  parts.push(`# hyperpanes terminal benchmark — ${data.label || 'report'}`);
+  parts.push(`# avada terminal benchmark — ${data.label || 'report'}`);
   const meta = [
     data.date && `Date: ${data.date}`,
     data.machine && `Machine: ${data.machine}`,

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the hyperpanes .rpm for x86_64 Linux via cargo-generate-rpm.
+# Build the avada .rpm for x86_64 Linux via cargo-generate-rpm.
 #
 # Contract (mirrors appimage.sh):
 #   rs/packaging/rpm.sh <version>     # <version> WITHOUT a leading "v"
-#   → rs/packaging/out/hyperpanes-<version>-1.x86_64.rpm
+#   → rs/packaging/out/avada-<version>-1.x86_64.rpm
 # Runs from any cwd; exits non-zero on any failure; artifact under rs/packaging/out/.
 #
-# Layout (FHS): /usr/bin/hyperpanes + /usr/share/hyperpanes/resources/shell-integration/…
+# Layout (FHS): /usr/bin/avada + /usr/share/avada/resources/shell-integration/…
 # (the assets list lives in crates/app/Cargo.toml [package.metadata.generate-rpm]). No root and
 # no rpm-build tooling needed — cargo-generate-rpm is a pure-Rust cargo plugin that writes the
 # rpm header + cpio payload directly; installed on demand if absent.
@@ -43,7 +43,7 @@ fi
 echo "==> cargo build --release (rs/crates/app)"
 cargo build --release --manifest-path "$APP_MANIFEST"
 
-ARTIFACT="$OUT_DIR/hyperpanes-${VERSION}-1.x86_64.rpm"
+ARTIFACT="$OUT_DIR/avada-${VERSION}-1.x86_64.rpm"
 echo "==> cargo generate-rpm → $ARTIFACT"
 rm -f "$ARTIFACT"
 # Run from the crate dir: cargo-generate-rpm reads ./Cargo.toml, takes target/release and the

@@ -481,7 +481,7 @@ mod tests {
         "╭──────────────────────────────────────────────────────────╮\n",
         "│ Do you trust the files in this folder?                     │\n",
         "│                                                            │\n",
-        "│ C:\\hyperpanes                                              │\n",
+        "│ C:\\avada                                              │\n",
         "│                                                            │\n",
         "│ ❯ 1. Yes, proceed                                          │\n",
         "│   2. No, exit                                              │\n",

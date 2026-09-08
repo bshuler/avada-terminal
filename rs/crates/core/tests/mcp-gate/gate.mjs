@@ -1,13 +1,13 @@
 // MCP acceptance gate for the Rust control server.
-// Spawns the REAL hyperpanes MCP server (dist/index.js) via the MCP SDK stdio client, pointed at
-// the Rust headless daemon through HYPERPANES_CONTROL_FILE, and drives the documented smoke
+// Spawns the REAL avada MCP server (dist/index.js) via the MCP SDK stdio client, pointed at
+// the Rust headless daemon through AVADA_CONTROL_FILE, and drives the documented smoke
 // sequence. Any route/JSON/event/discovery drift makes a tool throw or return wrong data → FAIL.
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const CONTROL_FILE = process.env.HYPERPANES_CONTROL_FILE || 'C:\\hp-gate\\control.json';
-const SERVER = 'C:\\hyperpanes-mcp\\dist\\index.js';
+const CONTROL_FILE = process.env.AVADA_CONTROL_FILE || 'C:\\hp-gate\\control.json';
+const SERVER = 'C:\\avada-mcp\\dist\\index.js';
 
 let pass = 0,
   fail = 0;
@@ -23,8 +23,8 @@ function mkClient(extraEnv = {}) {
     args: [SERVER],
     env: {
       ...process.env,
-      HYPERPANES_CONTROL_FILE: CONTROL_FILE,
-      HYPERPANES_ALLOW_INPUT: '1',
+      AVADA_CONTROL_FILE: CONTROL_FILE,
+      AVADA_ALLOW_INPUT: '1',
       ...extraEnv,
     },
   });
@@ -138,19 +138,19 @@ async function main() {
   // 10. scoped /state subtree filter + escalation 403, driven through a SCOPED bridge (env token).
   {
     const { client: sc, transport: st } = mkClient({
-      HYPERPANES_CONTROL_FILE: '', // force env-token discovery (no master control.json)
-      HYPERPANES_CONTROL_TOKEN: scopedToken,
-      HYPERPANES_CONTROL_PORT: String(port),
-      HYPERPANES_PANE_ID: paneId,
+      AVADA_CONTROL_FILE: '', // force env-token discovery (no master control.json)
+      AVADA_CONTROL_TOKEN: scopedToken,
+      AVADA_CONTROL_PORT: String(port),
+      AVADA_PANE_ID: paneId,
     });
     await sc.connect(st);
     // The scoped bridge sees ONLY its pane in /state.
     const list = await call(sc, 'list_panes');
     const ids = (list.data.panes || []).map((p) => p.paneId);
     assert(ids.length === 1 && ids[0] === paneId, 'scoped /state subtree (no sibling leak)', `panes=${ids.length}`);
-    // whoami-from-env: the scoped bridge identifies its own pane from HYPERPANES_PANE_ID.
+    // whoami-from-env: the scoped bridge identifies its own pane from AVADA_PANE_ID.
     const who = await call(sc, 'whoami');
-    assert(who.data.ok === true && who.data.paneId === paneId, 'whoami-from-env (HYPERPANES_PANE_ID)', who.data.paneId);
+    assert(who.data.ok === true && who.data.paneId === paneId, 'whoami-from-env (AVADA_PANE_ID)', who.data.paneId);
     // Escalation: minting a window-scoped token from the scoped bridge → 403.
     const esc = await call(sc, 'mint_token', { windowIds: [1] });
     assert(esc.isError && /scope|403|outside/i.test(esc.data.error || ''), 'escalation mint → 403', esc.data.error);
@@ -162,9 +162,9 @@ async function main() {
     const sib = await call(client, 'open_pane', { command: 'cmd', label: 'sibling' });
     const sibId = sib.data.paneId;
     const { client: sc, transport: st } = mkClient({
-      HYPERPANES_CONTROL_FILE: '',
-      HYPERPANES_CONTROL_TOKEN: scopedToken,
-      HYPERPANES_CONTROL_PORT: String(port),
+      AVADA_CONTROL_FILE: '',
+      AVADA_CONTROL_TOKEN: scopedToken,
+      AVADA_CONTROL_PORT: String(port),
     });
     await sc.connect(st);
     const list = await call(sc, 'list_panes');

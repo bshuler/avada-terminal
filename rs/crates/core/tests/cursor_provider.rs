@@ -21,7 +21,7 @@
 //!   * A filesystem probe that finds a real directory re-encoding to the name is proof of the
 //!     same kind, and recovers `what_is_light` where no substitution rule could.
 //!   * Everything else — Cursor's literal `empty-window` sentinel included — is a label, and
-//!     [`ResumePlan`](hyperpanes_core::tools::history::ResumePlan) must refuse to spawn on it.
+//!     [`ResumePlan`](avada_core::tools::history::ResumePlan) must refuse to spawn on it.
 //!
 //! Fixtures throughout, except the two absence-tolerant checks at the bottom (one `#[ignore]`d,
 //! because it reports numbers rather than asserting them).
@@ -29,13 +29,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use hyperpanes_core::claude_history::{HistorySource, ProjectOrigin};
-use hyperpanes_core::tools::history::cursor::{
+use avada_core::claude_history::{HistorySource, ProjectOrigin};
+use avada_core::tools::history::cursor::{
     cursor_root, encode_project_dir_cursor, store_exists, TOOL_ID,
 };
-use hyperpanes_core::tools::history::{
-    CursorProvider, ResumeBlocked, SessionProvider, ToolSession,
-};
+use avada_core::tools::history::{CursorProvider, ResumeBlocked, SessionProvider, ToolSession};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!(
@@ -500,7 +498,7 @@ fn the_real_store_scans_without_panicking() {
 }
 
 /// Not an assertion — a report. Run with:
-/// `cargo test -p hyperpanes-core --test cursor_provider -- --ignored --nocapture`
+/// `cargo test -p avada-core --test cursor_provider -- --ignored --nocapture`
 #[test]
 #[ignore = "reports numbers from the machine's real Cursor store"]
 fn report_real_store_numbers() {

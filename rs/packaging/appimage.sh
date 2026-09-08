@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build the hyperpanes AppImage for x86_64 Linux.
+# Build the avada AppImage for x86_64 Linux.
 #
 # Contract (docs/ports-seams.md §3, frozen — release-rust.yml calls this blind):
 #   rs/packaging/appimage.sh <version>     # <version> WITHOUT a leading "v"
-#   → rs/packaging/out/hyperpanes-<version>-x86_64.AppImage
+#   → rs/packaging/out/avada-<version>-x86_64.AppImage
 # Runs from any cwd; exits non-zero on any failure; all artifacts under
 # rs/packaging/out/.
 #
@@ -42,7 +42,7 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$(cargo metadata --manifest-path "$APP_MANIFEST"
   --format-version 1 --no-deps 2>/dev/null \
   | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')}"
 [ -n "$TARGET_DIR" ] || err "could not determine cargo target directory"
-BIN="$TARGET_DIR/release/hyperpanes"
+BIN="$TARGET_DIR/release/avada"
 [ -x "$BIN" ] || err "built binary not found at $BIN"
 
 # --- 2. assemble the AppDir ---------------------------------------------------
@@ -53,7 +53,7 @@ mkdir -p "$APPDIR/usr/bin" \
          "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/mime/packages"
 
-install -m 755 "$BIN" "$APPDIR/usr/bin/hyperpanes"
+install -m 755 "$BIN" "$APPDIR/usr/bin/avada"
 
 # Shell-integration init scripts: the app resolves exe_dir/resources/shell-integration
 # (same layout installer.nsi ships on Windows). ConPTY pair is Windows-only — skipped.
@@ -88,43 +88,43 @@ cp -R "$ROOT/resources/claude/hyperpane" "$APPDIR/usr/bin/resources/claude/hyper
 
 # Desktop entry + MIME info (registered by appimaged/AppImageLauncher or a
 # package manager hook via update-mime-database on integration).
-install -m 644 "$LINUX_DIR/hyperpanes.desktop" "$APPDIR/usr/share/applications/hyperpanes.desktop"
-install -m 644 "$LINUX_DIR/hyperpanes.desktop" "$APPDIR/hyperpanes.desktop"
-install -m 644 "$LINUX_DIR/hyperpanes-mime.xml" "$APPDIR/usr/share/mime/packages/hyperpanes.xml"
+install -m 644 "$LINUX_DIR/avada.desktop" "$APPDIR/usr/share/applications/avada.desktop"
+install -m 644 "$LINUX_DIR/avada.desktop" "$APPDIR/avada.desktop"
+install -m 644 "$LINUX_DIR/avada-mime.xml" "$APPDIR/usr/share/mime/packages/avada.xml"
 
 # Icons: pre-derived hicolor PNGs (source: build/icon.png 512×512 — see
 # rs/packaging/linux/README.md).
-for png in "$LINUX_DIR"/icons/hicolor/*/apps/hyperpanes.png; do
+for png in "$LINUX_DIR"/icons/hicolor/*/apps/avada.png; do
   size_dir="$(basename "$(dirname "$(dirname "$png")")")"   # e.g. 256x256
   mkdir -p "$APPDIR/usr/share/icons/hicolor/$size_dir/apps"
-  install -m 644 "$png" "$APPDIR/usr/share/icons/hicolor/$size_dir/apps/hyperpanes.png"
+  install -m 644 "$png" "$APPDIR/usr/share/icons/hicolor/$size_dir/apps/avada.png"
 done
-install -m 644 "$LINUX_DIR/icons/hicolor/512x512/apps/hyperpanes.png" "$APPDIR/hyperpanes.png"
-install -m 644 "$LINUX_DIR/icons/hicolor/512x512/apps/hyperpanes.png" "$APPDIR/.DirIcon"
+install -m 644 "$LINUX_DIR/icons/hicolor/512x512/apps/avada.png" "$APPDIR/avada.png"
+install -m 644 "$LINUX_DIR/icons/hicolor/512x512/apps/avada.png" "$APPDIR/.DirIcon"
 
 # AppRun: exec the real binary so std::env::current_exe() resolves to
-# usr/bin/hyperpanes and the exe-relative resources/ lookup works.
+# usr/bin/avada and the exe-relative resources/ lookup works.
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
-exec "$HERE/usr/bin/hyperpanes" "$@"
+exec "$HERE/usr/bin/avada" "$@"
 EOF
 chmod 755 "$APPDIR/AppRun"
 
 # Optional validation when the tooling is present (CI ubuntu images have it).
 if command -v desktop-file-validate >/dev/null 2>&1; then
   echo "==> desktop-file-validate"
-  desktop-file-validate "$APPDIR/hyperpanes.desktop"
+  desktop-file-validate "$APPDIR/avada.desktop"
 fi
 if command -v xmllint >/dev/null 2>&1; then
   echo "==> xmllint MIME xml"
-  xmllint --noout "$APPDIR/usr/share/mime/packages/hyperpanes.xml"
+  xmllint --noout "$APPDIR/usr/share/mime/packages/avada.xml"
 fi
 
 # --- 3. appimagetool (pinned), cached download --------------------------------
 APPIMAGETOOL_VERSION="1.9.1"   # AppImage/appimagetool release tag (the old AppImageKit/13 assets are gone)
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/hyperpanes-packaging"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/avada-packaging"
 TOOL="$CACHE_DIR/appimagetool-${APPIMAGETOOL_VERSION}-x86_64.AppImage"
 
 if [ ! -x "$TOOL" ]; then
@@ -142,7 +142,7 @@ if [ ! -x "$TOOL" ]; then
 fi
 
 # --- 4. emit the contract artifact --------------------------------------------
-ARTIFACT="$OUT_DIR/hyperpanes-${VERSION}-${ARCH_TRIPLE}.AppImage"
+ARTIFACT="$OUT_DIR/avada-${VERSION}-${ARCH_TRIPLE}.AppImage"
 echo "==> appimagetool → $ARTIFACT"
 rm -f "$ARTIFACT"
 # --appimage-extract-and-run: works without FUSE (containers, WSL, CI runners).

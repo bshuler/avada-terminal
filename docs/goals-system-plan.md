@@ -10,7 +10,7 @@ three Claude accounts.
 
 **Status (2026-07-12): DESIGN — not built.** Nearly every mechanism this needs already exists
 (CEO→manager→worker org, message bus, capability scoping, work queue, worker runner, session
-daemon, supervisor, Claude resume, `fan-out` / `use-hyperpanes` skills). What's missing is: the
+daemon, supervisor, Claude resume, `fan-out` / `use-avada` skills). What's missing is: the
 palette entry point + find-or-spawn glue, the goal-org agent roles/skills, **account rotation**, and
 the **dormant queue plumbing** that makes subtask execution durable. This doc is the design after a
 grilling pass; open decisions are all resolved (see "Decisions").
@@ -64,10 +64,10 @@ sandboxing = scoped tokens (`scope.rs`, `tokens.rs`).
 | Capability | Where | Role in goals |
 |---|---|---|
 | CEO→manager→worker org: message bus, `meta` hierarchy, scoped tokens, `whoami` | `control/inbox.rs`, `scope.rs`, `tokens.rs`; `agent-orchestration-plan.md` | The org itself — goals-orch/spec-agent/impl-agent map straight onto it |
-| `fan-out` + `use-hyperpanes` skills | `~/.claude/skills/*` (symlinks) | Spec agent uses fan-out to spawn impl agents; orchestrators use use-hyperpanes to drive panes |
+| `fan-out` + `use-avada` skills | `~/.claude/skills/*` (symlinks) | Spec agent uses fan-out to spawn impl agents; orchestrators use use-avada to drive panes |
 | Find-or-spawn by meta | `readmodel.rs` (`meta.role`), `open_pane`/`list_panes` MCP | Palette locates the project's goals-orch or creates it |
 | Work queue (SQLite, states, fencing, leases, backoff, dedupe) | `control/work.rs` | Durable subtask execution — spec agent enqueues, impl agents drain |
-| Worker runner (`hyperpanes worker`, `--count`, `--worktree`, `HP_TASK_*`) | `app/src/worker.rs` | Runs each subtask, git-worktree-isolated |
+| Worker runner (`avada worker`, `--count`, `--worktree`, `HP_TASK_*`) | `app/src/worker.rs` | Runs each subtask, git-worktree-isolated |
 | Session daemon (PTYs survive GUI crash, re-attach by uid) | `session/daemon.rs` | Keeps the whole org alive across a GUI crash |
 | Claude resume (`--resume`, session marker, prompt queue) | `resume_queue.rs`, `claude_panes.rs`, `dispatch.rs:213` | Orchestrator survives app relaunch with goal list intact; watchdog restarts a wedged agent **without losing its conversation** |
 | Supervisor (auto-restart on exit, backoff, `maxRetries`) | `supervisor.rs`, `server.rs:547` | Restart-on-crash for worker panes |
@@ -84,7 +84,7 @@ sandboxing = scoped tokens (`scope.rs`, `tokens.rs`).
 
 **Current disk reality (verified):** `~/.claude` (acct 1, 137 transcript dirs) and `~/.claude-alt`
 (acct 2, **own separate** `projects/`+`sessions/`, 1 dir). Only 2 dirs exist; 3rd is TODO. `claude`
-stores transcripts **under `CLAUDE_CONFIG_DIR`**, and hyperpanes sets **no** `CLAUDE_CONFIG_DIR`
+stores transcripts **under `CLAUDE_CONFIG_DIR`**, and avada sets **no** `CLAUDE_CONFIG_DIR`
 today (grep-confirmed). So rotating accounts today **silently starts a fresh conversation** — the
 per-pane + resume-across-accounts requirement is currently unsatisfiable.
 
@@ -182,9 +182,9 @@ around the org, not the org itself:
 
 | Symptom | Root cause | Fix |
 |---|---|---|
-| Reports reach the orchestrator's inbox but it never acts on them | The bus is **pull-only**: `POST /panes/:id/messages` stores + pings WS clients, nothing writes to the pane. An interactive `claude` orchestrator blocks on stdin the moment its turn ends, so mail sat unread (88 messages deep) until a human typed. | `control/nudge.rs` + `arm_inbox_nudge` in `routes.rs`: when mail lands for an opted-in pane (`meta.role` in `goals-orch`/`spec`, or `hp.nudge=on`), wait for the pane to leave `Busy`, then type ONE coalesced, rate-limited (`60s`) line naming the read cursor. `HYPERPANES_MSG_NUDGE=0` disables. |
+| Reports reach the orchestrator's inbox but it never acts on them | The bus is **pull-only**: `POST /panes/:id/messages` stores + pings WS clients, nothing writes to the pane. An interactive `claude` orchestrator blocks on stdin the moment its turn ends, so mail sat unread (88 messages deep) until a human typed. | `control/nudge.rs` + `arm_inbox_nudge` in `routes.rs`: when mail lands for an opted-in pane (`meta.role` in `goals-orch`/`spec`, or `hp.nudge=on`), wait for the pane to leave `Busy`, then type ONE coalesced, rate-limited (`60s`) line naming the read cursor. `AVADA_MSG_NUDGE=0` disables. |
 | Replies to a spec agent 404 (`no such pane`) | **Two pane-id spellings**: app-created panes are `pane-<uuid>`, control-created ones bare `<uuid>`. An agent handed one and reconstructing the other addressed a queue nobody reads. | `ReadModel::resolve_pane_id` canonicalizes either spelling (and a session uid); `find_pane_scoped` returns the canonical id, so post and read land on the same inbox. |
-| Impl-agent work is invisible: no chat, and the pane is gone afterwards | `spawn_workers` put **N agents in one pane**; `claude -p` prints nothing until it exits; the runner exits on drain and the pane auto-closes with its scrollback. | `hyperpanes worker` gains `--stream` (render Claude `stream-json` events as progress), `--log-dir` (per-task raw transcript that outlives the pane) and `--linger`; `spawn_workers` defaults to `layout:"pane-per-worker"` (one pane per agent) and exposes `stream`/`logDir`/`lingerSecs`. Personas pass `--output-format stream-json --verbose`. |
+| Impl-agent work is invisible: no chat, and the pane is gone afterwards | `spawn_workers` put **N agents in one pane**; `claude -p` prints nothing until it exits; the runner exits on drain and the pane auto-closes with its scrollback. | `avada worker` gains `--stream` (render Claude `stream-json` events as progress), `--log-dir` (per-task raw transcript that outlives the pane) and `--linger`; `spawn_workers` defaults to `layout:"pane-per-worker"` (one pane per agent) and exposes `stream`/`logDir`/`lingerSecs`. Personas pass `--output-format stream-json --verbose`. |
 
 ---
 
@@ -210,7 +210,7 @@ around the org, not the org itself:
   reaper requeues an expired lease; worker-exit requeue; (if D) `depends_on` blocks claim until deps
   `Done`. Account-health map: exhausted account skipped, resets after `exhausted_until`.
 - **Integration (headless, `crates/core/src/bin/headless.rs`):** enqueue subtasks with a DAG →
-  `hyperpanes worker --count N` drains in dep order → acceptance task flips terminal; kill a worker
+  `avada worker --count N` drains in dep order → acceptance task flips terminal; kill a worker
   mid-task, assert reaper requeues; simulate a limit-message on a pane, assert the health map marks
   the account exhausted and the next spawn picks another dir.
 - **Live (GUI + MCP):** Ctrl+Shift+P → New goal on a real project → confirm goals-orch spawns in the

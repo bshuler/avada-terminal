@@ -23,9 +23,9 @@
 //!   * **Round-trip** at all three nesting levels (top-level panes, group panes,
 //!     window→group panes).
 
-use hyperpanes_core::tools::kind::{PaneKind, META_KIND_KEY};
-use hyperpanes_core::workspace::io::{read_workspace, write_workspace};
-use hyperpanes_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
+use avada_core::tools::kind::{PaneKind, META_KIND_KEY};
+use avada_core::workspace::io::{read_workspace, write_workspace};
+use avada_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 

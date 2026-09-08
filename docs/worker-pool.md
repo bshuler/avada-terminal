@@ -10,7 +10,7 @@ properties the inbox lacks — **claim ownership**, **leases with fencing**, and
 Implementation: `rs/crates/core/src/control/work.rs` (pure rules + `WorkQueue` over
 SQLite) and `rs/crates/core/src/control/routes.rs` (HTTP surface).
 
-> The canonical surface is the **control API (HTTP)** documented below. The hyperpanes MCP
+> The canonical surface is the **control API (HTTP)** documented below. The avada MCP
 > server also wraps these routes as tools (`enqueue_task`, `list_tasks`, `claim_task`,
 > `ack_task`, `nack_task`, `extend_task`, `get_task`, `list_queues`, `purge_queue`); raw
 > HTTP with a bearer token works equivalently.

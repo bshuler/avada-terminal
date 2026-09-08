@@ -153,7 +153,7 @@ pub fn start_with_tap(
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
 
     let join = std::thread::Builder::new()
-        .name("hyperpanes-mic".to_string())
+        .name("avada-mic".to_string())
         .spawn(move || {
             let late = ready_tx.clone();
             let r = capture(&wav, max, stop_rx, ready_tx, tap);
@@ -398,11 +398,11 @@ mod tests {
     /// The only test that proves the thing this module exists for. Ignored by default
     /// because it needs a real microphone and, on macOS, a granted permission — neither
     /// of which CI has. Run it by hand on a machine with a mic:
-    /// `cargo test -p hyperpanes-core -- --ignored native`
+    /// `cargo test -p avada-core -- --ignored native`
     #[test]
     #[ignore = "needs a real microphone"]
     fn a_real_microphone_produces_a_readable_mono_16k_wav() {
-        let wav = std::env::temp_dir().join("hyperpanes-native-capture-test.wav");
+        let wav = std::env::temp_dir().join("avada-native-capture-test.wav");
         let _ = std::fs::remove_file(&wav);
         let cap = start(&wav, Duration::from_secs(30)).expect("start");
         std::thread::sleep(Duration::from_millis(1200));

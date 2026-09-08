@@ -10,7 +10,7 @@
 //! lacks `-0`), and uses it as the spawn base. On ANY failure — no shell, non-zero
 //! exit, unparseable output, timeout — it falls back to the process env unchanged.
 //!
-//! Process-only vars (`HYPERPANES_*` injections, tokens handed to us by a parent)
+//! Process-only vars (`AVADA_*` injections, tokens handed to us by a parent)
 //! are layered in last: a name the login shell also exports keeps the FRESH login
 //! value; names only the process knows pass through. Unlike the Windows registry
 //! merge this layering is case-SENSITIVE — POSIX env names are.
@@ -184,7 +184,7 @@ fn split_env_entry(entry: &str) -> Option<(&str, &str)> {
 }
 
 /// Layer process-only vars over the fresh login env: for a name present in both, the
-/// FRESH login value wins; names only the process knows (session-only `HYPERPANES_*`
+/// FRESH login value wins; names only the process knows (session-only `AVADA_*`
 /// injections etc.) are added. Case-sensitive — POSIX env semantics.
 #[tracing::instrument(level = "debug", skip_all)]
 fn layer_process_only(mut fresh: EnvMap, process: EnvMap) -> EnvMap {
@@ -302,12 +302,12 @@ mod unix_tests {
     #[test]
     fn fresh_wins_and_process_only_vars_are_layered_in() {
         let fresh = map(&[("PATH", "/login/bin"), ("LANG", "en_US.UTF-8")]);
-        let process = map(&[("PATH", "/stale/bin"), ("HYPERPANES_CONTROL_TOKEN", "tok")]);
+        let process = map(&[("PATH", "/stale/bin"), ("AVADA_CONTROL_TOKEN", "tok")]);
         let env = layer_process_only(fresh, process);
         assert_eq!(env.get("PATH").map(String::as_str), Some("/login/bin"));
         assert_eq!(env.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
         assert_eq!(
-            env.get("HYPERPANES_CONTROL_TOKEN").map(String::as_str),
+            env.get("AVADA_CONTROL_TOKEN").map(String::as_str),
             Some("tok")
         );
     }
@@ -366,15 +366,12 @@ mod unix_tests {
         let process = map(&[
             ("SHELL", shell.to_str().unwrap()),
             ("PATH", "/stale/bin"),
-            ("HYPERPANES_PANE_ID", "p1"),
+            ("AVADA_PANE_ID", "p1"),
         ]);
         let env = PlatformEnv.fresh_env_with_process(process.clone());
         assert_eq!(env.get("FROM_LOGIN").map(String::as_str), Some("1"));
         assert_eq!(env.get("PATH").map(String::as_str), Some("/login/bin"));
-        assert_eq!(
-            env.get("HYPERPANES_PANE_ID").map(String::as_str),
-            Some("p1")
-        );
+        assert_eq!(env.get("AVADA_PANE_ID").map(String::as_str), Some("p1"));
         let _ = std::fs::remove_file(&shell);
 
         // A broken $SHELL → the process env passes through unchanged.

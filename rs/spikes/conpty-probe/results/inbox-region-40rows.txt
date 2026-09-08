@@ -1,4 +1,4 @@
-[probe] exe dir: C:\hyperpanes\rs\spikes\conpty-probe\target\release
+[probe] exe dir: C:\avada\rs\spikes\conpty-probe\target\release
 [probe] sideloaded conpty.dll present: false | OpenConsole.exe present: false
 [probe] case=scrolling-region payloadMB=2 grid=120x40 — spawning node…
 [probe] node: C:\nvm4w\nodejs\node.exe

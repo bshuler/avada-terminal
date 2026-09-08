@@ -20,8 +20,8 @@
 //! may attach to the same (or different) sessions concurrently.
 //!
 //! ## Discovery / single-daemon-per-salt
-//! Reuses the `single_instance` machinery's shape: a flock'd `hyperpanesd-<salt>.lock`
-//! plus a `hyperpanesd-<salt>.sock`, both under the per-user runtime dir, with the salt
+//! Reuses the `single_instance` machinery's shape: a flock'd `avadad-<salt>.lock`
+//! plus a `avadad-<salt>.sock`, both under the per-user runtime dir, with the salt
 //! hashed to a fixed-width token. The flock guarantees one daemon per salt; a second
 //! `run` for a salt already served exits cleanly (`AddrInUse`).
 //!
@@ -38,7 +38,7 @@
 //!   elapses while still idle. Any client connect (the connection counter) or session
 //!   create (the registry's live count) resets it — so the daemon lingers across a GUI
 //!   crash→relaunch gap but never forever. The grace is overridable via
-//!   `HYPERPANES_DAEMON_IDLE_MS` so tests can use a short one.
+//!   `AVADA_DAEMON_IDLE_MS` so tests can use a short one.
 //! * **`Shutdown`.** [`ClientMsg::Shutdown`] kills every session and exits cleanly
 //!   (releasing the flock on process death, unlinking the socket on the way out). Drives
 //!   the app's `--kill-daemon` and the quit-vs-keep-alive "OFF" branch.
@@ -85,7 +85,7 @@ use crate::session_manager::{SessionEvent, SessionRegistry};
 
 /// How long the daemon stays alive after going fully idle (0 sessions AND 0 clients)
 /// before exiting. Long enough to span a GUI crash→relaunch gap; the
-/// `HYPERPANES_DAEMON_IDLE_MS` env override lets tests use a tiny grace.
+/// `AVADA_DAEMON_IDLE_MS` env override lets tests use a tiny grace.
 #[cfg(unix)]
 const DEFAULT_IDLE_GRACE_MS: u64 = 30_000;
 
@@ -111,12 +111,12 @@ const ACCEPT_POLL_MS: u64 = 15;
 #[cfg(unix)]
 const CONN_QUEUE_CAP: usize = 1024;
 
-/// The configured idle grace — [`DEFAULT_IDLE_GRACE_MS`] unless `HYPERPANES_DAEMON_IDLE_MS`
+/// The configured idle grace — [`DEFAULT_IDLE_GRACE_MS`] unless `AVADA_DAEMON_IDLE_MS`
 /// is set to a parseable millisecond count (the test hook for a short grace).
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
 fn idle_grace() -> Duration {
-    idle_grace_from(std::env::var("HYPERPANES_DAEMON_IDLE_MS").ok().as_deref())
+    idle_grace_from(std::env::var("AVADA_DAEMON_IDLE_MS").ok().as_deref())
 }
 
 /// Pure parse of the idle-grace override (factored out so it's testable WITHOUT mutating the
@@ -133,7 +133,7 @@ fn idle_grace_from(raw: Option<&str>) -> Duration {
 
 /// Run the session daemon for `salt`, blocking until the process exits. Binds the salted
 /// lock + socket under the runtime dir (one daemon per salt), then serves clients forever.
-/// This is the body behind `hyperpanes --session-daemon <salt>` — `main` is a 3-line entry.
+/// This is the body behind `avada --session-daemon <salt>` — `main` is a 3-line entry.
 ///
 /// On unix: builds a Tokio runtime (the pty drivers need it), acquires the daemon flock,
 /// binds the UDS, and serves. If another daemon already holds the salt, returns cleanly
@@ -564,8 +564,8 @@ fn daemon_names(salt: &str) -> DaemonNames {
     let h = format!("{:016x}", fnv1a64(salt));
     let dir = runtime_dir();
     DaemonNames {
-        lock: dir.join(format!("hyperpanesd.{h}.lock")),
-        socket: dir.join(format!("hyperpanesd.{h}.sock")),
+        lock: dir.join(format!("avadad.{h}.lock")),
+        socket: dir.join(format!("avadad.{h}.sock")),
     }
 }
 
@@ -653,7 +653,7 @@ struct Daemon {
     lifecycle: Arc<Lifecycle>,
     /// M7: the cross-process claim table — which connection is *hosting* each uid. The
     /// daemon is the arbiter precisely because it is already the one process every
-    /// hyperpanes window talks to, and because a claim scoped to a connection is released
+    /// avada window talks to, and because a claim scoped to a connection is released
     /// by the kernel closing the socket when the owner dies. See
     /// [`claims`](crate::session::claims).
     claims: Arc<ClaimRegistry>,
@@ -829,7 +829,7 @@ impl Daemon {
     /// AND 0 connected clients, it arms a `grace` countdown and exits the process when the
     /// grace elapses while still idle. Any new connection or session resets the timer (the
     /// monitor re-observes a non-idle state and clears its armed instant). The grace spans a
-    /// GUI crash→relaunch gap; a test-only short grace comes via `HYPERPANES_DAEMON_IDLE_MS`.
+    /// GUI crash→relaunch gap; a test-only short grace comes via `AVADA_DAEMON_IDLE_MS`.
     ///
     /// The monitor exits the WHOLE process (through [`Lifecycle::shutdown`]) rather than
     /// unwinding `serve`, because the accept loop is parked in a blocking `accept()` — there
@@ -2123,8 +2123,8 @@ mod tests {
 
     #[test]
     fn daemon_names_are_deterministic_and_hashed() {
-        let a = daemon_names("C:\\Users\\me\\AppData\\Roaming\\hyperpanes");
-        let b = daemon_names("C:\\Users\\me\\AppData\\Roaming\\hyperpanes");
+        let a = daemon_names("C:\\Users\\me\\AppData\\Roaming\\avada");
+        let b = daemon_names("C:\\Users\\me\\AppData\\Roaming\\avada");
         assert_eq!(a.socket, b.socket);
         assert_eq!(a.lock, b.lock);
         // Distinct salts → distinct names.
@@ -2132,7 +2132,7 @@ mod tests {
         assert_ne!(a.socket, c.socket);
         // The salt is hashed to a 16-hex token, never embedded raw.
         let fname = a.socket.file_name().unwrap().to_string_lossy();
-        assert!(fname.starts_with("hyperpanesd."), "got {fname}");
+        assert!(fname.starts_with("avadad."), "got {fname}");
         assert!(fname.ends_with(".sock"));
     }
 

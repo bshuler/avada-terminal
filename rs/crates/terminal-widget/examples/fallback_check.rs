@@ -9,7 +9,7 @@
 //!
 //! Run: `cargo run --example fallback_check`  → writes `target/fallback_check.png`.
 
-use hyperpanes_terminal_widget::font::{Font, GlyphKey};
+use avada_terminal_widget::font::{Font, GlyphKey};
 
 const FG: [u8; 3] = [0xc0, 0xca, 0xf5];
 const BG: [u8; 3] = [0x16, 0x16, 0x1e];

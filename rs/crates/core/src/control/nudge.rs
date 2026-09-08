@@ -16,7 +16,7 @@
 //!     one waiter task per pane is ever in flight.
 //!   • **Rate-limited** — at most one nudge per pane per [`MIN_INTERVAL_MS`], so a chatty wave of
 //!     impl agents can't turn into a typing storm.
-//!   • **Opt-out** — `hp.nudge=off` meta on the pane, or `HYPERPANES_MSG_NUDGE=0` in the app's
+//!   • **Opt-out** — `hp.nudge=off` meta on the pane, or `AVADA_MSG_NUDGE=0` in the app's
 //!     environment, disables it everywhere.
 //!
 //! This module is pure + in-memory so the policy is unit-testable without a server; the routes
@@ -65,7 +65,7 @@ pub fn wants_nudge(meta: Option<&BTreeMap<String, String>>) -> bool {
 pub fn nudge_text(pane_id: &str, pending: usize, first_seq: u64) -> String {
     let plural = if pending == 1 { "" } else { "s" };
     format!(
-        "[hyperpanes] inbox: {pending} new message{plural}. Read with read_messages \
+        "[avada] inbox: {pending} new message{plural}. Read with read_messages \
          {{paneId:\"{pane_id}\", after:{}}}, act on {} (report/consult/decision), then continue \
          your loop.",
         first_seq.saturating_sub(1),

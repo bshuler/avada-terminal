@@ -2,8 +2,8 @@
 //!
 //! iTerm2 and several mobile terminals speak tmux's *control mode*: instead of rendering a
 //! full-screen terminal, the client drives the multiplexer over a line-oriented text
-//! protocol and draws each pane as a **native tab**. This module makes hyperpanes speak the
-//! server side of that protocol, so those clients see hyperpanes panes as tmux panes.
+//! protocol and draws each pane as a **native tab**. This module makes avada speak the
+//! server side of that protocol, so those clients see avada panes as tmux panes.
 //!
 //! Everything here is **pure**: no sockets, no daemon, no tty. [`ControlServer`] is fed
 //! command lines and pane events and answers with byte lines; the transport is the caller's
@@ -54,17 +54,17 @@
 //!   window, `@origins` = their screen positions, `@hidden`, `@tabcolors`, `@iterm2_id`).
 //!   They are pure client scratch space — tmux itself never reads them — so honouring
 //!   them is honest, and without them a reconnect re-opens every pane as an ungrouped,
-//!   unpositioned tab. Every *other* option still errors: there is no hyperpanes setting
+//!   unpositioned tab. Every *other* option still errors: there is no avada setting
 //!   behind `status` or `default-terminal` to change.
 //! * **The commands a real client sends** were read out of iTerm2's own source
 //!   (`sources/tmux/TmuxController.m`, `TmuxGateway.m`, `TmuxWindowOpener.m`) rather than
 //!   guessed — see [`ControlServer::command`] for the list and where each one came from.
 //!
-//! ## The id mapping — DECIDED: one tmux window per hyperpanes pane
-//! hyperpanes has durable pane uids (`pane-<uuid>`, M0) and no window/tab concept below the
-//! GUI, so M4 has to invent one. It maps **one tmux window to one hyperpanes pane**, all
+//! ## The id mapping — DECIDED: one tmux window per avada pane
+//! avada has durable pane uids (`pane-<uuid>`, M0) and no window/tab concept below the
+//! GUI, so M4 has to invent one. It maps **one tmux window to one avada pane**, all
 //! inside a single tmux session `$0`. That is not a compromise — it is the product goal:
-//! iTerm2 opens a native tab per tmux *window*, so this is what turns hyperpanes panes into
+//! iTerm2 opens a native tab per tmux *window*, so this is what turns avada panes into
 //! iTerm2 tabs.
 //!
 //! Clients cache these ids, so [`IdMap`] derives them from the uid rather than handing out a
@@ -201,7 +201,7 @@ pub fn layout_checksum(body: &str) -> u16 {
 }
 
 /// The layout string for a window holding exactly one pane — which is every window we
-/// publish, since M4 maps one tmux window to one hyperpanes pane.
+/// publish, since M4 maps one tmux window to one avada pane.
 ///
 /// Body shape is `layout_append`'s `"%ux%u,%d,%d,%u"`; the checksum prefix is
 /// `layout_dump`'s `"%04hx,%s"`.
@@ -306,11 +306,11 @@ impl IdMap {
 // Panes
 // ---------------------------------------------------------------------------
 
-/// What the control server needs to know about one hyperpanes pane. The driver fills this
+/// What the control server needs to know about one avada pane. The driver fills this
 /// from `SessionMeta` plus whatever else it has.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {
-    /// The durable hyperpanes uid (`pane-<uuid>`, M0). The key for everything.
+    /// The durable avada uid (`pane-<uuid>`, M0). The key for everything.
     pub uid: String,
     /// Pane grid width, or `None` if the daemon predates `SessionMeta::cols`.
     pub cols: Option<u16>,
@@ -428,7 +428,7 @@ pub fn wants_screen_refresh(line: &str) -> bool {
 // The server
 // ---------------------------------------------------------------------------
 
-/// The control-mode state machine: hyperpanes panes in, tmux control protocol out.
+/// The control-mode state machine: avada panes in, tmux control protocol out.
 ///
 /// Single-threaded and synchronous by design. Feed it [`command`](Self::command) lines from
 /// the client and [`output`](Self::output) / [`pane_exited`](Self::pane_exited) /
@@ -481,7 +481,7 @@ impl ControlServer {
             deferred: Vec::new(),
             options: BTreeMap::new(),
             client_size: (80, 24),
-            client_name: "hyperpanes".to_string(),
+            client_name: "avada".to_string(),
         };
         for p in panes {
             s.panes.insert(p.uid.clone(), p);
@@ -660,7 +660,7 @@ impl ControlServer {
         vec![line]
     }
 
-    /// A new hyperpanes pane appeared → a new tmux window.
+    /// A new avada pane appeared → a new tmux window.
     ///
     /// Re-deriving the whole [`IdMap`] here is deliberate: ids are a pure function of the
     /// uid set (module docs), so the map must be rebuilt, not appended to.
@@ -689,7 +689,7 @@ impl ControlServer {
     }
 
     /// A pane exited → its window closes. The tmux **session stays**, because the
-    /// hyperpanes daemon is still there and other panes may still be live.
+    /// avada daemon is still there and other panes may still be live.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn pane_exited(&mut self, uid: &str) -> Vec<Line> {
         let Some(w) = self.ids.window_id(uid) else {
@@ -775,7 +775,7 @@ impl ControlServer {
     }
 
     /// Resolve a `-t` target to a uid. Accepts `%n` (pane), `@n` (window), `$n` (session →
-    /// the active pane), a bare hyperpanes uid, and a window index.
+    /// the active pane), a bare avada uid, and a window index.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn resolve_target(&self, target: &str) -> Option<String> {
         let t = target.trim().trim_matches('"').trim_matches('\'');
@@ -893,7 +893,7 @@ impl ControlServer {
                 Ok(Vec::new())
             }
             // Deliberately NOT silently accepted. These are the destructive and
-            // structure-changing commands; hyperpanes owns pane lifetime through the GUI
+            // structure-changing commands; avada owns pane lifetime through the GUI
             // and the daemon, and a control client inventing panes or killing someone's
             // shell is exactly the failure mode the plan's "return %error for what you do
             // not implement" rule exists to prevent.
@@ -903,8 +903,8 @@ impl ControlServer {
             | "swap-pane" | "swapp" | "swap-window" | "swapw" | "link-window" | "linkw"
             | "unlink-window" | "unlinkw" | "respawn-pane" | "respawnp" | "respawn-window"
             | "rename-window" | "renamew" | "rename-session" | "rename" => Err(format!(
-                "{name} is not supported by hyperpanes control mode: pane and window \
-                 lifetime is owned by the hyperpanes app, not by the control client"
+                "{name} is not supported by avada control mode: pane and window \
+                 lifetime is owned by the avada app, not by the control client"
             )),
             other => Err(format!("parse error: unknown command: {other}")),
         }
@@ -1252,7 +1252,7 @@ impl ControlServer {
     ///
     /// **Only user options (`@name`) are honoured.** Those are pure client-side scratch
     /// storage — tmux itself never reads them — so storing one is honest. A real tmux
-    /// option (`status`, `default-terminal`, `mouse`, …) errors instead: hyperpanes has no
+    /// option (`status`, `default-terminal`, `mouse`, …) errors instead: avada has no
     /// option store behind it, and a silent `%end` would tell the client a setting took
     /// effect when nothing changed. Same rule as the lifecycle commands above.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -1272,8 +1272,8 @@ impl ControlServer {
             .ok_or("set-option: not enough arguments")?;
         if !name.starts_with('@') {
             return Err(format!(
-                "{name} is not supported by hyperpanes control mode: only user options \
-                 (@name) are stored — hyperpanes has no tmux option store behind the rest"
+                "{name} is not supported by avada control mode: only user options \
+                 (@name) are stored — avada has no tmux option store behind the rest"
             ));
         }
         let scope = self.option_scope(&a);

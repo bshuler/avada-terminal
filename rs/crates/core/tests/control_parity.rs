@@ -7,8 +7,8 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use hyperpanes_core::control::readmodel::{PaneInfo, PaneStatus, TabInfo, WindowInfo};
-use hyperpanes_core::control::server::serve_for_test;
+use avada_core::control::readmodel::{PaneInfo, PaneStatus, TabInfo, WindowInfo};
+use avada_core::control::server::serve_for_test;
 
 /// Minimal HTTP/1.1 request over loopback. `Connection: close` lets us read the whole response to
 /// EOF, then split status + body. Returns (status_code, body).
@@ -79,7 +79,7 @@ fn boot() -> u16 {
                 exit_code: None,
                 meta: None,
                 talk: false,
-                kind: hyperpanes_core::tools::PaneKind::Terminal,
+                kind: avada_core::tools::PaneKind::Terminal,
             }],
         }],
     });
@@ -94,7 +94,7 @@ fn health_is_reachable_without_auth() {
     let (status, body) = request(port, "GET", "/health", None, None);
     assert_eq!(status, 200);
     assert!(body.contains(r#""ok":true"#));
-    assert!(body.contains(r#""app":"hyperpanes""#));
+    assert!(body.contains(r#""app":"avada""#));
     assert!(body.contains(r#""allowInput":true"#));
 }
 

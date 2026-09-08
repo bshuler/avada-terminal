@@ -446,6 +446,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "avada-core"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "avada-module-sdk",
+ "axum",
+ "cpal",
+ "directories",
+ "futures-util",
+ "hmac",
+ "hound",
+ "libc",
+ "portable-pty",
+ "rand 0.10.2",
+ "reqwest",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "whisper-rs",
+ "windows",
+]
+
+[[package]]
 name = "avada-module-sdk"
 version = "0.1.0"
 dependencies = [
@@ -455,6 +486,26 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "avada-terminal-widget"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "arboard",
+ "avada-core",
+ "bytemuck",
+ "etagere",
+ "i-slint-backend-testing",
+ "png",
+ "slint",
+ "slint-build",
+ "swash",
+ "tokio",
+ "tracing",
+ "wgpu",
 ]
 
 [[package]]
@@ -2258,57 +2309,6 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "hyperpanes-core"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "avada-module-sdk",
- "axum",
- "cpal",
- "directories",
- "futures-util",
- "hmac",
- "hound",
- "libc",
- "portable-pty",
- "rand 0.10.2",
- "reqwest",
- "rusqlite",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "whisper-rs",
- "windows",
-]
-
-[[package]]
-name = "hyperpanes-terminal-widget"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "arboard",
- "bytemuck",
- "etagere",
- "hyperpanes-core",
- "i-slint-backend-testing",
- "png",
- "slint",
- "slint-build",
- "swash",
- "tokio",
- "tracing",
- "wgpu",
 ]
 
 [[package]]

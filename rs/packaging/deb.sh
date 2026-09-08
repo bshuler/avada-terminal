@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the hyperpanes .deb for x86_64 Linux via cargo-deb.
+# Build the avada .deb for x86_64 Linux via cargo-deb.
 #
 # Contract (mirrors appimage.sh):
 #   rs/packaging/deb.sh <version>     # <version> WITHOUT a leading "v"
-#   → rs/packaging/out/hyperpanes_<version>_amd64.deb
+#   → rs/packaging/out/avada_<version>_amd64.deb
 # Runs from any cwd; exits non-zero on any failure; artifact under rs/packaging/out/.
 #
-# Layout (FHS): /usr/bin/hyperpanes + /usr/share/hyperpanes/resources/shell-integration/…
+# Layout (FHS): /usr/bin/avada + /usr/share/avada/resources/shell-integration/…
 # (the assets list lives in crates/app/Cargo.toml [package.metadata.deb]). No root needed —
 # cargo-deb is a pure-Rust cargo plugin, installed on demand if absent.
 
@@ -38,10 +38,10 @@ if ! cargo deb --version >/dev/null 2>&1; then
   cargo install cargo-deb
 fi
 
-ARTIFACT="$OUT_DIR/hyperpanes_${VERSION}_amd64.deb"
+ARTIFACT="$OUT_DIR/avada_${VERSION}_amd64.deb"
 echo "==> cargo deb → $ARTIFACT"
 rm -f "$ARTIFACT"
-# cargo-deb runs its own --release build; assets reference target/release/hyperpanes.
+# cargo-deb runs its own --release build; assets reference target/release/avada.
 cargo deb --manifest-path "$APP_MANIFEST" --output "$ARTIFACT"
 
 [ -f "$ARTIFACT" ] || err "cargo deb reported success but $ARTIFACT is missing"

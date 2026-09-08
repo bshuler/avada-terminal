@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=Hyperpanes
+Name=Avada Terminal
 GenericName=Terminal Workspace
 Comment=Tiled terminal workspace with AI-pane orchestration
-Exec=hyperpanes %F
-TryExec=hyperpanes
-Icon=hyperpanes
+Exec=avada %F
+TryExec=avada
+Icon=avada
 Terminal=false
 Categories=System;TerminalEmulator;
-MimeType=application/x-hyperpanes;
-StartupWMClass=hyperpanes
+MimeType=application/x-avada;
+StartupWMClass=avada
 Keywords=terminal;panes;tiling;workspace;

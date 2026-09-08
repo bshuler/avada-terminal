@@ -6,7 +6,7 @@
 //! A pane spawned out of the left panel's session list was handed one exact conversation,
 //! so its [`ToolSessionMark`] is written at birth. A pane running a tool with a lifecycle
 //! hook ([`crate::tools::session_hook`], [`crate::claude_hook`]) has the tool itself name
-//! the id, from inside a process carrying `HYPERPANES_PANE_ID`. Neither applies to a pane
+//! the id, from inside a process carrying `AVADA_PANE_ID`. Neither applies to a pane
 //! where the human opened a plain shell and typed a hook-less agent's name: on the next
 //! relaunch that pane comes back as a shell in the right directory, and the conversation
 //! is gone.

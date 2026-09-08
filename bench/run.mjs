@@ -71,7 +71,7 @@ async function startupRun(term, timeoutMs) {
   const id = uid('start');
   const out = join(RESULTS_DIR, `${id}.json`);
   const probeArgs = ['--out', out];
-  if (term.id === 'hyperpanes') probeArgs.push('--hold'); // no auto-exit
+  if (term.id === 'avada') probeArgs.push('--hold'); // no auto-exit
   const wrapper = writeCmdWrapper(id, join(WORKLOADS, 'startup-probe.mjs'), probeArgs);
   const { exe, args, env, temp } = term.launch({ wrapperPath: wrapper, cwd: REPO_ROOT, label: 'bench' });
   const t0 = Date.now();
@@ -125,7 +125,7 @@ async function memorySuite(term, { lines, idleOnly, cpuMs = 0 }) {
   };
 
   if (idleOnly) {
-    // No run-a-command flag (config-only terminals + the native hyperpanes GUI): launch bare with
+    // No run-a-command flag (config-only terminals + the native avada GUI): launch bare with
     // whatever isolated data dir the entry mints, settle, then sample idle memory + CPU.
     const { exe, args, env, temp } = term.launch({ wrapperPath: null, cwd: REPO_ROOT, label: 'bench' });
     const child = spawnTerminal(exe, args, { env });
@@ -161,15 +161,15 @@ async function memorySuite(term, { lines, idleOnly, cpuMs = 0 }) {
 }
 
 /**
- * Soft preflight. The native GUI has no single-instance lock and every measured hyperpanes
+ * Soft preflight. The native GUI has no single-instance lock and every measured avada
  * (native or Electron) is launched with an isolated data dir, so a running instance does NOT
  * capture the harness's launch — there is nothing to hard-skip. We only surface an informational
  * note when a repo-built native instance is already up (it shares the machine's CPU/RAM, which can
  * nudge the idle numbers). Returns null (never blocks).
  */
 function preflight(term) {
-  if (term.id === 'hyperpanes' && nativeRepoRunning()) {
-    log('  note: a repo-built native hyperpanes is already running — measuring a separate fresh (isolated-APPDATA) instance; close it for the cleanest idle numbers.');
+  if (term.id === 'avada' && nativeRepoRunning()) {
+    log('  note: a repo-built native avada is already running — measuring a separate fresh (isolated-APPDATA) instance; close it for the cleanest idle numbers.');
   }
   return null;
 }

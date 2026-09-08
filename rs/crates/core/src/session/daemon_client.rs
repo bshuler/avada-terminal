@@ -4,7 +4,7 @@
 //! [session daemon](crate::session::daemon) (which owns the PTYs) and presents the same
 //! create/write/resize/kill/replay/render_screen/… API so the GUI's `Arc<SessionManager>`
 //! and every call site are untouched (the backend is chosen behind
-//! `HYPERPANES_SESSION_DAEMON`, default-on — see [`SessionManager::new_daemon`]).
+//! `AVADA_SESSION_DAEMON`, default-on — see [`SessionManager::new_daemon`]).
 //!
 //! ## Keeping the synchronous API non-blocking
 //! The plan's "Keeping `SessionManager`'s synchronous API non-blocking" table is the spec
@@ -945,7 +945,7 @@ impl DaemonSessionManager {
     }
 
     /// The uids currently claimed by **some other connection** — i.e. panes that a different
-    /// hyperpanes process (or a different window sharing this daemon connection's process,
+    /// avada process (or a different window sharing this daemon connection's process,
     /// which cannot happen today) is responsible for. Read from the pushed claim snapshot:
     /// no I/O.
     ///
@@ -2629,7 +2629,7 @@ mod tests {
     // both numbers, to confirm the daemon overhead is negligible (the design's hypothesis).
     //
     // Ignored by default (it spawns real shells and takes a couple seconds); run with:
-    //   cargo test -p hyperpanes-core keystroke_echo_latency_bench -- --ignored --nocapture
+    //   cargo test -p avada-core keystroke_echo_latency_bench -- --ignored --nocapture
     #[test]
     #[ignore = "micro-bench: run with --ignored --nocapture"]
     fn keystroke_echo_latency_bench() {

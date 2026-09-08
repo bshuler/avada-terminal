@@ -1,7 +1,7 @@
 //! Crash reporting & recovery.
 //!
 //! The panic hook (in `main`) writes a crash log + a "pending" marker, then spawns
-//! `hyperpanes --crash-report <log>` — a *fresh* process (the crashing one is unwinding) that shows
+//! `avada --crash-report <log>` — a *fresh* process (the crashing one is unwinding) that shows
 //! a native dialog with the diagnostics and three actions: **Send diagnostics / Relaunch / Close**.
 //! If that instant reporter never runs (a hard crash), the next normal launch sees the leftover
 //! marker and shows it then ("both instant + next-launch"). The workspace itself is saved
@@ -12,14 +12,14 @@
 
 use std::path::{Path, PathBuf};
 
-use hyperpanes_core::persistence::paths;
+use avada_core::persistence::paths;
 
 const REPO_NEW_ISSUE: &str = "https://github.com/Eyalm321/hyperpanes/issues/new";
 
 /// The crash-log path the panic hook writes to (must match `main`'s hook).
 #[tracing::instrument(level = "debug", ret)]
 pub fn default_log_path() -> PathBuf {
-    std::env::temp_dir().join("hyperpanes-crash.log")
+    std::env::temp_dir().join("avada-crash.log")
 }
 
 /// The "unhandled crash" marker. Its presence means a crash hasn't been surfaced to the user yet;
@@ -62,7 +62,7 @@ pub fn gather(log_path: &Path) -> String {
     let raw =
         std::fs::read_to_string(log_path).unwrap_or_else(|_| "(crash log not found)".to_string());
     format!(
-        "hyperpanes {ver}  ({os}/{arch})\n\n{block}",
+        "avada {ver}  ({os}/{arch})\n\n{block}",
         ver = env!("CARGO_PKG_VERSION"),
         os = std::env::consts::OS,
         arch = std::env::consts::ARCH,
@@ -183,14 +183,14 @@ pub fn run_report(log_path: &Path) -> Outcome {
         };
         let res = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("Hyperpanes crashed")
+            .set_title("Avada crashed")
             .set_description(desc)
             .set_buttons(buttons)
             .show();
         match res {
             rfd::MessageDialogResult::Custom(s) if s == "Send diagnostics" => {
                 copy_to_clipboard(&report);
-                let _ = hyperpanes_core::paths::os_open(&github_issue_url(&report));
+                let _ = avada_core::paths::os_open(&github_issue_url(&report));
                 sent = true;
                 continue;
             }
@@ -207,16 +207,16 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
-/// Spawn a fresh hyperpanes (which restores the autosaved session) and detach. Strip the
+/// Spawn a fresh avada (which restores the autosaved session) and detach. Strip the
 /// reporter's own env markers so the relaunched app is a normal instance: without clearing
-/// `HYPERPANES_CRASH_CHILD` a recovered app couldn't report a *future* crash, and clearing
-/// `HYPERPANES_TEST_PANIC` stops the simulated-crash test from looping after recovery.
+/// `AVADA_CRASH_CHILD` a recovered app couldn't report a *future* crash, and clearing
+/// `AVADA_TEST_PANIC` stops the simulated-crash test from looping after recovery.
 #[tracing::instrument(level = "debug", ret)]
 pub fn relaunch() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::process::Command::new(exe)
-            .env_remove("HYPERPANES_CRASH_CHILD")
-            .env_remove("HYPERPANES_TEST_PANIC")
+            .env_remove("AVADA_CRASH_CHILD")
+            .env_remove("AVADA_TEST_PANIC")
             .spawn();
     }
 }
@@ -240,7 +240,7 @@ mod tests {
         let report = gather_from_str(LOG);
         let s = summary(&report);
         assert!(s.contains("boom"));
-        assert!(s.contains("hyperpanes")); // version/env line
+        assert!(s.contains("avada")); // version/env line
         assert!(!s.contains("0: aaa")); // backtrace dropped
     }
 
@@ -263,7 +263,7 @@ mod tests {
     // gather() reads a file; this mirrors its formatting against an in-memory log for tests.
     fn gather_from_str(raw: &str) -> String {
         format!(
-            "hyperpanes {ver}  ({os}/{arch})\n\n{block}",
+            "avada {ver}  ({os}/{arch})\n\n{block}",
             ver = env!("CARGO_PKG_VERSION"),
             os = std::env::consts::OS,
             arch = std::env::consts::ARCH,

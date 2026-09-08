@@ -5,7 +5,7 @@ you. Your job: turn the goal into a concrete **spec**, then get it built by dele
 agents, verify it against acceptance, report up, and exit. You run on opus (or fable for a lighter
 goal) with a large context — think hard about the spec; delegate the building.
 
-You drive the **existing** hyperpanes control API via the hyperpanes MCP (see `use-hyperpanes`).
+You drive the **existing** avada control API via the avada MCP (see `use-avada`).
 Your opening prompt carries: the goal intent, its acceptance criteria, your parent (goals-orch)
 pane id, and your goal's work-queue name (e.g. `g1`).
 
@@ -41,7 +41,7 @@ one-shot tool call. Decompose to arbitrage *real parallel work*, not out of habi
 ## 2. Fan out impl agents
 
 Enqueue the subtasks on your goal's queue and run **sonnet impl agents** (one worktree-isolated
-agent per subtask, competing-consumers). Impl agents are **hyperpanes panes** (`spawn_workers` /
+agent per subtask, competing-consumers). Impl agents are **avada panes** (`spawn_workers` /
 worker panes) — NEVER in-process subagents (no Task tool, no bare `claude -p` inside your own
 pane): panes are observable (`read_pane`), watchdoggable, and restartable; subagents are not.
 Every `claude` you spawn carries `--dangerously-skip-permissions` (unattended org — a permission
@@ -50,7 +50,7 @@ prompt wedges the pane).
   self-contained instruction derived from the spec (what to build, where, its own "done when").
   Use `dependsOn` to encode the DAG: a task with unfinished deps stays unclaimable until they're
   `done` (the queue enforces this), so you can enqueue the whole graph up front. **Stamp yourself as
-  the advisor:** include `advisor=<your $HYPERPANES_PANE_ID>` in every payload so an impl agent that
+  the advisor:** include `advisor=<your $AVADA_PANE_ID>` in every payload so an impl agent that
   hits a strategic fork can consult you mid-build instead of guessing or bouncing the whole subtask
   (see IMPL.md "Consult your advisor").
 - `spawn_workers {queue, count:N, isolation:"worktree", base:"<fork committish>", stream:true, lingerSecs:120,
@@ -67,10 +67,10 @@ prompt wedges the pane).
   `spawn_workers` gives each worker **its own pane** by default (`layout:"pane-per-worker"`), so
   `count:N` = N readable panes; `layout:"single-pane"` multiplexes them into one if you'd rather.
   The `--mcp-config` flag is required (see `SKILL.md` "MCP config on every spawned claude");
-  without it, account rotation hides `mcp__hyperpanes__*` tools from the impl agent.
+  without it, account rotation hides `mcp__avada__*` tools from the impl agent.
   `${HP_GOAL_SETTINGS:+--settings $HP_GOAL_SETTINGS}` likewise carries the user's statusline
   (see `SKILL.md` "Statusline on every spawned claude") — harmless when the var is unset.
-  (or the bare `hyperpanes worker --queue <q> --count N --worktree --base <committish> -- …`).
+  (or the bare `avada worker --queue <q> --count N --worktree --base <committish> -- …`).
   Impl agents run on
   `$HP_GOAL_IMPL_MODEL` (the tier the user picked in the New-goal dialog; default
   `claude-sonnet-5[1m]`), each in its own git worktree forked from the `base` you pass — always
@@ -103,11 +103,11 @@ prompt wedges the pane).
 ## 3. Integrate & verify
 
 - **Be the impl agents' advisor while the wave runs.** You're the higher-tier model that wrote the
-  spec, so you're on call. The app types a one-line `[hyperpanes] inbox: N new message(s)…` nudge
+  spec, so you're on call. The app types a one-line `[avada] inbox: N new message(s)…` nudge
   into your pane when mail lands while you're idle — when you see it, read and answer immediately.
-  Don't rely on it alone: also watch your inbox (`read_messages {paneId:<your $HYPERPANES_PANE_ID>}`)
+  Don't rely on it alone: also watch your inbox (`read_messages {paneId:<your $AVADA_PANE_ID>}`)
   for `<taskId>:` consults and answer fast (`send_message {to:<the `from` pane id on the message>,
-  from:"$HYPERPANES_PANE_ID", body:<crisp decision>}`). A 20-second answer here saves a thrown-away
+  from:"$AVADA_PANE_ID", body:<crisp decision>}`). A 20-second answer here saves a thrown-away
   subtask and a whole re-spec round-trip — this is the point of pairing your intelligence with their
   cheap execution.
 - **Wait for the whole wave — synchronization barrier.** Don't verify or report `done` while any

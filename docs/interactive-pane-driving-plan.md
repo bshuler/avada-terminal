@@ -4,7 +4,7 @@ How to make the control API good at **driving and observing an interactive TUI a
 (e.g. a live `claude` session), not just spawning/structuring panes. Builds on the control API
 ([`cli-multiwindow-mcp-plan.md`](cli-multiwindow-mcp-plan.md)) and the agent-orchestration stack
 ([`agent-orchestration-plan.md`](agent-orchestration-plan.md)); the MCP that drives it lives at
-`C:\hyperpanes-mcp`.
+`C:\avada-mcp`.
 
 **Status (2026-06-05): BUILT (Phases 1–3, + Phase 4 follow-ups P4a/P4b — see the last
 section).** Born from the first live interactive
@@ -44,7 +44,7 @@ Smaller lessons (4–8) are folded into the refinements below.
 ## Proposed primitives
 
 Three legs — **write**, **read**, **capture fidelity** — plus refinements. Each notes the
-**app** (`C:\hyperpanes`) and **MCP** (`C:\hyperpanes-mcp`) touch points. Keep the MCP zod in
+**app** (`C:\avada`) and **MCP** (`C:\avada-mcp`) touch points. Keep the MCP zod in
 lockstep (it's `.strict()`); gate every change with `typecheck && test && build` on both repos.
 
 ### A. Write path — submit in one call + named keys *(addresses #2, #6)*
@@ -106,7 +106,7 @@ forever. Pair with a launch flag / pre-trusted cwd to avoid the first-run trust 
 rendered reply delta. The whole per-turn dance in **one** call; ideal for driving TUI / "dumb"
 agents. (Built purely on A1+B1+C1; no new app surface.)
 
-**D2. Document "structured beats scraping" for MCP-capable agents.** Pane *had* the hyperpanes
+**D2. Document "structured beats scraping" for MCP-capable agents.** Pane *had* the avada
 MCP — the clean channel was its **inbox** (`send_message`/`send_to_parent`), not scraping its
 TUI. But an interactive `claude` won't poll its inbox unprompted, so scraping was the only live
 option. Two supported patterns: (a) run pane-agents with an **inbox-poll loop** ("listening

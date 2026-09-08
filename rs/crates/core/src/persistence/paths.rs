@@ -4,12 +4,12 @@
 //! app uses, or the MCP can't find `control.json` and last-session restore breaks.
 //! Electron computes `userData` as `app.getPath('appData')/<productName>`, and the
 //! product name comes from `package.json` — there is no `productName` override, so
-//! `app.getName()` falls back to `name` = `"hyperpanes"`. Per platform `appData` is:
+//! `app.getName()` falls back to `name` = `"avada"`. Per platform `appData` is:
 //!
 //! - Windows: `%APPDATA%` (the Roaming profile). EMPIRICALLY VERIFIED on this machine:
-//!   the production app's folder `%APPDATA%\hyperpanes` is the one holding
+//!   the production app's folder `%APPDATA%\avada` is the one holding
 //!   `control.json` / `control-settings.json` / `last-workspace.json` / `projects.json`
-//!   (the dev build uses `hyperpanes-dev`, which we deliberately do NOT target — the
+//!   (the dev build uses `avada-dev`, which we deliberately do NOT target — the
 //!   native binary replaces the production build). See the
 //!   `reads_a_file_the_real_electron_app_wrote` test below.
 //! - macOS: `~/Library/Application Support` (everything stays in the one folder —
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 /// The Electron product name (= `package.json` `name`, no `productName` override),
 /// which is the literal userData subfolder under the per-platform app-data base.
-pub const PRODUCT_NAME: &str = "hyperpanes";
+pub const PRODUCT_NAME: &str = "avada";
 
 /// `%APPDATA%` (Windows Roaming app-data), mirroring Electron's `app.getPath('appData')`.
 /// Electron prefers the `APPDATA` env var and falls back to the known folder; we do the
@@ -90,8 +90,8 @@ fn pick_base(env_value: Option<PathBuf>, home: &Path, rel: &str) -> PathBuf {
 
 /// The canonical userData directory — equal to Electron's `app.getPath('userData')`
 /// for the production build on every platform:
-/// Windows `%APPDATA%\hyperpanes`, macOS `~/Library/Application Support/hyperpanes`,
-/// Linux `$XDG_CONFIG_HOME/hyperpanes` (default `~/.config/hyperpanes`).
+/// Windows `%APPDATA%\avada`, macOS `~/Library/Application Support/avada`,
+/// Linux `$XDG_CONFIG_HOME/avada` (default `~/.config/avada`).
 #[tracing::instrument(level = "debug", ret)]
 pub fn user_data_dir() -> PathBuf {
     #[cfg(windows)]
@@ -119,7 +119,7 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// Where durable user data lives: [`user_data_dir`] on Windows/macOS;
-/// `$XDG_DATA_HOME/hyperpanes` (default `~/.local/share/hyperpanes`) on Linux.
+/// `$XDG_DATA_HOME/avada` (default `~/.local/share/avada`) on Linux.
 #[tracing::instrument(level = "debug", ret)]
 pub fn data_dir() -> PathBuf {
     #[cfg(any(windows, target_os = "macos"))]
@@ -133,7 +133,7 @@ pub fn data_dir() -> PathBuf {
 }
 
 /// Where session/runtime state lives: [`user_data_dir`] on Windows/macOS;
-/// `$XDG_STATE_HOME/hyperpanes` (default `~/.local/state/hyperpanes`) on Linux.
+/// `$XDG_STATE_HOME/avada` (default `~/.local/state/avada`) on Linux.
 #[tracing::instrument(level = "debug", ret)]
 pub fn state_dir() -> PathBuf {
     #[cfg(any(windows, target_os = "macos"))]
@@ -160,7 +160,7 @@ pub fn control_settings_json() -> PathBuf {
 }
 
 /// Persisted paired-device tokens (mobile clients). Lives beside `control.json` in the state
-/// dir — the running server reads it on start and `hyperpanes pair`/`devices`/`revoke` drive it
+/// dir — the running server reads it on start and `avada pair`/`devices`/`revoke` drive it
 /// through the control API, so the two always agree.
 #[tracing::instrument(level = "debug", ret)]
 pub fn device_tokens_json() -> PathBuf {
@@ -237,7 +237,7 @@ pub fn ai_memory_json() -> PathBuf {
 
 /// Persisted control-pane id map (session uid → external pane id). Written by the GUI's
 /// control host whenever the map changes and reloaded on start, so a relaunch can still
-/// resolve a re-attached control-spawned pane's `HYPERPANES_PANE_ID` (which is baked into
+/// resolve a re-attached control-spawned pane's `AVADA_PANE_ID` (which is baked into
 /// the pane's environment at spawn and keys the Claude session markers below).
 /// Runtime state → [`state_dir`].
 #[tracing::instrument(level = "debug", ret)]
@@ -275,8 +275,8 @@ pub fn workspaces_dir() -> PathBuf {
     data_dir().join("workspaces")
 }
 
-/// Where the per-process log files live (`hyperpanes-app.log`, `hyperpanes-daemon.log`,
-/// `hyperpanes-cli.log` and their `.1`…`.N` rolled predecessors — see `crate::logging`).
+/// Where the per-process log files live (`avada-app.log`, `avada-daemon.log`,
+/// `avada-cli.log` and their `.1`…`.N` rolled predecessors — see `crate::logging`).
 /// Runtime state, not user data: [`state_dir`], so on Linux it lands in `$XDG_STATE_HOME`.
 #[tracing::instrument(level = "debug", ret)]
 pub fn logs_dir() -> PathBuf {
@@ -303,7 +303,7 @@ pub fn sets_dir() -> PathBuf {
     data_dir().join("sets")
 }
 
-/// The member workspaces `SaveSet` generates (`sets/members/*.hyperpanes`).
+/// The member workspaces `SaveSet` generates (`sets/members/*.avada`).
 ///
 /// Deliberately NOT [`workspaces_dir`]: a set of N tabs generates N member files, and
 /// writing them into the library would bury the handful of workspaces the user actually
@@ -404,13 +404,13 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn user_data_dir_is_appdata_hyperpanes() {
+    fn user_data_dir_is_appdata_avada() {
         let dir = user_data_dir();
         assert!(
             dir.ends_with(PRODUCT_NAME),
             "userData dir must end in the product name: {dir:?}"
         );
-        // Must equal exactly what Electron resolves: %APPDATA%\hyperpanes.
+        // Must equal exactly what Electron resolves: %APPDATA%\avada.
         if let Some(appdata) = std::env::var_os("APPDATA") {
             assert_eq!(dir, Path::new(&appdata).join(PRODUCT_NAME));
         }
@@ -499,7 +499,7 @@ mod tests {
 
         #[test]
         fn user_data_dir_is_the_xdg_config_dir() {
-            // Electron parity: userData on Linux is $XDG_CONFIG_HOME/hyperpanes.
+            // Electron parity: userData on Linux is $XDG_CONFIG_HOME/avada.
             assert_eq!(user_data_dir(), expected("XDG_CONFIG_HOME", ".config"));
             assert_eq!(config_dir(), user_data_dir());
         }

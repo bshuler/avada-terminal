@@ -1,8 +1,8 @@
-# macOS packaging — Hyperpanes.app + dmg
+# macOS packaging — Avada.app + dmg
 
 `bundle.sh <version>` (version without a leading `v`) builds `rs/crates/app`
-in release mode, assembles `Hyperpanes.app`, and emits
-`rs/packaging/out/hyperpanes-<version>.dmg` containing the app plus an
+in release mode, assembles `Avada.app`, and emits
+`rs/packaging/out/avada-<version>.dmg` containing the app plus an
 `/Applications` symlink. It runs from any cwd and works both on the Mac mini
 and on a GitHub `macos-latest` (arm64) runner — only stock macOS tools are
 used (`cargo`, `sips`, `iconutil`, `hdiutil`, `plutil`, `codesign`).
@@ -10,17 +10,17 @@ used (`cargo`, `sips`, `iconutil`, `hdiutil`, `plutil`, `codesign`).
 ## Bundle layout
 
 ```
-Hyperpanes.app/
+Avada.app/
   Contents/
-    Info.plist                      # com.hyperpanes.app, the NS*UsageDescription
-                                    # strings, .hyperpanes doc type + exported UTI
+    Info.plist                      # to.avada.terminal, the NS*UsageDescription
+                                    # strings, .avada doc type + exported UTI
     _CodeSignature/                 # written by codesign; seals everything below
     MacOS/
-      hyperpanes                    # the release binary
+      avada                    # the release binary
       resources -> ../Resources     # symlink, so the app's exe-relative lookup
                                     # and the bundle-idiomatic one land together
     Resources/
-      hyperpanes.icns               # generated from build/icon.png via sips + iconutil
+      avada.icns               # generated from build/icon.png via sips + iconutil
       shell-integration/            # hp-init.ps1 / hp-init.sh / zdotdir
       claude/goal-orchestrator/     # SKILL.md, SPEC.md, IMPL.md
 ```
@@ -42,8 +42,8 @@ than a failure, so `bundle.sh` stays runnable on a machine with no certificate:
 
 | Variable | Effect |
 |---|---|
-| `HYPERPANES_SIGN_ID` | `codesign` identity to use. Unset → the first `Developer ID Application` in the login keychain; none → ad-hoc (`-`) with a loud warning. |
-| `HYPERPANES_NOTARY_PROFILE` | An `xcrun notarytool store-credentials` profile name. Unset → notarization is skipped. Also skipped on an ad-hoc signature, which Apple will not notarize. |
+| `AVADA_SIGN_ID` | `codesign` identity to use. Unset → the first `Developer ID Application` in the login keychain; none → ad-hoc (`-`) with a loud warning. |
+| `AVADA_NOTARY_PROFILE` | An `xcrun notarytool store-credentials` profile name. Unset → notarization is skipped. Also skipped on an ad-hoc signature, which Apple will not notarize. |
 
 No password ever reaches this script. Notarization credentials are created out
 of band, once, with `xcrun notarytool store-credentials <profile-name>`, and
@@ -73,7 +73,7 @@ bash rs/packaging/macos/bundle.sh 0.0.28
 bash scripts/install-macos.sh
 ```
 
-Replacing `/Applications/Hyperpanes.app` by deleting it first kills the session
+Replacing `/Applications/Avada.app` by deleting it first kills the session
 daemon — it is executing out of that bundle, and macOS kills a process whose
 executable is unlinked underneath it — which ends every program running in every
 pane. The installer renames the old bundle aside instead, verifies the daemon
@@ -83,36 +83,36 @@ possible. See [docs/live-session-safety.md](../../../docs/live-session-safety.md
 ### Installing an ad-hoc build (Gatekeeper)
 
 An ad-hoc-signed, un-notarized dmg is quarantined on download, and a plain
-double-click shows "Hyperpanes is damaged" or "cannot be opened because the
+double-click shows "Avada is damaged" or "cannot be opened because the
 developer cannot be verified". Either of these gets past it:
 
-- **Right-click → Open**: after copying `Hyperpanes.app` to `/Applications`,
+- **Right-click → Open**: after copying `Avada.app` to `/Applications`,
   right-click (or Ctrl-click) the app → **Open** → **Open** in the dialog.
   Only needed once; afterwards it launches normally.
 - **Strip the quarantine attribute** (Terminal):
 
   ```sh
-  xattr -dr com.apple.quarantine /Applications/Hyperpanes.app
+  xattr -dr com.apple.quarantine /Applications/Avada.app
   ```
 
 On newer macOS the first launch may instead be blocked outright with no Open
 override; then use System Settings → Privacy & Security → "Open Anyway", or
 the `xattr` command above.
 
-## `.hyperpanes` file association
+## `.avada` file association
 
-`Info.plist` declares the `com.hyperpanes.workspace` exported UTI (extension
-`.hyperpanes`, conforms to `public.json`) and registers the app as its Owner
+`Info.plist` declares the `to.avada.workspace` exported UTI (extension
+`.avada`, conforms to `public.json`) and registers the app as its Owner
 editor. LaunchServices picks the declaration up when the app is first copied
-into `/Applications` (or launched). Double-clicking a `.hyperpanes` file then
+into `/Applications` (or launched). Double-clicking a `.avada` file then
 opens it in the app — macOS passes the path as `argv[1]`, which flows through
 the CLI's positional-path capture, same as the Windows `"%1"` association.
 
 To verify a registration:
 
 ```sh
-mdls -name kMDItemContentType some.hyperpanes
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | grep -i hyperpanes
+mdls -name kMDItemContentType some.avada
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | grep -i avada
 ```
 
 ## Versioning

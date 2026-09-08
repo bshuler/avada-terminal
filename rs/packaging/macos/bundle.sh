@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Hyperpanes — macOS .app bundle + .dmg packaging (track T6 packaging-macos).
+# Avada — macOS .app bundle + .dmg packaging (track T6 packaging-macos).
 #
 # Contract (docs/ports-seams.md §3, frozen — release-rust.yml calls this blind):
 #   rs/packaging/macos/bundle.sh <version>   # <version> WITHOUT a leading "v"
-#   -> rs/packaging/out/hyperpanes-<version>.dmg
+#   -> rs/packaging/out/avada-<version>.dmg
 # Runs from any cwd (resolves the repo root from its own location), exits
 # non-zero on any failure, puts ALL artifacts under rs/packaging/out/.
 #
@@ -14,10 +14,10 @@
 # degrade to a warning rather than a failure, so this stays runnable on a machine
 # with no certificate at all:
 #
-#   HYPERPANES_SIGN_ID        codesign identity. Defaults to the first
+#   AVADA_SIGN_ID        codesign identity. Defaults to the first
 #                             "Developer ID Application" in the login keychain,
 #                             then to ad-hoc ("-") with a warning.
-#   HYPERPANES_NOTARY_PROFILE `xcrun notarytool store-credentials` profile name.
+#   AVADA_NOTARY_PROFILE `xcrun notarytool store-credentials` profile name.
 #                             Unset -> notarization is skipped.
 #
 # An ad-hoc signature is not nothing: it is what lets macOS attach TCC grants to
@@ -39,11 +39,11 @@ fi
 # script to pick it up. It never will: notarization authenticates only through a
 # keychain profile, so a password in the environment is a misunderstanding worth
 # stopping for rather than silently ignoring.
-for leaked in HYPERPANES_NOTARY_PASSWORD APPLE_APP_SPECIFIC_PASSWORD AC_PASSWORD; do
+for leaked in AVADA_NOTARY_PASSWORD APPLE_APP_SPECIFIC_PASSWORD AC_PASSWORD; do
     if [[ -n "${!leaked:-}" ]]; then
         echo "error: $leaked is set. This script never accepts a password." >&2
         echo "       Run: xcrun notarytool store-credentials <profile-name>" >&2
-        echo "       then set HYPERPANES_NOTARY_PROFILE=<profile-name>." >&2
+        echo "       then set AVADA_NOTARY_PROFILE=<profile-name>." >&2
         exit 2
     fi
 done
@@ -52,8 +52,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"          # repo root (rs/packaging/macos -> ../../..)
 OUT="$ROOT/rs/packaging/out"
 STAGE="$OUT/macos-stage"                            # scratch; recreated every run
-APP="$STAGE/Hyperpanes.app"
-DMG="$OUT/hyperpanes-$VERSION.dmg"
+APP="$STAGE/Avada.app"
+DMG="$OUT/avada-$VERSION.dmg"
 
 echo "==> repo root: $ROOT"
 echo "==> building rs/crates/app (release)"
@@ -62,20 +62,20 @@ cargo build --release --manifest-path "$ROOT/rs/crates/app/Cargo.toml" -j 4
 # The app crate is NOT a workspace member: depending on local config the release
 # binary lands either in the crate-local target dir or a shared rs/target.
 BIN=""
-for c in "$ROOT/rs/crates/app/target/release/hyperpanes" "$ROOT/rs/target/release/hyperpanes" "$ROOT/target/release/hyperpanes"; do
+for c in "$ROOT/rs/crates/app/target/release/avada" "$ROOT/rs/target/release/avada" "$ROOT/target/release/avada"; do
     if [[ -x "$c" ]]; then BIN="$c"; break; fi
 done
 if [[ -z "$BIN" ]]; then
-    echo "error: release binary 'hyperpanes' not found under any known target dir" >&2
+    echo "error: release binary 'avada' not found under any known target dir" >&2
     exit 1
 fi
 echo "==> binary: $BIN"
 
-echo "==> assembling Hyperpanes.app"
+echo "==> assembling Avada.app"
 rm -rf "$STAGE"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/hyperpanes"
-chmod 755 "$APP/Contents/MacOS/hyperpanes"
+cp "$BIN" "$APP/Contents/MacOS/avada"
+chmod 755 "$APP/Contents/MacOS/avada"
 
 # Two lookups have to be satisfied at once, and they disagree about where a
 # resource lives. Both resolve relative to the RUNNING BINARY, i.e. Contents/MacOS:
@@ -118,11 +118,11 @@ done
 
 ln -s ../Resources "$APP/Contents/MacOS/resources"
 
-echo "==> generating hyperpanes.icns from build/icon.png"
+echo "==> generating avada.icns from build/icon.png"
 # Source icon is 512x512 (build/icon.png — same art as the Windows icon.ico).
 # Standard iconset, every size derived with sips; 512@2x needs a 1024 source so
 # it is omitted (allowed — iconutil only requires the sizes present to be valid).
-ICONSET="$STAGE/hyperpanes.iconset"
+ICONSET="$STAGE/avada.iconset"
 mkdir -p "$ICONSET"
 SRC_ICON="$ROOT/build/icon.png"
 sips -z 16 16     "$SRC_ICON" --out "$ICONSET/icon_16x16.png"      >/dev/null
@@ -134,7 +134,7 @@ sips -z 256 256   "$SRC_ICON" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
 sips -z 256 256   "$SRC_ICON" --out "$ICONSET/icon_256x256.png"    >/dev/null
 sips -z 512 512   "$SRC_ICON" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
 sips -z 512 512   "$SRC_ICON" --out "$ICONSET/icon_512x512.png"    >/dev/null
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/hyperpanes.icns"
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/avada.icns"
 
 echo "==> writing Info.plist"
 # The NS*UsageDescription strings below are the text macOS puts in the consent
@@ -150,46 +150,46 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key>      <string>com.hyperpanes.app</string>
-    <key>CFBundleName</key>            <string>Hyperpanes</string>
-    <key>CFBundleDisplayName</key>     <string>Hyperpanes</string>
-    <key>CFBundleExecutable</key>      <string>hyperpanes</string>
+    <key>CFBundleIdentifier</key>      <string>to.avada.terminal</string>
+    <key>CFBundleName</key>            <string>Avada</string>
+    <key>CFBundleDisplayName</key>     <string>Avada Terminal</string>
+    <key>CFBundleExecutable</key>      <string>avada</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
-    <key>CFBundleIconFile</key>        <string>hyperpanes</string>
+    <key>CFBundleIconFile</key>        <string>avada</string>
     <key>CFBundleVersion</key>         <string>$BUNDLE_VERSION</string>
     <key>CFBundleShortVersionString</key> <string>$VERSION</string>
     <key>LSMinimumSystemVersion</key>  <string>11.0</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Hyperpanes uses the microphone only while you are dictating into a pane, and stops listening the moment you stop.</string>
+    <string>Avada uses the microphone only while you are dictating into a pane, and stops listening the moment you stop.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Hyperpanes sends Apple events so a pane can hand a file or a link to the editor or browser you picked, instead of opening it here.</string>
+    <string>Avada sends Apple events so a pane can hand a file or a link to the editor or browser you picked, instead of opening it here.</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>Hyperpanes needs this to open a workspace, or start a terminal, in a project you keep on your Desktop.</string>
+    <string>Avada needs this to open a workspace, or start a terminal, in a project you keep on your Desktop.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>Hyperpanes needs this to open a workspace, or start a terminal, in a project you keep in Documents.</string>
+    <string>Avada needs this to open a workspace, or start a terminal, in a project you keep in Documents.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>Hyperpanes needs this to open a workspace, or start a terminal, in a project you keep in Downloads.</string>
+    <string>Avada needs this to open a workspace, or start a terminal, in a project you keep in Downloads.</string>
     <key>NSRemovableVolumesUsageDescription</key>
-    <string>Hyperpanes needs this to open a workspace, or start a terminal, in a project you keep on an external drive.</string>
+    <string>Avada needs this to open a workspace, or start a terminal, in a project you keep on an external drive.</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
-            <key>CFBundleTypeName</key>       <string>Hyperpanes Workspace</string>
+            <key>CFBundleTypeName</key>       <string>Avada Workspace</string>
             <key>CFBundleTypeRole</key>       <string>Editor</string>
             <key>LSHandlerRank</key>          <string>Owner</string>
-            <key>CFBundleTypeIconFile</key>   <string>hyperpanes</string>
+            <key>CFBundleTypeIconFile</key>   <string>avada</string>
             <key>LSItemContentTypes</key>
             <array>
-                <string>com.hyperpanes.workspace</string>
+                <string>to.avada.workspace</string>
             </array>
         </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
-            <key>UTTypeIdentifier</key>   <string>com.hyperpanes.workspace</string>
-            <key>UTTypeDescription</key>  <string>Hyperpanes Workspace</string>
+            <key>UTTypeIdentifier</key>   <string>to.avada.workspace</string>
+            <key>UTTypeDescription</key>  <string>Avada Workspace</string>
             <key>UTTypeConformsTo</key>
             <array>
                 <string>public.json</string>
@@ -198,7 +198,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <dict>
                 <key>public.filename-extension</key>
                 <array>
-                    <string>hyperpanes</string>
+                    <string>avada</string>
                 </array>
             </dict>
         </dict>
@@ -229,13 +229,13 @@ plutil -lint "$APP/Contents/Info.plist"
 # SQLite amalgamation, no scripting engine), and turning off W^X in a process
 # that hosts the user's shells needs a better reason than "just in case".
 # `disable-library-validation` — the binary is statically linked and loads no
-# dylibs of its own. `app-sandbox` — Hyperpanes runs the user's shells and opens
+# dylibs of its own. `app-sandbox` — Avada runs the user's shells and opens
 # the user's repositories, which is the opposite of a container; Full Disk Access
 # is a grant the user makes in Settings, not an entitlement we can claim.
 ENTITLEMENTS="$SCRIPT_DIR/entitlements.plist"
 plutil -lint "$ENTITLEMENTS"
 
-SIGN_ID="${HYPERPANES_SIGN_ID:-}"
+SIGN_ID="${AVADA_SIGN_ID:-}"
 if [[ -z "$SIGN_ID" ]]; then
     # `find-identity` prints every usable identity; take the first Developer ID
     # Application line and nothing else. Apple Development / Apple Distribution
@@ -253,13 +253,13 @@ if [[ -z "$SIGN_ID" ]]; then
     echo "WARNING: no Developer ID Application certificate found — signing AD-HOC." >&2
     echo "WARNING: Gatekeeper will refuse this build on any Mac but this one, and" >&2
     echo "WARNING: macOS will drop every permission grant the moment it is rebuilt." >&2
-    echo "WARNING: Set HYPERPANES_SIGN_ID, or install a Developer ID, for a release." >&2
+    echo "WARNING: Set AVADA_SIGN_ID, or install a Developer ID, for a release." >&2
     echo "" >&2
 else
     echo "==> signing identity: $SIGN_ID"
 fi
 
-echo "==> signing Hyperpanes.app (hardened runtime)"
+echo "==> signing Avada.app (hardened runtime)"
 # No nested Mach-O to sign first: the binary is statically linked and everything
 # else under Contents is scripts, markdown and an icns. Hence no --deep.
 codesign --force --options runtime "${SIGN_TIMESTAMP[@]}" \
@@ -272,10 +272,10 @@ DMG_STAGE="$STAGE/dmg-root"
 mkdir -p "$DMG_STAGE"
 # ditto, not cp: it is the copy that carries extended attributes across intact,
 # and a signature that loses them is a signature that fails to verify.
-ditto "$APP" "$DMG_STAGE/Hyperpanes.app"
+ditto "$APP" "$DMG_STAGE/Avada.app"
 ln -s /Applications "$DMG_STAGE/Applications"
 rm -f "$DMG"
-hdiutil create -volname "Hyperpanes" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG"
+hdiutil create -volname "Avada" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG"
 codesign --force "${SIGN_TIMESTAMP[@]}" --sign "$SIGN_ID" "$DMG"
 
 # ---------------------------------------------------------------- notarization
@@ -286,9 +286,9 @@ codesign --force "${SIGN_TIMESTAMP[@]}" --sign "$SIGN_ID" "$DMG"
 # environment, and the check below refuses to continue if one has been exported
 # in the hope that it would; the guard for that is at the top of the script.
 
-NOTARY_PROFILE="${HYPERPANES_NOTARY_PROFILE:-}"
+NOTARY_PROFILE="${AVADA_NOTARY_PROFILE:-}"
 if [[ -z "$NOTARY_PROFILE" ]]; then
-    echo "==> notarization skipped (HYPERPANES_NOTARY_PROFILE unset)"
+    echo "==> notarization skipped (AVADA_NOTARY_PROFILE unset)"
 elif [[ "$SIGN_ID" == "-" ]]; then
     echo "==> notarization skipped (ad-hoc signature: Apple only notarizes Developer ID)"
 elif ! xcrun --find notarytool >/dev/null 2>&1; then

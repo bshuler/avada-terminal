@@ -1,4 +1,4 @@
-# Hyperpanes shell integration (PowerShell / pwsh).
+# Avada shell integration (PowerShell / pwsh).
 # Dot-sourced into an interactive pane AFTER the user's $PROFILE has loaded.
 # Strictly ADDITIVE: every step is guarded so any failure leaves a normal shell.
 
@@ -6,9 +6,9 @@
 # Wrap `prompt` exactly once (idempotent across re-sourcing) so every prompt emits
 # the live working directory as ESC ] 7 ; <file-uri> BEL. We keep the existing
 # prompt (the user's, or the default) and call it after emitting.
-if (-not $global:__HyperpanesPromptWrapped) {
-  $global:__HyperpanesPromptWrapped = $true
-  $global:__HyperpanesInnerPrompt = $function:prompt
+if (-not $global:__AvadaPromptWrapped) {
+  $global:__AvadaPromptWrapped = $true
+  $global:__AvadaInnerPrompt = $function:prompt
 
   function global:prompt {
     try {
@@ -21,8 +21,8 @@ if (-not $global:__HyperpanesPromptWrapped) {
       }
     } catch {}
 
-    if ($global:__HyperpanesInnerPrompt) {
-      & $global:__HyperpanesInnerPrompt
+    if ($global:__AvadaInnerPrompt) {
+      & $global:__AvadaInnerPrompt
     } else {
       # Reproduce PowerShell's built-in default prompt.
       "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "

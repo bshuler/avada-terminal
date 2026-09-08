@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hyperpanes — drive the GUI harness on a remote Linux box (default: ptah).
+# Avada — drive the GUI harness on a remote Linux box (default: ptah).
 #
 #   scripts/gui-harness/ptah.sh sync    # push the working tree over
 #   scripts/gui-harness/ptah.sh image   # build the harness image
@@ -15,19 +15,19 @@
 # docs/live-session-safety.md.
 #
 # ptah is shared. Take a lease before a long run and release it after:
-#   ssh ptah '~/.local/bin/ptah-lease acquire hyperpanes shared "gui harness"'
+#   ssh ptah '~/.local/bin/ptah-lease acquire avada shared "gui harness"'
 #   ssh ptah '~/.local/bin/ptah-lease release <token>'
 set -euo pipefail
 
-HOST="${HYPERPANES_HARNESS_HOST:-ptah}"
-REMOTE="${HYPERPANES_HARNESS_DIR:-/home/ubuntu/hyperpanes-harness}"
-IMAGE=hyperpanes-harness
+HOST="${AVADA_HARNESS_HOST:-ptah}"
+REMOTE="${AVADA_HARNESS_DIR:-/home/ubuntu/avada-harness}"
+IMAGE=avada-harness
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Named volumes, so a rebuild is minutes rather than the whole dependency tree
 # (Slint comes from git and is not cheap).
-CARGO_VOL=hyperpanes-cargo
-TARGET_VOL=hyperpanes-target
+CARGO_VOL=avada-cargo
+TARGET_VOL=avada-target
 
 note() { echo "==> $*"; }
 rsh() { ssh -o BatchMode=yes "$HOST" "$@"; }
@@ -73,7 +73,7 @@ cmd_test() {
 cmd_shot() {
     note "photographing the window inside $IMAGE"
     docker_run bash /work/scripts/gui-harness/in-container.sh shot /work/shots
-    local dest="${HYPERPANES_SHOT_DIR:-$REPO_ROOT/shots}"
+    local dest="${AVADA_SHOT_DIR:-$REPO_ROOT/shots}"
     mkdir -p "$dest"
     note "fetching PNGs -> $dest"
     rsync -a "$HOST:$REMOTE/shots/" "$dest/"

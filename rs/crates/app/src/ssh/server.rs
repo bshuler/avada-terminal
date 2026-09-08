@@ -7,7 +7,7 @@
 //!    `auth_*` callback is explicitly overridden to reject — including `auth_publickey_offered`,
 //!    whose russh default is `Accept`.
 //! 2. **The authorized-keys file is the sole authority**, re-read on every connection so
-//!    `hyperpanes ssh revoke` takes effect without a restart. No file, or an empty one, means
+//!    `avada ssh revoke` takes effect without a restart. No file, or an empty one, means
 //!    nobody gets in.
 //! 3. **The username is not a credential.** It is only ever read as a *pane hint*; two
 //!    different usernames with the same key get identical access. There is no per-user
@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::ssh::bridge::{self, Bridge, BridgeParams};
 use crate::ssh::config::{SshPaths, SshSettings};
 use crate::ssh::keys;
-use hyperpanes_core::session::attach::{self, ResizePolicy};
+use avada_core::session::attach::{self, ResizePolicy};
 use russh::keys::ssh_key::PublicKey;
 use russh::server::{self, Auth, Handle, Msg, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet, Pty};
@@ -35,7 +35,7 @@ use tokio::net::TcpListener;
 /// Everything a connection needs; shared immutably by every handler.
 #[derive(Debug, Clone)]
 pub struct ServeOpts {
-    /// Daemon salt — which hyperpanes workspace this port fronts.
+    /// Daemon salt — which avada workspace this port fronts.
     pub salt: String,
     /// Where the key sources live. Both the `ssh-authorized-keys` file and the `sshKey` column
     /// of `device-tokens.json` are re-read per authentication attempt, so a revoke through
@@ -57,7 +57,7 @@ pub fn build_config(host_key: russh::keys::PrivateKey) -> server::Config {
         // Identify honestly. A fake OpenSSH banner would only mislead the operator reading
         // their own logs.
         server_id: russh::SshId::Standard(std::borrow::Cow::Borrowed(concat!(
-            "SSH-2.0-hyperpanes_",
+            "SSH-2.0-avada_",
             env!("CARGO_PKG_VERSION")
         ))),
         // The whole auth policy, in one line: publickey and nothing else. A client that only
@@ -82,7 +82,7 @@ pub fn build_config(host_key: russh::keys::PrivateKey) -> server::Config {
 
 /// Load settings + keys and run the listener until it fails. Blocking; owns its own runtime.
 ///
-/// `verbose` prints to stdout (the `hyperpanes ssh serve` foreground path); the daemon path
+/// `verbose` prints to stdout (the `avada ssh serve` foreground path); the daemon path
 /// passes `false` and everything goes to the debug log instead.
 #[tracing::instrument(level = "debug", ret)]
 pub fn serve_blocking(paths: &SshPaths, salt: &str, verbose: bool) -> Result<(), String> {
@@ -110,8 +110,8 @@ pub fn serve_blocking(paths: &SshPaths, salt: &str, verbose: bool) -> Result<(),
         // Not fatal: the operator may be about to authorize a key, and the running server
         // will pick it up on the next connection. But say so loudly.
         let msg = "ssh: no client keys are authorized — every connection will be rejected. \
-                   Add one with `hyperpanes ssh authorize <key>`, or pair a device with \
-                   `hyperpanes pair --ssh-key <key>`.";
+                   Add one with `avada ssh authorize <key>`, or pair a device with \
+                   `avada pair --ssh-key <key>`.";
         if verbose {
             eprintln!("{msg}");
         }
@@ -248,7 +248,7 @@ impl SshHandler {
             let _ = session.channel_success(channel);
             let _ = session.data(
                 channel,
-                &b"hyperpanes: attaching needs a pty. Use `ssh -t`, or run `ssh \
+                &b"avada: attaching needs a pty. Use `ssh -t`, or run `ssh \
                    <host> list` to see the panes.\r\n"[..],
             );
             let _ = session.exit_status_request(channel, 1);
@@ -290,7 +290,7 @@ impl server::Handler for SshHandler {
         Ok(reject())
     }
 
-    /// Reject, always. There is no password to be right: nothing in hyperpanes stores or
+    /// Reject, always. There is no password to be right: nothing in avada stores or
     /// checks one, and adding one would put a guessable credential in front of every
     /// terminal on the machine.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -313,7 +313,7 @@ impl server::Handler for SshHandler {
         Ok(reject())
     }
 
-    /// Reject, always. An OpenSSH *certificate* authenticates against a CA, and hyperpanes
+    /// Reject, always. An OpenSSH *certificate* authenticates against a CA, and avada
     /// has no CA: the authorized-keys file lists key material, and only key material on that
     /// list gets in. russh's default already rejects; this override keeps that true if the
     /// default ever changes, the same reason `auth_none` is spelled out above.
@@ -729,7 +729,7 @@ mod tests {
         let mut session = connect(addr).await;
         session
             .authenticate_publickey(
-                "hyperpanes",
+                "avada",
                 russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key.clone()), None),
             )
             .await
@@ -773,7 +773,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_paired_device_key_gets_in_until_its_pairing_expires() {
-        use hyperpanes_core::persistence::device_tokens::{save_to, DeviceRecord};
+        use avada_core::persistence::device_tokens::{save_to, DeviceRecord};
 
         let dir = tmpdir("e2e-device-keys");
         let paths = SshPaths::under(dir.path());
@@ -823,7 +823,7 @@ mod tests {
             "a key that is on no list must not authenticate"
         );
 
-        // `hyperpanes revoke <label>` rewrites this file without the record; the SSH door shuts
+        // `avada revoke <label>` rewrites this file without the record; the SSH door shuts
         // with the control-API door, on the next connection.
         save_to(&paths.device_tokens, &[]).unwrap();
         assert!(
@@ -839,7 +839,7 @@ mod tests {
         let addr = start(&paths).await;
 
         let mut session = connect(addr).await;
-        let none = session.authenticate_none("hyperpanes").await.unwrap();
+        let none = session.authenticate_none("avada").await.unwrap();
         assert!(!none.success(), "`none` auth must never succeed");
         let AuthResult::Failure {
             remaining_methods, ..
@@ -857,7 +857,7 @@ mod tests {
         let mut session = connect(addr).await;
         assert!(
             !session
-                .authenticate_password("hyperpanes", "hunter2")
+                .authenticate_password("avada", "hunter2")
                 .await
                 .unwrap()
                 .success(),

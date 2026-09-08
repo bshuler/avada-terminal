@@ -11,7 +11,7 @@
 //! `hpmcp-controller/test/fixtures/task-wire.golden.json` and asserts the same
 //! keys. If this test drifts, the two sides have silently diverged.
 
-use hyperpanes_core::control::work::{Task, TaskState};
+use avada_core::control::work::{Task, TaskState};
 
 const GOLDEN: &str = include_str!("fixtures/task-wire.golden.json");
 

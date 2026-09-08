@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hyperpanes_core::claude_history;
-use hyperpanes_core::persistence::projects;
-pub use hyperpanes_core::persistence::projects::Project;
+use avada_core::claude_history;
+use avada_core::persistence::projects;
+pub use avada_core::persistence::projects::Project;
 
 /// The remembered projects, newest-first (the order the panel renders), self-healed:
 /// any project whose repo folder no longer exists on disk is forgotten (removed from
@@ -365,7 +365,7 @@ pub const CLAUDE_HISTORY_LIMIT: usize = 8;
 /// One agent session row, shaped for the sidebar: the resume id, a harness label
 /// ("Claude" — from [`claude_history::HistorySource`], so the UI never hard-wires the
 /// harness), a one-line summary, a human relative-time string ("2h ago") and the message
-/// count. Built from [`hyperpanes_core::claude_history::ClaudeSession`] with the timestamp
+/// count. Built from [`avada_core::claude_history::ClaudeSession`] with the timestamp
 /// turned into a label.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaudeSessionRow {

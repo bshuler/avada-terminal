@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Build the per-user NSIS installer for the native Rust hyperpanes app.
+  Build the per-user NSIS installer for the native Rust avada app.
 
 .DESCRIPTION
-  1. cargo build --release -p hyperpanes  (skip with -SkipBuild)
+  1. cargo build --release -p avada  (skip with -SkipBuild)
   2. Best-effort: embed build/icon.ico into the .exe via rcedit (downloaded if
      missing). This is purely packaging-side; if it fails the installer still
      builds (shortcuts + Add/Remove Programs get the icon regardless).
-  3. makensis rs/packaging/installer.nsi -> rs/packaging/dist/Hyperpanes-<ver>-setup.exe
+  3. makensis rs/packaging/installer.nsi -> rs/packaging/dist/Avada-<ver>-setup.exe
 
   Mirrors the Electron `npm run pack:win` step for the Rust app.
 
@@ -31,7 +31,7 @@ $PackagingDir = $PSScriptRoot
 $RepoRoot     = (Resolve-Path (Join-Path $PackagingDir '..\..')).Path
 $AppManifest  = Join-Path $RepoRoot 'rs\crates\app\Cargo.toml'
 $IconIco      = Join-Path $RepoRoot 'build\icon.ico'
-$ExePath      = Join-Path $RepoRoot 'rs\crates\app\target\release\hyperpanes.exe'
+$ExePath      = Join-Path $RepoRoot 'rs\crates\app\target\release\avada.exe'
 $DistDir      = Join-Path $PackagingDir 'dist'
 $Nsi          = Join-Path $PackagingDir 'installer.nsi'
 
@@ -46,14 +46,14 @@ if (-not $Version) {
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
   throw "Version must be semver x.y.z (got '$Version'); pass -Version explicitly."
 }
-Write-Host "==> Hyperpanes installer  version=$Version" -ForegroundColor Cyan
+Write-Host "==> Avada installer  version=$Version" -ForegroundColor Cyan
 
 # --- 1. build ----------------------------------------------------------------
 if ($SkipBuild) {
   Write-Host "==> -SkipBuild: reusing existing release binary" -ForegroundColor Yellow
 } else {
-  Write-Host "==> cargo build --release -p hyperpanes" -ForegroundColor Cyan
-  & cargo build --release --manifest-path $AppManifest -p hyperpanes
+  Write-Host "==> cargo build --release -p avada" -ForegroundColor Cyan
+  & cargo build --release --manifest-path $AppManifest -p avada
   if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
 }
 if (-not (Test-Path $ExePath)) { throw "Release binary not found: $ExePath" }
@@ -73,12 +73,12 @@ try {
       Invoke-WebRequest -Uri $url -OutFile $rcedit -UseBasicParsing
     }
   }
-  Write-Host "==> embedding icon + version info into hyperpanes.exe (rcedit)" -ForegroundColor Cyan
+  Write-Host "==> embedding icon + version info into avada.exe (rcedit)" -ForegroundColor Cyan
   & $rcedit $ExePath `
       --set-icon $IconIco `
-      --set-version-string 'ProductName' 'Hyperpanes' `
-      --set-version-string 'FileDescription' 'Hyperpanes' `
-      --set-version-string 'CompanyName' 'Hyperpanes' `
+      --set-version-string 'ProductName' 'Avada' `
+      --set-version-string 'FileDescription' 'Avada' `
+      --set-version-string 'CompanyName' 'Avada' `
       --set-file-version $Version `
       --set-product-version $Version
   if ($LASTEXITCODE -ne 0) { throw "rcedit exited $LASTEXITCODE" }
@@ -96,7 +96,7 @@ if (-not $makensis) {
 if (-not $makensis) { throw "makensis not found. Install NSIS (choco install nsis -y) or add it to PATH." }
 
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
-$OutFile = Join-Path $DistDir "Hyperpanes-$Version-setup.exe"
+$OutFile = Join-Path $DistDir "Avada-$Version-setup.exe"
 if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
 
 Write-Host "==> makensis -> $OutFile" -ForegroundColor Cyan

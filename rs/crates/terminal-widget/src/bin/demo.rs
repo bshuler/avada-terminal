@@ -1,6 +1,6 @@
-//! Standalone demo for `hyperpanes-terminal-widget`: a window with two live
+//! Standalone demo for `avada-terminal-widget`: a window with two live
 //! `TerminalPane`s, each bound to a real shell spawned through
-//! `hyperpanes_core::session_manager`. This is how the widget is developed/verified in
+//! `avada_core::session_manager`. This is how the widget is developed/verified in
 //! isolation (like Spike A), and the reference wiring Wave-2's `app-shell` mirrors.
 //!
 //! What it demonstrates end-to-end:
@@ -14,9 +14,9 @@
 //!
 //! Flags: `--software` (both panes software) · `--gpu` (both GPU).
 
-use hyperpanes_core::session_manager::{SessionEvent, SessionManager, SpawnOptions};
-use hyperpanes_terminal_widget::ui::{DemoWindow, HiRect, KeyMsg, PaneVisual};
-use hyperpanes_terminal_widget::{
+use avada_core::session_manager::{SessionEvent, SessionManager, SpawnOptions};
+use avada_terminal_widget::ui::{DemoWindow, HiRect, KeyMsg, PaneVisual};
+use avada_terminal_widget::{
     cells_for_px, encode_key, Font, GpuRenderer, LinkAction, PaneRenderer, RenderOpts,
     SoftwareRenderer, TerminalPane,
 };
@@ -316,7 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(LinkAction::OpenUrl(u)) => {
                     eprintln!(
                         "[demo] click → url {u}: {:?}",
-                        hyperpanes_core::open::open_url(&u)
+                        avada_core::open::open_url(&u)
                     );
                 }
                 // The shell reveals the path in its left file tree; the demo has no panel, so it
@@ -555,7 +555,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         kind: kinds[i],
                         started: false,
                         startup: Some(format!(
-                            "echo hyperpanes terminal-widget [{}]\r",
+                            "echo avada terminal-widget [{}]\r",
                             if kinds[i] == Kind::Gpu {
                                 "GPU"
                             } else {

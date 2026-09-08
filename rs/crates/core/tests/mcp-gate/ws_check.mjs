@@ -2,7 +2,7 @@
 // fan-out (no sibling leak), and a busy→idle `activity` flip. Uses Node globals (fetch + WebSocket).
 import { readFileSync } from 'node:fs';
 
-const CONTROL_FILE = process.env.HYPERPANES_CONTROL_FILE || 'C:\\hp-gate\\control.json';
+const CONTROL_FILE = process.env.AVADA_CONTROL_FILE || 'C:\\hp-gate\\control.json';
 const d = JSON.parse(readFileSync(CONTROL_FILE, 'utf8'));
 const BASE = `http://127.0.0.1:${d.port}`;
 const AUTH = { authorization: `Bearer ${d.token}`, 'content-type': 'application/json' };

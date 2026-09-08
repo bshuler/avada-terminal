@@ -57,11 +57,11 @@ pub fn apply_strategy() -> ApplyStrategy {
 /// panel's "About" block and compared against the latest GitHub release tag.
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The "latest release" REST endpoint for the public `Eyalm321/hyperpanes` repo.
-const LATEST_RELEASE_API: &str = "https://api.github.com/repos/Eyalm321/hyperpanes/releases/latest";
+/// The "latest release" REST endpoint for the public `Eyalm321/avada` repo.
+const LATEST_RELEASE_API: &str = "https://api.github.com/repos/Eyalm321/avada/releases/latest";
 
 /// GitHub rejects API requests without a User-Agent; identify ourselves + the running version.
-const USER_AGENT: &str = concat!("hyperpanes-updater/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("avada-updater/", env!("CARGO_PKG_VERSION"));
 
 /// The updater's coarse phase. Cast to `i32` and mirrored into the UI — keep the
 /// discriminants in lock-step with the `update-phase` mapping in overlays.slint's General
@@ -221,7 +221,7 @@ impl Updater {
                     name = g
                         .asset_name
                         .clone()
-                        .unwrap_or_else(|| "hyperpanes-setup.exe".to_string());
+                        .unwrap_or_else(|| "avada-setup.exe".to_string());
                     g.phase = Phase::Downloading;
                     g.message = "Downloading update…".to_string();
                     g.progress = 0.0;
@@ -324,7 +324,7 @@ fn fetch_latest() -> Result<ReleaseInfo, String> {
     })
 }
 
-/// Stream the installer to `%TEMP%\hyperpanes-update\<name>`, updating `inner.progress` as it
+/// Stream the installer to `%TEMP%\avada-update\<name>`, updating `inner.progress` as it
 /// goes. Returns the written path.
 #[tracing::instrument(level = "debug", ret, skip(inner))]
 fn download_to_temp(url: &str, name: &str, inner: &Arc<Mutex<Inner>>) -> Result<PathBuf, String> {
@@ -344,8 +344,8 @@ fn download_to_temp(url: &str, name: &str, inner: &Arc<Mutex<Inner>>) -> Result<
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "hyperpanes-setup.exe".to_string());
-    let dir = std::env::temp_dir().join("hyperpanes-update");
+        .unwrap_or_else(|| "avada-setup.exe".to_string());
+    let dir = std::env::temp_dir().join("avada-update");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(&fname);
     let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn api_endpoint_targets_the_public_repo() {
-        assert!(LATEST_RELEASE_API.contains("Eyalm321/hyperpanes"));
+        assert!(LATEST_RELEASE_API.contains("Eyalm321/avada"));
         assert!(LATEST_RELEASE_API.ends_with("/releases/latest"));
     }
 }

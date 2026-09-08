@@ -204,7 +204,7 @@ struct HealthOut {
 async fn health(State(shared): State<Arc<Shared>>) -> Response {
     ok_json(HealthOut {
         ok: true,
-        app: "hyperpanes",
+        app: "avada",
         pid: shared.pid,
         version: shared.version.clone(),
         allow_input: shared.allow_input(),
@@ -372,7 +372,7 @@ async fn tokens(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Byt
 // A device token is unscoped (a phone is a full remote head, and a scope is a whitelist of
 // TODAY's panes — it would go blind the moment a new pane opens), persisted to
 // `device-tokens.json` so pairing survives a host restart, and individually revocable by label.
-// `hyperpanes pair` POSTs here so the MASTER token never leaves the machine; `devices`/`revoke`
+// `avada pair` POSTs here so the MASTER token never leaves the machine; `devices`/`revoke`
 // list and drop. All three are MASTER-only — a scoped agent token must not mint device creds.
 
 #[derive(Serialize)]
@@ -392,7 +392,7 @@ struct DeviceListItem {
     label: String,
     expires_at: Option<i64>,
     /// The device's SSH public key, when it paired one. A public key is not a credential, so
-    /// unlike the bearer token it is safe to echo back — `hyperpanes devices` shows which
+    /// unlike the bearer token it is safe to echo back — `avada devices` shows which
     /// devices can also reach the embedded SSH server.
     #[serde(skip_serializing_if = "Option::is_none")]
     ssh_key: Option<String>,
@@ -428,8 +428,8 @@ fn persist_devices(shared: &Arc<Shared>) {
 /// `device`, ttl omitted = never expires). Returns the token + reachable port/events for the QR.
 ///
 /// `sshKey` is an optional `authorized_keys`-form public key for the same device: it rides in the
-/// same record so the embedded SSH server accepts that key, and so one `hyperpanes revoke <label>`
-/// drops both doors at once. It is validated by the caller (`hyperpanes pair --ssh-key`); the
+/// same record so the embedded SSH server accepts that key, and so one `avada revoke <label>`
+/// drops both doors at once. It is validated by the caller (`avada pair --ssh-key`); the
 /// server only stores what it is given, exactly as it does the label.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn devices_mint(
@@ -1013,12 +1013,12 @@ async fn messages_post(
     jstatus(200, json!({ "ok": true, "seq": msg.seq }))
 }
 
-/// Whether inbox nudges are enabled at all — `HYPERPANES_MSG_NUDGE=0` (or `false`/`off`) in the
+/// Whether inbox nudges are enabled at all — `AVADA_MSG_NUDGE=0` (or `false`/`off`) in the
 /// app's environment turns the whole mechanism off, leaving the bus pull-only as before.
 #[tracing::instrument(level = "debug", ret)]
 fn nudges_enabled() -> bool {
     !matches!(
-        std::env::var("HYPERPANES_MSG_NUDGE").as_deref(),
+        std::env::var("AVADA_MSG_NUDGE").as_deref(),
         Ok("0") | Ok("false") | Ok("off")
     )
 }
@@ -2611,7 +2611,7 @@ mod golden {
         assert_eq!(
             body,
             format!(
-                r#"{{"ok":true,"app":"hyperpanes","pid":{pid},"version":"0.1.8","allowInput":true}}"#
+                r#"{{"ok":true,"app":"avada","pid":{pid},"version":"0.1.8","allowInput":true}}"#
             )
         );
     }

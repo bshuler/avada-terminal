@@ -1,8 +1,8 @@
-# hyperpanes-terminal-widget
+# avada-terminal-widget
 
-The reusable **live-terminal pane** for the native (Slint) hyperpanes app — a clean
+The reusable **live-terminal pane** for the native (Slint) avada app — a clean
 `TerminalPane` Slint component + a Rust controller, lifted from the proven Spike A
-renderer and bound to `hyperpanes-core`'s `session_manager` (real shells, not private PTYs).
+renderer and bound to `avada-core`'s `session_manager` (real shells, not private PTYs).
 
 Wave-2's `app-shell` drops N of these into layout rects.
 
@@ -20,8 +20,8 @@ Wave-2's `app-shell` drops N of these into layout rects.
 ## Controller lifecycle (how the app-shell drives one pane)
 
 ```rust
-use hyperpanes_terminal_widget::{TerminalPane, SoftwareRenderer, Font, RenderOpts, encode_key, cells_for_px};
-use hyperpanes_core::session_manager::{SessionManager, SpawnOptions, SessionEvent};
+use avada_terminal_widget::{TerminalPane, SoftwareRenderer, Font, RenderOpts, encode_key, cells_for_px};
+use avada_core::session_manager::{SessionManager, SpawnOptions, SessionEvent};
 
 // 1. Spawn/attach a session sized to your initial grid, and a matching controller.
 let (cols, rows) = cells_for_px(width_px, height_px, font.cell_w, font.cell_h);

@@ -35,7 +35,7 @@
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
-use hyperpanes_core::persistence::window_geometry::{self, DisplayRect, WindowGeometry};
+use avada_core::persistence::window_geometry::{self, DisplayRect, WindowGeometry};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 
 /// Poll cadence for the frame watcher. Long enough to be free, short enough that a

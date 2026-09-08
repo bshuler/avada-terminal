@@ -1,7 +1,7 @@
 # Avada Terminal modules — fan-out plan
 
 Status (2026-09-07): **plan only, nothing implemented.** Output of an eleven-turn design
-brainstorm on turning hyperpanes into a modular host with a marketplace of modules. Every
+brainstorm on turning avada into a modular host with a marketplace of modules. Every
 decision below is binding for the agents that execute it; the reasoning lives in the
 brainstorm transcript, not here. Companion review reports (left panel, control plane, core,
 features, build, Slint) informed the file maps.
@@ -147,7 +147,7 @@ contract type.
 - Full rename: repo, crates, bundle id (`to.avada.terminal`), app-support dir, env vars,
   project dotfiles, topic, manifest, pairing scheme, docs, mobile. Compatibility layer:
   read both env prefixes for two releases; migrate the app-support dir and keychain items on
-  first launch; treat `.hyperpanes` and `.avada` project files as one with a rename prompt;
+  first launch; treat `.avada` and `.avada` project files as one with a rename prompt;
   users re-grant TCC permissions once.
 
 ---
@@ -272,21 +272,21 @@ Everything compiles and is inert. No behaviour changes.
 
 Runs before any host work so that every new identifier is born as Avada. Four agents:
 
-- **R1** `rs/` mechanical: crate names, binary `avada`, `HYPERPANES_*` → `AVADA_*` with
-  the alias reader, discovery and daemon names, user-visible strings, `.hyperpanes` →
+- **R1** `rs/` mechanical: crate names, binary `avada`, `AVADA_*` → `AVADA_*` with
+  the alias reader, discovery and daemon names, user-visible strings, `.avada` →
   `.avada`. Owns everything under `rs/` except `Cargo.toml`s.
 - **R2** build/release: `build/`, `scripts/`, `.github/`, bundle id `to.avada.terminal`,
   notarization profile names, sandbox bundle id, installer script.
 - **R3** prose and clients: `README.md`, `AGENTS.md`, `docs/`, `resources/`, skill files,
   `mobile/` (text and ids only; verified by CI, not locally — no Flutter on the dev machine).
 - **R4** (after R1) compat layer: app-support dir migration on first launch, keychain item
-  migration, both env prefixes for two releases, `.hyperpanes`/`.avada` equivalence with a
+  migration, both env prefixes for two releases, `.avada`/`.avada` equivalence with a
   one-time rename prompt, TCC re-grant explanation in the first-launch notice.
 - Orchestrator, last: `gh repo rename` (GitHub redirects the old name), directory rename on
   the dev machine, update `hyperpanes-buildinstall` worktree remote, memory file.
 
 **Exit:** `avada --version` prints the new name; a pre-rename user-data dir migrates cleanly
-in a `HOME=/tmp/...` sandbox; no `hyperpanes` string remains outside the compat layer and
+in a `HOME=/tmp/...` sandbox; no `avada` string remains outside the compat layer and
 the git history.
 
 ### Wave 1 — host and shell (seven agents in parallel)
@@ -396,7 +396,7 @@ lands it between waves.
 4. The headless Slint harness (`app/src/uitest.rs`) has a test for every new control: rail
    entry click, placeholder buttons, rights rows, marketplace install button.
 5. Empirical check on the isolated sandbox bundle (`/tmp/hphr/HP.app`, bundle id
-   `com.hyperpanes.hotreload`, `HOME=/tmp/hphr`; ids change with the rename) — never the
+   `to.avada.hotreload`, `HOME=/tmp/hphr`; ids change with the rename) — never the
    user's real install, never `/Applications`, never focus-stealing input. From Wave 2 the
    check is the module round trip in §5 Wave 2 exit, recorded as a screenshot in `shots/`.
 6. Secrets: no token, HMAC key or license key is logged, passed as an argument, or written

@@ -1,4 +1,4 @@
-//! The catalogue of CLI AI tools Hyperpanes knows about — **data, not code**.
+//! The catalogue of CLI AI tools Avada knows about — **data, not code**.
 //!
 //! Everything downstream keys off this table: which tools the settings page lists,
 //! which binary name detection looks for, which OSC-title tokens upgrade a terminal

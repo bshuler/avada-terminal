@@ -2,7 +2,7 @@
 //! `src/renderer/components/pathLinks.ts`.
 //!
 //! Detects file-path tokens in a single rendered terminal row so the pane can turn them into
-//! clickable links (resolved + verified by [`hyperpanes_core::paths`], opened/copied on click —
+//! clickable links (resolved + verified by [`avada_core::paths`], opened/copied on click —
 //! see [`crate::pane`]). Pure + unit-tested; the on-disk verification, cwd resolution and
 //! open/copy actions live in `core::paths` and the pane's link layer that consumes these
 //! candidates.
@@ -499,7 +499,7 @@ pub struct CommitCandidate {
 ///
 /// The shape gate is deliberately loose — 7 to 40 lowercase hex characters standing as a whole
 /// word, with at least one `a`–`f` in them — because the *real* gate is git: the pane asks
-/// [`hyperpanes_core::git::resolve_commit`] whether the token names a commit, and a token that
+/// [`avada_core::git::resolve_commit`] whether the token names a commit, and a token that
 /// does not simply never lights up. So this only has to be cheap and not obviously wrong.
 ///
 /// The one thing it does rule out on shape is a run of pure digits. A build log is full of
@@ -573,7 +573,7 @@ pub struct RefCandidate {
 /// remote-tracking ref has when a session narrates it (`origin/main is current at …`).
 ///
 /// Loose on purpose, like [`extract_commit_candidates`]: the real gate is git, which
-/// [`hyperpanes_core::git::resolve_commit`] asks per token, and `and/or` simply never lights
+/// [`avada_core::git::resolve_commit`] asks per token, and `and/or` simply never lights
 /// up. What is ruled out here is the shape that is *already* something else — a rooted path
 /// (`/usr/bin/grep`, `./x`, `../x`, `~/x`) belongs to the path resolver, and a token glued
 /// to `:` or `@` (`origin/main:file`, `user@host/x`) is a pathspec or an address.
@@ -673,9 +673,9 @@ mod tests {
 
     #[test]
     fn keeps_drive_letter_colon_in_absolute_windows_path() {
-        let c = only("at C:\\hyperpanes\\src\\Terminal.tsx:224");
+        let c = only("at C:\\avada\\src\\Terminal.tsx:224");
         assert_eq!(c.len(), 1);
-        assert_eq!(c[0].path, "C:\\hyperpanes\\src\\Terminal.tsx");
+        assert_eq!(c[0].path, "C:\\avada\\src\\Terminal.tsx");
         assert_eq!(c[0].line, Some(224));
     }
 
@@ -711,19 +711,16 @@ mod tests {
 
     #[test]
     fn an_assignment_or_flag_yields_the_rooted_path_after_its_equals() {
-        // `HP=/Applications/…/hyperpanes` in a Claude Code transcript: the variable is prose
+        // `HP=/Applications/…/avada` in a Claude Code transcript: the variable is prose
         // about the path, and the hover has to land on `/Applications/…` — not on a
         // non-existent `HP=/Applications/…` relative to the cwd.
-        let line = "$ HP=/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes";
+        let line = "$ HP=/Applications/Avada.app/Contents/MacOS/avada";
         let c = extract_path_candidates(line);
         assert_eq!(c.len(), 1);
-        assert_eq!(
-            c[0].path,
-            "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes"
-        );
+        assert_eq!(c[0].path, "/Applications/Avada.app/Contents/MacOS/avada");
         assert_eq!(
             &line[c[0].start..c[0].end],
-            "/Applications/Hyperpanes.app/Contents/MacOS/hyperpanes"
+            "/Applications/Avada.app/Contents/MacOS/avada"
         );
 
         let c = extract_path_candidates("--out=~/tmp/report.txt");

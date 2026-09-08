@@ -83,7 +83,7 @@ impl Ghost {
         unsafe {
             let hmod = GetModuleHandleW(None).unwrap();
             let hinst = HINSTANCE(hmod.0);
-            let class = w!("HyperpanesTearoffGhost");
+            let class = w!("AvadaTearoffGhost");
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(ghost_wndproc),
                 hInstance: hinst,

@@ -1,6 +1,6 @@
 ---
 name: goal-orchestrator
-description: Run a long-lived, headless per-project GOAL orchestrator on hyperpanes — hold a project's goal list, spawn a fable/opus spec agent per goal, have it fan work out to sonnet impl agents via the durable work queue, watchdog wedged agents, rotate across Claude accounts on limits, and loop 24/7. Use when the user wants a project to pursue goals autonomously, "set a goal for <project>", stand up a goals loop, or invokes /goal-orchestrator. One orchestrator instance per project.
+description: Run a long-lived, headless per-project GOAL orchestrator on avada — hold a project's goal list, spawn a fable/opus spec agent per goal, have it fan work out to sonnet impl agents via the durable work queue, watchdog wedged agents, rotate across Claude accounts on limits, and loop 24/7. Use when the user wants a project to pursue goals autonomously, "set a goal for <project>", stand up a goals loop, or invokes /goal-orchestrator. One orchestrator instance per project.
 disable-model-invocation: true
 argument-hint: "<project path or name> — the project this orchestrator owns"
 ---
@@ -13,8 +13,8 @@ yourself — you decompose intent into goals, spawn a spec agent per goal, and k
 healthy.
 
 Flow: **you → spec agent (per goal, fable/opus) → impl agents (sonnet)**. Design & rationale:
-`hyperpanes/docs/goals-system-plan.md`. You orchestrate the **existing** hyperpanes control API via
-the hyperpanes MCP (see the `use-hyperpanes` skill) — no bespoke tooling.
+`avada/docs/goals-system-plan.md`. You orchestrate the **existing** avada control API via
+the avada MCP (see the `use-avada` skill) — no bespoke tooling.
 
 ## Your identity & invariants
 
@@ -28,7 +28,7 @@ the hyperpanes MCP (see the `use-hyperpanes` skill) — no bespoke tooling.
   running ledger in your replies: each goal's `id`, one-line intent, status, and its spec-agent
   pane id. Re-derive it from `list_panes` + `list_tasks` after any resume.
 - **Agents are panes, never subagents.** Every spec agent and every impl agent runs in its own
-  hyperpanes pane (`open_pane` / `spawn_workers` via the hyperpanes MCP) — NEVER as an in-process
+  avada pane (`open_pane` / `spawn_workers` via the avada MCP) — NEVER as an in-process
   subagent (no Task tool, no bare `claude -p` inside your own pane). Panes are what make the org
   observable (`read_pane`), watchdoggable, restartable with `resume:true`, and account-rotatable;
   a subagent is invisible to all of that and dies with you.
@@ -66,7 +66,7 @@ For each goal you're given (free text):
    you spawn so a glance at the workspace reads project → task.
 3. **Ingest reports.** Read spec-agent messages (`read_messages` on your pane; spec agents
    `send_to_parent`). The bus is pull-only, so the app helps: when mail lands for your pane while
-   you're idle it types a one-line `[hyperpanes] inbox: N new message(s) … read_messages {paneId,
+   you're idle it types a one-line `[avada] inbox: N new message(s) … read_messages {paneId,
    after:<seq>}` nudge into you. **Treat that line as a work order** — read from the given cursor
    and act before anything else. It is coalesced (one line per burst) and rate-limited, so still
    poll `read_messages` yourself on every loop pass; never assume the nudge is your only signal.
@@ -90,7 +90,7 @@ The org is "plan big, execute small": each tier runs a cheaper model for the bul
 smarter one at the forks — impl agents (sonnet) consult their spec agent (opus/fable), and spec
 agents consult **you** (the top-tier model). So when a spec agent sends `needs-decision <q>` or a
 premise/plan consult, treat it as a paid call on your intelligence: answer promptly and crisply
-(`send_message {to:<its pane id>, from:"$HYPERPANES_PANE_ID", body:<the decision>}`) from the goal
+(`send_message {to:<its pane id>, from:"$AVADA_PANE_ID", body:<the decision>}`) from the goal
 intent — a fast, sharp answer here is worth far more than the tokens, because it steers a whole
 fan-out before it builds the wrong thing. Only escalate to the human when the fork genuinely needs
 them (leave it open in your ledger and keep the other goals moving). You already pass each spec
@@ -157,7 +157,7 @@ On every loop iteration, inspect your live spec-agent/impl panes and judge liven
 
 Spec agents do the fan-out, but you own the queue namespace: one queue per goal (e.g. `g1`), so a
 goal's subtasks are isolated and you can `list_tasks`/`purge_queue` per goal. Impl agents drain via
-the runner (`spawn_workers` with `base:"<committish>"` / `hyperpanes worker --queue <g> --count N
+the runner (`spawn_workers` with `base:"<committish>"` / `avada worker --queue <g> --count N
 --worktree --base <committish>`); subtasks carry
 a `dependsOn` DAG so the queue gates claim order. The worktree fork point is always explicit —
 `--worktree` refuses to run without `--base` (see `docs/worker-worktree-base.md`). The queue is durable and self-recovering (see the
@@ -173,27 +173,27 @@ not a code limit; hold the line so concurrent goals don't explode the pane count
 ### MCP config on every spawned claude
 
 Every `claude` the goals system spawns — this orchestrator, spec agents, impl agents — must carry
-`--mcp-config <state-dir>/goals-mcp.json` (state dir = `hyperpanes_core::persistence::paths::state_dir()`,
-e.g. `~/.local/state/hyperpanes` on Linux). Account rotation below points `CLAUDE_CONFIG_DIR` at
+`--mcp-config <state-dir>/goals-mcp.json` (state dir = `avada_core::persistence::paths::state_dir()`,
+e.g. `~/.local/state/avada` on Linux). Account rotation below points `CLAUDE_CONFIG_DIR` at
 per-account dirs whose `.claude.json` has no user-scoped MCP registrations, and `claude` ignores
 the default `~/.claude.json` once `CLAUDE_CONFIG_DIR` is set — without the flag, the pane loses
-every `mcp__hyperpanes__*` tool. The app already appends it on your own spawn; pass it down the
+every `mcp__avada__*` tool. The app already appends it on your own spawn; pass it down the
 same way when you spawn a spec agent, and tell the spec agent to do the same in its
 `spawn_workers` command, e.g.:
 `spawn_workers {queue, count:N, isolation:"worktree", base:"<fork committish>", stream:true, lingerSecs:120, command:"sh -c 'claude --dangerously-skip-permissions --mcp-config <state-dir>/goals-mcp.json -p \"$HP_TASK_PAYLOAD\" --output-format stream-json --verbose --append-system-prompt-file $HP_GOAL_PERSONA_DIR/IMPL.md ${HP_GOAL_SETTINGS:+--settings $HP_GOAL_SETTINGS} --model ${HP_GOAL_IMPL_MODEL:-claude-sonnet-5[1m]}'"}`
 
-### If the `mcp__hyperpanes__*` tools won't load — drop to the Control API, don't reverse-engineer
+### If the `mcp__avada__*` tools won't load — drop to the Control API, don't reverse-engineer
 
 Some harnesses load tools on demand and **cannot surface MCP tool schemas** even when the server
-is registered and running — so `mcp__hyperpanes__open_pane` etc. are never callable, no matter how
+is registered and running — so `mcp__avada__open_pane` etc. are never callable, no matter how
 you search for them. **Do not** waste turns probing the tool list, guessing a `select:`/loader
 syntax, or reverse-engineering the wire protocol. The control API is a plain loopback HTTP server
 and every MCP tool maps **1:1** to an endpoint. When the MCP tools aren't callable, invoke the
-`use-hyperpanes` skill and drop straight to its **Control-API tier**:
+`use-avada` skill and drop straight to its **Control-API tier**:
 
-1. Read `<state-dir>/control.json` (e.g. `~/.local/state/hyperpanes/control.json`) for `{port, token}`.
+1. Read `<state-dir>/control.json` (e.g. `~/.local/state/avada/control.json`) for `{port, token}`.
 2. `curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:<port>/health` to confirm it's live.
-3. Drive it with `Authorization: Bearer <token>` — `POST /command` with `{"type":"newPane"|"setMeta"|"promptPane"|...}` for pane ops, `GET /panes/:id/output`, `GET /panes/:id/messages`, the `/queues/*` endpoints for the work queue. Full endpoint + payload mapping: the `use-hyperpanes` skill's `API.md`.
+3. Drive it with `Authorization: Bearer <token>` — `POST /command` with `{"type":"newPane"|"setMeta"|"promptPane"|...}` for pane ops, `GET /panes/:id/output`, `GET /panes/:id/messages`, the `/queues/*` endpoints for the work queue. Full endpoint + payload mapping: the `use-avada` skill's `API.md`.
 
 This recovers the entire read/drive/orchestrate surface via `Bash` alone. Prefer it the moment the
 MCP tools don't answer — a wrapper you can shell beats a tool you can't load. Pass this same

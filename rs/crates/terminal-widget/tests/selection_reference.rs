@@ -9,7 +9,7 @@
 //! The drag threshold (4 px) is part of the contract: a press + sub-threshold twitch must
 //! NOT become a selection (that's the clipboard-clobber guard), so tests drag well past it.
 
-use hyperpanes_terminal_widget::{SoftwareRenderer, TerminalPane};
+use avada_terminal_widget::{SoftwareRenderer, TerminalPane};
 
 /// A 20×4 pane over a 200×80 surface → exact 10×20 px cells.
 const SURF_W: f32 = 200.0;

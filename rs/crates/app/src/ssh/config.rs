@@ -20,12 +20,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Default listen port. 2222 rather than 22: hyperpanes runs as an unprivileged desktop app
+/// Default listen port. 2222 rather than 22: avada runs as an unprivileged desktop app
 /// and must never look like it is trying to replace the system sshd.
 pub const DEFAULT_PORT: u16 = 2222;
 /// Default listen address — loopback only.
 pub const DEFAULT_BIND: &str = "127.0.0.1";
-/// Default detach key, matching `hyperpanes attach` (`Ctrl-\` then `d`).
+/// Default detach key, matching `avada attach` (`Ctrl-\` then `d`).
 pub const DEFAULT_DETACH_KEY: &str = "C-\\";
 
 /// Contents of `ssh-settings.json`.
@@ -113,7 +113,7 @@ impl SshSettings {
         let mut json = serde_json::to_vec_pretty(self)
             .map_err(|e| format!("could not serialize ssh settings: {e}"))?;
         json.push(b'\n');
-        hyperpanes_core::persistence::paths::write_atomic(path, &json)
+        avada_core::persistence::paths::write_atomic(path, &json)
             .map_err(|e| format!("{}: {e}", path.display()))
     }
 
@@ -124,7 +124,7 @@ impl SshSettings {
     pub fn resolve_bind(&self) -> Result<SocketAddr, String> {
         let ip: IpAddr = self.bind.trim().parse().map_err(|_| {
             format!(
-                "ssh bind {:?} is not an IP address (hyperpanes never resolves a hostname for a \
+                "ssh bind {:?} is not an IP address (avada never resolves a hostname for a \
                  listen address — write 127.0.0.1, ::1, 0.0.0.0 or a literal interface address)",
                 self.bind
             )
@@ -166,9 +166,9 @@ pub struct SshPaths {
     pub host_key: PathBuf,
     /// `authorized_keys`-format list of client keys allowed to attach.
     pub authorized_keys: PathBuf,
-    /// `device-tokens.json` — the paired-device table `hyperpanes pair` writes. Devices that
+    /// `device-tokens.json` — the paired-device table `avada pair` writes. Devices that
     /// paired with `--ssh-key` carry a public key here, and the SSH server treats those as a
-    /// second source of authorized keys so that one pairing and one `hyperpanes revoke <label>`
+    /// second source of authorized keys so that one pairing and one `avada revoke <label>`
     /// cover both the mobile bearer token and the phone's SSH key.
     pub device_tokens: PathBuf,
 }
@@ -178,7 +178,7 @@ impl SshPaths {
     /// host key in the state dir (machine-generated runtime state, like `control.json`).
     #[tracing::instrument(level = "debug", ret)]
     pub fn from_env() -> Self {
-        use hyperpanes_core::persistence::paths;
+        use avada_core::persistence::paths;
         let cfg = paths::config_dir();
         let state = paths::state_dir().join("ssh");
         Self {

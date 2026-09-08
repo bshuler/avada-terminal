@@ -1,6 +1,6 @@
 # Worker worktree fork point: `--base` (required with `--worktree`)
 
-`hyperpanes worker --worktree` creates one throwaway git worktree per claimed task. This doc is
+`avada worker --worktree` creates one throwaway git worktree per claimed task. This doc is
 the single source of truth for where those worktrees fork from; SKILL.md / SPEC.md link here
 rather than restating it.
 
@@ -58,20 +58,20 @@ Now:
 ## Migration
 
 - Bare runner invocations: add the flag —
-  `hyperpanes worker --queue <q> --count N --worktree --base main -- …`.
+  `avada worker --queue <q> --count N --worktree --base main -- …`.
 - Dependent waves: `--base <goal-integration-branch>` instead of checking that branch out in a
   shared cwd.
-- **Version-skew gap (closes when `g7/mcp-base` merges + publishes):** a hyperpanes binary with
-  this change plus a published `hyperpanes-mcp` *without* the `base` passthrough (≤ 0.1.12) means
+- **Version-skew gap (closes when `g7/mcp-base` merges + publishes):** a avada binary with
+  this change plus a published `avada-mcp` *without* the `base` passthrough (≤ 0.1.12) means
   `spawn_workers {isolation:"worktree"}` spawns runners that exit immediately with the teaching
   error — loud, not silent. Until the implemented follow-up below lands in a published package,
   either spawn worker panes running the bare runner command (`open_pane`), or point
-  `HYPERPANES_WORKER_BIN` at a wrapper script that injects `--base`.
+  `AVADA_WORKER_BIN` at a wrapper script that injects `--base`.
 
-## Follow-up: `base` passthrough in hyperpanes-mcp — DONE on `g7/mcp-base`, pending merge + publish
+## Follow-up: `base` passthrough in avada-mcp — DONE on `g7/mcp-base`, pending merge + publish
 
 **Do not re-implement this.** Goal g7 completed it on branch `g7/mcp-base` in
-`~/dev/hyperpanes-mcp` (stacked on `g2/spawn-workers-passthrough`): `base` added to the
+`~/dev/avada-mcp` (stacked on `g2/spawn-workers-passthrough`): `base` added to the
 `spawn_workers` schema, REQUIRED with `isolation:"worktree"`, guarded in the handler before any
 `newPane` is issued, emitted as `--base` in the runner argv; verified 170 tests green + tsc clean
 in a clean checkout. What remains is merging g2+g7 and publishing the package — the version-skew

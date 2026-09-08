@@ -1,5 +1,5 @@
 //! Port of the second-instance launch-routing in `src/main/workspace.ts`:
-//! `resolveSecondInstanceWindows` — a 2nd `hyperpanes …` invocation's argv + cwd → the
+//! `resolveSecondInstanceWindows` — a 2nd `avada …` invocation's argv + cwd → the
 //! window specs to open plus the routing to apply (new window vs attach).
 //!
 //! REUSES the routing enums and parser already defined in `crate::cli::parse`
@@ -23,7 +23,7 @@ pub struct SecondInstance {
     pub routing: LaunchRouting,
 }
 
-/// Resolve a second `hyperpanes …` invocation (its `argv` + `cwd`) into windows +
+/// Resolve a second `avada …` invocation (its `argv` + `cwd`) into windows +
 /// routing. No last-session fallback.
 #[tracing::instrument(level = "debug", ret)]
 pub fn resolve_second_instance_windows(argv: &[String], cwd: &str) -> SecondInstance {
@@ -58,7 +58,7 @@ mod tests {
     use crate::cli::parse::{AttachAs, RoutingTarget};
 
     fn argv(rest: &[&str]) -> Vec<String> {
-        let mut v = vec!["/path/to/hyperpanes".to_string()];
+        let mut v = vec!["/path/to/avada".to_string()];
         v.extend(rest.iter().map(|s| s.to_string()));
         v
     }

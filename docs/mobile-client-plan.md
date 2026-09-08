@@ -1,8 +1,8 @@
-# Hyperpanes Mobile — iOS/Android remote client
+# Avada Mobile — iOS/Android remote client
 
 Status: **v1 implemented** on branch `feat/mobile-client` (host additions + Flutter app).
 The mobile apps are pure *clients*: everything (ptys, agents, files, queues) runs on the
-host hyperpanes; the phone streams, observes, and drives.
+host avada; the phone streams, observes, and drives.
 
 ## 1. Why this architecture
 
@@ -17,7 +17,7 @@ API** (`rs/crates/core/src/control/`):
 | Scrollback / attach snapshot | `GET /panes/{id}/output` (raw ANSI replay + byte `cursor`) |
 | Typing / prompting / key chords | `POST /panes/{id}/input` (`data`+`submit`, `keys`) |
 | Pane management | `POST /command` (`newPane`, `closePane`, `restartPane`, `renamePane`, `recolorPane`, `setLayout`, `focusPane`) |
-| Auth | bearer token — a per-device token minted by `hyperpanes pair` via `POST /devices` (master + scoped tokens also exist) |
+| Auth | bearer token — a per-device token minted by `avada pair` via `POST /devices` (master + scoped tokens also exist) |
 
 So the client is architecturally identical to the MCP server — but with a terminal
 *emulator on the device*: we stream **raw pty bytes** and emulate/render locally
@@ -49,7 +49,7 @@ Host change H3 adds it (additive; legacy clients ignore unknown fields).
 - **H3 `cursor` on WS `output` frames** — monotonic byte cursor after the batch.
 - **H4 `cols`/`rows` on `/state` panes** — from the session screen, so the device knows
   the grid to emulate.
-- **H5 `hyperpanes pair`** — CLI subcommand: reads `control.json`, enumerates non-loopback
+- **H5 `avada pair`** — CLI subcommand: reads `control.json`, enumerates non-loopback
   IPs (Tailscale 100.64/10 preferred), prints `hp://<host>:<port>/#<token>` pairing URLs
   + a scannable terminal QR code.
 
@@ -60,11 +60,11 @@ untrusted LANs is possible but the pair output warns about it. `allowInput` stay
 separate host-side switch. TLS termination is a non-goal for v1 (tailscale serve can
 provide HTTPS if wanted).
 
-**Per-device tokens.** `hyperpanes pair` does not hand the phone the master token — it POSTs
+**Per-device tokens.** `avada pair` does not hand the phone the master token — it POSTs
 `/devices` (master-only) to mint a distinct, labelled, full-authority (unscoped) token and
 embeds *that* in the QR, so the master credential never leaves the host. A scope is a whitelist
 of the panes that exist *now*, so it can't serve a full remote head that must reach panes opened
-later — hence device tokens are unscoped, but individually revocable (`hyperpanes revoke
+later — hence device tokens are unscoped, but individually revocable (`avada revoke
 <label>`) and optionally TTL'd (`pair --ttl 30d`). They persist to `device-tokens.json` (`0600`,
 beside `control.json`) and reload on start, so pairing survives a restart — the same guarantee
 the master token gets from its `control-token` file on remote binds. `POST/GET/DELETE /devices`
@@ -86,7 +86,7 @@ lib/src/ui/       connect, dashboard, terminal, composer, actions, settings
 ```
 
 ### Screens / UX (coding + Claude first)
-- **Connect** — scan `hyperpanes pair` QR or paste URL / manual host+port+token; saved
+- **Connect** — scan `avada pair` QR or paste URL / manual host+port+token; saved
   hosts (flutter_secure_storage for tokens).
 - **Dashboard** — live tree of windows→tabs→panes; each pane card shows label, project
   color, **AI subtitle** (`ai.subtitle` meta), liveness chip (`working` amber pulse /

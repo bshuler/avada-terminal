@@ -14,8 +14,8 @@
 //!   * `windows_of` normalises any file into a flat window list with the schema's
 //!     precedence (`windows` → `groups` → `panes`), dropping groupless windows.
 //!
-//! The `.hyperpanes` format (docs/hyperpanes-format.md, option (b)): on-disk files are
-//! a **versioned container** `{ "format": "hyperpanes", "version": 1, "workspace": {…} }`
+//! The `.avada` format (docs/avada-format.md, option (b)): on-disk files are
+//! a **versioned container** `{ "format": "avada", "version": 1, "workspace": {…} }`
 //! ([`WorkspaceEnvelope`]). The reader accepts BOTH that envelope and a bare legacy
 //! `WorkspaceFile` object (treated as "version 0"); the writer always emits the
 //! versioned form. A present-but-wrong `format`, or a `version` newer than this build
@@ -27,11 +27,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 /// The magic `format` discriminator of a versioned workspace container.
-pub const ENVELOPE_FORMAT: &str = "hyperpanes";
+pub const ENVELOPE_FORMAT: &str = "avada";
 /// The newest envelope `version` this build reads and the version it writes.
 pub const ENVELOPE_VERSION: u32 = 1;
 
-/// The versioned on-disk container: `{ "format": "hyperpanes", "version": 1,
+/// The versioned on-disk container: `{ "format": "avada", "version": 1,
 /// "workspace": { … } }`. Field declaration order is the canonical file order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceEnvelope {
@@ -75,7 +75,7 @@ pub fn parse_workspace_str(raw: &str) -> Result<WorkspaceFile, String> {
         Some(ENVELOPE_FORMAT) => {}
         other => {
             return Err(format!(
-                "not a hyperpanes workspace: \"format\" is {:?}, expected \"{ENVELOPE_FORMAT}\"",
+                "not a avada workspace: \"format\" is {:?}, expected \"{ENVELOPE_FORMAT}\"",
                 other.unwrap_or("<non-string>")
             ));
         }
@@ -85,17 +85,17 @@ pub fn parse_workspace_str(raw: &str) -> Result<WorkspaceFile, String> {
         Some(v) => {
             return Err(format!(
                 "workspace version {v} is newer than this build understands \
-                 (max {ENVELOPE_VERSION}) — update hyperpanes to open it"
+                 (max {ENVELOPE_VERSION}) — update avada to open it"
             ));
         }
         None => {
-            return Err("hyperpanes workspace is missing a numeric \"version\" field".to_string());
+            return Err("avada workspace is missing a numeric \"version\" field".to_string());
         }
     }
     let workspace = obj
         .get("workspace")
         .cloned()
-        .ok_or_else(|| "hyperpanes workspace is missing the \"workspace\" payload".to_string())?;
+        .ok_or_else(|| "avada workspace is missing the \"workspace\" payload".to_string())?;
     serde_json::from_value(workspace).map_err(|e| format!("invalid workspace payload: {e}"))
 }
 
@@ -242,7 +242,7 @@ pub fn read_workspace<P: AsRef<Path>>(path: P) -> Option<WorkspaceFile> {
     Some(resolve_cwds(&file, &base_dir))
 }
 
-/// Write a workspace file (pretty, 2-space) in the versioned `.hyperpanes` container
+/// Write a workspace file (pretty, 2-space) in the versioned `.avada` container
 /// form (`format`/`version`/`workspace`). Returns `false` on error (mirroring the TS
 /// `writeWorkspace` boolean). The reader stays tolerant of bare legacy files, so older
 /// `.json` workspaces keep loading even though saves are now always versioned.
@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(panes[2].cwd, None);
     }
 
-    // ---- the .hyperpanes versioned container (format/version/workspace) ----
+    // ---- the .avada versioned container (format/version/workspace) ----
 
     #[test]
     fn write_emits_versioned_envelope_and_read_round_trips() {
@@ -596,7 +596,7 @@ mod tests {
         assert!(write_workspace(&path, &ws));
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(
-            raw.contains("\"format\": \"hyperpanes\""),
+            raw.contains("\"format\": \"avada\""),
             "versioned form: {raw}"
         );
         assert!(raw.contains("\"version\": 1"), "versioned form: {raw}");
@@ -618,23 +618,23 @@ mod tests {
         let err =
             parse_workspace_str(r#"{"format":"notpanes","version":1,"workspace":{}}"#).unwrap_err();
         assert!(
-            err.contains("not a hyperpanes workspace") && err.contains("notpanes"),
+            err.contains("not a avada workspace") && err.contains("notpanes"),
             "error names the bad format: {err}"
         );
         // A non-string format is also a clear rejection, not a parse panic.
         let err = parse_workspace_str(r#"{"format":7,"version":1,"workspace":{}}"#).unwrap_err();
-        assert!(err.contains("not a hyperpanes workspace"), "error: {err}");
+        assert!(err.contains("not a avada workspace"), "error: {err}");
     }
 
     #[test]
     fn rejects_future_or_missing_version_with_a_clear_error() {
-        let err = parse_workspace_str(r#"{"format":"hyperpanes","version":2,"workspace":{}}"#)
-            .unwrap_err();
+        let err =
+            parse_workspace_str(r#"{"format":"avada","version":2,"workspace":{}}"#).unwrap_err();
         assert!(
             err.contains("version 2") && err.contains("newer"),
             "error explains the version gap: {err}"
         );
-        let err = parse_workspace_str(r#"{"format":"hyperpanes","workspace":{}}"#).unwrap_err();
+        let err = parse_workspace_str(r#"{"format":"avada","workspace":{}}"#).unwrap_err();
         assert!(
             err.contains("version"),
             "error mentions the missing version: {err}"
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn rejects_envelope_without_workspace_payload() {
-        let err = parse_workspace_str(r#"{"format":"hyperpanes","version":1}"#).unwrap_err();
+        let err = parse_workspace_str(r#"{"format":"avada","version":1}"#).unwrap_err();
         assert!(
             err.contains("workspace"),
             "error names the missing payload: {err}"
@@ -654,7 +654,7 @@ mod tests {
     fn envelope_round_trips_byte_identically_through_pretty_printing() {
         // The 2-space byte-identical contract re-stated for the container.
         let json = r#"{
-  "format": "hyperpanes",
+  "format": "avada",
   "version": 1,
   "workspace": {
     "name": "dev",

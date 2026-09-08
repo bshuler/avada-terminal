@@ -1,4 +1,4 @@
-//! Repo-local project files: `.hyperpanes/project.json`, the layout as a property of
+//! Repo-local project files: `.avada/project.json`, the layout as a property of
 //! the *checkout* instead of the machine.
 //!
 //! The persistence layer keys a saved layout by workspace uid under the user's
@@ -37,7 +37,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// The per-repo directory this module owns, at the root of a checkout.
-pub const PROJECT_DIR: &str = ".hyperpanes";
+pub const PROJECT_DIR: &str = ".avada";
 /// The file inside it.
 pub const PROJECT_FILE: &str = "project.json";
 
@@ -52,9 +52,9 @@ pub const MAX_WALK_DEPTH: usize = 64;
 /// Which marker ended the ancestor walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootMarker {
-    /// A `.hyperpanes/` directory — this repo describes its own windows.
-    Hyperpanes,
-    /// A `.git` entry with no `.hyperpanes/` beside it. The walk stops here rather than
+    /// A `.avada/` directory — this repo describes its own windows.
+    Avada,
+    /// A `.git` entry with no `.avada/` beside it. The walk stops here rather than
     /// continuing: a repo nested inside another checkout must not adopt the outer
     /// checkout's windows. It is also where a first "save to repo" belongs.
     Git,
@@ -78,20 +78,20 @@ impl ProjectRoot {
 /// A repo-local project file that was found and parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectFile {
-    /// The checkout root — the directory *containing* `.hyperpanes/`.
+    /// The checkout root — the directory *containing* `.avada/`.
     pub root: PathBuf,
-    /// `<root>/.hyperpanes/project.json`.
+    /// `<root>/.avada/project.json`.
     pub path: PathBuf,
     pub workspace: WorkspaceFile,
 }
 
-/// `<dir>/.hyperpanes/project.json`.
+/// `<dir>/.avada/project.json`.
 #[tracing::instrument(level = "debug", ret)]
 pub fn project_file_path(dir: &Path) -> PathBuf {
     dir.join(PROJECT_DIR).join(PROJECT_FILE)
 }
 
-/// Walk up from `start` to the first ancestor holding a `.hyperpanes/` directory or a
+/// Walk up from `start` to the first ancestor holding a `.avada/` directory or a
 /// `.git` entry, whichever comes first.
 ///
 /// Same shape as the git-root walk the sidebar does before recording a project — one
@@ -110,7 +110,7 @@ pub fn find_project_root<P: AsRef<Path>>(start: P) -> Option<ProjectRoot> {
         if d.join(PROJECT_DIR).is_dir() {
             return Some(ProjectRoot {
                 dir: d.to_path_buf(),
-                marker: RootMarker::Hyperpanes,
+                marker: RootMarker::Avada,
             });
         }
         if d.join(".git").exists() {
@@ -140,7 +140,7 @@ pub fn find_project_file<P: AsRef<Path>>(start: P) -> Option<PathBuf> {
 ///
 /// Relative pane cwds resolve against `root`, **not** against the file's own directory:
 /// a cwd in a repo-local file is written by a human thinking in repo-relative terms, and
-/// `"src"` meaning `<root>/.hyperpanes/src` would be nonsense.
+/// `"src"` meaning `<root>/.avada/src` would be nonsense.
 #[tracing::instrument(level = "debug", ret, skip(root))]
 pub fn read_project_at<P: AsRef<Path>>(root: P) -> Result<Option<ProjectFile>, String> {
     let root = root.as_ref();
@@ -162,12 +162,12 @@ pub fn read_project_at<P: AsRef<Path>>(root: P) -> Result<Option<ProjectFile>, S
 #[tracing::instrument(level = "debug", ret, skip(start))]
 pub fn discover_project<P: AsRef<Path>>(start: P) -> Result<Option<ProjectFile>, String> {
     match find_project_root(start) {
-        Some(root) if root.marker == RootMarker::Hyperpanes => read_project_at(&root.dir),
+        Some(root) if root.marker == RootMarker::Avada => read_project_at(&root.dir),
         _ => Ok(None),
     }
 }
 
-/// Write `workspace` to `<root>/.hyperpanes/project.json`, creating the directory,
+/// Write `workspace` to `<root>/.avada/project.json`, creating the directory,
 /// scrubbing credential-shaped `meta` keys, and carrying forward any key a newer build
 /// left behind. Returns the path written.
 ///
@@ -504,14 +504,14 @@ mod tests {
     // --- discovery ---
 
     #[test]
-    fn discovery_finds_the_hyperpanes_dir_from_a_nested_subdirectory() {
+    fn discovery_finds_the_avada_dir_from_a_nested_subdirectory() {
         let root = temp_root("nested");
         std::fs::create_dir_all(root.join(PROJECT_DIR)).unwrap();
         let deep = root.join("crates/core/src/workspace");
         std::fs::create_dir_all(&deep).unwrap();
 
         let found = find_project_root(&deep).expect("walk finds the root");
-        assert_eq!(found.marker, RootMarker::Hyperpanes);
+        assert_eq!(found.marker, RootMarker::Avada);
         assert_eq!(found.dir, root);
         assert_eq!(found.file_path(), project_file_path(&root));
 
@@ -519,9 +519,9 @@ mod tests {
     }
 
     /// A repo checked out inside another repo must not adopt the outer repo's windows:
-    /// the walk stops at the inner `.git`, sees no `.hyperpanes/` there, and answers None.
+    /// the walk stops at the inner `.git`, sees no `.avada/` there, and answers None.
     #[test]
-    fn discovery_stops_at_a_git_root_with_no_hyperpanes_dir() {
+    fn discovery_stops_at_a_git_root_with_no_avada_dir() {
         let outer = temp_root("stop-at-git");
         std::fs::create_dir_all(outer.join(PROJECT_DIR)).unwrap();
         write_project(&outer, &with_panes()).unwrap();
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips_the_note_creating_the_dir() {
-        let root = temp_root("round-trip"); // no .hyperpanes/ yet
+        let root = temp_root("round-trip"); // no .avada/ yet
         let path = write_project(&root, &with_panes()).unwrap();
         assert_eq!(path, project_file_path(&root));
 
@@ -617,7 +617,7 @@ mod tests {
         std::fs::write(
             &path,
             r#"{
-  "format": "hyperpanes",
+  "format": "avada",
   "version": 1,
   "provenance": { "writtenBy": "9.9" },
   "workspace": {
@@ -660,7 +660,7 @@ mod tests {
         let root = temp_root("malformed");
         let path = project_file_path(&root);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "{ \"format\": \"hyperpanes\", oops").unwrap();
+        std::fs::write(&path, "{ \"format\": \"avada\", oops").unwrap();
 
         let err = discover_project(root.join("src")).unwrap_err();
         assert!(err.contains("invalid JSON"), "{err}");
@@ -670,7 +670,7 @@ mod tests {
         std::fs::write(&path, r#"{ "format": "vscode", "version": 1 }"#).unwrap();
         assert!(discover_project(&root)
             .unwrap_err()
-            .contains("not a hyperpanes workspace"));
+            .contains("not a avada workspace"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -901,7 +901,7 @@ mod tests {
         write_project(&root, &portable).unwrap();
         let back = read_project_at(&root).unwrap().unwrap().workspace;
         // Read back, the relative cwd is absolute again — against the ROOT, not
-        // against `.hyperpanes/`.
+        // against `.avada/`.
         assert_eq!(
             back.panes.as_ref().unwrap()[0].cwd.as_deref(),
             Some(root.join("crates/core").to_string_lossy().as_ref())

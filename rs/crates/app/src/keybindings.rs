@@ -9,13 +9,13 @@
 //! like the renderer's `combos` overlay. The Preferences → Keybindings editor rebinds a
 //! chord (capture a key combo → [`Keymap::set`]), resets one to default ([`Keymap::reset`]),
 //! or resets them all ([`Keymap::reset_all`]); changes persist to
-//! `%APPDATA%\hyperpanes\native-keybindings.json`.
+//! `%APPDATA%\avada\native-keybindings.json`.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use hyperpanes_core::layout::navigate::Direction;
-use hyperpanes_core::persistence::paths;
+use avada_core::layout::navigate::Direction;
+use avada_core::persistence::paths;
 use serde::{Deserialize, Serialize};
 
 use crate::command::Command;

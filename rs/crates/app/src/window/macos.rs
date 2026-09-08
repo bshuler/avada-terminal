@@ -251,7 +251,7 @@ pub fn close(raw: isize) {
 /// and activate the app so it wins over whatever is currently frontmost.
 ///
 /// All three steps are needed. `makeKeyAndOrderFront:` alone raises the window WITHIN
-/// Hyperpanes but leaves another app frontmost, and a miniaturized window ignores it
+/// Avada but leaves another app frontmost, and a miniaturized window ignores it
 /// entirely — so a "take me to that pane" click would silently do nothing visible.
 #[tracing::instrument(level = "debug", ret)]
 pub fn raise(raw: isize) {

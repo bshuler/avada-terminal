@@ -21,8 +21,8 @@
 //! the server live; toggling Allow-Input flips `allow_input` on the running server.
 //!
 //! Env overrides (parity with the headless bin / Electron, for the MCP acceptance gate):
-//!   * `HYPERPANES_CONTROL_FILE` — discovery file path (also injected into spawned panes).
-//!   * `HYPERPANES_ALLOW_INPUT`  — `1`/`true`/`yes` forces `allowInput` on (else from settings).
+//!   * `AVADA_CONTROL_FILE` — discovery file path (also injected into spawned panes).
+//!   * `AVADA_ALLOW_INPUT`  — `1`/`true`/`yes` forces `allowInput` on (else from settings).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -34,13 +34,13 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
-use hyperpanes_core::control::dictation_service;
-use hyperpanes_core::control::readmodel::{PaneInfo, PaneStatus, ReadModel, TabInfo, WindowInfo};
-use hyperpanes_core::control::server::{self, notify_state, Shared};
-use hyperpanes_core::control::uiops::UiOp;
-use hyperpanes_core::persistence::{control_settings, paths};
-use hyperpanes_core::session_manager::{SessionEvent, SessionManager};
-use hyperpanes_core::tools::PaneKind;
+use avada_core::control::dictation_service;
+use avada_core::control::readmodel::{PaneInfo, PaneStatus, ReadModel, TabInfo, WindowInfo};
+use avada_core::control::server::{self, notify_state, Shared};
+use avada_core::control::uiops::UiOp;
+use avada_core::persistence::{control_settings, paths};
+use avada_core::session_manager::{SessionEvent, SessionManager};
+use avada_core::tools::PaneKind;
 
 use slint::Color;
 
@@ -135,13 +135,13 @@ impl ControlHost {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(mgr: &Arc<SessionManager>) -> Self {
         let settings = control_settings::load();
-        // Panes may inherit `HYPERPANES_CONTROL_FILE` set-but-empty from the app; treat
-        // empty as unset (see `hyperpanes pair`'s identical workaround).
-        let control_file = std::env::var_os("HYPERPANES_CONTROL_FILE")
+        // Panes may inherit `AVADA_CONTROL_FILE` set-but-empty from the app; treat
+        // empty as unset (see `avada pair`'s identical workaround).
+        let control_file = std::env::var_os("AVADA_CONTROL_FILE")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(paths::control_json);
-        let allow_input = settings.allow_input || env_truthy("HYPERPANES_ALLOW_INPUT");
+        let allow_input = settings.allow_input || env_truthy("AVADA_ALLOW_INPUT");
         let host = ControlHost {
             enabled: Cell::new(settings.enabled),
             allow_input: Cell::new(allow_input),
@@ -170,7 +170,7 @@ impl ControlHost {
         host
     }
 
-    /// The external pane id a control-spawned pane advertises (its `HYPERPANES_PANE_ID` and the
+    /// The external pane id a control-spawned pane advertises (its `AVADA_PANE_ID` and the
     /// key the Claude session hook writes markers under). `None` for GUI-native panes, whose
     /// pane id IS their session uid.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -236,7 +236,7 @@ impl ControlHost {
         local.max(remote)
     }
 
-    /// Mirror `pane_ids` to disk. A pane's `HYPERPANES_PANE_ID` is baked into its environment
+    /// Mirror `pane_ids` to disk. A pane's `AVADA_PANE_ID` is baked into its environment
     /// at spawn, but this uid→pane-id map lived only in the GUI's memory — so after a GUI
     /// relaunch re-attached a control-spawned pane, nothing could resolve its external id
     /// (Claude session markers are keyed by it). Best-effort; reloaded by [`Self::start`].
@@ -265,7 +265,7 @@ impl ControlHost {
             return;
         }
         // Recover the uid→pane-id map from the previous GUI generation, so re-attached
-        // control-spawned panes keep resolving their external id (env `HYPERPANES_PANE_ID`,
+        // control-spawned panes keep resolving their external id (env `AVADA_PANE_ID`,
         // the Claude session-marker key). Live in-memory entries win; stale uids are pruned
         // by the next reconcile pass.
         if self.pane_ids.borrow().is_empty() {
@@ -940,7 +940,7 @@ impl ControlHost {
         // The pane-id aliases also honor DAEMON liveness: right after a GUI relaunch this
         // pass can run before the surviving sessions are re-adopted (zero GUI panes), and
         // a GUI-presence-only prune would wipe the just-reloaded persisted map — orphaning
-        // every control-spawned pane's external id (its env HYPERPANES_PANE_ID is baked at
+        // every control-spawned pane's external id (its env AVADA_PANE_ID is baked at
         // spawn and keys the Claude session markers).
         self.pane_ids
             .borrow_mut()

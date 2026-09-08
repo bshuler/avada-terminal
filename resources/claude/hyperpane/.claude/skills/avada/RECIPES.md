@@ -5,8 +5,8 @@ Worked examples for the things that come up most. Every one starts from `tabs`, 
 ## "What is that pane doing?"
 
 ```
-hyperpanes ctl tabs
-hyperpanes ctl read p7 --tail 40
+avada ctl tabs
+avada ctl read p7 --tail 40
 ```
 
 `tabs` gives the outline; the pane id is the first field on the indented lines. `--tail 40` is
@@ -17,7 +17,7 @@ pager, `top`): scrollback of a TUI is a mess of repaints, but the screen is what
 ## "Did the build finish?"
 
 ```
-hyperpanes ctl read p7 --wait --tail 20
+avada ctl read p7 --wait --tail 20
 ```
 
 `--wait` blocks until the pane goes idle, so this answers with the finished output instead of
@@ -26,9 +26,9 @@ catching the build mid-run. If the pane never settles, it is still building.
 ## Run a command in an existing terminal
 
 ```
-hyperpanes ctl read   p7 --screen --tail 5     # 1. look before you type
-hyperpanes ctl submit p7 cargo test            # 2. say what you are running, then run it
-hyperpanes ctl read   p7 --wait --tail 40      # 3. read the result
+avada ctl read   p7 --screen --tail 5     # 1. look before you type
+avada ctl submit p7 cargo test            # 2. say what you are running, then run it
+avada ctl read   p7 --wait --tail 40      # 3. read the result
 ```
 
 Step 1 is not optional. A pane at a shell prompt takes `cargo test`; a pane sitting in `vim`, a
@@ -37,8 +37,8 @@ REPL, or another agent's session takes it as keystrokes into whatever that is.
 ## Interrupt something
 
 ```
-hyperpanes ctl keys p7 ctrl+c
-hyperpanes ctl read p7 --screen --tail 10
+avada ctl keys p7 ctrl+c
+avada ctl read p7 --screen --tail 10
 ```
 
 Answer a prompt the same way — `keys p7 enter`, `keys p7 escape`, `keys p7 down down enter`.
@@ -48,7 +48,7 @@ Answer a prompt the same way — `keys p7 enter`, `keys p7 escape`, `keys p7 dow
 When the work is yours rather than the user's, don't borrow their terminal:
 
 ```
-hyperpanes ctl new-pane --cwd ~/code/hyperpanes --cmd "cargo test" --label tests --color '#3b82f6'
+avada ctl new-pane --cwd ~/code/hyperpanes --cmd "cargo test" --label tests --color '#3b82f6'
 ```
 
 The reply is JSON carrying the new pane's id. The pane lands in the window's **active** tab;
@@ -58,12 +58,12 @@ that one is not undoable, so ask first.
 ## Set up a tab for a task
 
 ```
-hyperpanes ctl new-tab --title "release" --cwd ~/code/hyperpanes   # 202; reply carries the id
-hyperpanes ctl tabs                                                 # confirm it exists
-hyperpanes ctl focus-tab 1:4
-hyperpanes ctl new-pane --cwd ~/code/hyperpanes --label build
-hyperpanes ctl new-pane --cwd ~/code/hyperpanes --label logs
-hyperpanes ctl layout 1:4 columns
+avada ctl new-tab --title "release" --cwd ~/code/hyperpanes   # 202; reply carries the id
+avada ctl tabs                                                 # confirm it exists
+avada ctl focus-tab 1:4
+avada ctl new-pane --cwd ~/code/hyperpanes --label build
+avada ctl new-pane --cwd ~/code/hyperpanes --label logs
+avada ctl layout 1:4 columns
 ```
 
 Two things to be careful about. Tab writes return **202** — queued for the UI thread, not done —
@@ -76,7 +76,7 @@ tab, which is why `focus-tab` comes before the panes.
 They will say "the one running the server", not "p7".
 
 ```
-hyperpanes ctl panes
+avada ctl panes
 ```
 
 One line per pane — `id · tab · status · label` — across every window and tab, on screen or not.
@@ -86,8 +86,8 @@ ask; acting on the wrong terminal is not recoverable by re-reading it.
 ## Change a preference
 
 ```
-hyperpanes ctl settings                  # the authoritative key list
-hyperpanes ctl set fontPx 15
+avada ctl settings                  # the authoritative key list
+avada ctl set fontPx 15
 ```
 
 Read first. The patch is validated key-by-key and one unknown key fails the whole thing, so a
@@ -98,8 +98,8 @@ maximum: read back if the exact value matters.
 ## Reach something with no verb
 
 ```
-hyperpanes ctl get /projects
-hyperpanes ctl command '{"type":"setMeta","paneId":"p7","meta":{"role":"reviewer"}}'
+avada ctl get /projects
+avada ctl command '{"type":"setMeta","paneId":"p7","meta":{"role":"reviewer"}}'
 ```
 
 `get`, `post`, `patch` and `command` are the raw passthroughs; `REFERENCE.md` lists the routes.

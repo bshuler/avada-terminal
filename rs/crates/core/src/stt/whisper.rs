@@ -195,7 +195,7 @@ pub fn prefetch(settings: &super::SttSettings) {
         return;
     }
     let _ = std::thread::Builder::new()
-        .name("hyperpanes-model-fetch".into())
+        .name("avada-model-fetch".into())
         .spawn(move || {
             let _ = ensure(model);
         });
@@ -241,7 +241,7 @@ pub fn ensure(model: &Model) -> Result<PathBuf, String> {
 fn download(url: &str, dest: &Path, expect: u64) -> Result<(), String> {
     let (url, dest) = (url.to_string(), dest.to_path_buf());
     let handle = std::thread::Builder::new()
-        .name("hyperpanes-model-http".into())
+        .name("avada-model-http".into())
         .spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -676,7 +676,7 @@ mod tests {
     #[test]
     #[ignore = "downloads ~142 MB and runs the model"]
     fn a_real_recording_transcribes_to_the_words_that_were_said() {
-        // Run with: cargo test -p hyperpanes-core -- --ignored transcribes_to_the_words
+        // Run with: cargo test -p avada-core -- --ignored transcribes_to_the_words
         // Speak into HP_STT_WAV, or leave it unset to use the recorder itself.
         let wav = std::env::var("HP_STT_WAV").expect("set HP_STT_WAV to a spoken wav file");
         let text = transcribe(Path::new(&wav), &SttSettings::default()).unwrap();

@@ -199,11 +199,11 @@ pub struct SpawnOptions {
     pub env: Option<EnvMap>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
-    /// The owning pane's stable id → injected as `HYPERPANES_PANE_ID`.
+    /// The owning pane's stable id → injected as `AVADA_PANE_ID`.
     pub pane_id: Option<String>,
     /// Shell integration (interactive branch only). See [`Integration`].
     pub integration: Option<Integration>,
-    /// Path to `control.json` (→ `HYPERPANES_CONTROL_FILE`, unless a scoped token is
+    /// Path to `control.json` (→ `AVADA_CONTROL_FILE`, unless a scoped token is
     /// present). Supplied by the persistence/control wiring. `None` → not injected.
     pub control_file: Option<String>,
 }
@@ -874,7 +874,7 @@ impl PaneLoad {
 ///   ([`SessionManager::new`]) and what CI / `--no-daemon` use.
 /// * [`Backend::Daemon`] — a [`DaemonSessionManager`] talking to the PTY-owning
 ///   [session daemon](crate::session::daemon) over a UDS, so the PTYs survive a GUI crash
-///   (selected by [`SessionManager::new_daemon`], wired to `HYPERPANES_SESSION_DAEMON=1`).
+///   (selected by [`SessionManager::new_daemon`], wired to `AVADA_SESSION_DAEMON=1`).
 ///
 /// Every public method dispatches to the active backend with an **identical signature**, so
 /// the GUI's call sites are untouched — the whole point of M1: the backend swap is invisible
@@ -1226,13 +1226,13 @@ impl SessionManager {
     //
     // Why the in-process backend answers "yes, and nobody else holds anything": its PTYs are
     // children of *this* process and its registry is private to it. There is no other
-    // hyperpanes process that could be hosting one of these uids, so a claim can never lose
+    // avada process that could be hosting one of these uids, so a claim can never lose
     // and no uid can ever be claimed elsewhere. The daemon backend is the only one where the
     // question is real.
 
     /// **Claim `uid` for this process** — the no-double-adoption gate. Returns whether the
     /// claim was granted; a caller that gets `false` must NOT adopt the session, because
-    /// another hyperpanes process is already hosting it.
+    /// another avada process is already hosting it.
     ///
     /// See [`DaemonSessionManager::claim`](crate::session::daemon_client::DaemonSessionManager::claim)
     /// for the round-trip and the fail-closed policy.
@@ -1266,7 +1266,7 @@ impl SessionManager {
         }
     }
 
-    /// The uids some **other** hyperpanes process is currently hosting — what the left
+    /// The uids some **other** avada process is currently hosting — what the left
     /// panel subtracts from its detached list so it never offers to adopt a pane that is
     /// visibly running in another window. Empty for the in-process backend.
     #[tracing::instrument(level = "debug", ret, skip(self))]

@@ -4,9 +4,9 @@
 //! command line, the crash reporter) calls [`init`] once at entry. Levels resolve, highest
 //! precedence first:
 //!
-//! 1. `HYPERPANES_LOG` — a `tracing_subscriber::EnvFilter` directive string (`debug`,
-//!    `hyperpanes_core::session=trace,info`, …). A session-scoped override.
-//! 2. `HYPERPANES_DEBUG` — the historical debug switch; any value means `debug`.
+//! 1. `AVADA_LOG` — a `tracing_subscriber::EnvFilter` directive string (`debug`,
+//!    `avada_core::session=trace,info`, …). A session-scoped override.
+//! 2. `AVADA_DEBUG` — the historical debug switch; any value means `debug`.
 //! 3. The persisted `logLevel` setting, handed in by the caller as `default_level`.
 //! 4. `info`.
 //!
@@ -15,7 +15,7 @@
 //! emits span `new`/`close` events, and `ret` records the value on the way out. At `info`
 //! the spans cost one disabled-callsite check each and emit nothing.
 //!
-//! The file lives under [`crate::persistence::paths::logs_dir`] as `hyperpanes-<role>.log`
+//! The file lives under [`crate::persistence::paths::logs_dir`] as `avada-<role>.log`
 //! and rolls at [`MAX_LOG_BYTES`] into `.1` … `.N` ([`KEEP_ROTATED`]). Warnings and errors are
 //! mirrored to stderr so a terminal launch still shows what went wrong.
 
@@ -36,9 +36,9 @@ pub const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
 pub const KEEP_ROTATED: usize = 5;
 
 /// Environment variable carrying an `EnvFilter` directive string.
-pub const ENV_LOG: &str = "HYPERPANES_LOG";
+pub const ENV_LOG: &str = "AVADA_LOG";
 /// The historical debug switch: set (to anything) means `debug`.
-pub const ENV_DEBUG: &str = "HYPERPANES_DEBUG";
+pub const ENV_DEBUG: &str = "AVADA_DEBUG";
 
 /// The level names a `logLevel` setting may hold, in ascending verbosity.
 pub const LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
@@ -81,7 +81,7 @@ fn resolve_from(env_log: Option<&str>, env_debug: bool, default_level: &str) -> 
 /// The log file for a process role (`app`, `daemon`, `cli`, `worker`, `crash`, `headless`).
 #[tracing::instrument(level = "debug", ret)]
 pub fn log_path(role: &str) -> PathBuf {
-    crate::persistence::paths::logs_dir().join(format!("hyperpanes-{role}.log"))
+    crate::persistence::paths::logs_dir().join(format!("avada-{role}.log"))
 }
 
 /// Install the global subscriber for this process. `role` names the log file;
@@ -201,7 +201,7 @@ impl Rotating {
                     self.failed = true;
                     let _ = writeln!(
                         io::stderr(),
-                        "hyperpanes: cannot open log file {}: {e}",
+                        "avada: cannot open log file {}: {e}",
                         self.path.display()
                     );
                 }
@@ -276,7 +276,7 @@ mod tests {
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("hp-logging-{}-{}", std::process::id(), name));
         let _ = std::fs::remove_dir_all(&dir);
-        dir.join("hyperpanes-test.log")
+        dir.join("avada-test.log")
     }
 
     #[test]
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn log_path_is_per_role_under_logs_dir() {
         let p = log_path("daemon");
-        assert_eq!(p.file_name().unwrap(), "hyperpanes-daemon.log");
+        assert_eq!(p.file_name().unwrap(), "avada-daemon.log");
         assert_eq!(p.parent().unwrap(), crate::persistence::paths::logs_dir());
     }
 }

@@ -1,5 +1,5 @@
 //! Compile the app's Slint UI, importing the reusable `TerminalPane` from the
-//! `hyperpanes-terminal-widget` crate via a Slint *library path*. In `ui/app.slint`
+//! `avada-terminal-widget` crate via a Slint *library path*. In `ui/app.slint`
 //! that surfaces as `import { TerminalPane, KeyMsg } from "@widgets";`.
 
 use std::collections::HashMap;
@@ -39,7 +39,7 @@ fn main() {
     // this a dev build registers no hook at all and every hand-started tool pane silently
     // falls back to the scan-and-diff heuristic — the one path we cannot test by running
     // it. This list and the five packaging manifests must all carry every entry of
-    // HOOKED_TOOLS; `every_hook_ships_in_every_packaging_manifest` in hyperpanes-core's
+    // HOOKED_TOOLS; `every_hook_ships_in_every_packaging_manifest` in avada-core's
     // tools::session_hook asserts it, because each of the last two tools added was added
     // to some of those places and not the others.
     let hooks: [(&str, &str); 6] = [
@@ -99,9 +99,9 @@ fn main() {
     for f in [
         "README.md",
         ".claude/settings.json",
-        ".claude/skills/hyperpanes/SKILL.md",
-        ".claude/skills/hyperpanes/REFERENCE.md",
-        ".claude/skills/hyperpanes/RECIPES.md",
+        ".claude/skills/avada/SKILL.md",
+        ".claude/skills/avada/REFERENCE.md",
+        ".claude/skills/avada/RECIPES.md",
     ] {
         println!("cargo:rerun-if-changed={}", hyperpane.join(f).display());
     }

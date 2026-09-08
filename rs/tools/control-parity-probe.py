@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Control-API parity probe (Wave-2 INTEGRATION track).
 
-Run against an ISOLATED hyperpanes instance (temp config dirs!) on each OS and
+Run against an ISOLATED avada instance (temp config dirs!) on each OS and
 diff the outputs: it captures the JSON *shapes* (key paths + value types, values
 dropped) of control.json discovery, GET /health, GET /state, a POST /command
 round-trip (renamePane), POST /panes/{id}/input, and the WS /events hello +

@@ -1,7 +1,7 @@
 //! The SSH channel ↔ attach-core bridge (mux backend M3).
 //!
 //! An accepted SSH `shell`/`exec` channel is wired straight into
-//! [`hyperpanes_core::session::attach`] — the tty-free client M2 split out for exactly this.
+//! [`avada_core::session::attach`] — the tty-free client M2 split out for exactly this.
 //! Nothing about the protocol, the detach key, the resize policy, or the UTF-8 stream decode
 //! is re-implemented here; this module only supplies the two ends the CLI would have taken
 //! from a tty:
@@ -29,15 +29,15 @@
 //! # Teardown
 //!
 //! Every path ends with the channel closed and an exit status sent, and never kills the
-//! session: detaching over SSH leaves the pane running, exactly as `hyperpanes attach` does.
+//! session: detaching over SSH leaves the pane running, exactly as `avada attach` does.
 //! The input thread ends when its sender is dropped (the handler drops the channel state on
 //! `channel_close`/`channel_eof`, or when the whole connection's handler is dropped).
 
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use hyperpanes_core::session::attach::{self, Attachment, PumpEnd, ResizePolicy};
-use hyperpanes_core::session::proto::SessionMeta;
+use avada_core::session::attach::{self, Attachment, PumpEnd, ResizePolicy};
+use avada_core::session::proto::SessionMeta;
 use russh::server::Handle;
 use russh::ChannelId;
 
@@ -138,7 +138,7 @@ pub fn spawn(params: BridgeParams, handle: Handle, channel: ChannelId) -> Bridge
                 Ok(code) => code,
                 Err(msg) => {
                     tracing::debug!("ssh: channel failed: {msg}");
-                    let _ = sink.write_all(format!("\r\nhyperpanes: {msg}\r\n").as_bytes());
+                    let _ = sink.write_all(format!("\r\navada: {msg}\r\n").as_bytes());
                     let _ = sink.flush();
                     1
                 }
@@ -181,7 +181,7 @@ fn attach_main(
         return Ok(0);
     }
     if sessions.is_empty() {
-        return Err("no live sessions in this hyperpanes workspace.".to_string());
+        return Err("no live sessions in this avada workspace.".to_string());
     }
 
     let uid = match pick(&sessions, params.query.as_deref(), sink, &input_rx)? {
@@ -204,7 +204,7 @@ fn attach_main(
             .unwrap_or((None, None));
         if attach::fits(params.term, session_grid) == Some(false) {
             let msg = format!(
-                "\r\nhyperpanes: this terminal is {}x{}; the pane is larger and will be \
+                "\r\navada: this terminal is {}x{}; the pane is larger and will be \
                  clipped.\r\n",
                 params.term.0, params.term.1
             );
@@ -266,11 +266,11 @@ fn attach_main(
     let end = attachment.pump_output(sink).map_err(|e| e.to_string())?;
     let (tail, code) = match end {
         PumpEnd::Exited(code) => (
-            format!("\r\nhyperpanes: {uid} exited (code {code})\r\n"),
+            format!("\r\navada: {uid} exited (code {code})\r\n"),
             u32::try_from(code).unwrap_or(1),
         ),
         PumpEnd::Disconnected => (
-            format!("\r\nhyperpanes: detached from {uid} — the session is still running\r\n"),
+            format!("\r\navada: detached from {uid} — the session is still running\r\n"),
             0,
         ),
     };
@@ -367,9 +367,9 @@ fn read_line(rx: &Receiver<Vec<u8>>, sink: &mut ChannelSink) -> Result<Option<St
 #[tracing::instrument(level = "debug", ret)]
 fn render_list(sessions: &[SessionMeta]) -> String {
     if sessions.is_empty() {
-        return "No live hyperpanes sessions.\r\n".to_string();
+        return "No live avada sessions.\r\n".to_string();
     }
-    let mut s = String::from("Live hyperpanes sessions:\r\n");
+    let mut s = String::from("Live avada sessions:\r\n");
     for (i, m) in sessions.iter().enumerate() {
         let grid = match (m.cols, m.rows) {
             (Some(c), Some(r)) => format!("{c}x{r}"),
@@ -585,7 +585,7 @@ mod tests {
         for line in text.split("\r\n") {
             assert!(!line.contains('\n'), "bare LF in raw-mode output: {text:?}");
         }
-        assert_eq!(render_list(&[]), "No live hyperpanes sessions.\r\n");
+        assert_eq!(render_list(&[]), "No live avada sessions.\r\n");
     }
 
     #[test]

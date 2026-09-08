@@ -4,7 +4,7 @@
 //! runner's shared cwd (the silent-degradation defect that put an unisolated
 //! `claude -p` in the shared checkout on 2026-07-30).
 //!
-//! Drives the real `hyperpanes worker` binary against a minimal mock of the control
+//! Drives the real `avada worker` binary against a minimal mock of the control
 //! API's queue endpoints, with a scratch git repo as the runner cwd. The failure is
 //! forced the same way it happens in production: a stale `worker/<queue>/<id8>`
 //! branch AHEAD of the base, which `Worktree::create_in` refuses to clobber.
@@ -139,9 +139,9 @@ fn plant_stale_branch(repo: &Path, queue: &str, id8: &str) {
 }
 
 fn run_worker(repo: &Path, control: &Path, extra: &[&str], child: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_hyperpanes"))
+    Command::new(env!("CARGO_BIN_EXE_avada"))
         .current_dir(repo)
-        .env("HYPERPANES_CONTROL_FILE", control)
+        .env("AVADA_CONTROL_FILE", control)
         .args([
             "worker",
             "--queue",

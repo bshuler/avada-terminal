@@ -6,11 +6,11 @@
 //! blob, and flips `dirty` (font changes also flag a reload) so the next resync
 //! re-projects them — the same contract every workspace mutation uses.
 //!
-//! Persisted to `%APPDATA%\hyperpanes\native-settings.json` via
+//! Persisted to `%APPDATA%\avada\native-settings.json` via
 //! `core::persistence::paths` (atomic write), distinct from the Electron build's
 //! localStorage blob so the two never fight over a file.
 
-use hyperpanes_core::persistence::paths;
+use avada_core::persistence::paths;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -59,7 +59,7 @@ pub fn font_label(font: &str) -> &str {
     }
 }
 
-/// Fonts shipped with hyperpanes (OFL 1.1, baked into the binary) so they're always
+/// Fonts shipped with avada (OFL 1.1, baked into the binary) so they're always
 /// available regardless of what the user has installed. Extracted to [`bundled_font_dir`]
 /// on startup (see [`init_bundled_fonts`]); their file names match the [`FONT_OPTIONS`]
 /// values so the picker resolves them. Licenses live in `assets/fonts/*-OFL.txt`.
@@ -74,7 +74,7 @@ pub const BUNDLED_FONTS: [(&str, &[u8]); 2] = [
     ),
 ];
 
-/// Where the baked-in fonts are extracted: `%APPDATA%\hyperpanes\fonts`.
+/// Where the baked-in fonts are extracted: `%APPDATA%\avada\fonts`.
 #[tracing::instrument(level = "debug", ret)]
 pub fn bundled_font_dir() -> std::path::PathBuf {
     paths::user_data_dir().join("fonts")
@@ -204,14 +204,14 @@ pub struct Settings {
     /// body right-click is modal (copy the selection if one exists, else paste). When ON,
     /// right-click always pastes — the selection was already copied on release.
     pub copy_on_select: bool,
-    /// Whether terminals keep running in the background when Hyperpanes closes (the
+    /// Whether terminals keep running in the background when Avada closes (the
     /// session-daemon quit-vs-keep-alive toggle, M3). **ON by default** — with the
-    /// crash-surviving session daemon (`HYPERPANES_SESSION_DAEMON=1`), an explicit quit then
+    /// crash-surviving session daemon (`AVADA_SESSION_DAEMON=1`), an explicit quit then
     /// leaves the daemon + its PTY sessions alive so a relaunch re-attaches them; turning it
     /// OFF makes quit ask the daemon to shut down (kill its sessions + exit). INERT for the
     /// in-process backend (those PTYs die with the GUI regardless).
     pub keep_alive: bool,
-    /// Tool ids (`hyperpanes_core::tools::registry::ToolDef::id`) the user has starred, in
+    /// Tool ids (`avada_core::tools::registry::ToolDef::id`) the user has starred, in
     /// the order they chose. Favourites are what the left panel offers a mode for and what
     /// the new-pane menu lists first; every registered tool stays *listed* either way.
     /// Unknown ids are kept verbatim rather than dropped — a favourite set edited on a
@@ -235,10 +235,10 @@ pub struct Settings {
     /// Turning it off only silences the *undoable* closes — the last pane of the last tab
     /// ends the window and nothing can bring it back, so that one asks regardless.
     pub confirm_close: bool,
-    /// Log verbosity for every hyperpanes process: one of `error|warn|info|debug|trace`
-    /// (see `hyperpanes_core::logging::LEVELS`). `debug` logs the entry and exit of every
+    /// Log verbosity for every avada process: one of `error|warn|info|debug|trace`
+    /// (see `avada_core::logging::LEVELS`). `debug` logs the entry and exit of every
     /// instrumented function with its parameters and return value. Read at process start;
-    /// `HYPERPANES_LOG`/`HYPERPANES_DEBUG` in the environment override it for one launch.
+    /// `AVADA_LOG`/`AVADA_DEBUG` in the environment override it for one launch.
     pub log_level: String,
     /// Minutes between firings of the Hyperpane **status loop** (the system tab's agent is
     /// asked to check every pane and recover the stuck ones). `0` disables it.
@@ -286,7 +286,7 @@ impl Default for Settings {
             browser_mode: String::from(BROWSER_MODE_DEFAULT),
             browser_app: String::new(),
             confirm_close: true,
-            log_level: hyperpanes_core::logging::DEFAULT_LEVEL.to_string(),
+            log_level: avada_core::logging::DEFAULT_LEVEL.to_string(),
             status_loop_minutes: 15,
             restart_loop_hours: 24,
             status_loop_prompt: String::new(),
@@ -338,7 +338,7 @@ impl Settings {
         if self.browser_mode != BROWSER_MODE_APP || self.browser_app.is_empty() {
             return None;
         }
-        hyperpanes_core::open::list_browsers()
+        avada_core::open::list_browsers()
             .into_iter()
             .find(|b| b.id == self.browser_app)
             .map(|b| b.launcher)
@@ -395,11 +395,11 @@ impl Settings {
                 )
             ));
         }
-        if !hyperpanes_core::logging::valid_level(&self.log_level) {
+        if !avada_core::logging::valid_level(&self.log_level) {
             return Err(format!(
                 "logLevel {:?} is not one of {}",
                 self.log_level,
-                join_tokens(hyperpanes_core::logging::LEVELS.iter().copied())
+                join_tokens(avada_core::logging::LEVELS.iter().copied())
             ));
         }
         if self.status_loop_minutes > MAX_STATUS_LOOP_MINUTES {
@@ -653,7 +653,7 @@ mod tests {
             s.default_shell = tok.into();
             assert_eq!(s.validate(), Ok(()), "defaultShell {tok:?}");
         }
-        for level in hyperpanes_core::logging::LEVELS {
+        for level in avada_core::logging::LEVELS {
             s.log_level = level.into();
             assert_eq!(s.validate(), Ok(()), "logLevel {level}");
         }

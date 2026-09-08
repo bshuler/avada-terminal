@@ -1,4 +1,4 @@
-//! Auto-register the hyperpanes Claude Code SessionStart/SessionEnd hook in the user's Claude
+//! Auto-register the avada Claude Code SessionStart/SessionEnd hook in the user's Claude
 //! settings, so the pane→conversation marker (`<state>/claude-sessions/<pane-id>.json`, written
 //! by `resources/claude/hp-claude-session-hook.sh`) exists reliably — without the user
 //! hand-editing `settings.json`. This backs both the claude-resume feature and the goals
@@ -35,8 +35,8 @@ pub fn bundled_hook_path() -> Option<PathBuf> {
                 .join("claude")
                 .join("hp-claude-session-hook.sh"),
         );
-        candidates.push(prefix.join("share").join("hyperpanes").join(&rel));
-        candidates.push(prefix.join("lib").join("hyperpanes").join(&rel));
+        candidates.push(prefix.join("share").join("avada").join(&rel));
+        candidates.push(prefix.join("lib").join("avada").join(&rel));
     }
     candidates.into_iter().find(|p| p.is_file())
 }

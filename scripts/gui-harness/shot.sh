@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs INSIDE the harness container (scripts/gui-harness/Dockerfile).
 #
-# Photographs a real Hyperpanes window on a real X server so a rendering change
+# Photographs a real Avada window on a real X server so a rendering change
 # can be judged from pixels instead of from an opinion. Companion to
 # `gui-test.sh`, which drives input; this one only looks.
 #
@@ -17,10 +17,10 @@
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="${HYPERPANES_BIN:-$ROOT/rs/crates/app/target/release/hyperpanes}"
+BIN="${AVADA_BIN:-$ROOT/rs/crates/app/target/release/avada}"
 OUT="${1:-/work/shots}"
-FIXTURE="${HYPERPANES_FIXTURE:-$ROOT/scripts/gui-harness/fixture.md}"
-PALETTES="${HYPERPANES_PALETTES:-0 1}"
+FIXTURE="${AVADA_FIXTURE:-$ROOT/scripts/gui-harness/fixture.md}"
+PALETTES="${AVADA_PALETTES:-0 1}"
 
 [[ -x "$BIN" ]] || { echo "no binary at $BIN — build it first" >&2; exit 1; }
 [[ -f "$FIXTURE" ]] || { echo "no fixture at $FIXTURE" >&2; exit 1; }
@@ -39,13 +39,13 @@ for _ in $(seq 1 50); do
 done
 
 STATE="$(mktemp -d /tmp/hp-shot.XXXXXX)"
-export HYPERPANES_USER_DATA_DIR="$STATE/data"
-export HYPERPANES_CONTROL_FILE="$STATE/control.json"
-mkdir -p "$HYPERPANES_USER_DATA_DIR"
+export AVADA_USER_DATA_DIR="$STATE/data"
+export AVADA_CONTROL_FILE="$STATE/control.json"
+mkdir -p "$AVADA_USER_DATA_DIR"
 
 cleanup() {
     [[ -n "${APP:-}" ]] && kill "$APP" 2>/dev/null
-    pkill -f -- "--session-daemon $HYPERPANES_USER_DATA_DIR" 2>/dev/null
+    pkill -f -- "--session-daemon $AVADA_USER_DATA_DIR" 2>/dev/null
     kill "${OPENBOX:-}" 2>/dev/null
     kill "$XVFB" 2>/dev/null
     rm -rf "$STATE"
@@ -77,7 +77,7 @@ JSON
 APP=$!
 ctl() { "$BIN" ctl "$@"; }
 for _ in $(seq 1 100); do
-    [[ -s "$HYPERPANES_CONTROL_FILE" ]] && ctl health >/dev/null 2>&1 && break
+    [[ -s "$AVADA_CONTROL_FILE" ]] && ctl health >/dev/null 2>&1 && break
     ps -p "$APP" >/dev/null 2>&1 || { echo "app died on launch:"; tail -30 "$STATE/app.log"; exit 1; }
     sleep 0.3
 done

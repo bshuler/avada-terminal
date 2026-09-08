@@ -5,14 +5,14 @@ Built by `rs/packaging/appimage.sh <version>` (contract frozen in
 
 ```
 rs/packaging/appimage.sh 0.0.6
-→ rs/packaging/out/hyperpanes-0.0.6-x86_64.AppImage
+→ rs/packaging/out/avada-0.0.6-x86_64.AppImage
 ```
 
 The script runs from any cwd, release-builds `rs/crates/app` (a non-member
 crate — built via `--manifest-path`), assembles an AppDir, and packs it with a
 pinned **appimagetool 1.9.1** (`AppImage/appimagetool` release — the legacy
 AppImageKit/13 assets no longer exist), downloaded into
-`${XDG_CACHE_HOME:-~/.cache}/hyperpanes-packaging/` on first use. The tool is
+`${XDG_CACHE_HOME:-~/.cache}/avada-packaging/` on first use. The tool is
 invoked with `--appimage-extract-and-run`, so neither the build host nor CI
 needs FUSE.
 
@@ -20,23 +20,23 @@ needs FUSE.
 
 ```
 AppDir/
-├── AppRun                          # sh shim → exec usr/bin/hyperpanes
-├── hyperpanes.desktop              # also at usr/share/applications/
-├── hyperpanes.png  + .DirIcon      # 512×512
+├── AppRun                          # sh shim → exec usr/bin/avada
+├── avada.desktop              # also at usr/share/applications/
+├── avada.png  + .DirIcon      # 512×512
 └── usr/
-    ├── bin/hyperpanes
+    ├── bin/avada
     ├── bin/resources/shell-integration/   # hp-init.sh + hp-init.ps1
-    ├── share/icons/hicolor/<N>x<N>/apps/hyperpanes.png   # 16…512
-    └── share/mime/packages/hyperpanes.xml  # application/x-hyperpanes, *.hyperpanes
+    ├── share/icons/hicolor/<N>x<N>/apps/avada.png   # 16…512
+    └── share/mime/packages/avada.xml  # application/x-avada, *.avada
 ```
 
 - **shell-integration** sits next to the binary because the app resolves
   `exe_dir/resources/shell-integration` (same layout `installer.nsi` ships on
   Windows; the ConPTY redistributable pair is Windows-only and is skipped).
   `AppRun` is a shim (not a symlink) so `std::env::current_exe()` resolves to
-  `usr/bin/hyperpanes` and that relative lookup works from the squashfs mount.
-- **MIME**: `usr/share/mime/packages/hyperpanes.xml` declares
-  `application/x-hyperpanes` with a `*.hyperpanes` glob (sub-class of JSON).
+  `usr/bin/avada` and that relative lookup works from the squashfs mount.
+- **MIME**: `usr/share/mime/packages/avada.xml` declares
+  `application/x-avada` with a `*.avada` glob (sub-class of JSON).
   AppImages are not "installed", so registration happens only when an
   integrator (appimaged / AppImageLauncher) or a downstream package runs
   `update-mime-database`; the file is in the standard location for that.
@@ -79,7 +79,7 @@ Slint's femtovg/wgpu renderers need no further -dev packages).
 `theme::load_font()` candidates are hardcoded `C:/Windows/Fonts/*.ttf` and
 `load_font_at()` hard-falls-back to `consola.ttf`, so the first window panics
 on Linux (`load monospace font: No such file or directory`, crash log at
-`$TMPDIR/hyperpanes-crash.log`) before the bundled-font machinery
+`$TMPDIR/avada-crash.log`) before the bundled-font machinery
 (`prefs::font_path()` / `bundled_font_dir()`) is ever consulted. Owned by the
 shared-file owner (theme.rs/app.rs are frozen for platform tracks). The full
 AppImage launch path was smoke-verified under WSLg with a local font-candidate

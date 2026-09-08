@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs INSIDE the harness container (scripts/gui-harness/Dockerfile).
 #
-# Drives a real Hyperpanes window on a real X server with synthetic input, and
+# Drives a real Avada window on a real X server with synthetic input, and
 # checks what the pane actually received. Nothing here touches a human's
 # desktop: the display is an Xvfb stub that exists only for this process tree.
 #
@@ -9,7 +9,7 @@
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="${HYPERPANES_BIN:-$ROOT/rs/crates/app/target/release/hyperpanes}"
+BIN="${AVADA_BIN:-$ROOT/rs/crates/app/target/release/avada}"
 KEEP=0
 [[ "${1:-}" == "--keep" ]] && KEEP=1
 
@@ -44,15 +44,15 @@ echo "==> X server up on $DISPLAY"
 
 # --- an instance that shares nothing with anything else ------------------------
 STATE="$(mktemp -d /tmp/hp-harness.XXXXXX)"
-export HYPERPANES_USER_DATA_DIR="$STATE/data"
-export HYPERPANES_CONTROL_FILE="$STATE/control.json"
-export HYPERPANES_ALLOW_INPUT=1
-mkdir -p "$HYPERPANES_USER_DATA_DIR"
+export AVADA_USER_DATA_DIR="$STATE/data"
+export AVADA_CONTROL_FILE="$STATE/control.json"
+export AVADA_ALLOW_INPUT=1
+mkdir -p "$AVADA_USER_DATA_DIR"
 
 cleanup() {
     [[ $KEEP == 1 ]] && { echo "==> --keep: instance left running (DISPLAY=$DISPLAY, STATE=$STATE)"; return; }
     [[ -n "${APP:-}" ]] && kill "$APP" 2>/dev/null
-    pkill -f -- "--session-daemon $HYPERPANES_USER_DATA_DIR" 2>/dev/null
+    pkill -f -- "--session-daemon $AVADA_USER_DATA_DIR" 2>/dev/null
     kill "${OPENBOX:-}" 2>/dev/null
     kill "$XVFB" 2>/dev/null
     rm -rf "$STATE"
@@ -66,7 +66,7 @@ echo "==> launched pid $APP (state: $STATE)"
 ctl() { "$BIN" ctl "$@"; }
 
 for _ in $(seq 1 100); do
-    [[ -s "$HYPERPANES_CONTROL_FILE" ]] && ctl health >/dev/null 2>&1 && break
+    [[ -s "$AVADA_CONTROL_FILE" ]] && ctl health >/dev/null 2>&1 && break
     kill -0 "$APP" 2>/dev/null || { echo "app died on launch:"; tail -30 "$STATE/app.log"; exit 1; }
     sleep 0.3
 done

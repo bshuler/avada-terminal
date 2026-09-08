@@ -120,7 +120,7 @@ impl SecondaryInstance {
 
 `unix.rs` currently returns `ErrorKind::Unsupported` from `acquire`. Expected unix
 shape: an `O_EXCL`/`flock` lock file as the detector + a unix-domain socket carrying the
-same `{argv, cwd}` JSON. `user_salt()` falls back to `"hyperpanes-default"` off-Windows;
+same `{argv, cwd}` JSON. `user_salt()` falls back to `"avada-default"` off-Windows;
 the unix track should key it off `$XDG_RUNTIME_DIR`/`$HOME` (a `mod.rs` edit — coordinate,
 it is shared).
 
@@ -162,9 +162,9 @@ Fixed paths + argv, so `release-rust.yml` can reference them before they exist:
 
 ```
 rs/packaging/appimage.sh <version>      # builds rs/crates/app for x86_64 Linux,
-                                        # emits  rs/packaging/out/hyperpanes-<version>-x86_64.AppImage
+                                        # emits  rs/packaging/out/avada-<version>-x86_64.AppImage
 rs/packaging/macos/bundle.sh <version>  # builds rs/crates/app for macOS,
-                                        # emits  rs/packaging/out/hyperpanes-<version>.dmg
+                                        # emits  rs/packaging/out/avada-<version>.dmg
 ```
 
 Both scripts: run from any cwd (they resolve the repo root themselves), exit non-zero on

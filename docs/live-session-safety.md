@@ -13,7 +13,7 @@ There is exactly one ordinary act that destroys it, and it does not look
 dangerous:
 
 ```sh
-rm -rf /Applications/Hyperpanes.app        # <- ends every program in every pane
+rm -rf /Applications/Avada.app        # <- ends every program in every pane
 ```
 
 The daemon is executing out of the installed bundle, and macOS kills a process
@@ -37,8 +37,8 @@ It never deletes a bundle a process might still be running from:
 | Step | Why |
 |---|---|
 | Record every `--session-daemon` pid | So "did anything die?" is a check, not a hope |
-| `ditto` the new bundle to `/Applications/.Hyperpanes.app.incoming` | Staging on the same volume makes the final step a rename |
-| Move the old bundle to `/Applications/.hyperpanes-attic/` | **Rename, never remove.** The inode survives, so the live daemon keeps running from the moved directory without noticing |
+| `ditto` the new bundle to `/Applications/.Avada.app.incoming` | Staging on the same volume makes the final step a rename |
+| Move the old bundle to `/Applications/.avada-attic/` | **Rename, never remove.** The inode survives, so the live daemon keeps running from the moved directory without noticing |
 | `mv` the staged bundle into place | Atomic: no instant where the path is half-written |
 | `chflags -R uchg` the result | Layer 2, below |
 | Re-check every recorded pid | A daemon that died is a hard error, not a warning |
@@ -54,7 +54,7 @@ program in every pane — so the script prints the command rather than running i
 The installed bundle is locked with the BSD user-immutable flag:
 
 ```sh
-chflags -R uchg /Applications/Hyperpanes.app
+chflags -R uchg /Applications/Avada.app
 ```
 
 Every path to the accident then fails at the syscall, with no cooperation
@@ -62,11 +62,11 @@ required from whoever typed it:
 
 | Command | Result |
 |---|---|
-| `rm -rf /Applications/Hyperpanes.app` | `Operation not permitted` |
-| `ditto new /Applications/Hyperpanes.app` | `Operation not permitted` |
-| `cp -R new/. /Applications/Hyperpanes.app/` | `Operation not permitted` |
-| `rsync -a new/ /Applications/Hyperpanes.app/` | `Operation not permitted` |
-| `mv /Applications/Hyperpanes.app elsewhere` | `Operation not permitted` |
+| `rm -rf /Applications/Avada.app` | `Operation not permitted` |
+| `ditto new /Applications/Avada.app` | `Operation not permitted` |
+| `cp -R new/. /Applications/Avada.app/` | `Operation not permitted` |
+| `rsync -a new/ /Applications/Avada.app/` | `Operation not permitted` |
+| `mv /Applications/Avada.app elsewhere` | `Operation not permitted` |
 
 `sudo` does not help; the flag has to be cleared first, deliberately, which is
 the point. `scripts/install-macos.sh` clears it and restores it as part of the
@@ -86,7 +86,7 @@ command and exits 2 — which blocks the call and hands the reason back — for:
   command that also names `/Applications`;
 - `chflags … nouchg` against `/Applications`, which is step one of doing it by
   hand;
-- `kill` / `pkill` / `killall` aimed at `hyperpanes` or `--session-daemon`;
+- `kill` / `pkill` / `killall` aimed at `avada` or `--session-daemon`;
 - `osascript` that activates an app or synthesises keystrokes, `open -a`, and
   `ctl focus-pane` — all of which take the keyboard away from whoever is typing.
 
@@ -131,7 +131,7 @@ the script arrived on `main` in the same commit — so **the guard only exists o
 branches that contain it.**
 
 A session working in a worktree checked out 140 commits back had no
-`.claude/settings.json`, therefore no hook, and `rm -rf /Applications/Hyperpanes.app`
+`.claude/settings.json`, therefore no hook, and `rm -rf /Applications/Avada.app`
 was submitted with nothing to refuse it. The stale checkout was not obvious from
 inside: the branch built, tested, and packaged normally, and `bundle.sh` reported
 success while relinking nothing, so its five-day-old artifacts looked current.
@@ -152,7 +152,7 @@ It copies the script to `~/.claude/hooks/` and adds a `PreToolUse` entry to
 `~/.claude/settings.json` naming it by absolute path — a path no branch can take
 away. The edit is idempotent: an existing entry is refreshed rather than
 duplicated, other hooks are left alone, and the settings file is backed up first.
-The install ends by feeding the guard `rm -rf /Applications/Hyperpanes.app` and
+The install ends by feeding the guard `rm -rf /Applications/Avada.app` and
 failing if it is not refused, so a successful run is evidence and not a claim.
 
 Copy, as with every helper in these repos — a symlink into a worktree

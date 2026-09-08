@@ -76,7 +76,7 @@ component AbButton inherits Rectangle {
 
 export component AskBrowserDialog inherits Rectangle {
     // The URL being routed. Already validated Rust-side — the card never shows a URL
-    // Hyperpanes would then refuse to open.
+    // Avada would then refuse to open.
     in property <string> url;
     in property <[PrefBrowserRow]> browsers;
     callback pick(int);     // index into `browsers`

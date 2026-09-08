@@ -505,7 +505,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uppercases_the_drive_letter() {
-        assert_eq!(canonical_path("c:\\hyperpanes"), "C:\\hyperpanes");
+        assert_eq!(canonical_path("c:\\avada"), "C:\\avada");
     }
 
     #[cfg(windows)]
@@ -517,10 +517,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn makes_cmd_and_pwsh_paths_identical() {
-        assert_eq!(
-            canonical_path("c:\\hyperpanes"),
-            canonical_path("C:\\hyperpanes")
-        );
+        assert_eq!(canonical_path("c:\\avada"), canonical_path("C:\\avada"));
     }
 
     // ---- extra coverage: color stability + upsert round-trip ----

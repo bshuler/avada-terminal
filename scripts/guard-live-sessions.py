@@ -9,7 +9,7 @@ What it blocks, and why each one is here
 ----------------------------------------
 1. Anything that deletes or overwrites a bundle in /Applications. The session
    daemon runs out of the installed bundle and macOS kills a process whose
-   executable is unlinked underneath it, so `rm -rf /Applications/Hyperpanes.app`
+   executable is unlinked underneath it, so `rm -rf /Applications/Avada.app`
    destroys every program running in every pane — the exact thing the daemon
    exists to prevent. `scripts/install-macos.sh` is the sanctioned path and is
    allowed through.
@@ -19,7 +19,7 @@ What it blocks, and why each one is here
    is a legitimate thing for a person to want; it is not something to do on an
    agent's own initiative.
 4. Stealing the keyboard: `osascript` that activates an app or synthesises
-   keystrokes, `open -a`, and `hyperpanes ctl focus-pane`. There is a human
+   keystrokes, `open -a`, and `avada ctl focus-pane`. There is a human
    typing into this machine, and yanking the front window out from under them
    mid-sentence sends their keys somewhere they did not aim them.
 
@@ -43,8 +43,8 @@ SIGNALS = {"kill", "pkill", "killall"}
 SANCTIONED = "scripts/install-macos.sh"
 
 APPLICATIONS = re.compile(r"/Applications\b", re.I)
-HYPERPANES = re.compile(r"hyperpanes", re.I)
-DAEMONISH = re.compile(r"hyperpanes|session-daemon", re.I)
+AVADA = re.compile(r"hyperpanes|avada", re.I)
+DAEMONISH = re.compile(r"hyperpanes|avada|session-daemon", re.I)
 SYNTH_INPUT = re.compile(r"\bactivate\b|\bkeystroke\b|\bkey code\b|System Events", re.I)
 
 
@@ -104,7 +104,7 @@ def refusal(command):
     if destructive and hits_applications:
         return (
             f"Blocked: `{destructive[0]}` against /Applications would unlink or overwrite an "
-            "installed app bundle. The Hyperpanes session daemon runs out of that bundle, and "
+            "installed app bundle. The Avada session daemon runs out of that bundle, and "
             "macOS kills a process whose executable is removed underneath it — every program "
             f"in every pane dies with it. Use `{SANCTIONED}`, which renames the old bundle "
             "aside instead of deleting it and verifies the daemon survived."
@@ -117,7 +117,7 @@ def refusal(command):
         )
     if seen & SIGNALS and DAEMONISH.search(command):
         return (
-            "Blocked: signalling Hyperpanes. If this is the session daemon it owns every "
+            "Blocked: signalling Avada. If this is the session daemon it owns every "
             "pane's PTY, so killing it ends every running program in every pane. That is a "
             "decision for the person at the keyboard — ask, and let them run it."
         )
@@ -127,7 +127,7 @@ def refusal(command):
             "typing on this machine; taking the front window sends their keys into whatever "
             "you just raised. Ask them to drive the UI instead."
         )
-    if "open" in seen and "-a" in command.split() and HYPERPANES.search(command):
+    if "open" in seen and "-a" in command.split() and AVADA.search(command):
         return (
             "Blocked: `open -a` fronts the app and takes the user's focus mid-keystroke. "
             "Launch the binary directly if you need a process, or ask them to open it."

@@ -1,7 +1,7 @@
-# Packaging — native Rust `hyperpanes`
+# Packaging — native Rust `avada`
 
 Produces a **per-user Windows NSIS installer** for the native Rust app
-(`rs/crates/app`, binary `hyperpanes`). It is the Rust equivalent of the Electron
+(`rs/crates/app`, binary `avada`). It is the Rust equivalent of the Electron
 `electron-builder` NSIS setup (`electron-builder.yml` + `build/installer.nsh`).
 
 ## Build it locally
@@ -11,7 +11,7 @@ Produces a **per-user Windows NSIS installer** for the native Rust app
 pwsh rs/packaging/build-installer.ps1
 ```
 
-Output: `rs/packaging/dist/Hyperpanes-<version>-setup.exe`
+Output: `rs/packaging/dist/Avada-<version>-setup.exe`
 
 Useful flags:
 
@@ -35,13 +35,13 @@ pwsh rs/packaging/build-installer.ps1 -Version 0.1.0          # override the ver
 | electron-builder.yml / installer.nsh | This installer (`installer.nsi`) |
 | --- | --- |
 | `oneClick: false` | Assisted MUI2 installer (Welcome → Directory → Install → Finish) |
-| `perMachine: false` | Per-user, **no elevation** — installs to `%LOCALAPPDATA%\Programs\Hyperpanes`, registry under `HKCU` |
+| `perMachine: false` | Per-user, **no elevation** — installs to `%LOCALAPPDATA%\Programs\Avada`, registry under `HKCU` |
 | `allowToChangeInstallationDirectory: true` | Directory page |
-| `artifactName: Hyperpanes-<version>-setup.exe` | `Hyperpanes-<version>-setup.exe` |
+| `artifactName: Avada-<version>-setup.exe` | `Avada-<version>-setup.exe` |
 | `installer.nsh` PATH add/remove | `AddToUserPath` / `RemoveFromUserPath` — **verbatim port** of the fail-safe PowerShell `[Environment]::SetEnvironmentVariable(..., 'User')` approach |
 | app icon | `build/icon.ico` → installer/uninstaller UI, Start-Menu + Desktop shortcuts, and Add/Remove Programs |
 
-After install, `hyperpanes` resolves from any **new** terminal (PATH is updated for
+After install, `avada` resolves from any **new** terminal (PATH is updated for
 the current user; already-open shells won't see it until restarted).
 
 ## Files
@@ -60,16 +60,16 @@ git push origin v0.1.0
 ```
 
 The workflow builds the installer on `windows-latest` and attaches
-`Hyperpanes-0.1.0-setup.exe` to the GitHub Release. It can also be run manually
+`Avada-0.1.0-setup.exe` to the GitHub Release. It can also be run manually
 via **workflow_dispatch** with an explicit version.
 
 > **Note:** the legacy Electron `release.yml` also triggers on `v*` and produces
-> an identically-named `Hyperpanes-<ver>-setup.exe`. Retire it (archive the
+> an identically-named `Avada-<ver>-setup.exe`. Retire it (archive the
 > Electron `main`) before tagging, otherwise the two releases collide.
 
 ## Known follow-up (needs an app-crate change — out of packaging scope)
 
-The bare `hyperpanes.exe`'s **own** embedded icon (shown in Explorer / when the
+The bare `avada.exe`'s **own** embedded icon (shown in Explorer / when the
 binary is launched directly) is set best-effort via `rcedit` at package time. The
 "proper" fix is a `build.rs`/`winres` icon resource in `rs/crates/app`, which is
 app-source territory and intentionally **not** changed here. Shortcuts and

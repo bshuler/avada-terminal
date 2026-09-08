@@ -4,7 +4,7 @@ against a running ISOLATED instance:
 
   1. zsh pane spawns with the bundled-ZDOTDIR integration and reports OSC-7 cwd
   2. vim opens + renders in a pane (proves no DSR interception) and quits clean
-  3. (optional, app binary path given) .hyperpanes file open via a SECOND
+  3. (optional, app binary path given) .avada file open via a SECOND
      instance hands off to the primary (single-instance socket) — the file's
      tab appears in the primary's /state
 
@@ -83,11 +83,11 @@ def main():
     screen2 = out2.get("output") or ""
     check(screen2.count("~") < 5, "vim quit back to shell", "")
 
-    # ---- 3. .hyperpanes open via second-instance handoff ----
+    # ---- 3. .avada open via second-instance handoff ----
     if app_bin:
-        ws_file = "/tmp/hp-smoke-open.hyperpanes"
+        ws_file = "/tmp/hp-smoke-open.avada"
         payload = {
-            "format": "hyperpanes",
+            "format": "avada",
             "version": 1,
             "workspace": {
                 "name": "smoke-open",
@@ -105,7 +105,7 @@ def main():
         check(proc.returncode == 0, "second instance exits 0 (handoff, no second window)",
               f"rc={proc.returncode}")
         check(after == before + 1 and "smoke-open" in titles,
-              ".hyperpanes argv landed in the PRIMARY instance",
+              ".avada argv landed in the PRIMARY instance",
               f"tabs {before}->{after} titles={titles}")
 
     bad = [r for r in results if not r[0]]

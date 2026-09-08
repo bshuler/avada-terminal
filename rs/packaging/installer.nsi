@@ -1,16 +1,16 @@
-; Hyperpanes — per-user Windows installer for the native Rust app (binary: hyperpanes.exe).
+; Avada — per-user Windows installer for the native Rust app (binary: avada.exe).
 ;
 ; This is the Rust equivalent of the Electron `electron-builder` NSIS setup
 ; (electron-builder.yml) + `build/installer.nsh`. Mirrored behaviour:
 ;   - oneClick: false                       -> assisted MUI2 installer (Welcome/Dir/Install/Finish)
 ;   - perMachine: false                     -> per-user install, no elevation (HKCU, %LOCALAPPDATA%)
 ;   - allowToChangeInstallationDirectory    -> a Directory page
-;   - artifactName Hyperpanes-<ver>-setup   -> OutFile passed in via /DOUTFILE
+;   - artifactName Avada-<ver>-setup   -> OutFile passed in via /DOUTFILE
 ;   - build/installer.nsh PATH integration  -> AddToUserPath / RemoveFromUserPath below (verbatim port)
 ;
 ; Build-time inputs (passed by rs/packaging/build-installer.ps1 via makensis /D...):
 ;   VERSION   semver, e.g. 0.1.0           (defaults to 0.0.0)
-;   APP_EXE   absolute path to the release hyperpanes.exe   (required)
+;   APP_EXE   absolute path to the release avada.exe   (required)
 ;   ICON      absolute path to build/icon.ico               (required)
 ;   OUTFILE   absolute path of the installer to produce      (required)
 
@@ -20,28 +20,28 @@ Unicode true
 !include "FileFunc.nsh"
 
 ; ----- Identity (mirrors electron-builder.yml) -------------------------------
-!define PRODUCT_NAME "Hyperpanes"
-!define APP_ID       "com.hyperpanes.app"
-!define PUBLISHER    "Hyperpanes"
-!define MAIN_BINARY  "hyperpanes.exe"
+!define PRODUCT_NAME "Avada"
+!define APP_ID       "to.avada.terminal"
+!define PUBLISHER    "Avada"
+!define MAIN_BINARY  "avada.exe"
 !define UNINST_KEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
 
-; .hyperpanes workspace file association (per-user: HKCU\Software\Classes == per-user HKCR)
-!define WS_EXT    ".hyperpanes"
-!define WS_PROGID "Hyperpanes.Workspace"
+; .avada workspace file association (per-user: HKCU\Software\Classes == per-user HKCR)
+!define WS_EXT    ".avada"
+!define WS_PROGID "Avada.Workspace"
 
 ; ----- Build-time inputs -----------------------------------------------------
 !ifndef VERSION
   !define VERSION "0.0.0"
 !endif
 !ifndef APP_EXE
-  !error "APP_EXE must be defined: makensis /DAPP_EXE=<path to release hyperpanes.exe>"
+  !error "APP_EXE must be defined: makensis /DAPP_EXE=<path to release avada.exe>"
 !endif
 !ifndef ICON
   !error "ICON must be defined: makensis /DICON=<path to icon.ico>"
 !endif
 !ifndef OUTFILE
-  !define OUTFILE "Hyperpanes-${VERSION}-setup.exe"
+  !define OUTFILE "Avada-${VERSION}-setup.exe"
 !endif
 ; Repo `resources/` dir (conpty redistributable pair + shell-integration scripts).
 ; build-installer.ps1 passes it absolute; the default resolves relative to this .nsi.
@@ -112,8 +112,8 @@ Section "Install"
   File "${RESOURCES}\shell-integration\zdotdir\.zshrc"
 
   ; The CLI-agent session hook (tool-resume feature). One PowerShell script covers all five
-  ; supported agents — it is told which by a `-Tool <id>` argument when hyperpanes registers
-  ; it — where POSIX has a script apiece; see the `# Windows` section of hyperpanes-core's
+  ; supported agents — it is told which by a `-Tool <id>` argument when avada registers
+  ; it — where POSIX has a script apiece; see the `# Windows` section of avada-core's
   ; tools::session_hook. Resolved as exe_dir\resources\hooks; build.rs deploys the same for
   ; dev. Registration degrades to a silent no-op when the script is missing, so dropping this
   ; block costs every hand-started agent pane its conversation id with no error anywhere.
@@ -148,10 +148,10 @@ Section "Install"
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 
-  ; .hyperpanes file association: double-clicking a workspace opens it in the app
+  ; .avada file association: double-clicking a workspace opens it in the app
   ; ("%1" arrives as argv[1] and flows through the CLI's positional-path capture).
   WriteRegStr HKCU "Software\Classes\${WS_EXT}"    "" "${WS_PROGID}"
-  WriteRegStr HKCU "Software\Classes\${WS_PROGID}" "" "Hyperpanes Workspace"
+  WriteRegStr HKCU "Software\Classes\${WS_PROGID}" "" "Avada Workspace"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}\DefaultIcon"        "" "$INSTDIR\icon.ico,0"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}\shell\open\command" "" '"$INSTDIR\${MAIN_BINARY}" "%1"'
   ; Tell the shell the association table changed so the icon/verb apply immediately.
@@ -183,7 +183,7 @@ Section "Uninstall"
   Delete "$INSTDIR\Uninstall ${PRODUCT_NAME}.exe"
   RMDir  "$INSTDIR"
 
-  ; Mirror the .hyperpanes association cleanup (leave the extension key alone if
+  ; Mirror the .avada association cleanup (leave the extension key alone if
   ; another app has since claimed it).
   DeleteRegKey   HKCU "Software\Classes\${WS_PROGID}"
   ReadRegStr $0 HKCU "Software\Classes\${WS_EXT}" ""
@@ -207,7 +207,7 @@ SectionEnd
 
 Function AddToUserPath
   DetailPrint "Adding ${PRODUCT_NAME} to your PATH..."
-  FileOpen $0 "$PLUGINSDIR\hyperpanes-path.ps1" w
+  FileOpen $0 "$PLUGINSDIR\avada-path.ps1" w
   FileWrite $0 "param([string]$$Dir)$\r$\n"
   FileWrite $0 "$$p=[Environment]::GetEnvironmentVariable('Path','User')$\r$\n"
   FileWrite $0 "if([string]::IsNullOrEmpty($$p)){ $$p='' }$\r$\n"
@@ -215,19 +215,19 @@ Function AddToUserPath
   FileWrite $0 "$$items+=$$Dir$\r$\n"
   FileWrite $0 "[Environment]::SetEnvironmentVariable('Path',($$items -join ';'),'User')$\r$\n"
   FileClose $0
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\hyperpanes-path.ps1" "$INSTDIR"'
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\avada-path.ps1" "$INSTDIR"'
   Pop $0
 FunctionEnd
 
 Function un.RemoveFromUserPath
   DetailPrint "Removing ${PRODUCT_NAME} from your PATH..."
-  FileOpen $0 "$PLUGINSDIR\hyperpanes-unpath.ps1" w
+  FileOpen $0 "$PLUGINSDIR\avada-unpath.ps1" w
   FileWrite $0 "param([string]$$Dir)$\r$\n"
   FileWrite $0 "$$p=[Environment]::GetEnvironmentVariable('Path','User')$\r$\n"
   FileWrite $0 "if([string]::IsNullOrEmpty($$p)){ exit }$\r$\n"
   FileWrite $0 "$$items=@($$p.Split(';') | Where-Object { $$_ -ne '' -and $$_ -ne $$Dir })$\r$\n"
   FileWrite $0 "[Environment]::SetEnvironmentVariable('Path',($$items -join ';'),'User')$\r$\n"
   FileClose $0
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\hyperpanes-unpath.ps1" "$INSTDIR"'
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\avada-unpath.ps1" "$INSTDIR"'
   Pop $0
 FunctionEnd

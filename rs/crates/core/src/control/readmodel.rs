@@ -139,7 +139,7 @@ pub struct WindowInfo {
     pub keyboard_focus_pane: Option<String>,
 }
 
-/// One app-owned scheduler loop's status (see `hyperpanes::loops::Loops` — the app crate this
+/// One app-owned scheduler loop's status (see `avada::loops::Loops` — the app crate this
 /// crate does not depend on), as published for `GET /loops`.
 ///
 /// Additive and default-empty on purpose: this lane defines the shape and the route so the

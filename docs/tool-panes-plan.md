@@ -43,7 +43,7 @@ animation. **F5's signal is live; only the consequence is missing.**
 
 **A deterministic Claude-identity marker already exists.**
 `rs/crates/core/src/claude_panes.rs` — `resources/claude/hp-claude-session-hook.sh`
-registers as a Claude Code `SessionStart` hook, reads `HYPERPANES_PANE_ID` from the
+registers as a Claude Code `SessionStart` hook, reads `AVADA_PANE_ID` from the
 environment, and writes `<state dir>/claude-sessions/<pane-id>.json`; `SessionEnd`
 deletes it. That is an *authoritative* "Claude is running in pane X", not a guess —
 exactly the coded-deterministic-over-inferred preference we are asked to honour.
@@ -139,7 +139,7 @@ publishes; kind should reach it too.
 ### D3 — Do **not** mint session uids for non-PTY panes
 
 `PaneState.uid` is doing four jobs at once: the `SessionManager` registry key, the
-`HYPERPANES_PANE_ID` environment value, the Claude hook's marker filename, and the
+`AVADA_PANE_ID` environment value, the Claude hook's marker filename, and the
 `PaneSpec.uid` reattach key (`session_manager.rs:816`). A file-browser pane has no
 PTY, so calling `SessionManager::fresh_uid()` for one would put a phantom entry in
 front of `pane_load` (`session_manager.rs:873`), `has()`, and the multi-window
@@ -446,7 +446,7 @@ Everything here compiles and is inert. No behaviour changes.
 
 Gate: `cargo check --manifest-path rs/crates/app/Cargo.toml` green on all three OSes;
 existing 248 unit tests still pass (`cargo test --bins`, **not** `--lib` — the
-`hyperpanes` package is binary-only and `--lib` errors out while still exiting 0).
+`avada` package is binary-only and `--lib` errors out while still exiting 0).
 
 ### Wave 1 — five agents in parallel
 
@@ -491,7 +491,7 @@ conversation by project. That is the highest value-per-risk slice of the whole a
 2. `cargo check` for the app crate on macOS, Windows, Linux (new per D12)
 3. Compat suite green: the cloned `workspace_kind_compat.rs` four directions
 4. Empirical UI check on the isolated sandbox bundle (`/tmp/hphr/HP.app`, bundle id
-   `com.hyperpanes.hotreload`, run under `HOME=/tmp/hphr`) — never the user's real
+   `to.avada.hotreload`, run under `HOME=/tmp/hphr`) — never the user's real
    install. Human-paced synthetic drags via the `slowdrag` CoreGraphics harness; the
    drag pump samples the cursor every 8 ms and refuses anything faster.
 
@@ -614,8 +614,8 @@ directory and is keyed by workspace uid, which means it travels with the *machin
 not with the *repo*. A repo-local file makes the layout a property of the checkout —
 it clones, it branches, it can be committed or `.gitignore`d per the owner's taste.
 
-- **Location:** `.hyperpanes/project.json` in the repo root, discovered by walking up
-  from the opened directory to the first `.hyperpanes/` or `.git/` — the same ancestor
+- **Location:** `.avada/project.json` in the repo root, discovered by walking up
+  from the opened directory to the first `.avada/` or `.git/` — the same ancestor
   walk shape the existing git-branch lookup uses.
 - **Format:** the existing `PaneSpec`/workspace envelope, reused verbatim. Same
   `Option<T>` + `skip_serializing_if` compat rule, same `ENVELOPE_VERSION`. Writing a
@@ -715,10 +715,10 @@ widget that normally draws it is not on screen.
 
 ### D17 — Why paths in an agent pane were not linking
 
-**Asked for:** `"Artifact(/Users/bshuler/Library/Application Support/hyperpanes/lane-watch.html)"
+**Asked for:** `"Artifact(/Users/bshuler/Library/Application Support/avada/lane-watch.html)"
 isnt being hot linked`, then `/System/Volumes/Data`, `/usr/bin/python3`, `/dev/disk3s5`,
-`/Users/bshuler/Library/Application Support/hyperpanes/hyperpane` and
-`.claude/skills/hyperpanes/relay.py` — six reports, and it turned out to be three bugs.
+`/Users/bshuler/Library/Application Support/avada/hyperpane` and
+`.claude/skills/avada/relay.py` — six reports, and it turned out to be three bugs.
 
 D14 built the detector and it worked. What failed was everything around it.
 

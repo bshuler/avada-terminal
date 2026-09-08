@@ -12,7 +12,7 @@ set -uo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL="$HERE/install-macos.sh"
 ROOT="$(mktemp -d)"
-DEST="$ROOT/apps/Hyperpanes.app"
+DEST="$ROOT/apps/Avada.app"
 pass=0
 fail=0
 
@@ -29,8 +29,8 @@ want() { if eval "$2"; then ok; else no "$1"; fi; }
 
 make_bundle() { # make_bundle <dir> <marker>
     mkdir -p "$1/Contents/MacOS"
-    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$1/Contents/MacOS/hyperpanes"
-    chmod +x "$1/Contents/MacOS/hyperpanes"
+    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$1/Contents/MacOS/avada"
+    chmod +x "$1/Contents/MacOS/avada"
     echo "$2" > "$1/Contents/MacOS/marker"
 }
 
@@ -39,7 +39,7 @@ make_bundle "$ROOT/v2" two
 
 # --- first install, into an empty destination ---------------------------------
 bash "$INSTALL" "$ROOT/v1" --dest "$DEST" >/dev/null 2>&1
-want "first install lands the bundle" '[[ -x "$DEST/Contents/MacOS/hyperpanes" ]]'
+want "first install lands the bundle" '[[ -x "$DEST/Contents/MacOS/avada" ]]'
 want "first install copies the right build" '[[ "$(cat "$DEST/Contents/MacOS/marker")" == one ]]'
 want "installed bundle is locked" '/bin/ls -ldO "$DEST" | grep -q uchg'
 want "the lock refuses rm -rf" '! rm -rf "$DEST" 2>/dev/null && [[ -d "$DEST" ]]'
@@ -47,7 +47,7 @@ want "the lock refuses an overwrite" '! ditto "$ROOT/v2" "$DEST" 2>/dev/null'
 want "the lock refuses a rename" '! mv "$DEST" "$ROOT/apps/moved.app" 2>/dev/null'
 
 # --- a process running out of the installed bundle ----------------------------
-"$DEST/Contents/MacOS/hyperpanes" &
+"$DEST/Contents/MacOS/avada" &
 VICTIM=$!
 disown 2>/dev/null   # else the shell announces "Terminated" when cleanup reaps it
 sleep 0.3
@@ -57,16 +57,16 @@ want "the victim process started" 'kill -0 "$VICTIM" 2>/dev/null'
 bash "$INSTALL" "$ROOT/v2" --dest "$DEST" >/dev/null 2>&1
 want "second install replaced the bundle" '[[ "$(cat "$DEST/Contents/MacOS/marker")" == two ]]'
 want "THE PROCESS SURVIVED THE SWAP" 'kill -0 "$VICTIM" 2>/dev/null'
-want "the old bundle was retired, not deleted" '[[ -n "$(/bin/ls -1d "$ROOT/apps/.hyperpanes-attic"/*.app 2>/dev/null)" ]]'
+want "the old bundle was retired, not deleted" '[[ -n "$(/bin/ls -1d "$ROOT/apps/.avada-attic"/*.app 2>/dev/null)" ]]'
 want "the new bundle is locked again" '/bin/ls -ldO "$DEST" | grep -q uchg'
-want "no staging directory is left behind" '[[ ! -e "$ROOT/apps/.Hyperpanes.app.incoming" ]]'
+want "no staging directory is left behind" '[[ ! -e "$ROOT/apps/.Avada.app.incoming" ]]'
 
 # --- the attic keeps the newest few and prunes the rest ------------------------
 for v in 3 4 5; do
     make_bundle "$ROOT/v$v" "$v"
     bash "$INSTALL" "$ROOT/v$v" --dest "$DEST" >/dev/null 2>&1
 done
-retired=$(/bin/ls -1d "$ROOT/apps/.hyperpanes-attic"/*.app 2>/dev/null | wc -l | tr -d ' ')
+retired=$(/bin/ls -1d "$ROOT/apps/.avada-attic"/*.app 2>/dev/null | wc -l | tr -d ' ')
 want "the attic is pruned (kept $retired)" '[[ "$retired" -le 3 ]]'
 want "the process is STILL alive after four swaps" 'kill -0 "$VICTIM" 2>/dev/null'
 

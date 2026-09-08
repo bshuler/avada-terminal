@@ -1,6 +1,6 @@
-# hyperpanes mobile
+# avada mobile
 
-iOS/Android client for a host hyperpanes: streams pane output, drives Claude/agent
+iOS/Android client for a host avada: streams pane output, drives Claude/agent
 panes, and manages the workspace over the control API. Everything heavy (ptys, agents,
 repos) stays on the host — the phone is a remote head.
 
@@ -17,13 +17,13 @@ Architecture, protocol, and host-side requirements: `docs/mobile-client-plan.md`
    ```
 
    Prefer the Tailscale IP — WireGuard-encrypted, no open LAN ports.
-2. Run `hyperpanes pair` → mints a **per-device token** (the master token never leaves the
+2. Run `avada pair` → mints a **per-device token** (the master token never leaves the
    host) and prints `hp://…` URLs + a QR code. Name the device / set an expiry with
-   `hyperpanes pair --device "my-iphone" --ttl 30d` (TTL omitted = never expires).
+   `avada pair --device "my-iphone" --ttl 30d` (TTL omitted = never expires).
 3. In the app: **Scan pairing QR** (or enter host:port + token manually).
 
-Each device is paired individually and revocably: `hyperpanes devices` lists the paired
-clients by label, and `hyperpanes revoke "my-iphone"` drops one without disturbing the others.
+Each device is paired individually and revocably: `avada devices` lists the paired
+clients by label, and `avada revoke "my-iphone"` drops one without disturbing the others.
 Device tokens are persisted (`device-tokens.json`), so a phone stays paired across host restarts.
 
 ## Develop

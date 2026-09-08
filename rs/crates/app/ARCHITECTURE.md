@@ -1,7 +1,7 @@
-# hyperpanes app — architecture (Phase 3, Wave 1)
+# avada app — architecture (Phase 3, Wave 1)
 
 The GUI crate (`rs/crates/app`) is the native Slint shell. It **consumes**
-`hyperpanes-core` (layout math, session manager) and `hyperpanes-terminal-widget`
+`avada-core` (layout math, session manager) and `avada-terminal-widget`
 (the reusable `TerminalPane`) unchanged, and assembles them into a multi-tab
 tiled-terminal workspace.
 

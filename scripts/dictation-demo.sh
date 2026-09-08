@@ -7,20 +7,20 @@
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 A="${DICTATION_DEMO_DIR:-$(mktemp -d /tmp/hp-stt-demo.XXXXXX)}"
-rm -rf "$A"; mkdir -p "$A/state/hyperpanes" "$A/config/hyperpanes" "$A/data"
+rm -rf "$A"; mkdir -p "$A/state/avada" "$A/config/avada" "$A/data"
 # Settings (speech.json / stt.json) resolve through config_dir(), which is XDG only on Linux
 # and $HOME/Library/Application Support on macOS — so XDG overrides ALONE do not sandbox them,
 # and a demo that skipped HOME would silently read the developer's real settings. Override HOME
 # too and seed both candidates; the one this platform reads wins, the other is inert.
 export HOME="$A/home"
-mkdir -p "$A/config/hyperpanes" "$A/home/Library/Application Support/hyperpanes"
+mkdir -p "$A/config/avada" "$A/home/Library/Application Support/avada"
 TYPED="$A/typed.txt"; EV="$A/events.txt"; : > "$TYPED"; : > "$EV"
 FAILED=0
 ok()   { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; FAILED=1; }
 check() { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1 (want '$3', got '$2')"; fi; }
 
-[ -x "$REPO/rs/target/debug/headless" ] || (cd "$REPO/rs" && cargo build --locked -p hyperpanes-core --bin headless) || exit 1
+[ -x "$REPO/rs/target/debug/headless" ] || (cd "$REPO/rs" && cargo build --locked -p avada-core --bin headless) || exit 1
 
 # Fake recorder. A Custom recorder is stopped with SIGINT on macOS/Linux (backend.rs's
 # stop_kind), so it must write its WAV up front and then exit cleanly on the signal — the
@@ -50,18 +50,18 @@ chmod +x "$A/rec.sh" "$A/tr.sh"
 jq -n --arg r "$A/rec.sh" --arg t "$A/tr.sh" \
   '{recordTemplate:["/bin/sh",$r,"{wav}"],transcribeTemplate:["/bin/sh",$t,"{wav}"],submit:true}' \
   > "$A/stt.json"
-cp "$A/stt.json" "$A/config/hyperpanes/stt.json"
-cp "$A/stt.json" "$A/home/Library/Application Support/hyperpanes/stt.json"
+cp "$A/stt.json" "$A/config/avada/stt.json"
+cp "$A/stt.json" "$A/home/Library/Application Support/avada/stt.json"
 
-CJ="$A/state/hyperpanes/control.json"
-# HYPERPANES_CONTROL_FILE leaks in from this pane's env and would clobber the LIVE app's
+CJ="$A/state/avada/control.json"
+# AVADA_CONTROL_FILE leaks in from this pane's env and would clobber the LIVE app's
 # discovery file — pin it into the sandbox explicitly.
 # A fresh sandbox has no control-settings.json, so `allowInput` defaults OFF — and dictation
 # types into a pty, so it lives or dies with that switch. Turn it on explicitly rather than
 # inheriting whatever the developer happens to have enabled.
-env -u HYPERPANES_PANE_ID \
+env -u AVADA_PANE_ID \
   XDG_STATE_HOME="$A/state" XDG_CONFIG_HOME="$A/config" XDG_DATA_HOME="$A/data" \
-  HYPERPANES_CONTROL_FILE="$CJ" HYPERPANES_MSG_NUDGE=0 HYPERPANES_ALLOW_INPUT=1 \
+  AVADA_CONTROL_FILE="$CJ" AVADA_MSG_NUDGE=0 AVADA_ALLOW_INPUT=1 \
   "$REPO/rs/target/debug/headless" > "$A/headless.log" 2>&1 &
 HPID=$!
 trap 'kill $HPID 2>/dev/null' EXIT
@@ -74,7 +74,7 @@ echo "== headless up on $H:$P (pid $HPID), sandbox $A"
 
 # The recordings directory is pid-scoped scratch: raw audio of the user never lands beside
 # the settings, and this demo asserts it is empty again at the end.
-WAVDIR="${TMPDIR:-/tmp}/hyperpanes-dictation-$HPID"
+WAVDIR="${TMPDIR:-/tmp}/avada-dictation-$HPID"
 
 # A pane whose program is a sink: whatever the pty delivers ends up in $TYPED, and only a
 # real Enter (the separate delayed CR write) makes `cat` flush a line out.

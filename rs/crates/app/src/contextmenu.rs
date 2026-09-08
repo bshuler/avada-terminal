@@ -522,7 +522,7 @@ pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMe
     let handlers = if is_dir {
         Vec::new()
     } else {
-        hyperpanes_core::open::handlers_for(path)
+        avada_core::open::handlers_for(path)
     };
 
     if is_dir {
@@ -536,8 +536,8 @@ pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMe
         } else {
             b.item("Open in Viewer", Command::FilesOpen(p.clone()));
         }
-        for def in hyperpanes_core::tools::registry::editors() {
-            if hyperpanes_core::tools::detect::resolve(def, &state.settings.tool_paths).is_none() {
+        for def in avada_core::tools::registry::editors() {
+            if avada_core::tools::detect::resolve(def, &state.settings.tool_paths).is_none() {
                 continue;
             }
             b.row(
@@ -602,7 +602,7 @@ pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMe
 /// the explorer. URLs and commits have no explorer row, so they get the two things a link can
 /// do: go there, or take the text. Both run through the same commands a left-click uses.
 #[tracing::instrument(level = "debug")]
-pub fn link_menu(hit: &hyperpanes_terminal_widget::LinkHit, x: f32, y: f32) -> CtxMenu {
+pub fn link_menu(hit: &avada_terminal_widget::LinkHit, x: f32, y: f32) -> CtxMenu {
     let mut b = Build::new();
     if hit.is_commit {
         b.item(
@@ -636,7 +636,7 @@ fn is_runnable(path: &std::path::Path) -> bool {
     }
     #[cfg(not(unix))]
     {
-        hyperpanes_core::paths::is_executable_ext(&path.to_string_lossy())
+        avada_core::paths::is_executable_ext(&path.to_string_lossy())
     }
 }
 
@@ -887,7 +887,7 @@ pub fn app_menu(state: &State, x: f32, y: f32) -> CtxMenu {
     // panes are not ours to lose: the session daemon owns every PTY and outlives us, so this
     // is a client reconnecting, not a workspace being torn down.
     b.row(
-        "Restart Hyperpanes",
+        "Restart Avada",
         "",
         crate::theme::menu_icon::RESTART,
         false,
@@ -968,8 +968,8 @@ mod read_only_menu_tests {
     //! a disabled action, it is a different pane's menu.
     use super::*;
     use crate::state::{DetachedPane, State};
-    use hyperpanes_core::session_manager::SessionManager;
-    use hyperpanes_core::tools::PaneKind;
+    use avada_core::session_manager::SessionManager;
+    use avada_core::tools::PaneKind;
 
     fn labels(st: &State) -> Vec<String> {
         pane_menu(st, 0, 0.0, 0.0, false)
@@ -1050,7 +1050,7 @@ mod read_only_menu_tests {
         let at = menu
             .entries
             .iter()
-            .position(|e| e.label == "Restart Hyperpanes")
+            .position(|e| e.label == "Restart Avada")
             .expect("the app menu offers a restart");
         let cmd = menu.commands[at]
             .clone()
@@ -1129,8 +1129,8 @@ mod tests {
         }
     }
 
-    fn link(is_url: bool, is_commit: bool) -> hyperpanes_terminal_widget::LinkHit {
-        hyperpanes_terminal_widget::LinkHit {
+    fn link(is_url: bool, is_commit: bool) -> avada_terminal_widget::LinkHit {
+        avada_terminal_widget::LinkHit {
             x: 0.0,
             y: 0.0,
             w: 0.0,

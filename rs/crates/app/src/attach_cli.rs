@@ -1,6 +1,6 @@
-//! `hyperpanes attach [<pane>]` — the **M2 terminal client** (`docs/mux-backend-plan.md`).
+//! `avada attach [<pane>]` — the **M2 terminal client** (`docs/mux-backend-plan.md`).
 //!
-//! Renders a live hyperpanes pane into whatever terminal this process is running in: seed
+//! Renders a live avada pane into whatever terminal this process is running in: seed
 //! from the daemon's replay buffer, stream output to stdout, forward stdin, handle
 //! `SIGWINCH`, and leave on a detach key with the session still running. This is the
 //! tmux-client equivalent, and it works over a stock system sshd today — M3's embedded
@@ -9,7 +9,7 @@
 //! ## Split with `core`
 //! Everything protocol-shaped — connect, `Attach`, the replay seed, the event pump, uid
 //! resolution, the detach-key state machine, the resize policy — lives in
-//! [`hyperpanes_core::session::attach`], with no tty in it, so M3 can reuse it verbatim.
+//! [`avada_core::session::attach`], with no tty in it, so M3 can reuse it verbatim.
 //! What is left here is the part that is genuinely about *this* process's terminal:
 //! `termios` raw mode, `TIOCGWINSZ`, signal handling, the chooser, and argv. That mirrors
 //! how [`control_cli`](crate::control_cli) keeps its shared plumbing separate from the
@@ -39,10 +39,10 @@
 // Everything below the tty layer is `core`'s: see the module docs for the split. The
 // unix-only half of the surface is imported inside `run`, so the Windows build (whose
 // `run` is a one-line "not yet") stays warning-clean under clippy's `-D warnings`.
-use hyperpanes_core::session::attach::{parse_detach_key, ResizePolicy, DEFAULT_DETACH_PREFIX};
-use hyperpanes_core::session::proto::SessionMeta;
+use avada_core::session::attach::{parse_detach_key, ResizePolicy, DEFAULT_DETACH_PREFIX};
+use avada_core::session::proto::SessionMeta;
 
-/// Whether `argv` is `hyperpanes attach …`. Checked in `main` alongside the other
+/// Whether `argv` is `avada attach …`. Checked in `main` alongside the other
 /// subcommands, before the GUI/single-instance path.
 #[tracing::instrument(level = "debug", ret)]
 pub fn wants_attach(argv: &[String]) -> bool {
@@ -76,7 +76,7 @@ impl Default for AttachOpts {
 }
 
 impl AttachOpts {
-    /// `hyperpanes attach [<pane>] [--list] [--resize] [--detach-key <spec>]`.
+    /// `avada attach [<pane>] [--list] [--resize] [--detach-key <spec>]`.
     ///
     /// A single positional argument names the pane; a second is an error rather than a
     /// silent win for one of them. Unknown flags are rejected outright — a typo'd
@@ -114,11 +114,11 @@ impl AttachOpts {
 }
 
 pub const HELP: &str = "\
-hyperpanes attach — render a live pane into this terminal
+avada attach — render a live pane into this terminal
 
 USAGE:
-    hyperpanes attach [<pane>] [--resize] [--detach-key <key>]
-    hyperpanes attach --list
+    avada attach [<pane>] [--resize] [--detach-key <key>]
+    avada attach --list
 
     <pane>            A pane uid, or any unique prefix/substring of one. Omit it to
                       pick from a list of the live sessions.
@@ -378,17 +378,17 @@ mod tty {
 }
 
 #[cfg_attr(not(unix), allow(dead_code))]
-/// The salt every hyperpanes client keys its daemon by: this install's user-data dir.
+/// The salt every avada client keys its daemon by: this install's user-data dir.
 /// Identical to `main`'s `--kill-daemon` path and to `SessionManager::new_daemon`, so
 /// `attach` always finds the daemon THIS build would attach to.
 #[tracing::instrument(level = "debug", ret)]
 fn salt() -> String {
-    hyperpanes_core::persistence::paths::user_data_dir()
+    avada_core::persistence::paths::user_data_dir()
         .to_string_lossy()
         .into_owned()
 }
 
-/// `hyperpanes attach` on Windows. The GUI binary is built with
+/// `avada attach` on Windows. The GUI binary is built with
 /// `windows_subsystem = "windows"` (no console at all), and `core`'s Windows dependency set
 /// carries no `Win32_System_Console` bindings for raw mode — so rather than ship something
 /// that silently does nothing, say so. The plan scopes M2 to "usable over a stock system
@@ -396,7 +396,7 @@ fn salt() -> String {
 #[cfg(not(unix))]
 #[tracing::instrument(level = "debug", ret)]
 pub fn run(_argv: &[String]) -> Result<(), String> {
-    Err("hyperpanes attach is not available on Windows yet \
+    Err("avada attach is not available on Windows yet \
          (the GUI binary has no console subsystem, and the console raw-mode bindings are \
          not in this build). Use the desktop app, or attach from a unix host."
         .to_string())
@@ -405,7 +405,7 @@ pub fn run(_argv: &[String]) -> Result<(), String> {
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
 pub fn run(argv: &[String]) -> Result<(), String> {
-    use hyperpanes_core::session::attach::{self, detach_key_label, Attachment, PumpEnd};
+    use avada_core::session::attach::{self, detach_key_label, Attachment, PumpEnd};
     use std::io::Write;
     use std::sync::atomic::Ordering;
 
@@ -414,13 +414,13 @@ pub fn run(argv: &[String]) -> Result<(), String> {
 
     let conn = attach::connect(&salt).map_err(|e| e.to_string())?;
     match attach::handshake(&conn) {
-        Ok(ver) if ver != hyperpanes_core::session::proto::PROTO_VER => {
+        Ok(ver) if ver != avada_core::session::proto::PROTO_VER => {
             // Deliberately NOT the lock-step tear-down `daemon_client` does: that daemon is
             // full of somebody's live shells and this CLI does not own its lifetime.
             eprintln!(
-                "hyperpanes attach: warning — the running daemon speaks protocol {ver}, this \
+                "avada attach: warning — the running daemon speaks protocol {ver}, this \
                  binary speaks {}. Attaching anyway.",
-                hyperpanes_core::session::proto::PROTO_VER
+                avada_core::session::proto::PROTO_VER
             );
         }
         Ok(_) => {}
@@ -429,10 +429,10 @@ pub fn run(argv: &[String]) -> Result<(), String> {
 
     let sessions = attach::list_sessions(&conn).map_err(|e| e.to_string())?;
     if sessions.is_empty() {
-        return Err("no live hyperpanes sessions on this install.".to_string());
+        return Err("no live avada sessions on this install.".to_string());
     }
     if opts.list {
-        println!("Live hyperpanes sessions:");
+        println!("Live avada sessions:");
         print_sessions(&sessions);
         return Ok(());
     }
@@ -446,13 +446,13 @@ pub fn run(argv: &[String]) -> Result<(), String> {
     // ---- banner + the letterbox verdict, printed while the terminal is still cooked ----
     let term_size = tty::size(tty::STDOUT).unwrap_or((80, 24));
     println!(
-        "[hyperpanes] attaching to {uid} — press {} d to detach",
+        "[avada] attaching to {uid} — press {} d to detach",
         detach_key_label(opts.detach)
     );
     match opts.policy {
         ResizePolicy::Request => {
             println!(
-                "[hyperpanes] --resize: reflowing the pane to {}x{} (this changes it on the \
+                "[avada] --resize: reflowing the pane to {}x{} (this changes it on the \
                  desktop too)",
                 term_size.0, term_size.1
             );
@@ -461,7 +461,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
             if attach::fits(term_size, (meta.cols, meta.rows)) == Some(false) {
                 let (c, r) = (meta.cols.unwrap_or(0), meta.rows.unwrap_or(0));
                 println!(
-                    "[hyperpanes] this terminal is {}x{} but the pane is {c}x{r} — output will \
+                    "[avada] this terminal is {}x{} but the pane is {c}x{r} — output will \
                      be clipped. Resize this window, or re-run with --resize to reflow the \
                      pane (which also reflows it on the desktop).",
                     term_size.0, term_size.1
@@ -565,10 +565,10 @@ pub fn run(argv: &[String]) -> Result<(), String> {
     drop(_raw);
     match end {
         PumpEnd::Exited(code) => {
-            println!("\r\n[hyperpanes] {uid} exited (code {code})");
+            println!("\r\n[avada] {uid} exited (code {code})");
         }
         PumpEnd::Disconnected => {
-            println!("\r\n[hyperpanes] detached from {uid} — the session is still running");
+            println!("\r\n[avada] detached from {uid} — the session is still running");
         }
     }
     Ok(())
@@ -588,14 +588,14 @@ const CLEAR_SCREEN: &[u8] = b"\x1b[H\x1b[2J\x1b[3J";
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
 fn choose(sessions: &[SessionMeta], query: Option<&str>) -> Result<String, String> {
-    use hyperpanes_core::session::attach::{self, UidMatch};
+    use avada_core::session::attach::{self, UidMatch};
     use std::io::Write;
 
     if let Some(q) = query {
         return match attach::resolve_uid(sessions, q) {
             UidMatch::One(uid) => Ok(uid),
             UidMatch::None => Err(format!(
-                "no live session matches '{q}'. `hyperpanes attach --list` shows them."
+                "no live session matches '{q}'. `avada attach --list` shows them."
             )),
             UidMatch::Ambiguous(hits) => Err(format!(
                 "'{q}' matches {} sessions:\n{}\nBe more specific.",
@@ -620,7 +620,7 @@ fn choose(sessions: &[SessionMeta], query: Option<&str>) -> Result<String, Strin
         return Err(msg);
     }
 
-    println!("Live hyperpanes sessions:");
+    println!("Live avada sessions:");
     print_sessions(sessions);
     print!("Attach to [1-{}, or q to quit]: ", sessions.len());
     let _ = std::io::stdout().flush();
@@ -665,19 +665,19 @@ mod tests {
 
     #[test]
     fn wants_attach_only_fires_on_the_subcommand() {
-        assert!(wants_attach(&argv(&["hyperpanes", "attach"])));
-        assert!(wants_attach(&argv(&["hyperpanes", "attach", "pane-1"])));
-        assert!(!wants_attach(&argv(&["hyperpanes"])));
-        assert!(!wants_attach(&argv(&["hyperpanes", "pair"])));
+        assert!(wants_attach(&argv(&["avada", "attach"])));
+        assert!(wants_attach(&argv(&["avada", "attach", "pane-1"])));
+        assert!(!wants_attach(&argv(&["avada"])));
+        assert!(!wants_attach(&argv(&["avada", "pair"])));
         // Not a flag, and never matched past argv[1] — `-c "attach"` must launch the GUI.
-        assert!(!wants_attach(&argv(&["hyperpanes", "-c", "attach"])));
+        assert!(!wants_attach(&argv(&["avada", "-c", "attach"])));
     }
 
     // ---- flag parsing ----
 
     #[test]
     fn parse_defaults_to_the_chooser_and_the_letterbox_policy() {
-        let o = AttachOpts::parse(&argv(&["hyperpanes", "attach"])).expect("parses");
+        let o = AttachOpts::parse(&argv(&["avada", "attach"])).expect("parses");
         assert_eq!(o.query, None);
         assert!(!o.list);
         assert_eq!(
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn parse_reads_a_pane_and_every_flag() {
         let o = AttachOpts::parse(&argv(&[
-            "hyperpanes",
+            "avada",
             "attach",
             "pane-abc",
             "--resize",
@@ -703,17 +703,17 @@ mod tests {
         assert_eq!(o.policy, ResizePolicy::Request);
         assert_eq!(o.detach, 0x1D);
 
-        let l = AttachOpts::parse(&argv(&["hyperpanes", "attach", "-l"])).expect("parses");
+        let l = AttachOpts::parse(&argv(&["avada", "attach", "-l"])).expect("parses");
         assert!(l.list);
     }
 
     #[test]
     fn parse_rejects_typos_rather_than_silently_ignoring_them() {
         // A dropped `--resize` would silently keep the (opposite) default policy.
-        assert!(AttachOpts::parse(&argv(&["hyperpanes", "attach", "--resiez"])).is_err());
-        assert!(AttachOpts::parse(&argv(&["hyperpanes", "attach", "--detach-key"])).is_err());
-        assert!(AttachOpts::parse(&argv(&["hyperpanes", "attach", "--detach-key", "x"])).is_err());
-        assert!(AttachOpts::parse(&argv(&["hyperpanes", "attach", "a", "b"])).is_err());
+        assert!(AttachOpts::parse(&argv(&["avada", "attach", "--resiez"])).is_err());
+        assert!(AttachOpts::parse(&argv(&["avada", "attach", "--detach-key"])).is_err());
+        assert!(AttachOpts::parse(&argv(&["avada", "attach", "--detach-key", "x"])).is_err());
+        assert!(AttachOpts::parse(&argv(&["avada", "attach", "a", "b"])).is_err());
     }
 
     // ---- chooser formatting ----

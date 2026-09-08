@@ -26,7 +26,7 @@ The only human stop is CODEOWNERS review on risky paths (§3), which the bot can
 > can now be made **required** and auto-merge flipped on (start low — see §7 rollout).
 
 All settings below are applied **by hand in the GitHub web UI** — this doc does not call
-the GitHub API or `gh`. Repo: `Eyalm321/hyperpanes`, default branch **`main`**.
+the GitHub API or `gh`. Repo: `Eyalm321/avada`, default branch **`main`**.
 
 ---
 

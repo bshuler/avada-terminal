@@ -2,8 +2,8 @@
 
 ## The failure mode this closes
 
-`core/src/app.rs:44-46` resolves the discovery file as `HYPERPANES_CONTROL_FILE` with
-precedence over the XDG-derived default (`~/.local/state/hyperpanes/control.json`).
+`core/src/app.rs:44-46` resolves the discovery file as `AVADA_CONTROL_FILE` with
+precedence over the XDG-derived default (`~/.local/state/avada/control.json`).
 Every spawned pane **inherits** that variable pointing at the LIVE file
 (`session::spawn`), so a dev/test build launched from an agent pane — even one that
 overrides `XDG_STATE_HOME` — still targets the live `control.json`. On start it
@@ -23,12 +23,12 @@ daemon never collide there — correct for argv hand-off, blind to file ownershi
 
 Before `run_server` claims the file it reads it and checks the recorded pid. The file
 is refused ONLY when that pid is alive, is not ours, and **verifiably looks like a
-hyperpanes process** (comm/argv0 on Linux, `ps` comm elsewhere on unix, image path on
-Windows — matching `hyperpanes` or the `headless` bin). Everything else claims
+avada process** (comm/argv0 on Linux, `ps` comm elsewhere on unix, image path on
+Windows — matching `avada` or the `headless` bin). Everything else claims
 cleanly; the guard **fails open**, because a wrongly-refused legitimate launch would
 be a worse wedge than the clobber it prevents:
 
-- **live foreign hyperpanes pid → refuse startup**, before binding anything, with a
+- **live foreign avada pid → refuse startup**, before binding anything, with a
   message naming the live owner (pid / port / version), the copy-pasteable isolation
   env line, and the pid-reuse escape hatch. The refusal is retried for ~5s first, so
   an owner that is mid-exit (restart overlap) is claimed instead of refused. The
@@ -48,7 +48,7 @@ the `single_instance` flock (released only when the old process dies) plus the
 relauncher's 2s sleep (`app::service_restart_request`), and the guard's retry window
 covers any residual overlap. Exactly two code paths ever write discovery — the GUI's
 `ControlHost` and the core headless `app::run` (`grep -rn "server::run_server"
-rs/crates`); the session daemon (`--session-daemon`) and `hyperpanes worker` are
+rs/crates`); the session daemon (`--session-daemon`) and `avada worker` are
 clients only, so no legitimate pair of processes can deadlock on the guard.
 
 Known limit: two instances starting simultaneously against a not-yet-written file
@@ -59,12 +59,12 @@ live instance, where the file always exists first.
 
 ```sh
 d=$(mktemp -d -p ~/.cache)   # not /tmp: tmpfs
-XDG_STATE_HOME=$d HYPERPANES_CONTROL_FILE=$d/control.json \
+XDG_STATE_HOME=$d AVADA_CONTROL_FILE=$d/control.json \
   cargo run --bin headless
 ```
 
 Both variables matter: `XDG_STATE_HOME` isolates the rest of the state dir, and
-`HYPERPANES_CONTROL_FILE` must be set explicitly because the inherited value would
+`AVADA_CONTROL_FILE` must be set explicitly because the inherited value would
 otherwise win (that precedence is the whole failure mode). Optionally add
 `XDG_CONFIG_HOME=$d` too: `control-settings.json` lives in the config dir, so a dev
 instance otherwise inherits the live bind address — harmless (the live port is taken

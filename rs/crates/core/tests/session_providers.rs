@@ -23,13 +23,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use hyperpanes_core::claude_history::{
+use avada_core::claude_history::{
     all_projects_in, decode_by_probing, decode_project_dir, encode_path_str, encode_project_dir,
     read_session_file, HistorySource, ProjectOrigin, SessionCache,
 };
-use hyperpanes_core::tools::history::{
-    ClaudeProvider, ResumeBlocked, SessionProvider, ToolSession,
-};
+use avada_core::tools::history::{ClaudeProvider, ResumeBlocked, SessionProvider, ToolSession};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!(
@@ -454,7 +452,7 @@ fn an_uninstalled_tool_is_blocked_with_a_reason() {
 
 /// The machine's own `~/.claude/projects`, or `None` when Claude Code has never run here.
 fn real_store() -> Option<PathBuf> {
-    hyperpanes_core::claude_history::claude_projects_root().filter(|p| p.is_dir())
+    avada_core::claude_history::claude_projects_root().filter(|p| p.is_dir())
 }
 
 #[test]
@@ -482,7 +480,7 @@ fn the_real_store_enumerates_without_panicking() {
 }
 
 /// Not an assertion — a report. Run with:
-/// `cargo test -p hyperpanes-core --test session_providers -- --ignored --nocapture`
+/// `cargo test -p avada-core --test session_providers -- --ignored --nocapture`
 #[test]
 #[ignore = "reports numbers from the machine's real transcript store"]
 fn report_real_store_numbers() {

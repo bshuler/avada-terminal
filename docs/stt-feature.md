@@ -37,7 +37,7 @@ one model file. Nothing else.
 
 ```
 click mic   → recorder (in-process, or a command)
-                                      → <temp>/hyperpanes-dictation-<pid>/<pane>.wav
+                                      → <temp>/avada-dictation-<pid>/<pane>.wav
             → (in the background)     → fetch the speech model if it is not cached yet
 click again → graceful stop           → the recorder finalizes its WAV header
             → transcriber (in-process, or a command)

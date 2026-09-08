@@ -1,4 +1,4 @@
-/// Connect screen: saved hosts, QR scan (`hyperpanes pair` on the host prints the code),
+/// Connect screen: saved hosts, QR scan (`avada pair` on the host prints the code),
 /// and manual entry.
 library;
 
@@ -54,7 +54,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     final p = HostPairing.parse(url);
     if (p == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not a hyperpanes pairing code')),
+        const SnackBar(content: Text('Not a avada pairing code')),
       );
       return;
     }
@@ -72,7 +72,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('hyperpanes')),
+      appBar: AppBar(title: const Text('avada')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
@@ -86,7 +86,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                         const Icon(Icons.terminal, size: 56, color: hpTextDim),
                         const SizedBox(height: 12),
                         Text(
-                          'Run `hyperpanes pair` on your host,\nthen scan the QR code.',
+                          'Run `avada pair` on your host,\nthen scan the QR code.',
                           textAlign: TextAlign.center,
                           style: Theme.of(context)
                               .textTheme

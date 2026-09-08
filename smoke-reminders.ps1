@@ -1,9 +1,9 @@
-# Track F smoke: launch an ISOLATED hyperpanes (temp APPDATA, control-file env cleared),
-# seeded via HYPERPANES_OPEN=reminders (pane parked, due in ~10s, bell list open).
+# Track F smoke: launch an ISOLATED avada (temp APPDATA, control-file env cleared),
+# seeded via AVADA_OPEN=reminders (pane parked, due in ~10s, bell list open).
 # Captures: s1 (pending), s2 (fired/overdue), then clicks the row and captures s3 (restored).
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSCommandPath
-$exe = Join-Path $root "rs\crates\app\target\debug\hyperpanes.exe"
+$exe = Join-Path $root "rs\crates\app\target\debug\avada.exe"
 $out = Join-Path $root "smoke-out"
 New-Item -ItemType Directory -Force $out | Out-Null
 $tmpAppData = Join-Path $out "appdata"
@@ -71,13 +71,13 @@ function Shot([IntPtr]$h, [string]$path) {
     $g.Dispose(); $bmp.Dispose()
 }
 
-# Launch isolated: temp APPDATA, HYPERPANES_OPEN=reminders, control-file env REMOVED.
+# Launch isolated: temp APPDATA, AVADA_OPEN=reminders, control-file env REMOVED.
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $exe
 $psi.UseShellExecute = $false
 $psi.EnvironmentVariables['APPDATA'] = $tmpAppData
-$psi.EnvironmentVariables['HYPERPANES_OPEN'] = 'reminders'
-$psi.EnvironmentVariables.Remove('HYPERPANES_CONTROL_FILE') | Out-Null
+$psi.EnvironmentVariables['AVADA_OPEN'] = 'reminders'
+$psi.EnvironmentVariables.Remove('AVADA_CONTROL_FILE') | Out-Null
 $proc = [System.Diagnostics.Process]::Start($psi)
 $t0 = Get-Date
 Write-Output "PID=$($proc.Id)"
@@ -90,7 +90,7 @@ for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) {
 }
 if ($h -eq [IntPtr]::Zero) { $proc.Kill(); throw "window not found" }
 # Pin TOPMOST so screen captures show OUR window and the click can't land on another app
-# (the host hyperpanes window overlapped us on a previous run — never drive its input).
+# (the host avada window overlapped us on a previous run — never drive its input).
 [Win]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null  # NOMOVE|NOSIZE|NOACTIVATE
 Start-Sleep -Seconds 3   # let the shells spawn + first frames render
 

@@ -22,9 +22,9 @@
 //! (the in-process decision), `session::daemon_client` tests (the decision against a REAL
 //! daemon — a live uid re-attaches, a dead one spawns).
 
-use hyperpanes_core::session_manager::{PaneLoad, SessionManager};
-use hyperpanes_core::workspace::io::{read_workspace, windows_of, write_workspace};
-use hyperpanes_core::workspace::model::{GroupSpec, PaneSpec, WorkspaceFile};
+use avada_core::session_manager::{PaneLoad, SessionManager};
+use avada_core::workspace::io::{read_workspace, windows_of, write_workspace};
+use avada_core::workspace::model::{GroupSpec, PaneSpec, WorkspaceFile};
 use serde::Deserialize;
 
 fn temp_file(tag: &str) -> std::path::PathBuf {
@@ -192,7 +192,7 @@ fn a_mixed_file_decides_per_pane_not_per_file() {
 // ----------------------------------------------------------------- forward compatibility
 
 /// The pane shape a build that PREDATES the `uid` field knows about. Deserializing a
-/// uid-bearing file into this is what an older hyperpanes does when a user downgrades.
+/// uid-bearing file into this is what an older avada does when a user downgrades.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PreM6PaneSpec {

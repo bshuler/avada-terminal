@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn healthy_but_quiet_tail_is_not_a_false_positive() {
-        let tail = "Compiling hyperpanes-core v0.0.0\n\
+        let tail = "Compiling avada-core v0.0.0\n\
              warning: unused variable `x`\n\
              Finished dev profile in 1.2s\n\
              Let me look at that file.\n\
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn resolves_candidates_across_stores_newest_first_with_correct_config_dir() {
-        let project_root = Path::new("/home/eyalmizrachi/dev/hyperpanes");
+        let project_root = Path::new("/home/eyalmizrachi/dev/avada");
         let encoded = crate::claude_history::encode_project_dir(project_root);
 
         let default_root = temp_dir("default");

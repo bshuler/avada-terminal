@@ -3,8 +3,8 @@
 
 use std::borrow::Cow;
 
-use hyperpanes_core::layout::presets::Layout;
-use hyperpanes_terminal_widget::Font;
+use avada_core::layout::presets::Layout;
+use avada_terminal_widget::Font;
 use slint::Color;
 
 /// The selectable frame palettes (pane dot + frame-border colors), the native port of
@@ -436,7 +436,7 @@ pub mod menu_icon {
     /// Base for the layout minis: `LAYOUT_BASE + layout_id(l)` (see [`super::layout_icon_kind`]).
     pub const LAYOUT_BASE: i32 = 10;
     /// Base for the per-tool marks. Kinds from here up are allocated by the core registry
-    /// (`hyperpanes_core::tools::registry::TOOL_ICON_BASE`, which MUST equal this) and drawn
+    /// (`avada_core::tools::registry::TOOL_ICON_BASE`, which MUST equal this) and drawn
     /// by `ToolIcon` in `ui/contextmenu.slint`. The two constants live in different crates
     /// because the registry is data in core while the drawing is app-side; the assertion in
     /// [`super::tests::tool_icons_start_where_the_registry_says`] is what keeps them equal.
@@ -524,7 +524,7 @@ mod tests {
         // Two crates, one allocation. Drift here silently draws the wrong mark.
         assert_eq!(
             super::menu_icon::TOOL_BASE as u32,
-            hyperpanes_core::tools::registry::TOOL_ICON_BASE
+            avada_core::tools::registry::TOOL_ICON_BASE
         );
     }
 
@@ -541,7 +541,7 @@ mod tests {
     /// selects the drawn mini in `ui/contextmenu.slint`, which is matched by literal.
     #[test]
     fn the_original_menu_ids_are_unchanged() {
-        use hyperpanes_core::layout::presets::Layout;
+        use avada_core::layout::presets::Layout;
         for (i, l) in [
             Layout::Auto,
             Layout::Single,
@@ -571,7 +571,7 @@ mod tests {
     /// still reads as a grid rather than falling all the way back to Automatic.
     #[test]
     fn an_off_menu_grid_shape_borrows_the_square_grids_row() {
-        use hyperpanes_core::layout::presets::Layout;
+        use avada_core::layout::presets::Layout;
         assert_eq!(
             super::layout_id(Layout::GridFixed(4, 3)),
             super::layout_id(Layout::Grid)
@@ -582,7 +582,7 @@ mod tests {
     /// token is what a workspace file must be able to read back.
     #[test]
     fn fixed_grids_label_and_serialize_distinctly() {
-        use hyperpanes_core::layout::presets::Layout;
+        use avada_core::layout::presets::Layout;
         assert_eq!(super::layout_label(Layout::GridFixed(2, 3)), "2 x 3");
         assert_eq!(super::layout_name(Layout::GridFixed(2, 3)), "grid-2x3");
         assert_eq!(

@@ -14,7 +14,7 @@
 //!     else default → attach to the focused window as a new tab;
 //!   - label default `command.trim().split(/\s+/)[0] || "shell"`;
 //!   - a positional path is captured only when it (case-insensitively) ends in
-//!     `.json` or `.hyperpanes` AND `exists_fn` reports it present, resolved to
+//!     `.json` or `.avada` AND `exists_fn` reports it present, resolved to
 //!     an absolute path.
 
 use crate::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
@@ -38,7 +38,7 @@ pub enum AttachAs {
     Panes,
 }
 
-/// Where a second `hyperpanes …` launch puts its content.
+/// Where a second `avada …` launch puts its content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchRouting {
     NewWindow,
@@ -53,8 +53,8 @@ pub enum LaunchRouting {
 pub struct ParsedCli {
     /// A workspace assembled from inline flags (`-c`, `--layout`, …), or `None`.
     pub workspace: Option<WorkspaceFile>,
-    /// A positional workspace path (`.json` or `.hyperpanes`), resolved to absolute,
-    /// e.g. `hyperpanes ./dev.hyperpanes`.
+    /// A positional workspace path (`.json` or `.avada`), resolved to absolute,
+    /// e.g. `avada ./dev.avada`.
     pub json_path: Option<String>,
     /// New window vs attach-to-existing for this invocation.
     pub routing: LaunchRouting,
@@ -144,7 +144,7 @@ fn resolve_path(p: &str) -> String {
 
 /// Parse a launch command line into a workspace + routing. `argv[0]` is the
 /// program path (ignored, as in the TS port). `exists_fn` decides whether a
-/// positional `.json`/`.hyperpanes` is real (injected for testability).
+/// positional `.json`/`.avada` is real (injected for testability).
 #[tracing::instrument(level = "debug", ret)]
 pub fn parse_cli(argv: &[String]) -> ParsedCli {
     parse_cli_with(argv, |p| Path::new(p).exists())
@@ -329,7 +329,7 @@ pub fn parse_cli_with(argv: &[String], exists_fn: impl Fn(&str) -> bool) -> Pars
             _ => {
                 let lower = a.to_lowercase();
                 if !a.starts_with('-')
-                    && (lower.ends_with(".json") || lower.ends_with(".hyperpanes"))
+                    && (lower.ends_with(".json") || lower.ends_with(".avada"))
                     && exists_fn(&a)
                 {
                     json_path = Some(resolve_path(&a));
@@ -528,9 +528,9 @@ fn pane_mut(
 mod tests {
     use super::*;
 
-    /// `argv('foo', 'bar')` → ["/path/to/hyperpanes", "foo", "bar"].
+    /// `argv('foo', 'bar')` → ["/path/to/avada", "foo", "bar"].
     fn argv(rest: &[&str]) -> Vec<String> {
-        let mut v = vec!["/path/to/hyperpanes".to_string()];
+        let mut v = vec!["/path/to/avada".to_string()];
         v.extend(rest.iter().map(|s| s.to_string()));
         v
     }
@@ -676,17 +676,17 @@ mod tests {
     }
 
     #[test]
-    fn captures_a_positional_hyperpanes_path_that_exists() {
-        let exists = |p: &str| p == "./dev.hyperpanes";
-        let r = parse_cli_with(&argv(&["./dev.hyperpanes"]), exists);
+    fn captures_a_positional_avada_path_that_exists() {
+        let exists = |p: &str| p == "./dev.avada";
+        let r = parse_cli_with(&argv(&["./dev.avada"]), exists);
         assert!(
-            r.json_path.as_deref().unwrap().ends_with("dev.hyperpanes"),
-            "json_path should resolve to an absolute path ending in dev.hyperpanes: {:?}",
+            r.json_path.as_deref().unwrap().ends_with("dev.avada"),
+            "json_path should resolve to an absolute path ending in dev.avada: {:?}",
             r.json_path
         );
         // Case-insensitive, like the .json check.
-        let exists = |p: &str| p == "./DEV.HYPERPANES";
-        let r = parse_cli_with(&argv(&["./DEV.HYPERPANES"]), exists);
+        let exists = |p: &str| p == "./DEV.AVADA";
+        let r = parse_cli_with(&argv(&["./DEV.AVADA"]), exists);
         assert!(r.json_path.is_some());
     }
 
@@ -694,7 +694,7 @@ mod tests {
     fn ignores_a_json_path_that_does_not_exist() {
         let r = parse_cli_with(&argv(&["./missing.json"]), |_| false);
         assert!(r.json_path.is_none());
-        let r = parse_cli_with(&argv(&["./missing.hyperpanes"]), |_| false);
+        let r = parse_cli_with(&argv(&["./missing.avada"]), |_| false);
         assert!(r.json_path.is_none());
     }
 

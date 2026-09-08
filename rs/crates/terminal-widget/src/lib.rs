@@ -1,4 +1,4 @@
-//! `hyperpanes-terminal-widget` — the reusable live-terminal pane component.
+//! `avada-terminal-widget` — the reusable live-terminal pane component.
 //!
 //! A clean, Wave-2-consumable terminal pane: a [`pane::TerminalPane`] Rust **controller**
 //! + a `TerminalPane` **Slint component** (in [`ui`]), driven by the proven Spike A
@@ -6,7 +6,7 @@
 //!   GPU `wgpu::Texture` → `slint::Image`, behind the [`render::PaneRenderer`] trait).
 //!
 //! Unlike the spike, the pane owns **no PTY**: the live shell lives in
-//! `hyperpanes_core::session_manager`, and the controller is pumped with that session's
+//! `avada_core::session_manager`, and the controller is pumped with that session's
 //! output (and forwards key input / resize / DSR replies back to it). See
 //! [`pane::TerminalPane`] for the lifecycle, and `src/bin/demo.rs` for a full wiring.
 //!

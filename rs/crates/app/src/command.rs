@@ -7,9 +7,9 @@
 //! OS fullscreen). Wave-2 features add variants here and emit them; they never
 //! reach into the UI or the window glue themselves.
 
-use hyperpanes_core::layout::navigate::Direction;
-use hyperpanes_core::layout::presets::{DividerKind, Layout};
-use hyperpanes_core::session_manager::SessionManager;
+use avada_core::layout::navigate::Direction;
+use avada_core::layout::presets::{DividerKind, Layout};
+use avada_core::session_manager::SessionManager;
 
 use crate::state::{DetachedPane, DetachedTab, NewPaneOpts, ReminderOffset, Setting, State};
 use crate::theme;
@@ -157,7 +157,7 @@ pub enum Command {
         tool: String,
     },
     /// Hand `path` to one specific application the OS says can open its kind — the
-    /// "Open With" flyout. `app` is a [`hyperpanes_core::open::HandlerApp`]'s launcher,
+    /// "Open With" flyout. `app` is a [`avada_core::open::HandlerApp`]'s launcher,
     /// which is opaque and per-OS, so it is passed straight back through the same seam
     /// that produced it.
     OpenPathInApp {
@@ -268,7 +268,7 @@ pub enum Command {
     PasteFocused,
     /// Forward a literal Ctrl+V (0x16) to the focused pane (the Alt+V keybinding) so an in-pane
     /// TUI that reads the OS clipboard itself — e.g. Claude Code's image paste — can pull a
-    /// clipboard IMAGE. hyperpanes' text paste can't carry image bytes through the pty; this
+    /// clipboard IMAGE. avada' text paste can't carry image bytes through the pty; this
     /// hands the clipboard read to the focused program. Matches the shortcut Claude Code
     /// documents for terminals that intercept Ctrl+V.
     PasteImageFocused,
@@ -335,7 +335,7 @@ pub enum Command {
     /// Always prompt for a destination, save the active tab there, and remember it.
     SaveWorkspaceAs,
     /// Write the active tab into the checkout it is working in, as
-    /// `.hyperpanes/project.json` — the layout travels with the repo, not the laptop.
+    /// `.avada/project.json` — the layout travels with the repo, not the laptop.
     SaveProject,
     /// Save every non-empty tab as a member workspace and index them in a `sets/*.json`.
     SaveSet,
@@ -609,7 +609,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             // This used to branch `explorer` / `xdg-open` inline, which meant it did nothing
             // at all on macOS (no `xdg-open` there); `core::open` owns the per-OS launch now.
             if let Some(cwd) = state.active_tab().panes.get(i).and_then(|p| p.cwd.clone()) {
-                if let Err(e) = hyperpanes_core::open::reveal_path(std::path::Path::new(&cwd)) {
+                if let Err(e) = avada_core::open::reveal_path(std::path::Path::new(&cwd)) {
                     tracing::debug!("RevealPaneCwd {cwd}: {e}");
                 }
             }
@@ -659,7 +659,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     show_dot: None,
                     env: None,
                     startup: None,
-                    kind: Some(hyperpanes_core::tools::kind::PaneKind::FileBrowser),
+                    kind: Some(avada_core::tools::kind::PaneKind::FileBrowser),
                     // A view pane holds a directory, not a conversation.
                     session: None,
                 },
@@ -785,9 +785,9 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                 e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")
             });
             let kind = if md {
-                hyperpanes_core::tools::kind::PaneKind::Markdown
+                avada_core::tools::kind::PaneKind::Markdown
             } else {
-                hyperpanes_core::tools::kind::PaneKind::FileViewer
+                avada_core::tools::kind::PaneKind::FileViewer
             };
             let label = p
                 .file_name()
@@ -816,11 +816,11 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             // The tool's resolved binary, so a user override in Preferences → Tools is what
             // actually runs. Falling back to the registry's bare bin name lets PATH decide,
             // which is right when the override was cleared but the tool is still installed.
-            let Some(def) = hyperpanes_core::tools::registry::by_id(&tool) else {
+            let Some(def) = avada_core::tools::registry::by_id(&tool) else {
                 tracing::debug!("OpenPathWith: unknown tool {tool}");
                 return Effect::None;
             };
-            let bin = hyperpanes_core::tools::detect::resolve(def, &state.settings.tool_paths)
+            let bin = avada_core::tools::detect::resolve(def, &state.settings.tool_paths)
                 .map(|r| r.path.display().to_string())
                 .unwrap_or_else(|| def.bin.to_string());
             let p = std::path::PathBuf::from(&path);
@@ -846,7 +846,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     show_dot: None,
                     env: None,
                     startup: None,
-                    kind: Some(hyperpanes_core::tools::kind::PaneKind::Tool(tool)),
+                    kind: Some(avada_core::tools::kind::PaneKind::Tool(tool)),
                     // "Open this file in vim" starts an editor on a file — there is no
                     // conversation to come back to.
                     session: None,
@@ -858,8 +858,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             state.copy_link_text(f, &path);
         }
         Command::OpenPathInApp { path, app } => {
-            if let Err(e) = hyperpanes_core::open::open_path_with(&app, std::path::Path::new(&path))
-            {
+            if let Err(e) = avada_core::open::open_path_with(&app, std::path::Path::new(&path)) {
                 tracing::debug!("OpenPathInApp {path} in {app}: {e}");
             }
         }
@@ -903,7 +902,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             state.add_pane_cwd(mgr, dir.map(|d| d.display().to_string()), None);
         }
         Command::RevealPath(path) => {
-            if let Err(e) = hyperpanes_core::open::reveal_path(std::path::Path::new(&path)) {
+            if let Err(e) = avada_core::open::reveal_path(std::path::Path::new(&path)) {
                 tracing::debug!("RevealPath {path}: {e}");
             }
         }
@@ -1133,7 +1132,7 @@ mod rename_from_menu_tests {
     //! the `CloseContext` that closed the menu also cancelled the rename the pick had
     //! just started, one command later. The inline edit box never appeared.
     use super::*;
-    use hyperpanes_core::session_manager::SessionManager;
+    use avada_core::session_manager::SessionManager;
 
     fn mgr() -> SessionManager {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1210,7 +1209,7 @@ mod rename_from_menu_tests {
         st.add_pane_opts(
             &mgr,
             NewPaneOpts {
-                kind: Some(hyperpanes_core::tools::PaneKind::Markdown),
+                kind: Some(avada_core::tools::PaneKind::Markdown),
                 ..Default::default()
             },
         )
@@ -1241,7 +1240,7 @@ mod restart_rebinds_the_control_alias_tests {
     //! alias kept pointing at the dead session and was pruned — the pane got a NEW id
     //! mid-conversation. The exit-fallback path rebinds; this one must too.
     use super::*;
-    use hyperpanes_core::session_manager::SessionManager;
+    use avada_core::session_manager::SessionManager;
 
     fn mgr() -> SessionManager {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1316,7 +1315,7 @@ mod git_commit_diff_tests {
     //! test cannot see. These tests never skip — a machine without git is a failure, not
     //! a pass, because a silently-skipped test is indistinguishable from a green one.
     use super::*;
-    use hyperpanes_core::session_manager::SessionManager;
+    use avada_core::session_manager::SessionManager;
     use std::path::PathBuf;
 
     fn mgr() -> SessionManager {

@@ -13,10 +13,10 @@
 //! 2. `REG_EXPAND_SZ` values expanded (`%SystemRoot%` etc.) against the merged map,
 //!    falling back to the process env for tokens the registry doesn't define,
 //! 3. process-env vars that are NOT registry-backed layered in (session-only vars:
-//!    `HYPERPANES_*` injections, tokens handed to us by a parent, etc.) — for a name
+//!    `AVADA_*` injections, tokens handed to us by a parent, etc.) — for a name
 //!    present in both, the FRESH registry value wins over the stale process copy.
 //!
-//! Per-pane `opts.env` overrides and the `HYPERPANES_PANE_ID`/control-file injection
+//! Per-pane `opts.env` overrides and the `AVADA_PANE_ID`/control-file injection
 //! still happen afterwards in [`super::spawn::build_env`], unchanged.
 //!
 //! The registry read is `#[cfg(windows)]` (elsewhere the process env IS the freshest
@@ -116,7 +116,7 @@ pub fn merge_fresh_env(machine: &[RawVar], user: &[RawVar], process: &EnvMap) ->
         env.insert(name.clone(), v);
     }
 
-    // 3. layer process-only vars (session vars, HYPERPANES_* injections). A name the
+    // 3. layer process-only vars (session vars, AVADA_* injections). A name the
     //    registry also defines keeps the FRESH registry value.
     for (k, v) in process {
         if !env.keys().any(|n| n.eq_ignore_ascii_case(k)) {
@@ -258,12 +258,9 @@ mod tests {
     #[test]
     fn process_only_vars_are_layered_in() {
         let machine = raw(&[("Path", "C:\\Windows", false)]);
-        let process = map(&[
-            ("HYPERPANES_CONTROL_TOKEN", "tok"),
-            ("SESSIONNAME", "Console"),
-        ]);
+        let process = map(&[("AVADA_CONTROL_TOKEN", "tok"), ("SESSIONNAME", "Console")]);
         let env = merge_fresh_env(&machine, &[], &process);
-        assert_eq!(get(&env, "HYPERPANES_CONTROL_TOKEN"), Some("tok"));
+        assert_eq!(get(&env, "AVADA_CONTROL_TOKEN"), Some("tok"));
         assert_eq!(get(&env, "SESSIONNAME"), Some("Console"));
     }
 
@@ -293,7 +290,7 @@ mod tests {
     // Live smoke for the #28 user intent: a user var set AFTER this process started
     // (so it's absent from the process env) must reach a fresh spawn base. Run manually:
     //   [Environment]::SetEnvironmentVariable('HP_TEST','1','User')
-    //   cargo test -p hyperpanes-core fresh_env_sees_post_launch_user_var -- --ignored
+    //   cargo test -p avada-core fresh_env_sees_post_launch_user_var -- --ignored
     //   [Environment]::SetEnvironmentVariable('HP_TEST',$null,'User')
     #[cfg(windows)]
     #[test]

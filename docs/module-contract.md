@@ -249,7 +249,7 @@ menu, key).
 
 ## 11. Pane kinds reserved for modules
 
-`hyperpanes_core::tools::kind::PaneKind::Module(ModulePaneRef)` is the pane a
+`avada_core::tools::kind::PaneKind::Module(ModulePaneRef)` is the pane a
 module opens through `host.panes.spawn`. Its workspace-file spelling is
 `module:owner/repo#surface` with an optional `@semver` pin; a reference the
 host cannot parse is kept verbatim as a tool id so an older build never drops

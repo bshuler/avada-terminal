@@ -6,7 +6,7 @@
 //! writes, and the shim's whole job is to write
 //!
 //! ```text
-//! ESC ] 1337 ; HyperpanesOpenURL = <url> BEL
+//! ESC ] 1337 ; AvadaOpenURL = <url> BEL
 //! ```
 //!
 //! to its own `/dev/tty` — so the URL arrives on the same byte stream the pane is
@@ -14,7 +14,7 @@
 //! pre-attributed to the pane that asked for it. `1337` is iTerm2's extensible
 //! namespace, so it is the key name that makes the sequence ours; another terminal
 //! reading this stream ignores an unknown `1337` key, and no other tool can collide
-//! with `HyperpanesOpenURL`.
+//! with `AvadaOpenURL`.
 //!
 //! **This scanner is the trust boundary.** Any process holding the pane's tty can emit
 //! this sequence — a printed log line is enough — so what comes out of here is
@@ -37,7 +37,7 @@ const ST: &str = "\u{1b}\\"; // ST = ESC \
 
 /// The full payload prefix, namespace and key together. Case-sensitive: we generate
 /// the emitter, so an off-case spelling is somebody else's sequence, not ours.
-const KEY: &str = "1337;HyperpanesOpenURL=";
+const KEY: &str = "1337;AvadaOpenURL=";
 
 /// Longest URL we will carry out of a pane. Well under the OSC carry bound, and far
 /// past any real link — a payload longer than this is someone probing, not a browser
@@ -124,7 +124,7 @@ mod tests {
     const ESC: &str = "\u{1b}";
 
     fn seq(url: &str) -> String {
-        format!("{ESC}]1337;HyperpanesOpenURL={url}{BEL}")
+        format!("{ESC}]1337;AvadaOpenURL={url}{BEL}")
     }
 
     #[test]
@@ -153,7 +153,7 @@ mod tests {
     fn accepts_an_st_terminator() {
         let (urls, _) = parse_osc_open_url(
             "",
-            &format!("{ESC}]1337;HyperpanesOpenURL=https://st.test/{ESC}\\"),
+            &format!("{ESC}]1337;AvadaOpenURL=https://st.test/{ESC}\\"),
         );
         assert_eq!(urls, vec!["https://st.test/"]);
     }
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn carries_a_payload_split_across_two_chunks() {
         let (urls_a, carry_a) =
-            parse_osc_open_url("", &format!("{ESC}]1337;HyperpanesOpenURL=https://split."));
+            parse_osc_open_url("", &format!("{ESC}]1337;AvadaOpenURL=https://split."));
         assert!(urls_a.is_empty());
         let (urls_b, carry_b) = parse_osc_open_url(&carry_a, &format!("test/page{BEL}"));
         assert_eq!(urls_b, vec!["https://split.test/page"]);
@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(carry_a, ESC);
         let (urls_b, _) = parse_osc_open_url(
             &carry_a,
-            &format!("]1337;HyperpanesOpenURL=https://p.test/{BEL}"),
+            &format!("]1337;AvadaOpenURL=https://p.test/{BEL}"),
         );
         assert_eq!(urls_b, vec!["https://p.test/"]);
     }
@@ -214,7 +214,7 @@ mod tests {
         let huge = "x".repeat(20000);
         let (urls, carry) = parse_osc_open_url(
             "",
-            &format!("{ESC}]1337;HyperpanesOpenURL=https://x.test/{huge}"),
+            &format!("{ESC}]1337;AvadaOpenURL=https://x.test/{huge}"),
         );
         assert!(urls.is_empty());
         assert_eq!(carry, "");
@@ -226,9 +226,8 @@ mod tests {
     /// here rather than left to agreement between two hand-written constants.
     #[test]
     fn parses_a_real_pty_capture_from_the_shim() {
-        let captured =
-            "^D\u{8}\u{8}\u{1b}]1337;HyperpanesOpenURL=https://example.com/x?a=1&b=%20c\u{7}\
-                        \u{1b}]1337;HyperpanesOpenURL=mailto:me@example.com\u{7}";
+        let captured = "^D\u{8}\u{8}\u{1b}]1337;AvadaOpenURL=https://example.com/x?a=1&b=%20c\u{7}\
+                        \u{1b}]1337;AvadaOpenURL=mailto:me@example.com\u{7}";
         let (urls, carry) = parse_osc_open_url("", captured);
         assert_eq!(
             urls,

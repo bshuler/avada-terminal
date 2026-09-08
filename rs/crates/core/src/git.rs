@@ -341,7 +341,7 @@ mod tests {
         impl Dir {
             pub fn new() -> Option<Self> {
                 let base = std::env::temp_dir().join(format!(
-                    "hyperpanes-git-{}-{:?}",
+                    "avada-git-{}-{:?}",
                     std::process::id(),
                     std::thread::current().id()
                 ));

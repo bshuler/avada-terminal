@@ -1,16 +1,16 @@
-//! `hyperpanes control-mode` — the **M4 tmux control-mode (`-CC`) server**
+//! `avada control-mode` — the **M4 tmux control-mode (`-CC`) server**
 //! (`docs/mux-backend-plan.md`).
 //!
 //! iTerm2 and the mobile tmux clients (Blink, Prompt, Termius…) do not scrape a terminal:
 //! they run `tmux -CC` and speak a line-oriented control protocol over the SSH channel,
-//! rendering each tmux pane as a native tab. This subcommand makes hyperpanes answer that
-//! protocol, so a stock `ssh host hyperpanes control-mode` presents the desktop's live panes
+//! rendering each tmux pane as a native tab. This subcommand makes avada answer that
+//! protocol, so a stock `ssh host avada control-mode` presents the desktop's live panes
 //! to those clients as tmux windows.
 //!
 //! ## Split with `core`
 //! Everything protocol-shaped — the `%begin`/`%end` guard blocks, `%output` escaping, the
 //! layout strings and their checksums, the uid → tmux-id mapping, the command dispatcher —
-//! lives in [`hyperpanes_core::session::control_mode`] as a pure, I/O-free state machine, so
+//! lives in [`avada_core::session::control_mode`] as a pure, I/O-free state machine, so
 //! M3's embedded SSH server can drive the identical code on a channel instead of on stdio.
 //! What is left in this file is only the transport: connect to the daemon, attach to every
 //! pane, turn daemon events into calls on the state machine, and write its lines out.
@@ -41,10 +41,10 @@
 //! either way — iTerm2 sends it unconditionally during attach and treats an error as a fatal
 //! protocol failure — but only `--resize` makes it act.
 
-use hyperpanes_core::session::attach::ResizePolicy;
-use hyperpanes_core::session::control_mode::ControlMode;
+use avada_core::session::attach::ResizePolicy;
+use avada_core::session::control_mode::ControlMode;
 
-/// Whether `argv` is `hyperpanes control-mode …`.
+/// Whether `argv` is `avada control-mode …`.
 ///
 /// `-CC` is accepted as an alias because that is what a user copying a tmux invocation into
 /// a mobile client's "custom command" box will type.
@@ -70,7 +70,7 @@ impl Default for ControlOpts {
     #[tracing::instrument(level = "debug", ret)]
     fn default() -> Self {
         Self {
-            session_name: "hyperpanes".to_string(),
+            session_name: "avada".to_string(),
             policy: ResizePolicy::default(),
             mode: ControlMode::default(),
         }
@@ -78,7 +78,7 @@ impl Default for ControlOpts {
 }
 
 impl ControlOpts {
-    /// `hyperpanes control-mode [--session-name <n>] [--resize] [--no-dcs]`.
+    /// `avada control-mode [--session-name <n>] [--resize] [--no-dcs]`.
     ///
     /// Unknown flags are rejected rather than ignored: this process's stdout is a protocol
     /// stream, so a typo that silently changed behaviour would surface as an unexplainable
@@ -111,31 +111,31 @@ impl ControlOpts {
 }
 
 pub const HELP: &str = "\
-hyperpanes control-mode — serve this workspace's panes over the tmux control protocol
+avada control-mode — serve this workspace's panes over the tmux control protocol
 
 USAGE:
-    hyperpanes control-mode [--session-name <name>] [--resize] [--no-dcs]
+    avada control-mode [--session-name <name>] [--resize] [--no-dcs]
 
     Speaks the SERVER side of tmux's control mode (`tmux -CC`) on stdin/stdout, so
-    iTerm2 and the mobile tmux clients render live hyperpanes panes as native tabs.
-    Each hyperpanes pane is published as one tmux window holding one pane.
+    iTerm2 and the mobile tmux clients render live avada panes as native tabs.
+    Each avada pane is published as one tmux window holding one pane.
 
-    --session-name <n>  Name to publish the workspace under (default: hyperpanes).
+    --session-name <n>  Name to publish the workspace under (default: avada).
     --resize            Let the client reflow panes with `refresh-client -C`. This
                         changes the pane for every viewer, the desktop included.
                         Without it (the default) panes keep the desktop's grid.
     --no-dcs, -C        Bare `-C` framing: omit the DCS envelope around the stream.
 
 Point a client at it over SSH, e.g.:
-    ssh <host> hyperpanes control-mode
+    ssh <host> avada control-mode
 ";
 
-/// The salt every hyperpanes client keys its daemon by: this install's user-data dir.
+/// The salt every avada client keys its daemon by: this install's user-data dir.
 /// Identical to `attach`'s, so both find the same daemon.
 #[cfg_attr(not(unix), allow(dead_code))]
 #[tracing::instrument(level = "debug", ret)]
 fn salt() -> String {
-    hyperpanes_core::persistence::paths::user_data_dir()
+    avada_core::persistence::paths::user_data_dir()
         .to_string_lossy()
         .into_owned()
 }
@@ -153,7 +153,7 @@ const POLL: std::time::Duration = std::time::Duration::from_millis(1200);
 #[cfg_attr(not(unix), allow(dead_code))]
 const SCREEN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// `hyperpanes control-mode` on Windows. Same reason as `attach`: the GUI binary is built
+/// `avada control-mode` on Windows. Same reason as `attach`: the GUI binary is built
 /// with `windows_subsystem = "windows"` and has no console to be a protocol stream. The
 /// protocol core itself is platform-independent and compiles here — only this transport is
 /// unix-only.
@@ -161,7 +161,7 @@ const SCREEN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150
 #[tracing::instrument(level = "debug", ret)]
 pub fn run(_argv: &[String]) -> Result<(), String> {
     Err(
-        "hyperpanes control-mode is not available on Windows yet (the GUI binary has no \
+        "avada control-mode is not available on Windows yet (the GUI binary has no \
          console subsystem). Run it from a unix host."
             .to_string(),
     )
@@ -171,7 +171,7 @@ pub fn run(_argv: &[String]) -> Result<(), String> {
 #[cfg(unix)]
 enum Msg {
     /// A frame from the session daemon.
-    Daemon(Box<hyperpanes_core::session::proto::DaemonMsg>),
+    Daemon(Box<avada_core::session::proto::DaemonMsg>),
     /// The daemon connection ended — the workspace is gone, so this client is done.
     DaemonEof,
     /// One command line from the control client.
@@ -183,14 +183,14 @@ enum Msg {
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
 pub fn run(argv: &[String]) -> Result<(), String> {
-    use hyperpanes_core::session::attach;
-    use hyperpanes_core::session::control_mode::{
+    use avada_core::session::attach;
+    use avada_core::session::control_mode::{
         needs_newline, wants_screen_refresh, Action, ControlServer, PaneInfo,
     };
-    use hyperpanes_core::session::proto::{
+    use avada_core::session::proto::{
         read_frame, write_frame, ClientMsg, DaemonMsg, SessionMeta, PROTO_VER,
     };
-    use hyperpanes_core::session_manager::SessionEvent;
+    use avada_core::session_manager::SessionEvent;
     use std::collections::BTreeMap;
     use std::io::Write;
     use std::sync::mpsc;
@@ -204,7 +204,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         // the daemon's lifetime, and its stderr is not in the protocol stream.
         Ok(ver) if ver != PROTO_VER => {
             eprintln!(
-                "hyperpanes control-mode: warning — the running daemon speaks protocol \
+                "avada control-mode: warning — the running daemon speaks protocol \
                  {ver}, this binary speaks {PROTO_VER}. Continuing."
             );
         }
@@ -216,9 +216,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
     if sessions.is_empty() {
         // Refused rather than served empty: tmux clients treat a session with no windows as
         // a dead server and show an opaque failure, so a plain message on stderr is kinder.
-        return Err(
-            "no live hyperpanes sessions on this install — start hyperpanes first.".to_string(),
-        );
+        return Err("no live avada sessions on this install — start avada first.".to_string());
     }
 
     let meta_to_pane = |m: &SessionMeta| {
@@ -256,7 +254,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
     // on nothing else reads the socket (which is why the blocking `read_frame` is safe —
     // `attach::handshake`/`list_sessions` cleared their socket timeouts on the way out).
     {
-        let mut r = hyperpanes_core::session::transport::try_clone(&conn)
+        let mut r = avada_core::session::transport::try_clone(&conn)
             .map_err(|e| format!("clone connection: {e}"))?;
         let tx = tx.clone();
         std::thread::Builder::new()
@@ -304,7 +302,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
 
     // Every socket write happens on THIS thread (the poll is a `recv_timeout`, not a second
     // writer thread), so the frames can never interleave.
-    let mut sock = hyperpanes_core::session::transport::try_clone(&conn)
+    let mut sock = avada_core::session::transport::try_clone(&conn)
         .map_err(|e| format!("clone connection: {e}"))?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -348,11 +346,8 @@ pub fn run(argv: &[String]) -> Result<(), String> {
 
         match msg {
             Msg::DaemonEof => {
-                emit(
-                    &mut out,
-                    server.goodbye(Some("the hyperpanes daemon exited")),
-                )
-                .map_err(|e| e.to_string())?;
+                emit(&mut out, server.goodbye(Some("the avada daemon exited")))
+                    .map_err(|e| e.to_string())?;
                 return Ok(());
             }
             Msg::StdinEof => {
@@ -423,7 +418,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
                             server.set_cwd(&uid, Some(cwd));
                             Vec::new()
                         }
-                        // Prompt/command/agent events are hyperpanes-specific and have no
+                        // Prompt/command/agent events are avada-specific and have no
                         // tmux notification; a client learns nothing from them.
                         _ => Vec::new(),
                     };
@@ -453,12 +448,12 @@ pub fn run(argv: &[String]) -> Result<(), String> {
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret, skip_all)]
 fn refresh_screens(
-    server: &mut hyperpanes_core::session::control_mode::ControlServer,
-    sock: &mut hyperpanes_core::session::transport::Conn,
+    server: &mut avada_core::session::control_mode::ControlServer,
+    sock: &mut avada_core::session::transport::Conn,
     rx: &std::sync::mpsc::Receiver<Msg>,
     pending: &mut std::collections::VecDeque<Msg>,
 ) {
-    use hyperpanes_core::session::proto::{write_frame, ClientMsg, DaemonMsg};
+    use avada_core::session::proto::{write_frame, ClientMsg, DaemonMsg};
 
     let uids = server.uids();
     let mut want = 0usize;
@@ -493,13 +488,13 @@ fn refresh_screens(
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret, skip(server))]
 fn diff_sessions(
-    server: &mut hyperpanes_core::session::control_mode::ControlServer,
+    server: &mut avada_core::session::control_mode::ControlServer,
     seen: &mut std::collections::BTreeMap<String, (Option<u16>, Option<u16>)>,
-    list: &[hyperpanes_core::session::proto::SessionMeta],
-    sock: &mut hyperpanes_core::session::transport::Conn,
+    list: &[avada_core::session::proto::SessionMeta],
+    sock: &mut avada_core::session::transport::Conn,
 ) -> Vec<Vec<u8>> {
-    use hyperpanes_core::session::control_mode::PaneInfo;
-    use hyperpanes_core::session::proto::{write_frame, ClientMsg};
+    use avada_core::session::control_mode::PaneInfo;
+    use avada_core::session::proto::{write_frame, ClientMsg};
 
     let mut lines = Vec::new();
     let mut now: std::collections::BTreeMap<String, (Option<u16>, Option<u16>)> =
@@ -542,7 +537,7 @@ mod tests {
     use super::*;
 
     fn argv(rest: &[&str]) -> Vec<String> {
-        let mut v = vec!["hyperpanes".to_string(), "control-mode".to_string()];
+        let mut v = vec!["avada".to_string(), "control-mode".to_string()];
         v.extend(rest.iter().map(|s| s.to_string()));
         v
     }
@@ -551,20 +546,20 @@ mod tests {
     fn recognizes_the_subcommand_and_the_tmux_alias() {
         assert!(wants_control_mode(&argv(&[])));
         assert!(wants_control_mode(&[
-            "hyperpanes".to_string(),
+            "avada".to_string(),
             "-CC".to_string()
         ]));
         assert!(!wants_control_mode(&[
-            "hyperpanes".to_string(),
+            "avada".to_string(),
             "attach".to_string()
         ]));
-        assert!(!wants_control_mode(&["hyperpanes".to_string()]));
+        assert!(!wants_control_mode(&["avada".to_string()]));
     }
 
     #[test]
     fn defaults_are_observe_and_wrapped() {
         let o = ControlOpts::parse(&argv(&[])).unwrap();
-        assert_eq!(o.session_name, "hyperpanes");
+        assert_eq!(o.session_name, "avada");
         assert_eq!(o.policy, ResizePolicy::Observe);
         assert_eq!(o.mode, ControlMode::Wrapped);
     }

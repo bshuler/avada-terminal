@@ -1,5 +1,5 @@
 //! **The attach client core** (`docs/mux-backend-plan.md` M2) — the transport- and
-//! terminal-agnostic half of `hyperpanes attach`.
+//! terminal-agnostic half of `avada attach`.
 //!
 //! The daemon already owns everything an attach client needs: the PTYs, a 128 KiB rolling
 //! [replay buffer](crate::session::replay), a headless screen mirror, and a framed
@@ -89,7 +89,7 @@ pub enum PumpEnd {
 
 /// Connect to the **already running** daemon for `salt`. Unlike
 /// [`DaemonSessionManager`](crate::session::daemon_client::DaemonSessionManager), this
-/// never spawns one: `hyperpanes attach` is a client of a live workspace, and silently
+/// never spawns one: `avada attach` is a client of a live workspace, and silently
 /// starting an empty daemon would just produce an empty chooser.
 ///
 /// The endpoint is derived by [`transport::endpoint_for`] — the same salt→address function
@@ -101,8 +101,8 @@ pub fn connect(salt: &str) -> io::Result<Conn> {
         io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound => io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "no hyperpanes session daemon is running for this install ({endpoint}). \
-                 Start hyperpanes, or check HYPERPANES_USER_DATA_DIR."
+                "no avada session daemon is running for this install ({endpoint}). \
+                 Start avada, or check AVADA_USER_DATA_DIR."
             ),
         ),
         _ => e,

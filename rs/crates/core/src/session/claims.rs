@@ -1,5 +1,5 @@
 //! The **cross-process claim registry** (mux plan M7): who is hosting which session uid,
-//! right now, across every hyperpanes process on the machine.
+//! right now, across every avada process on the machine.
 //!
 //! ## Why the daemon is the registry, and not a file
 //!
@@ -20,7 +20,7 @@
 //!   (`flock` a per-uid file, or one global lock everybody serializes through). Crash safety
 //!   is the reader's job, forever, on every read.
 //! * **The daemon as the single arbiter** — chosen. The daemon *already* is the one process
-//!   that knows every session and that every hyperpanes process is connected to; the claim
+//!   that knows every session and that every avada process is connected to; the claim
 //!   map is ordinary in-memory state behind a `Mutex`, so a claim is a genuine atomic
 //!   compare-and-set with exactly one winner, no protocol.
 //!

@@ -68,7 +68,7 @@ class Source:
             X.InputOutput, X.CopyFromParent,
             event_mask=X.PropertyChangeMask,
         )
-        self.win.set_wm_name("hyperpanes-xdnd-source")
+        self.win.set_wm_name("avada-xdnd-source")
         self.win.change_property(a["XdndAware"], Xatom.ATOM, 32, [XDND_VERSION])
 
     def own_selection(self, t):

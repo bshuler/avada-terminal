@@ -19,9 +19,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use hyperpanes_core::claude_history::{ClaudeSession, SessionCache};
-use hyperpanes_core::tools::history::SessionProvider;
-use hyperpanes_core::tools::{InferOutcome, PaneWatch, ToolSessionMark};
+use avada_core::claude_history::{ClaudeSession, SessionCache};
+use avada_core::tools::history::SessionProvider;
+use avada_core::tools::{InferOutcome, PaneWatch, ToolSessionMark};
 
 use crate::leftpanel::{self, ScannedSession};
 use crate::sidebar::{self, WorktreeRow};
@@ -38,7 +38,7 @@ enum Job {
     /// per scan rather than once per frame on the UI thread.
     ToolSessions(String, BTreeMap<String, String>),
     /// Re-read the raw `(conversation id, project directory)` set out of one tool's history
-    /// store, for [`session_infer`](hyperpanes_core::tools::session_infer).
+    /// store, for [`session_infer`](avada_core::tools::session_infer).
     ///
     /// Deliberately NOT the same job as [`Job::ToolSessions`]: that one is the left panel's
     /// render feed — it resolves resumability, builds row labels, and sorts for the panel's
@@ -190,20 +190,14 @@ fn provider_for(
     overrides: &BTreeMap<String, String>,
 ) -> Option<Box<dyn SessionProvider>> {
     match tool_id {
-        hyperpanes_core::tools::history::claude::TOOL_ID => Some(Box::new(
-            hyperpanes_core::tools::history::claude::ClaudeProvider::with_overrides(
-                overrides.clone(),
-            ),
+        avada_core::tools::history::claude::TOOL_ID => Some(Box::new(
+            avada_core::tools::history::claude::ClaudeProvider::with_overrides(overrides.clone()),
         )),
-        hyperpanes_core::tools::history::cursor::TOOL_ID => Some(Box::new(
-            hyperpanes_core::tools::history::cursor::CursorProvider::with_overrides(
-                overrides.clone(),
-            ),
+        avada_core::tools::history::cursor::TOOL_ID => Some(Box::new(
+            avada_core::tools::history::cursor::CursorProvider::with_overrides(overrides.clone()),
         )),
-        hyperpanes_core::tools::history::copilot::TOOL_ID => Some(Box::new(
-            hyperpanes_core::tools::history::copilot::CopilotProvider::with_overrides(
-                overrides.clone(),
-            ),
+        avada_core::tools::history::copilot::TOOL_ID => Some(Box::new(
+            avada_core::tools::history::copilot::CopilotProvider::with_overrides(overrides.clone()),
         )),
         _ => None,
     }
@@ -310,7 +304,7 @@ pub fn retain_panes(alive: &HashSet<String>) {
 /// because `PENDING_STORE` keeps a second request from queueing while one is in flight and
 /// every watch on the same tool consumes the same snapshot.
 ///
-/// [`session_infer::SCAN_EVERY`]: hyperpanes_core::tools::session_infer::SCAN_EVERY
+/// [`session_infer::SCAN_EVERY`]: avada_core::tools::session_infer::SCAN_EVERY
 #[tracing::instrument(level = "debug", ret)]
 pub fn poll_inference(overrides: &BTreeMap<String, String>) -> Vec<(String, ToolSessionMark)> {
     let now = std::time::Instant::now();

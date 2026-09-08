@@ -3,7 +3,7 @@
 # (docs/agent-recovery.md): detect -> classify -> repair -> resume, against a REAL
 # poisoned Claude Code transcript.
 #
-# Boots an ISOLATED headless hyperpanes-core instance (its own XDG_STATE_HOME /
+# Boots an ISOLATED headless avada-core instance (its own XDG_STATE_HOME /
 # XDG_DATA_HOME / XDG_CONFIG_HOME, its own ephemeral port+token) — it never touches the
 # user's running GUI app or its control.json. The one thing it does NOT isolate is
 # Claude Code's own `~/.claude` store: a poisoned session has to be resumable by the
@@ -62,14 +62,14 @@ XDG_STATE_HOME="$TMP/xstate"
 XDG_DATA_HOME="$TMP/xdata"
 XDG_CONFIG_HOME="$TMP/xconfig"
 mkdir -p "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
-CONTROL_JSON="$XDG_STATE_HOME/hyperpanes/control.json"
+CONTROL_JSON="$XDG_STATE_HOME/avada/control.json"
 
 # ---- production-state guard (hard requirement, see docs/agent-recovery.md) ----------------
 # The headless boot MUST be pointed away from the live org's control file EXPLICITLY:
-# HYPERPANES_CONTROL_FILE takes precedence over the XDG-derived path (app.rs:44-46), and this
+# AVADA_CONTROL_FILE takes precedence over the XDG-derived path (app.rs:44-46), and this
 # very script inherited it pointing at production three times before this guard existed. A test
 # that CAN reach production state eventually WILL.
-LIVE_CONTROL_JSON="$HOME/.local/state/hyperpanes/control.json"
+LIVE_CONTROL_JSON="$HOME/.local/state/avada/control.json"
 if [ "$CONTROL_JSON" = "$LIVE_CONTROL_JSON" ]; then
     echo "FAIL: refusing to run — isolated control path equals the live control file ($LIVE_CONTROL_JSON)"
     exit 1
@@ -83,7 +83,7 @@ fi
 
 ENCODED_PROJ="$(encode "$PROJ")"
 # The account the poisoned session lives under. It must be an account whose MCP tool set
-# matches what the fixture conversation actually loaded (tokensave/serena/headroom/hyperpanes)
+# matches what the fixture conversation actually loaded (tokensave/serena/headroom/avada)
 # — the g2 incident session ran under the goals-rotation account `.claude-sunsations`, and a
 # resume in a store without those servers fails with a NEW 400 ("Tool reference ... not found
 # in available tools") even after the poison is excised. The headless server's markerless scan
@@ -130,15 +130,15 @@ fi
 # The transcript's surviving tool-search records reference tools that must exist in the resumed
 # request or the API 400s with "Tool reference ... not found in available tools":
 #   - mcp__tokensave__tokensave_context (loaded by the record-16 tool_search result)
-#   - five mcp__hyperpanes__* tools (loaded via ToolSearch in record 20)
+#   - five mcp__avada__* tools (loaded via ToolSearch in record 20)
 # So the resume needs: tool search ENABLED (ENABLE_TOOL_SEARCH=true), plus the tokensave and
-# hyperpanes MCP servers connected. `tokensave serve` refuses to start outside a registered
+# avada MCP servers connected. `tokensave serve` refuses to start outside a registered
 # project, so it is pinned to the project the incident session actually ran in.
-TOKENSAVE_PROJECT="${HP_DEMO_TOKENSAVE_PROJECT:-$HOME/dev/hyperpanes}"
+TOKENSAVE_PROJECT="${HP_DEMO_TOKENSAVE_PROJECT:-$HOME/dev/avada}"
 DEMO_MCP="$TMP/demo-mcp.json"
 jq -n --arg tsproj "$TOKENSAVE_PROJECT" '{mcpServers: {
     tokensave: {type: "stdio", command: (env.HOME + "/.local/bin/tokensave"), args: ["serve", "-p", $tsproj], env: {}},
-    hyperpanes: {type: "stdio", command: "npx", args: ["-y", "hyperpanes-mcp"], env: {HYPERPANES_ALLOW_INPUT: "1"}}
+    avada: {type: "stdio", command: "npx", args: ["-y", "avada-mcp"], env: {AVADA_ALLOW_INPUT: "1"}}
 }}' >"$DEMO_MCP"
 
 resume_claude() {
@@ -160,22 +160,22 @@ else
     echo "-------------------------------"
 fi
 
-echo "== step 3: boot an isolated headless hyperpanes-core instance =="
+echo "== step 3: boot an isolated headless avada-core instance =="
 # Build outside /tmp: worktrees live on a tmpfs here, and a fresh target/ inside one costs RAM.
-CARGO_TARGET_DIR="${HP_DEMO_TARGET_DIR:-$HOME/.cache/hyperpanes-g3-demo-target}"
+CARGO_TARGET_DIR="${HP_DEMO_TARGET_DIR:-$HOME/.cache/avada-g3-demo-target}"
 export CARGO_TARGET_DIR
-(cd "$CORE_DIR" && cargo build -p hyperpanes-core --bin headless) >"$TMP/build.log" 2>&1
+(cd "$CORE_DIR" && cargo build -p avada-core --bin headless) >"$TMP/build.log" 2>&1
 if [ $? -ne 0 ]; then
     fail "step 3: cargo build failed — see $TMP/build.log"
     cat "$TMP/build.log"
     exit 1
 fi
 HEADLESS_BIN="$CARGO_TARGET_DIR/debug/headless"
-# HYPERPANES_CONTROL_FILE must be overridden HERE: it wins over XDG_STATE_HOME (app.rs:44-46)
+# AVADA_CONTROL_FILE must be overridden HERE: it wins over XDG_STATE_HOME (app.rs:44-46)
 # and the surrounding environment carries it pointing at the live org's control file.
 XDG_STATE_HOME="$XDG_STATE_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
-    HYPERPANES_CONTROL_FILE="$CONTROL_JSON" \
-    HYPERPANES_ALLOW_INPUT=1 "$HEADLESS_BIN" >"$TMP/headless.log" 2>&1 &
+    AVADA_CONTROL_FILE="$CONTROL_JSON" \
+    AVADA_ALLOW_INPUT=1 "$HEADLESS_BIN" >"$TMP/headless.log" 2>&1 &
 HEADLESS_PID=$!
 
 for _ in $(seq 1 60); do

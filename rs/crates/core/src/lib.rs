@@ -1,4 +1,4 @@
-//! `hyperpanes-core` — headless Rust core for the native rewrite (Phase 1).
+//! `avada-core` — headless Rust core for the native rewrite (Phase 1).
 //!
 //! The module map below is **frozen by the fan-out scaffold**. Each leaf module is a
 //! 1:1 port of a TypeScript source under `src/main`, owned by exactly one parallel

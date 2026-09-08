@@ -7,11 +7,11 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>hyperpanes</string>
+	<string>Avada Terminal</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan the pairing QR code shown by `hyperpanes pair` on your computer.</string>
+	<string>Scan the pairing QR code shown by `avada pair` on your computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to the hyperpanes host on your local network or tailnet.</string>
+	<string>Connect to the avada host on your local network or tailnet.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The control API is plain HTTP/WS; transport security comes from the

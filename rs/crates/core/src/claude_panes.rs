@@ -3,7 +3,7 @@
 //!
 //! A Claude Code `SessionStart` hook (`resources/claude/hp-claude-session-hook.sh`) runs
 //! inside every `claude` a user launches in a pane. The pane's environment carries
-//! `HYPERPANES_PANE_ID`, and the hook's stdin carries the conversation's `session_id` —
+//! `AVADA_PANE_ID`, and the hook's stdin carries the conversation's `session_id` —
 //! so the hook writes `<state dir>/claude-sessions/<pane-id>.json`:
 //!
 //! ```json

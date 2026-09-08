@@ -13,21 +13,19 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use hyperpanes_core::ai::service::AiProjectRef;
-use hyperpanes_core::layout::navigate::{neighbor_index, Direction};
-use hyperpanes_core::layout::presets::{
+use avada_core::ai::service::AiProjectRef;
+use avada_core::layout::navigate::{neighbor_index, Direction};
+use avada_core::layout::presets::{
     compute_dividers, compute_tiles, effective_layout, DividerKind, Layout,
 };
-use hyperpanes_core::layout::sizes::{
-    clamp_fraction, equal_sizes, insert_size, remove_size, resize_at,
-};
-use hyperpanes_core::persistence::{paths, projects};
-use hyperpanes_core::session_manager::{AgentLiveness, SessionManager, SpawnOptions};
-use hyperpanes_core::tools::{PaneKind, ToolSessionMark};
-use hyperpanes_core::workspace::io::{read_workspace, windows_of, write_workspace};
-use hyperpanes_core::workspace::model::{GroupSpec, PaneSpec, WorkspaceFile};
-use hyperpanes_core::workspace::sets;
-use hyperpanes_terminal_widget::{Font, RenderOpts, SoftwareRenderer, TerminalPane};
+use avada_core::layout::sizes::{clamp_fraction, equal_sizes, insert_size, remove_size, resize_at};
+use avada_core::persistence::{paths, projects};
+use avada_core::session_manager::{AgentLiveness, SessionManager, SpawnOptions};
+use avada_core::tools::{PaneKind, ToolSessionMark};
+use avada_core::workspace::io::{read_workspace, windows_of, write_workspace};
+use avada_core::workspace::model::{GroupSpec, PaneSpec, WorkspaceFile};
+use avada_core::workspace::sets;
+use avada_terminal_widget::{Font, RenderOpts, SoftwareRenderer, TerminalPane};
 
 use slint::{Color, Image, SharedString};
 
@@ -365,7 +363,7 @@ pub enum Setting {
 /// reuses the proven resume-queue cadence (type text, gap, CR, insurance CR).
 #[derive(Debug, Clone)]
 pub struct PendingGoal {
-    /// The orchestrator pane's session uid (also its `HYPERPANES_PANE_ID` / marker filename).
+    /// The orchestrator pane's session uid (also its `AVADA_PANE_ID` / marker filename).
     pub uid: String,
     /// The goal prompt (intent + image path references + model hint), sans trailing CR.
     pub text: String,
@@ -397,7 +395,7 @@ const GOAL_HISTORY_CAP: usize = 50;
 /// Where the goal history persists — sibling of `projects.json` in the app data dir.
 #[tracing::instrument(level = "debug", ret)]
 fn goal_history_path() -> std::path::PathBuf {
-    hyperpanes_core::persistence::paths::data_dir().join("goal_history.json")
+    avada_core::persistence::paths::data_dir().join("goal_history.json")
 }
 
 /// Where the New-goal dialog's last-used model tiers persist — sibling of
@@ -405,7 +403,7 @@ fn goal_history_path() -> std::path::PathBuf {
 /// orchestrator/spec/impl tiers to the built-in defaults every time.
 #[tracing::instrument(level = "debug", ret)]
 fn goal_defaults_path() -> std::path::PathBuf {
-    hyperpanes_core::persistence::paths::data_dir().join("goal_defaults.json")
+    avada_core::persistence::paths::data_dir().join("goal_defaults.json")
 }
 
 /// Built-in model tiers when nothing is remembered yet: orchestrator/spec = opus (idx 0),
@@ -494,22 +492,22 @@ fn save_goal_history(history: &[GoalHistoryEntry]) {
     }
 }
 
-/// Build the contents of `goals-mcp.json`: registers the hyperpanes MCP server so a spawned
-/// `claude --mcp-config <this file>` sees `mcp__hyperpanes__*` tools. Needed because the goals
+/// Build the contents of `goals-mcp.json`: registers the avada MCP server so a spawned
+/// `claude --mcp-config <this file>` sees `mcp__avada__*` tools. Needed because the goals
 /// system rotates `CLAUDE_CONFIG_DIR` across per-account dirs (see `claude_accounts`) whose
-/// `.claude.json` has no user-scoped MCP registrations — the hyperpanes server only lives in the
+/// `.claude.json` has no user-scoped MCP registrations — the avada server only lives in the
 /// default `~/.claude.json`, which `claude` ignores once `CLAUDE_CONFIG_DIR` is set.
 #[tracing::instrument(level = "debug", ret)]
 fn goals_mcp_config_json(control_json_path: &str) -> String {
     serde_json::json!({
         "mcpServers": {
-            "hyperpanes": {
+            "avada": {
                 "type": "stdio",
                 "command": "npx",
-                "args": ["-y", "hyperpanes-mcp"],
+                "args": ["-y", "avada-mcp"],
                 "env": {
-                    "HYPERPANES_ALLOW_INPUT": "1",
-                    "HYPERPANES_CONTROL_FILE": control_json_path,
+                    "AVADA_ALLOW_INPUT": "1",
+                    "AVADA_CONTROL_FILE": control_json_path,
                 }
             }
         }
@@ -521,9 +519,9 @@ fn goals_mcp_config_json(control_json_path: &str) -> String {
 /// write failure must not block a goal spawn; the caller just omits `--mcp-config`.
 #[tracing::instrument(level = "debug", ret)]
 fn write_goals_mcp_config() -> Option<std::path::PathBuf> {
-    let control_path = hyperpanes_core::persistence::paths::control_json();
+    let control_path = avada_core::persistence::paths::control_json();
     let json = goals_mcp_config_json(&control_path.to_string_lossy());
-    let path = hyperpanes_core::persistence::paths::state_dir().join("goals-mcp.json");
+    let path = avada_core::persistence::paths::state_dir().join("goals-mcp.json");
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             tracing::warn!(
@@ -564,7 +562,7 @@ fn write_goals_settings_config() -> Option<std::path::PathBuf> {
         serde_json::from_str(&std::fs::read_to_string(src).ok()?).ok()?;
     let status_line = parsed.get("statusLine").filter(|v| !v.is_null())?;
     let json = goals_settings_json(status_line);
-    let path = hyperpanes_core::persistence::paths::state_dir().join("goals-settings.json");
+    let path = avada_core::persistence::paths::state_dir().join("goals-settings.json");
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             tracing::warn!("failed to create state dir for goals-settings.json: {e}; spawning without --settings");
@@ -583,16 +581,16 @@ fn write_goals_settings_config() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod goals_mcp_config_tests {
     #[test]
-    fn json_registers_hyperpanes_server_with_control_path() {
+    fn json_registers_avada_server_with_control_path() {
         let control_path = "/tmp/example-state/control.json";
         let json = super::goals_mcp_config_json(control_path);
         let parsed: serde_json::Value =
             serde_json::from_str(&json).expect("goals-mcp.json contents must parse as JSON");
-        let hyperpanes = &parsed["mcpServers"]["hyperpanes"];
-        assert_eq!(hyperpanes["command"], "npx");
-        assert_eq!(hyperpanes["env"]["HYPERPANES_CONTROL_FILE"], control_path);
+        let avada = &parsed["mcpServers"]["avada"];
+        assert_eq!(avada["command"], "npx");
+        assert_eq!(avada["env"]["AVADA_CONTROL_FILE"], control_path);
         assert!(json.contains(control_path));
-        assert!(json.contains("hyperpanes"));
+        assert!(json.contains("avada"));
     }
 
     #[test]
@@ -662,7 +660,7 @@ pub struct NewPaneOpts {
     pub show_frame: Option<bool>,
     pub show_dot: Option<bool>,
     /// Per-pane env overrides layered over the fresh spawn base (#27 linked terminal).
-    pub env: Option<hyperpanes_core::session::spawn::EnvMap>,
+    pub env: Option<avada_core::session::spawn::EnvMap>,
     /// Text typed into the pane once it produces its first output (the boot-safe inject the
     /// resume path uses). Used to hand a freshly-spawned agent its opening prompt without a
     /// PTY timing race. `None` ⇒ nothing typed.
@@ -943,7 +941,7 @@ pub struct PaneState {
     pub surf: (f32, f32),
     /// The current clickable-path hover hit (drives the link overlay), plus the cursor
     /// position (logical px within the surface) for tooltip placement. `None` = no link.
-    pub link: Option<hyperpanes_terminal_widget::LinkHit>,
+    pub link: Option<avada_terminal_widget::LinkHit>,
     pub link_cursor: (f32, f32),
     /// Idle-glow animation state — its `alpha` (0 when not glowing) is projected into the
     /// pane model each tick once the pane has been output-quiet past the idle threshold.
@@ -989,7 +987,7 @@ pub struct PaneState {
     pub font_px: f32,
     /// The font loaded at `font_px × DPI-scale` (its own glyph cache + cell metrics), so each
     /// pane renders — and reflows — at its own zoom level independently of its neighbours.
-    pub font: hyperpanes_terminal_widget::Font,
+    pub font: avada_terminal_widget::Font,
     /// Set when `font_px` changed → the pump reloads `font` at the current DPI scale and
     /// forces a repaint on the next tick (a DPI / family / base-size change reloads via
     /// [`State::reload_font`] instead).
@@ -1000,7 +998,7 @@ pub struct PaneState {
     pub cwd: Option<String>,
     /// The env overrides this pane was spawned with (`None` = none), kept so "Open Linked
     /// Terminal" / "Refresh Env" can re-spawn with the same per-pane context (#27/#28).
-    pub env: Option<hyperpanes_core::session::spawn::EnvMap>,
+    pub env: Option<avada_core::session::spawn::EnvMap>,
     /// A SHORT shell-type label (e.g. "pwsh", "cmd", "bash") derived once at pane creation
     /// from the resolved spawn shell program (see [`shell_label`]) and projected dim after
     /// the title in the header. "" = unknown (e.g. a re-hosted pane whose original shell
@@ -1347,7 +1345,7 @@ impl Tab {
 pub struct State {
     /// The base font (loaded at the configured `font_px`) — the template a new pane copies its
     /// size from; per-pane rendering uses each pane's own [`PaneState::font`].
-    pub font: hyperpanes_terminal_widget::Font,
+    pub font: avada_terminal_widget::Font,
     /// The DPI scale of the last pump tick, so pane fonts (created/zoomed outside the pump,
     /// where the scale isn't known) can be loaded at the right physical size.
     pub last_scale: f32,
@@ -1401,12 +1399,12 @@ pub struct State {
     /// submitted path doesn't exist / isn't a directory; cleared on open and on close.
     pub add_project_error: String,
     /// The URL the [`Overlay::AskBrowser`] chooser is holding (`""` when it isn't open).
-    /// Already validated by [`hyperpanes_core::open::is_openable_url`] before the overlay
+    /// Already validated by [`avada_core::open::is_openable_url`] before the overlay
     /// mounts — the chooser never displays a URL it would refuse to open.
     pub ask_url: String,
     /// The browsers offered by the [`Overlay::AskBrowser`] chooser. Snapshotted at open so
     /// the row a human clicks is the row they saw, even if an install finishes mid-choice.
-    pub ask_browsers: Vec<hyperpanes_core::open::BrowserApp>,
+    pub ask_browsers: Vec<avada_core::open::BrowserApp>,
     /// Persisted appearance preferences (font, frame/dot).
     pub settings: Settings,
     /// The user's keybinding overrides — consulted (override-first) by the key router. Edited
@@ -1541,7 +1539,7 @@ pub struct State {
     /// The commit the panel is showing INSTEAD of the working tree, after a hash was clicked
     /// in a pane's output. `None` is the ordinary working-tree view. Loaded once on the click
     /// and then held: a commit is immutable, so nothing can make this projection stale.
-    pub git_commit: Option<hyperpanes_core::git::Commit>,
+    pub git_commit: Option<avada_core::git::Commit>,
     /// A one-shot request to switch the left panel to a given mode, consumed by the resync.
     /// The strip's selection lives in the UI as an `in-out` property (switching views is not
     /// a `State` mutation), so a command that needs to change it leaves a note instead of
@@ -1681,7 +1679,7 @@ pub enum EscOutcome {
 impl State {
     /// Fresh state with a single empty tab; the caller seeds pane 0 via [`Self::add_pane`].
     #[tracing::instrument(level = "debug", skip(font))]
-    pub fn new(font: hyperpanes_terminal_widget::Font) -> Self {
+    pub fn new(font: avada_terminal_widget::Font) -> Self {
         let mut s = State {
             font,
             last_scale: 1.0,
@@ -2015,7 +2013,7 @@ impl State {
     ///
     /// A terminal that opens in `$HOME` when the app was started in a project is the single
     /// most-reported papercut here, and it happened because nobody DECIDED: `SpawnOptions.cwd`
-    /// was left `None` and [`hyperpanes_core::session_manager`]'s pty-layer safety net picked
+    /// was left `None` and [`avada_core::session_manager`]'s pty-layer safety net picked
     /// `$HOME` — which is the right last resort but the wrong first answer. The order below is
     /// the intent, most-specific first:
     ///
@@ -2028,7 +2026,7 @@ impl State {
     ///    FILES and GIT draw, deliberately reused so there is ONE notion of "this window's
     ///    project" rather than a second one that can disagree with what is on screen).
     /// 4. the directory the process was launched from ([`launch_dir`]), so `cd project &&
-    ///    hyperpanes` opens in `project`.
+    ///    avada` opens in `project`.
     /// 5. `$HOME`, and finally `None` — at which point the pty layer's own fallback runs.
     ///
     /// Every candidate is stat'd by [`first_existing_dir`]; a stale one is skipped rather than
@@ -2115,17 +2113,17 @@ impl State {
         // binary (build.rs in dev, packaging for release), else this is simply `None`.
         let shell_path = shell
             .clone()
-            .unwrap_or_else(hyperpanes_core::session::spawn::default_shell);
+            .unwrap_or_else(avada_core::session::spawn::default_shell);
         // Integration applies to the interactive branch only; a one-off `command` pane is
         // not an interactive shell, so skip it there (core would ignore it anyway).
         let integration = command
             .is_none()
             .then(|| {
-                hyperpanes_core::shell_integration::integration_for(
+                avada_core::shell_integration::integration_for(
                     &shell_path,
-                    &hyperpanes_core::shell_integration::shell_integration_dir(),
+                    &avada_core::shell_integration::shell_integration_dir(),
                 )
-                .map(|si| hyperpanes_core::session_manager::Integration {
+                .map(|si| avada_core::session_manager::Integration {
                     args: si.args,
                     env: si.env.into_iter().collect(),
                 })
@@ -2154,7 +2152,7 @@ impl State {
                     // thus Preferences → Browser) instead of straight to the OS. Wrapped
                     // here and not where the env is recorded on the pane: the shim path is
                     // regenerated every run, so it must not be baked into a snapshot.
-                    env: hyperpanes_core::open::with_browser_shim(opts.env.clone()),
+                    env: avada_core::open::with_browser_shim(opts.env.clone()),
                     integration,
                     ..Default::default()
                 },
@@ -2820,7 +2818,7 @@ impl State {
         }
         if let PaneKind::Tool(id) = &p.kind {
             return Some(
-                hyperpanes_core::tools::registry::by_id(id)
+                avada_core::tools::registry::by_id(id)
                     .map(|t| t.bin.to_string())
                     .unwrap_or_else(|| id.clone()),
             );
@@ -2849,7 +2847,7 @@ impl State {
         if !matches!(self.tabs[ti].panes[pi].kind, PaneKind::Terminal) {
             return;
         }
-        if let Some(t) = hyperpanes_core::tools::registry::by_title(title) {
+        if let Some(t) = avada_core::tools::registry::by_title(title) {
             let changed = self.sniffed_tool.get(uid).map(String::as_str) != Some(t.id);
             if changed {
                 self.sniffed_tool.insert(uid.to_string(), t.id.to_string());
@@ -2889,7 +2887,7 @@ impl State {
         if !matches!(self.tabs[ti].panes[pi].kind, PaneKind::Terminal) {
             return;
         }
-        match hyperpanes_core::tools::foreground::tool_for_foreground_name(name) {
+        match avada_core::tools::foreground::tool_for_foreground_name(name) {
             Some(t) => {
                 if self.sniffed_tool.get(uid).map(String::as_str) != Some(t.id) {
                     self.sniffed_tool.insert(uid.to_string(), t.id.to_string());
@@ -3174,7 +3172,7 @@ impl State {
     /// The current active tab's draggable dividers (empty when zoomed or fullscreen — both
     /// solo a single pane, so there are no seams to drag).
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn dividers(&self) -> Vec<hyperpanes_core::layout::presets::DividerDesc> {
+    pub fn dividers(&self) -> Vec<avada_core::layout::presets::DividerDesc> {
         let t = self.active_tab();
         if t.zoomed.is_some() || self.fullscreen {
             return Vec::new();
@@ -3232,7 +3230,7 @@ impl State {
     /// installed ⇒ a plain shell in the same directory, so the tab and its files still exist
     /// and the user can start one by hand.
     ///
-    /// [`hyperpane_dir`]: hyperpanes_core::persistence::paths::hyperpane_dir
+    /// [`hyperpane_dir`]: avada_core::persistence::paths::hyperpane_dir
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn ensure_hyperpane_tab(&mut self, mgr: &SessionManager) -> bool {
         if self.tabs.iter().any(|t| t.system) {
@@ -3250,7 +3248,7 @@ impl State {
         true
     }
 
-    /// How long a failed [`hyperpanes_core::hyperpane::materialize`] is held before the
+    /// How long a failed [`avada_core::hyperpane::materialize`] is held before the
     /// tick's retry is allowed to try again — long enough that a read-only data dir does
     /// not turn the 8 ms pump into a filesystem hammer, short enough that fixing it (or a
     /// transient failure passing) is noticed in the same sitting.
@@ -3270,7 +3268,7 @@ impl State {
         if self.hyperpane_retry_at.is_some_and(|at| now < at) {
             return None;
         }
-        match hyperpanes_core::hyperpane::materialize() {
+        match avada_core::hyperpane::materialize() {
             Ok(dir) => {
                 self.hyperpane_retry_at = None;
                 Some(dir)
@@ -3337,7 +3335,7 @@ impl State {
     /// creation ([`Self::ensure_hyperpane_tab`]) and refill ([`Self::reseed_system_tab`]).
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn hyperpane_pane_opts(&self, dir: &std::path::Path, agent: bool) -> NewPaneOpts {
-        use hyperpanes_core::tools::{detect, registry};
+        use avada_core::tools::{detect, registry};
         let picked = self
             .settings
             .tool_favorites
@@ -3360,13 +3358,13 @@ impl State {
             None => (None, None),
         };
 
-        let mut env: hyperpanes_core::session::spawn::EnvMap = std::collections::HashMap::new();
+        let mut env: avada_core::session::spawn::EnvMap = std::collections::HashMap::new();
         // Where the control API's token and port are published. The agent reads it through
-        // `hyperpanes ctl`, which does the same lookup — set explicitly so a pane that
+        // `avada ctl`, which does the same lookup — set explicitly so a pane that
         // inherited an empty value from somewhere else still points at the right file.
         env.insert(
-            "HYPERPANES_CONTROL_FILE".to_string(),
-            hyperpanes_core::persistence::paths::control_json()
+            "AVADA_CONTROL_FILE".to_string(),
+            avada_core::persistence::paths::control_json()
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -3379,7 +3377,7 @@ impl State {
         env.insert("ENABLE_TOOL_SEARCH".to_string(), "false".to_string());
         if let Ok(exe) = std::env::current_exe() {
             env.insert("HP_CTL".to_string(), exe.to_string_lossy().into_owned());
-            // Put the app's own directory on PATH so the skills' `hyperpanes ctl …` resolves
+            // Put the app's own directory on PATH so the skills' `avada ctl …` resolves
             // verbatim — which is what lets the shipped `.claude/settings.json` pre-approve
             // exactly that command and nothing else. An absolute path could not be written
             // into a permission rule, and a permission prompt per read would make the tab
@@ -3625,11 +3623,11 @@ impl State {
     /// by its session uid (used as the stable pane id), carrying the current label + Mute
     /// flag so the engine can summarise unmuted panes and clear muted ones.
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn ai_pane_publish(&self) -> Vec<hyperpanes_core::ai::service::AiPanePublish> {
+    pub fn ai_pane_publish(&self) -> Vec<avada_core::ai::service::AiPanePublish> {
         let mut out = Vec::new();
         for tab in &self.tabs {
             for p in &tab.panes {
-                out.push(hyperpanes_core::ai::service::AiPanePublish {
+                out.push(avada_core::ai::service::AiPanePublish {
                     pane_id: p.uid.clone(),
                     session_uid: p.uid.clone(),
                     label: p.title.to_string(),
@@ -3797,7 +3795,7 @@ impl State {
     pub fn view_link_command(&self, idx: usize, href: &str) -> crate::command::Command {
         use crate::command::Command;
         let open = Command::OpenLink(href.to_string());
-        if hyperpanes_core::open::is_openable_url(href) {
+        if avada_core::open::is_openable_url(href) {
             return open;
         }
         let Some(p) = self.active_tab().panes.get(idx) else {
@@ -3818,13 +3816,13 @@ impl State {
 
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn open_link(&mut self, url: &str) -> Result<(), String> {
-        if !hyperpanes_core::open::is_openable_url(url) {
+        if !avada_core::open::is_openable_url(url) {
             return Err(format!(
                 "refusing to open {url:?}: not an http/https/mailto URL"
             ));
         }
         if self.settings.browser_asks() {
-            let found = hyperpanes_core::open::list_browsers();
+            let found = avada_core::open::list_browsers();
             if !found.is_empty() {
                 self.ask_url = url.to_string();
                 self.ask_browsers = found;
@@ -3834,8 +3832,8 @@ impl State {
             }
         }
         match self.settings.browser_launcher() {
-            Some(l) => hyperpanes_core::open::open_url_with(&l, url),
-            None => hyperpanes_core::open::open_url(url),
+            Some(l) => avada_core::open::open_url_with(&l, url),
+            None => avada_core::open::open_url(url),
         }
     }
 
@@ -3848,7 +3846,7 @@ impl State {
         let launcher = self.ask_browsers.get(idx).map(|b| b.launcher.clone());
         self.close_overlay_now();
         match launcher {
-            Some(l) if !url.is_empty() => hyperpanes_core::open::open_url_with(&l, &url),
+            Some(l) if !url.is_empty() => avada_core::open::open_url_with(&l, &url),
             _ => Ok(()),
         }
     }
@@ -4616,7 +4614,7 @@ impl State {
             serde_json::from_value(merged).map_err(|e| format!("bad settings patch: {e}"))?;
         // `log_level` is a free string to serde; the logger only understands its own set,
         // and a typo stored here would silently fall back at the next launch.
-        if !hyperpanes_core::logging::valid_level(&next.log_level) {
+        if !avada_core::logging::valid_level(&next.log_level) {
             return Err(format!(
                 "bad settings patch: unknown log level {:?}",
                 next.log_level
@@ -4843,7 +4841,7 @@ impl State {
         x: f32,
         y: f32,
         ctrl: bool,
-    ) -> Option<hyperpanes_terminal_widget::LinkAction> {
+    ) -> Option<avada_terminal_widget::LinkAction> {
         if !self.settings.clickable_paths {
             return None;
         }
@@ -5200,8 +5198,7 @@ impl State {
     /// describing three different places at once.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn show_commit(&mut self, cwd: &str, hash: &str) -> bool {
-        let Some(commit) = hyperpanes_core::git::load_commit(std::path::Path::new(cwd), hash)
-        else {
+        let Some(commit) = avada_core::git::load_commit(std::path::Path::new(cwd), hash) else {
             return false;
         };
         if self.files_root.as_deref() != Some(commit.root.as_path()) {
@@ -5490,7 +5487,7 @@ impl State {
         self.add_pane_cwd(mgr, Some(p.path.clone()), Some(parse_hex(&p.color)));
     }
 
-    /// Open the windows `<root>/.hyperpanes/project.json` describes, and say whether it
+    /// Open the windows `<root>/.avada/project.json` describes, and say whether it
     /// did. The layout as a property of the *checkout*: cloned with the repo, still there
     /// after a reboot or a six-month pause.
     ///
@@ -5500,7 +5497,7 @@ impl State {
     /// *for this project* counts — the rest of the window is somebody else's work.
     #[tracing::instrument(level = "debug", skip_all)]
     fn open_project_windows(&mut self, root: &str, mgr: &SessionManager) -> bool {
-        use hyperpanes_core::workspace::project;
+        use avada_core::workspace::project;
         let repo = match project::discover_project(root) {
             Ok(Some(f)) => f,
             Ok(None) => return false,
@@ -5524,15 +5521,15 @@ impl State {
     }
 
     /// "Save to this repo": write the active tab's layout into the checkout the focused
-    /// pane sits in, as `.hyperpanes/project.json`.
+    /// pane sits in, as `.avada/project.json`.
     ///
     /// The root is found by walking up from the pane's cwd, so a `.git` checkout with no
-    /// `.hyperpanes/` yet is where a first save lands — that is the whole point of the
+    /// `.avada/` yet is where a first save lands — that is the whole point of the
     /// walk stopping at `.git`. Pane cwds under the root are stored relative to it, so
     /// the file still means something on a machine that keeps its checkouts elsewhere.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn save_project(&mut self) {
-        use hyperpanes_core::workspace::project;
+        use avada_core::workspace::project;
         if self.refuse_saving_system_tab() {
             return;
         }
@@ -5556,10 +5553,10 @@ impl State {
         };
         let file = self.to_library_workspace_file();
         match project::write_project(&root.dir, &project::relativize_cwds(&file, &root.dir)) {
-            Ok(_) => self.toast_active("saved to .hyperpanes"),
+            Ok(_) => self.toast_active("saved to .avada"),
             Err(e) => {
                 tracing::debug!("save to repo: {e}");
-                self.toast_active("could not save to .hyperpanes");
+                self.toast_active("could not save to .avada");
             }
         }
     }
@@ -5764,8 +5761,8 @@ impl State {
                             .join("goal-orchestrator")
                             .join("SKILL.md"),
                     );
-                    candidates.push(prefix.join("share").join("hyperpanes").join(&rel));
-                    candidates.push(prefix.join("lib").join("hyperpanes").join(&rel));
+                    candidates.push(prefix.join("share").join("avada").join(&rel));
+                    candidates.push(prefix.join("lib").join("avada").join(&rel));
                 }
             }
             if let Some(home) = std::env::var_os("HOME") {
@@ -5795,13 +5792,13 @@ impl State {
             "claude --dangerously-skip-permissions --append-system-prompt-file {} --model {orch_model}",
             persona.display()
         );
-        // Account rotation hides the user-scoped hyperpanes MCP registration (it only lives in
+        // Account rotation hides the user-scoped avada MCP registration (it only lives in
         // the default `~/.claude.json`), so hand every spawned claude an explicit config that
         // re-registers it. Best-effort: a write failure just drops the flag, not the spawn.
         if let Some(mcp_config_path) = write_goals_mcp_config() {
-            // `--strict-mcp-config`: load ONLY the hyperpanes server from our config, never merge
+            // `--strict-mcp-config`: load ONLY the avada server from our config, never merge
             // whatever `.mcp.json` / user-scoped servers the goal's project cwd happens to carry.
-            // Keeps the goal agent's tool pool small and deterministic (just `mcp__hyperpanes__*`).
+            // Keeps the goal agent's tool pool small and deterministic (just `mcp__avada__*`).
             command.push_str(&format!(
                 " --mcp-config {} --strict-mcp-config",
                 mcp_config_path.display()
@@ -5816,7 +5813,7 @@ impl State {
         if let Some(ref settings_path) = goals_settings {
             command.push_str(&format!(" --settings {}", settings_path.display()));
         }
-        let mut env: hyperpanes_core::session::spawn::EnvMap = std::collections::HashMap::new();
+        let mut env: avada_core::session::spawn::EnvMap = std::collections::HashMap::new();
         env.insert("HP_GOAL_SPEC_MODEL".to_string(), spec_model.to_string());
         env.insert("HP_GOAL_IMPL_MODEL".to_string(), impl_model.to_string());
         // The orchestrator is handed the persona *content* via `--append-system-prompt-file`,
@@ -5837,18 +5834,18 @@ impl State {
             );
         }
         env.insert(
-            "HYPERPANES_CONTROL_FILE".to_string(),
-            hyperpanes_core::persistence::paths::control_json()
+            "AVADA_CONTROL_FILE".to_string(),
+            avada_core::persistence::paths::control_json()
                 .to_string_lossy()
                 .into_owned(),
         );
         // Force eager MCP-tool registration. Claude Code >= 2.1.x defaults to "tool-search" mode
         // (`ENABLE_TOOL_SEARCH` unset ⇒ mode "tst"), under which EVERY MCP tool is deferred and
         // only callable after a `ToolSearch` round-trip. In an unattended goal pane that deferral
-        // is fatal: the `mcp__hyperpanes__*` tools show up but never surface (ToolSearch returns
+        // is fatal: the `mcp__avada__*` tools show up but never surface (ToolSearch returns
         // nothing / can even orphan a `tool_search_tool_result` and 400-brick the session). Pin
         // the mode to "standard" so the pane's Claude — and every spec/impl agent it spawns, which
-        // inherit this env — registers the hyperpanes tools up front and can call them directly.
+        // inherit this env — registers the avada tools up front and can call them directly.
         // (The user's own sessions dodge this because their launcher already sets it; unattended
         // spawns get the CLI default, so we set it explicitly here.)
         env.insert("ENABLE_TOOL_SEARCH".to_string(), "false".to_string());
@@ -5864,7 +5861,7 @@ impl State {
         // registry) via CLAUDE_CONFIG_DIR, and hand it the full ordered list (HP_GOAL_ACCOUNTS,
         // newline-separated) so the persona can spread + rotate its spec/impl agents across
         // accounts. No registry / single account ⇒ nothing injected (Claude uses its default).
-        let accounts = hyperpanes_core::claude_accounts::config_dirs();
+        let accounts = avada_core::claude_accounts::config_dirs();
         if !accounts.is_empty() {
             let chosen = &accounts[self.goal_account_cursor % accounts.len()];
             self.goal_account_cursor = self.goal_account_cursor.wrapping_add(1);
@@ -6420,7 +6417,7 @@ impl State {
     }
 
     /// Forward a literal Ctrl+V (0x16) to pane `idx`'s session so an in-pane TUI that reads the
-    /// OS clipboard itself (e.g. Claude Code) can paste a clipboard IMAGE — which hyperpanes'
+    /// OS clipboard itself (e.g. Claude Code) can paste a clipboard IMAGE — which avada'
     /// own text paste can't deliver through the pty. Bound to Alt+V, the shortcut Claude Code
     /// documents for "your terminal intercepts Ctrl+V". Unconditional (the user knows there's an
     /// image): the app simply lets the focused program resolve the clipboard.
@@ -6587,7 +6584,7 @@ impl State {
         ti: usize,
         pi: usize,
         mgr: &SessionManager,
-        marker: Option<&hyperpanes_core::claude_panes::PaneClaudeSession>,
+        marker: Option<&avada_core::claude_panes::PaneClaudeSession>,
     ) -> Option<(String, String)> {
         let (tool, cwd, env, mark) = {
             let p = self.tabs.get(ti)?.panes.get(pi)?;
@@ -6601,7 +6598,7 @@ impl State {
                 p.tool_session.clone(),
             )
         };
-        let bin = hyperpanes_core::tools::by_id(&tool)
+        let bin = avada_core::tools::by_id(&tool)
             .map(|t| t.bin)
             .unwrap_or(tool.as_str());
         let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
@@ -6610,7 +6607,7 @@ impl State {
                 Some(m.session_id.clone()),
                 non_empty(&m.cwd).or_else(|| cwd.clone()),
                 non_empty(&m.config_dir)
-                    .filter(|d| hyperpanes_core::claude_panes::valid_config_dir(d))
+                    .filter(|d| avada_core::claude_panes::valid_config_dir(d))
                     .map(|d| format!("CLAUDE_CONFIG_DIR='{d}' "))
                     .unwrap_or_default(),
             ),
@@ -6683,7 +6680,7 @@ impl State {
         idx: usize,
         mgr: &SessionManager,
         cwd: Option<String>,
-        env: Option<hyperpanes_core::session::spawn::EnvMap>,
+        env: Option<avada_core::session::spawn::EnvMap>,
     ) -> Option<(String, String)> {
         let (cols, rows) = match self.tabs.get(ti).and_then(|t| t.panes.get(idx)) {
             // A view pane has no session to restart — restarting it would spawn a shell into a
@@ -6699,12 +6696,12 @@ impl State {
         let shell = prefs::effective_shell(&self.settings.default_shell);
         let shell_path = shell
             .clone()
-            .unwrap_or_else(hyperpanes_core::session::spawn::default_shell);
-        let integration = hyperpanes_core::shell_integration::integration_for(
+            .unwrap_or_else(avada_core::session::spawn::default_shell);
+        let integration = avada_core::shell_integration::integration_for(
             &shell_path,
-            &hyperpanes_core::shell_integration::shell_integration_dir(),
+            &avada_core::shell_integration::shell_integration_dir(),
         )
-        .map(|si| hyperpanes_core::session_manager::Integration {
+        .map(|si| avada_core::session_manager::Integration {
             args: si.args,
             env: si.env.into_iter().collect(),
         });
@@ -6722,7 +6719,7 @@ impl State {
             // thus Preferences → Browser) instead of straight to the OS. Wrapped
             // here and not where the env is recorded on the pane: the shim path is
             // regenerated every run, so it must not be baked into a snapshot.
-            env: hyperpanes_core::open::with_browser_shim(env.clone()),
+            env: avada_core::open::with_browser_shim(env.clone()),
             integration,
             ..Default::default()
         }) {
@@ -7517,7 +7514,7 @@ impl State {
     }
 
     /// "Save workspace…": pick a destination via the native save dialog and write the active
-    /// tab's serialized workspace there (versioned `.hyperpanes` container by default; the
+    /// tab's serialized workspace there (versioned `.avada` container by default; the
     /// reader keeps accepting legacy bare `.json`). No-op if the dialog is cancelled.
     /// Save to the remembered [`Self::workspace_path`] when there is one (a silent write-back,
     /// the usual Save semantics), otherwise fall through to [`Self::save_workspace_as`].
@@ -7544,13 +7541,13 @@ impl State {
         }
         let file = self.to_library_workspace_file();
         let default_name = match &file.name {
-            Some(n) if !n.is_empty() => format!("{}.hyperpanes", sets::slug(n)),
-            _ => "workspace.hyperpanes".to_string(),
+            Some(n) if !n.is_empty() => format!("{}.avada", sets::slug(n)),
+            _ => "workspace.avada".to_string(),
         };
         let library = paths::workspaces_dir();
         let _ = std::fs::create_dir_all(&library);
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Hyperpanes workspace", &["hyperpanes"])
+            .add_filter("Avada workspace", &["avada"])
             .add_filter("JSON workspace", &["json"])
             .set_directory(&library)
             .set_file_name(default_name)
@@ -7577,14 +7574,14 @@ impl State {
         ok
     }
 
-    /// "Open workspace…": pick a `.hyperpanes`/`.json` workspace via the native open dialog,
+    /// "Open workspace…": pick a `.avada`/`.json` workspace via the native open dialog,
     /// read + validate it, and load its groups as new tabs (switching to the first).
     /// Non-destructive: existing tabs/sessions are left intact. No-op if cancelled or the
     /// file has no panes.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn open_workspace(&mut self, mgr: &SessionManager) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Workspace", &["hyperpanes", "json"])
+            .add_filter("Workspace", &["avada", "json"])
             .pick_file()
         else {
             return;
@@ -7611,7 +7608,7 @@ impl State {
         let _ = std::fs::create_dir_all(&dir);
         let default_name = format!("{}.json", sets::slug(self.active_tab().title.as_str()));
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Hyperpanes set", &["json"])
+            .add_filter("Avada set", &["json"])
             .set_directory(&dir)
             .set_file_name(default_name)
             .save_file()
@@ -7642,11 +7639,8 @@ impl State {
                 continue; // 0-pane tab
             };
             let title = ws.name.clone().unwrap_or_default();
-            let member_path = members_dir.join(format!(
-                "{stem}-{}-{}.hyperpanes",
-                i + 1,
-                sets::slug(&title)
-            ));
+            let member_path =
+                members_dir.join(format!("{stem}-{}-{}.avada", i + 1, sets::slug(&title)));
             // `write_workspace` does not create directories; the set dir may be brand new.
             if let Some(parent) = member_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -7684,7 +7678,7 @@ impl State {
         let dir = paths::sets_dir();
         let _ = std::fs::create_dir_all(&dir);
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Hyperpanes set", &["json"])
+            .add_filter("Avada set", &["json"])
             .set_directory(&dir)
             .pick_file()
         else {
@@ -7891,12 +7885,12 @@ impl State {
             .or_else(|| prefs::effective_shell(&self.settings.default_shell));
         let shell_path = shell
             .clone()
-            .unwrap_or_else(hyperpanes_core::session::spawn::default_shell);
-        let integration = hyperpanes_core::shell_integration::integration_for(
+            .unwrap_or_else(avada_core::session::spawn::default_shell);
+        let integration = avada_core::shell_integration::integration_for(
             &shell_path,
-            &hyperpanes_core::shell_integration::shell_integration_dir(),
+            &avada_core::shell_integration::shell_integration_dir(),
         )
-        .map(|si| hyperpanes_core::session_manager::Integration {
+        .map(|si| avada_core::session_manager::Integration {
             args: si.args,
             env: si.env.into_iter().collect(),
         });
@@ -7951,8 +7945,8 @@ impl State {
         } else {
             spec.meta
                 .as_ref()
-                .and_then(|m| m.get(hyperpanes_core::claude_panes::META_KEY))
-                .filter(|id| hyperpanes_core::claude_panes::valid_session_id(id))
+                .and_then(|m| m.get(avada_core::claude_panes::META_KEY))
+                .filter(|id| avada_core::claude_panes::valid_session_id(id))
                 .cloned()
         };
         // Two resume shapes: a pane whose *program* is claude gets `--resume <id>` appended to
@@ -7966,8 +7960,8 @@ impl State {
         let resume_cwd = (!reattach)
             .then_some(spec.meta.as_ref())
             .flatten()
-            .and_then(|m| m.get(hyperpanes_core::claude_panes::META_CWD_KEY))
-            .filter(|c| hyperpanes_core::claude_panes::valid_resume_cwd(c))
+            .and_then(|m| m.get(avada_core::claude_panes::META_CWD_KEY))
+            .filter(|c| avada_core::claude_panes::valid_resume_cwd(c))
             .cloned();
         // The account (CLAUDE_CONFIG_DIR) the conversation was saved under. `claude` stores
         // transcripts in `$CLAUDE_CONFIG_DIR/projects`, so resume must re-set it or claude
@@ -7976,13 +7970,13 @@ impl State {
         let resume_config_dir = (!reattach)
             .then_some(spec.meta.as_ref())
             .flatten()
-            .and_then(|m| m.get(hyperpanes_core::claude_panes::META_CONFIG_DIR_KEY))
-            .filter(|d| hyperpanes_core::claude_panes::valid_config_dir(d))
+            .and_then(|m| m.get(avada_core::claude_panes::META_CONFIG_DIR_KEY))
+            .filter(|d| avada_core::claude_panes::valid_config_dir(d))
             .cloned();
         let mut spawn_command = spec.command.clone();
         let mut spawn_args = spec.args.clone();
         let mut spawn_cwd = spec.cwd.clone();
-        let mut spawn_env: Option<hyperpanes_core::session::spawn::EnvMap> = None;
+        let mut spawn_env: Option<avada_core::session::spawn::EnvMap> = None;
         let mut startup = None;
         if let Some(id) = &resume_id {
             // `CLAUDE_CONFIG_DIR='<dir>' ` prefix for typed resume lines (the shell-pane path);
@@ -8027,7 +8021,7 @@ impl State {
 
         // ---- Every other tool's conversation resume ----
         // Claude is resumed above from a hook-written marker; no other tool offers a hook.
-        // What every tool does have is the pane Hyperpanes itself opened out of the left
+        // What every tool does have is the pane Avada itself opened out of the left
         // panel's session list: that pane was handed one exact conversation, and the mark
         // records which one, in which directory. A re-spawn puts the pane back into it.
         //
@@ -8050,7 +8044,7 @@ impl State {
             // resume flag starts fresh rather than being handed a guessed one.
             let extra = match &kind {
                 PaneKind::Tool(tool) => {
-                    hyperpanes_core::tools::resume_args(tool, &mark.id).map(|a| (tool.clone(), a))
+                    avada_core::tools::resume_args(tool, &mark.id).map(|a| (tool.clone(), a))
                 }
                 // ...unless the pane's kind cannot say. A pane the user turned into a tool
                 // pane by TYPING the tool's name persists as `Terminal` — the foreground
@@ -8060,8 +8054,7 @@ impl State {
                 // tool; that name is validated against the registry on the way in, so it
                 // can only ever be a real id.
                 _ => mark.tool.as_deref().and_then(|tool| {
-                    hyperpanes_core::tools::resume_args(tool, &mark.id)
-                        .map(|a| (tool.to_string(), a))
+                    avada_core::tools::resume_args(tool, &mark.id).map(|a| (tool.to_string(), a))
                 }),
             };
             // A pane opened from the session list already persists `<tool> --resume <id>` as
@@ -8098,7 +8091,7 @@ impl State {
                     // output, through the shell, so the user's own alias for the tool applies
                     // (the same shape the Claude shell-pane arm uses).
                     (None, None) => {
-                        let bin = hyperpanes_core::tools::by_id(&tool)
+                        let bin = avada_core::tools::by_id(&tool)
                             .map(|t| t.bin)
                             .unwrap_or(tool.as_str());
                         startup = Some(resume_startup_line(
@@ -8165,7 +8158,7 @@ impl State {
                     // thus Preferences → Browser) instead of straight to the OS. Wrapped
                     // here and not where the env is recorded on the pane: the shim path is
                     // regenerated every run, so it must not be baked into a snapshot.
-                    env: hyperpanes_core::open::with_browser_shim(spawn_env),
+                    env: avada_core::open::with_browser_shim(spawn_env),
                     integration,
                     ..Default::default()
                 },
@@ -9504,7 +9497,7 @@ mod reminder_tests {
 mod view_pane_tests {
     //! D3 — a non-pty view pane (file browser / viewer / markdown) is pane identity WITHOUT
     //! session identity. `PaneState.uid` is doing four jobs at once — the `SessionManager`
-    //! registry key, `HYPERPANES_PANE_ID`, the Claude hook's marker filename, and the
+    //! registry key, `AVADA_PANE_ID`, the Claude hook's marker filename, and the
     //! `PaneSpec` re-attach key — so handing a view pane a backend uid would put a phantom
     //! in front of `pane_load`, `has`, and the cross-window `claim_session` arbitration:
     //! a uid the daemon is asked about forever and can never answer for.
@@ -9779,7 +9772,7 @@ mod view_pane_tests {
                 uid: Some("view-99".into()),
                 meta: Some(
                     [(
-                        hyperpanes_core::tools::kind::META_KIND_KEY.to_string(),
+                        avada_core::tools::kind::META_KIND_KEY.to_string(),
                         "view:markdown".to_string(),
                     )]
                     .into_iter()
@@ -9834,7 +9827,7 @@ mod view_pane_tests {
                 cwd: Some("/tmp".into()),
                 meta: Some(
                     [(
-                        hyperpanes_core::tools::kind::META_KIND_KEY.to_string(),
+                        avada_core::tools::kind::META_KIND_KEY.to_string(),
                         "view:files".to_string(),
                     )]
                     .into_iter()
@@ -9948,17 +9941,17 @@ mod tool_session_tests {
         // The kind is what says *which* tool to relaunch; the mark is what says which
         // chat. Both, or the relaunch is a fresh copilot in the right directory.
         assert_eq!(
-            meta.get(hyperpanes_core::tools::kind::META_KIND_KEY)
+            meta.get(avada_core::tools::kind::META_KIND_KEY)
                 .map(String::as_str),
             Some("copilot")
         );
         assert_eq!(
-            meta.get(hyperpanes_core::tools::META_SESSION_KEY)
+            meta.get(avada_core::tools::META_SESSION_KEY)
                 .map(String::as_str),
             Some("aaaa-bbbb-cccc")
         );
         assert_eq!(
-            meta.get(hyperpanes_core::tools::META_SESSION_CWD_KEY)
+            meta.get(avada_core::tools::META_SESSION_CWD_KEY)
                 .map(String::as_str),
             Some("/tmp")
         );
@@ -9975,9 +9968,9 @@ mod tool_session_tests {
         st.attach_panes_from_specs(
             &m,
             &[spec_with(&[
-                (hyperpanes_core::tools::kind::META_KIND_KEY, "copilot"),
-                (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
-                (hyperpanes_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                (avada_core::tools::kind::META_KIND_KEY, "copilot"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
             ])],
         );
         let p = st.active_tab().panes.last().unwrap();
@@ -10005,9 +9998,9 @@ mod tool_session_tests {
             &[PaneSpec {
                 command: Some("copilot --resume aaaa-bbbb-cccc".into()),
                 ..spec_with(&[
-                    (hyperpanes_core::tools::kind::META_KIND_KEY, "copilot"),
-                    (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
-                    (hyperpanes_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                    (avada_core::tools::kind::META_KIND_KEY, "copilot"),
+                    (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                    (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
                 ])
             }],
         );
@@ -10034,9 +10027,9 @@ mod tool_session_tests {
             &[PaneSpec {
                 cwd: Some("/var".into()),
                 ..spec_with(&[
-                    (hyperpanes_core::tools::kind::META_KIND_KEY, "copilot"),
-                    (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
-                    (hyperpanes_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                    (avada_core::tools::kind::META_KIND_KEY, "copilot"),
+                    (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                    (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
                 ])
             }],
         );
@@ -10057,9 +10050,9 @@ mod tool_session_tests {
         st.attach_panes_from_specs(
             &m,
             &[spec_with(&[
-                (hyperpanes_core::tools::kind::META_KIND_KEY, "aider"),
-                (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
-                (hyperpanes_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                (avada_core::tools::kind::META_KIND_KEY, "aider"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
             ])],
         );
         let p = st.active_tab().panes.last().unwrap();
@@ -10080,8 +10073,8 @@ mod tool_session_tests {
         st.attach_panes_from_specs(
             &m,
             &[spec_with(&[
-                (hyperpanes_core::tools::kind::META_KIND_KEY, "copilot"),
-                (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::kind::META_KIND_KEY, "copilot"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
             ])],
         );
         let p = st.active_tab().panes.last().unwrap();
@@ -10142,9 +10135,9 @@ mod tool_session_tests {
         st.attach_panes_from_specs(
             &m,
             &[spec_with(&[
-                (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
-                (hyperpanes_core::tools::META_SESSION_CWD_KEY, "/tmp"),
-                (hyperpanes_core::tools::META_SESSION_TOOL_KEY, "copilot"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                (avada_core::tools::META_SESSION_TOOL_KEY, "copilot"),
             ])],
         );
         let p = st.active_tab().panes.last().unwrap();
@@ -10168,8 +10161,8 @@ mod tool_session_tests {
         st.attach_panes_from_specs(
             &m,
             &[spec_with(&[
-                (hyperpanes_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
-                (hyperpanes_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
             ])],
         );
         let p = st.active_tab().panes.last().unwrap();
@@ -10274,12 +10267,12 @@ mod tool_session_tests {
             .meta
             .expect("an adopted pane carries meta");
         assert_eq!(
-            meta.get(hyperpanes_core::tools::META_SESSION_KEY)
+            meta.get(avada_core::tools::META_SESSION_KEY)
                 .map(String::as_str),
             Some("aaaa-bbbb-cccc")
         );
         assert_eq!(
-            meta.get(hyperpanes_core::tools::META_SESSION_TOOL_KEY)
+            meta.get(avada_core::tools::META_SESSION_TOOL_KEY)
                 .map(String::as_str),
             Some("claude")
         );
@@ -10415,7 +10408,7 @@ mod tool_identity_tests {
 
     // ---- D13: the layout as a property of the checkout ----
 
-    /// The save seam end to end: what lands in `.hyperpanes/project.json` is what the
+    /// The save seam end to end: what lands in `.avada/project.json` is what the
     /// checkout needs to rebuild these windows — the command, and a cwd expressed
     /// *relative to the root* so the file still means something on a machine that keeps
     /// its checkouts somewhere else. The run-local session uid must not be in it.
@@ -10430,7 +10423,7 @@ mod tool_identity_tests {
                 .as_nanos()
         ));
         // `find_project_root` walks up to a `.git`, so a plain checkout with no
-        // `.hyperpanes/` yet is exactly where a first save lands.
+        // `.avada/` yet is exactly where a first save lands.
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let sub = root.join("crates").join("core");
         std::fs::create_dir_all(&sub).unwrap();
@@ -10445,7 +10438,7 @@ mod tool_identity_tests {
 
         st.save_project();
 
-        let written = root.join(".hyperpanes").join("project.json");
+        let written = root.join(".avada").join("project.json");
         let raw = std::fs::read_to_string(&written).expect("the save landed in the checkout");
         assert!(
             raw.contains("claude"),
@@ -10856,7 +10849,7 @@ mod set_tests {
     //! plumbing: durable uids are written into library workspaces, survive the set round-trip,
     //! and reach the loader — where the in-process backend correctly declines to re-attach.
     use super::*;
-    use hyperpanes_core::session_manager::PaneLoad;
+    use avada_core::session_manager::PaneLoad;
 
     fn fresh() -> State {
         State::new(theme::load_font(1.0))
@@ -10942,7 +10935,7 @@ mod set_tests {
             );
         }
         // The member file on disk carries the durable pane id (the reattach key).
-        let first = hyperpanes_core::workspace::io::read_workspace(&set.members[0].path).unwrap();
+        let first = avada_core::workspace::io::read_workspace(&set.members[0].path).unwrap();
         assert_eq!(
             first.panes.as_ref().unwrap()[0].uid.as_deref(),
             Some("pane-a")
@@ -11038,7 +11031,7 @@ mod set_tests {
             .unwrap();
         let _guard = rt.enter();
         let dir = temp_dir("legacy");
-        let path = dir.join("legacy.hyperpanes");
+        let path = dir.join("legacy.avada");
         // Verbatim shape of an old save-dialog file: bare object, no envelope, no uid.
         std::fs::write(
             &path,
@@ -11053,7 +11046,7 @@ mod set_tests {
         )
         .unwrap();
 
-        let file = hyperpanes_core::workspace::io::read_workspace(&path).expect("legacy parses");
+        let file = avada_core::workspace::io::read_workspace(&path).expect("legacy parses");
         for p in file.panes.iter().flatten() {
             assert_eq!(p.uid, None, "the fixture really is uid-less");
         }
@@ -11083,7 +11076,7 @@ mod set_tests {
             .unwrap();
         let _guard = rt.enter();
         let dir = temp_dir("save-as");
-        let path = dir.join("saved.hyperpanes");
+        let path = dir.join("saved.avada");
 
         let mut st = fresh();
         let m = mgr();
@@ -11099,7 +11092,7 @@ mod set_tests {
         );
         assert!(raw.contains("pane-keep-1") && raw.contains("pane-keep-2"));
 
-        let back = hyperpanes_core::workspace::io::read_workspace(&path).expect("re-reads");
+        let back = avada_core::workspace::io::read_workspace(&path).expect("re-reads");
         let uids: Vec<Option<String>> =
             back.panes.iter().flatten().map(|p| p.uid.clone()).collect();
         assert_eq!(
@@ -11168,7 +11161,7 @@ mod browser_routing_tests {
     /// path (there is nothing to ask about) and not something a test should assert against.
     #[test]
     fn ask_mode_holds_the_url_for_a_human() {
-        if hyperpanes_core::open::list_browsers().is_empty() {
+        if avada_core::open::list_browsers().is_empty() {
             return;
         }
         let mut st = fresh();
@@ -11185,7 +11178,7 @@ mod browser_routing_tests {
     fn out_of_range_pick_closes_without_opening() {
         let mut st = fresh();
         st.ask_url = "https://example.com/x".into();
-        st.ask_browsers = vec![hyperpanes_core::open::BrowserApp {
+        st.ask_browsers = vec![avada_core::open::BrowserApp {
             id: "test.browser".into(),
             name: "Test".into(),
             launcher: "/nonexistent/browser".into(),
@@ -11229,7 +11222,7 @@ mod browser_routing_tests {
 #[cfg(test)]
 mod tool_session_location {
     use super::*;
-    use hyperpanes_core::tools::session_mark::ToolSessionMark;
+    use avada_core::tools::session_mark::ToolSessionMark;
 
     fn fresh() -> State {
         State::new(theme::load_font(1.0))
@@ -12377,7 +12370,7 @@ mod hyperpane_uniqueness_tests {
     }
 
     #[test]
-    fn closing_the_hyperpanes_only_pane_leaves_a_system_tab_at_index_0() {
+    fn closing_the_avada_only_pane_leaves_a_system_tab_at_index_0() {
         let rt = runtime();
         let _guard = rt.enter();
         let m = mgr();
@@ -12397,7 +12390,7 @@ mod hyperpane_uniqueness_tests {
     }
 
     #[test]
-    fn moving_the_hyperpanes_only_pane_to_another_tab_keeps_the_system_tab() {
+    fn moving_the_avada_only_pane_to_another_tab_keeps_the_system_tab() {
         let rt = runtime();
         let _guard = rt.enter();
         let m = mgr();

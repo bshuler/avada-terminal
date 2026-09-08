@@ -1,19 +1,19 @@
 ---
-name: hyperpanes
-description: Inspect and control the running Hyperpanes workspace — list windows, tabs and panes, read what any terminal is showing (even on a tab that is not on screen), type into or submit commands to any terminal, create/close/rename/recolor/re-layout panes, create/close/rename/reorder tabs, and read or change any application preference. Use whenever the user asks about "this window", "that pane", "the other tab", what a terminal is doing, or asks to change how Hyperpanes looks or behaves.
+name: avada
+description: Inspect and control the running Avada workspace — list windows, tabs and panes, read what any terminal is showing (even on a tab that is not on screen), type into or submit commands to any terminal, create/close/rename/recolor/re-layout panes, create/close/rename/reorder tabs, and read or change any application preference. Use whenever the user asks about "this window", "that pane", "the other tab", what a terminal is doing, or asks to change how Avada looks or behaves.
 ---
 
-# Hyperpanes control
+# Avada control
 
-You are running inside the **Hyperpane** tab of a live Hyperpanes workspace. You can see and
+You are running inside the **Hyperpane** tab of a live Avada workspace. You can see and
 change the whole thing through one command:
 
 ```
-hyperpanes ctl <verb> [args]
+avada ctl <verb> [args]
 ```
 
-That is the Hyperpanes binary itself. This pane's `PATH` carries the app's own directory, so the
-bare name resolves here even when Hyperpanes isn't installed system-wide; `$HP_CTL` is the same
+That is the Avada binary itself. This pane's `PATH` carries the app's own directory, so the
+bare name resolves here even when Avada isn't installed system-wide; `$HP_CTL` is the same
 binary's absolute path, for the rare shell that loses the `PATH`.
 
 Two reference files sit beside this one:
@@ -26,13 +26,13 @@ Two reference files sit beside this one:
 Ids change. Before acting on a pane or tab, get the current ones:
 
 ```
-hyperpanes ctl tabs
+avada ctl tabs
 ```
 
 That prints the whole workspace as an outline: one line per tab (with its id, title and layout,
 `*` marking the active one) and one indented line per pane (id, label, status).
 
-If it fails with "Start hyperpanes and enable Preferences → Control API", the control API is off.
+If it fails with "Start avada and enable Preferences → Control API", the control API is off.
 Tell the user, and point them at **Preferences → Control API** — do not try to work around it.
 
 ## The ids
@@ -44,7 +44,7 @@ Tell the user, and point them at **Preferences → Control API** — do not try 
 ## Reading a terminal
 
 ```
-hyperpanes ctl read <pane> [--tail 60] [--screen] [--wait] [--raw]
+avada ctl read <pane> [--tail 60] [--screen] [--wait] [--raw]
 ```
 
 The pane's text goes to stdout, ANSI already stripped; the pane id and status go to stderr. Use
@@ -58,9 +58,9 @@ focused first.
 ## Writing to a terminal
 
 ```
-hyperpanes ctl submit <pane> git status      # type it and press Enter
-hyperpanes ctl send   <pane> some text       # type it, leave the line unsent
-hyperpanes ctl keys   <pane> ctrl+c          # named keys: enter escape tab up down ctrl+c …
+avada ctl submit <pane> git status      # type it and press Enter
+avada ctl send   <pane> some text       # type it, leave the line unsent
+avada ctl keys   <pane> ctrl+c          # named keys: enter escape tab up down ctrl+c …
 ```
 
 Rules that matter:
@@ -89,10 +89,10 @@ You cannot close the Hyperpane tab. It is the app's own tab and the close is ref
 ## Preferences
 
 ```
-hyperpanes ctl settings                 # everything, as JSON
-hyperpanes ctl set fontPx 15
-hyperpanes ctl set defaultShell zsh
-hyperpanes ctl set-json '{"showFrame":true,"terminalTheme":3}'
+avada ctl settings                 # everything, as JSON
+avada ctl set fontPx 15
+avada ctl set defaultShell zsh
+avada ctl set-json '{"showFrame":true,"terminalTheme":3}'
 ```
 
 Keys are camelCase and are validated against the live settings — an unknown key is rejected and
@@ -100,7 +100,7 @@ Keys are camelCase and are validated against the live settings — an unknown ke
 slider could not produce (a 400px font, a 3-second idle alert) are clamped rather than refused.
 Changes take effect live and are saved.
 
-Read `hyperpanes ctl settings` before writing: it is the authoritative list of what exists.
+Read `avada ctl settings` before writing: it is the authoritative list of what exists.
 
 ## Anything else
 
@@ -108,8 +108,8 @@ The control API has more surface than the verbs above — projects, work queues,
 devices, tokens. Reach it directly:
 
 ```
-hyperpanes ctl get /projects
-hyperpanes ctl post /command '{"type":"setMeta","paneId":"…","meta":{"role":"reviewer"}}'
+avada ctl get /projects
+avada ctl post /command '{"type":"setMeta","paneId":"…","meta":{"role":"reviewer"}}'
 ```
 
 See `REFERENCE.md` for the routes.

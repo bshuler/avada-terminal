@@ -1,6 +1,6 @@
 # Native vs Electron (idle memory) + native vs real-world terminals (driven)
 
-First run of the ported harness against the **native Rust** hyperpanes (the rewrite) vs the
+First run of the ported harness against the **native Rust** avada (the rewrite) vs the
 pre-rewrite **Electron** build, to answer: *did the rewrite deliver the memory win?*
 
 - **Machine:** DESKTOP-RDPOAEP — Windows 11 (10.0.26100), Intel i9-9900K, 16 cores
@@ -11,14 +11,14 @@ pre-rewrite **Electron** build, to answer: *did the rewrite deliver the memory w
   Electron: `--user-data-dir <temp>`), one default-shell pane, settled, then a `Win32_Process`
   tree-walk summed Working Set + Private Bytes + idle CPU. Idle-only (the native GUI v0.0.1 has no
   run-a-command CLI, so it can't be driven for throughput/startup). Reproduce:
-  `node bench/run.mjs --only=hyperpanes,hyperpanes-electron,wt --suite=memory --idle-bare`.
+  `node bench/run.mjs --only=avada,avada-electron,wt --suite=memory --idle-bare`.
 
 ## Results (idle, fresh instance + one default-shell pane)
 
 | App | Idle WS (MB) | Idle Private (MB) | Idle CPU (%) | Procs |
 | --- | ---: | ---: | ---: | ---: |
-| **hyperpanes (native) v0.0.1** | **308.5** | 308.6 | ~13 | **3** |
-| hyperpanes (Electron) v0.1.8 | 486.9 | 282.2 | ~0 | 6 |
+| **avada (native) v0.0.1** | **308.5** | 308.6 | ~13 | **3** |
+| avada (Electron) v0.1.8 | 486.9 | 282.2 | ~0 | 6 |
 | Windows Terminal | — | — | — | — |
 
 Windows Terminal can't be tree-walked: `wt.exe` is a launcher stub that hands off to a shared
@@ -28,7 +28,7 @@ Windows Terminal can't be tree-walked: `wt.exe` is a launcher stub that hands of
 
 ```
 native (3 procs):                         Electron (6 procs):
-  hyperpanes.exe   185 WS / 249 priv        electron.exe ×4  363 WS / 214 priv  (main+GPU+renderer+utility)
+  avada.exe   185 WS / 249 priv        electron.exe ×4  363 WS / 214 priv  (main+GPU+renderer+utility)
   pwsh.exe         114 WS /  56 priv        pwsh.exe         112 WS /  56 priv  } the shell pane —
   conhost.exe        8 WS /   1 priv        conhost.exe        8 WS /   1 priv  } common to both
 ```
@@ -62,16 +62,16 @@ unoptimized) vs a mature Electron v0.1.8.
 
 ## Native vs real-world terminals (driven — added 2026-06-09)
 
-The native GUI now wires CLI launch (`hyperpanes --shell cmd.exe -c <wrapper> …`), so it can be
+The native GUI now wires CLI launch (`avada --shell cmd.exe -c <wrapper> …`), so it can be
 **driven** like the other terminals — real throughput + startup, not just idle memory. Run against
 the installed competitors that expose a run-a-command flag (WezTerm/Rio/ConEmu aren't installed on
-this box): `node bench/run.mjs --only=hyperpanes,wt,alacritty,hyper --idle-bare --runs=3`. Release
+this box): `node bench/run.mjs --only=avada,wt,alacritty,hyper --idle-bare --runs=3`. Release
 binary; `--idle-bare` makes the memory column apples-to-apples (every app idle) while throughput +
 startup still run driven.
 
 ### Throughput (MB/s, median of 3 — higher is better)
 
-| Case | hyperpanes (native) | Windows Terminal | Alacritty |
+| Case | avada (native) | Windows Terminal | Alacritty |
 | --- | ---: | ---: | ---: |
 | dense | 10.2 | **107.1** | 18.5 |
 | scrolling | 7.5 | **79.7** | 11.6 |
@@ -82,7 +82,7 @@ startup still run driven.
 
 ### Startup (ms — "process launch → command running in a pane", lower is better)
 
-| hyperpanes (native) | Windows Terminal | Alacritty |
+| avada (native) | Windows Terminal | Alacritty |
 | ---: | ---: | ---: |
 | 1380 | **239** | 418 |
 
@@ -90,7 +90,7 @@ startup still run driven.
 
 | App | Idle WS (MB) | Idle CPU (%) | Procs |
 | --- | ---: | ---: | ---: |
-| hyperpanes (native) v0.0.1 | 308 | ~5–8 | 3 |
+| avada (native) v0.0.1 | 308 | ~5–8 | 3 |
 | Windows Terminal | — | — | — |
 | Alacritty 0.17 | **198** | ~2 | 3 |
 | Hyper 3.x (Electron) | 396 | ~0 | 6 |

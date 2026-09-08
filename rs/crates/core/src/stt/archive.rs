@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn pruning_an_archive_that_does_not_exist_is_not_an_error() {
-        prune(Path::new("/nonexistent/hyperpanes/dictation"), 5);
+        prune(Path::new("/nonexistent/avada/dictation"), 5);
     }
 
     #[test]

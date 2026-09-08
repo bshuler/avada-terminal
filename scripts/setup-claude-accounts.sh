@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-claude-accounts.sh — prepare multiple Claude accounts for hyperpanes goal-orchestrator
+# setup-claude-accounts.sh — prepare multiple Claude accounts for avada goal-orchestrator
 # account rotation, WITHOUT breaking `claude --resume` across accounts.
 #
 # WHY: the `claude` CLI stores conversation transcripts under $CLAUDE_CONFIG_DIR
@@ -47,7 +47,7 @@ if [ "$APPLY" = 1 ]; then
   # under a running process can lose or misplace a transcript write. Refuse if any are running.
   if pgrep -x claude >/dev/null 2>&1 || pgrep -f '/claude ' >/dev/null 2>&1; then
     say "REFUSING: a 'claude' process is running. Quit ALL claude instances first —"
-    say "  including this session, the hyperpanes app's agent panes, and ~/.claude/daemon —"
+    say "  including this session, the avada app's agent panes, and ~/.claude/daemon —"
     say "  then re-run with --apply. (Check:  pgrep -af claude)"
     exit 1
   fi

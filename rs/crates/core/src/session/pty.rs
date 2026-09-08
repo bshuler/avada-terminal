@@ -16,7 +16,7 @@
 //! ## Smoke test
 //! A real-shell round-trip lives in `tests` behind `#[ignore]` (it spawns a process).
 //! Run it explicitly with:
-//! `cargo test --manifest-path rs/Cargo.toml -p hyperpanes-core session::pty -- --ignored --nocapture`
+//! `cargo test --manifest-path rs/Cargo.toml -p avada-core session::pty -- --ignored --nocapture`
 //!
 //! ### Environment note (verified 2026-06-07; root-caused 2026-06-09)
 //! ConPTY (spawned with `PSUEDOCONSOLE_INHERIT_CURSOR`, as portable-pty does) sends an
@@ -505,17 +505,14 @@ mod tests {
         })
         .expect("spawn pty");
 
-        pty.write(b"echo HYPERPANES_PTY_OK\r\n").expect("write");
+        pty.write(b"echo AVADA_PTY_OK\r\n").expect("write");
         // Wait for the echoed marker on the shell's *output* line (not just the typed
         // echo) — require it to appear after a newline so the command echo alone can't
         // satisfy it on every shell.
         let (out, _) = drain_until(&rx, Duration::from_secs(10), |o| {
-            o.matches("HYPERPANES_PTY_OK").count() >= 2 || o.contains("HYPERPANES_PTY_OK\r\n")
+            o.matches("AVADA_PTY_OK").count() >= 2 || o.contains("AVADA_PTY_OK\r\n")
         });
-        assert!(
-            out.contains("HYPERPANES_PTY_OK"),
-            "marker missing; got: {out:?}"
-        );
+        assert!(out.contains("AVADA_PTY_OK"), "marker missing; got: {out:?}");
 
         pty.write(b"exit\r\n").expect("write exit");
         let (_, exit) = drain_until(&rx, Duration::from_secs(10), |_| false);

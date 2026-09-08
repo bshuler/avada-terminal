@@ -1,17 +1,17 @@
-//! `hyperpanes worker` — headless work-queue drain loop (worker runner MVP, issue #10).
+//! `avada worker` — headless work-queue drain loop (worker runner MVP, issue #10).
 //!
 //! Usage:
 //! ```text
-//! hyperpanes worker --queue <name> [--worker <id>] [--count N] [--worktree --base <committish>] \
+//! avada worker --queue <name> [--worker <id>] [--count N] [--worktree --base <committish>] \
 //!   [--retry-window <secs>] [--nack-delay <ms>] \
 //!   [--stream] [--log-dir <dir>] [--linger <secs>] -- <cmd> [args...]
 //! ```
 //!
-//! Discovers the running app's control API from `control.json` (or `HYPERPANES_CONTROL_FILE`),
+//! Discovers the running app's control API from `control.json` (or `AVADA_CONTROL_FILE`),
 //! then loops: **claim** one task → run `<cmd>` as a child with the task injected via env
 //! (`HP_TASK_ID`, `HP_TASK_PAYLOAD`, `HP_FENCING_TOKEN`, `HP_QUEUE`, `HP_TASK_TITLE`) → **ack**
 //! on child exit 0 / **nack** on non-zero → repeat until a claim comes back empty, then exit 0
-//! (so a hyperpanes pane running the worker auto-closes on drain).
+//! (so a avada pane running the worker auto-closes on drain).
 //!
 //! Flags: `--count N` runs N competing workers in this process (#11); `--worktree` runs each
 //! task in a throwaway git worktree that auto-removes (#14), forked from `--base <committish>`
@@ -44,7 +44,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-/// Parsed `hyperpanes worker` invocation.
+/// Parsed `avada worker` invocation.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WorkerArgs {
     pub queue: String,
@@ -109,7 +109,7 @@ struct ClaimOut {
     tasks: Vec<Task>,
 }
 
-/// True if argv requests worker mode: `hyperpanes worker ...` (subcommand in argv[1]).
+/// True if argv requests worker mode: `avada worker ...` (subcommand in argv[1]).
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn wants_worker(argv: &[String]) -> bool {
     argv.get(1).map(|a| a == "worker").unwrap_or(false)
@@ -268,7 +268,7 @@ pub fn parse_args(argv: &[String]) -> Result<WorkerArgs, String> {
     })
 }
 
-/// pid-suffixed default so two bare `hyperpanes worker` invocations don't share an id.
+/// pid-suffixed default so two bare `avada worker` invocations don't share an id.
 #[tracing::instrument(level = "debug", skip_all)]
 fn default_worker_name() -> String {
     format!("worker-{}", std::process::id())
@@ -279,14 +279,14 @@ fn short(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
 }
 
-/// Read `control.json` (env override `HYPERPANES_CONTROL_FILE`, else the state-dir default).
-/// Panes may inherit `HYPERPANES_CONTROL_FILE` set-but-empty from the app; treat empty as unset.
+/// Read `control.json` (env override `AVADA_CONTROL_FILE`, else the state-dir default).
+/// Panes may inherit `AVADA_CONTROL_FILE` set-but-empty from the app; treat empty as unset.
 #[tracing::instrument(level = "debug", skip_all)]
 fn load_discovery() -> Result<Discovery, Box<dyn Error>> {
-    let path = std::env::var_os("HYPERPANES_CONTROL_FILE")
+    let path = std::env::var_os("AVADA_CONTROL_FILE")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(hyperpanes_core::persistence::paths::control_json);
+        .unwrap_or_else(avada_core::persistence::paths::control_json);
     let raw = std::fs::read_to_string(&path).map_err(|e| {
         format!(
             "cannot read control.json at {} ({e}); is the app running with the control API enabled?",
@@ -302,8 +302,8 @@ pub fn run(argv: &[String]) -> Result<(), Box<dyn Error>> {
     let args = match parse_args(argv) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("hyperpanes worker: {e}");
-            eprintln!("usage: hyperpanes worker --queue <name> [--worker <id>] -- <cmd> [args...]");
+            eprintln!("avada worker: {e}");
+            eprintln!("usage: avada worker --queue <name> [--worker <id>] -- <cmd> [args...]");
             return Err(e.into());
         }
     };
@@ -1046,18 +1046,9 @@ mod tests {
 
     #[test]
     fn detects_worker_mode() {
-        assert!(wants_worker(&argv(&[
-            "hyperpanes",
-            "worker",
-            "--queue",
-            "q"
-        ])));
-        assert!(!wants_worker(&argv(&["hyperpanes"])));
-        assert!(!wants_worker(&argv(&[
-            "hyperpanes",
-            "--session-daemon",
-            "x"
-        ])));
+        assert!(wants_worker(&argv(&["avada", "worker", "--queue", "q"])));
+        assert!(!wants_worker(&argv(&["avada"])));
+        assert!(!wants_worker(&argv(&["avada", "--session-daemon", "x"])));
     }
 
     #[test]

@@ -1,12 +1,12 @@
-# Agent orchestration on hyperpanes — gap analysis & design
+# Agent orchestration on avada — gap analysis & design
 
-How to run an LLM **agent org** on top of hyperpanes: a manager driving worker panes, or a
+How to run an LLM **agent org** on top of avada: a manager driving worker panes, or a
 recursive **CEO → manager → workers** tree. This builds on the control API (M2/M2b — see
 [`cli-multiwindow-mcp-plan.md`](cli-multiwindow-mcp-plan.md)) and the separate MCP project at
-`C:\hyperpanes-mcp`.
+`C:\avada-mcp`.
 
 **Status (2026-06-05): Phases A, B & C ALL BUILT & static-verified** across both repos
-(hyperpanes typecheck + 141 unit tests + `electron-vite build`; MCP typecheck + 64 unit tests +
+(avada typecheck + 141 unit tests + `electron-vite build`; MCP typecheck + 64 unit tests +
 `tsc` build, all green).
 - **Phase A** — pane-id env (A), activity (B), meta (C), `open_pane`→paneId (D).
 - **Phase B** — message bus (E: durable inbox, `/panes/:id/messages`, scope-filtered `message`
@@ -18,10 +18,10 @@ recursive **CEO → manager → workers** tree. This builds on the control API (
   /panes/:id/lock` gating `send_input`).
 
 **Live socket round-trip — SMOKE-VERIFIED 2026-06-05** (first time over a real socket).
-Driven against the packaged build (`Hyperpanes.exe` v0.1.2; control on loopback;
+Driven against the packaged build (`Avada.exe` v0.1.2; control on loopback;
 `control-settings.json = {enabled:true, allowInput:true}`) with the MCP bridge running *inside*
 a pane — so `whoami` self-identification was exercised with **real injected env, not a
-simulation** (it correctly reported its own paneId from `HYPERPANES_PANE_ID`). All three layers
+simulation** (it correctly reported its own paneId from `AVADA_PANE_ID`). All three layers
 (raw HTTP/WS · MCP tools · orchestration) passed, and all five prior-flagged risk predictions
 were confirmed:
 - **D · `open_pane`→paneId (fix #2):** the `/command` round-trip returns the new paneId both raw
@@ -34,8 +34,8 @@ were confirmed:
 - **F · scoping:** a scoped token's `/state` is filtered to its subtree (1 pane vs 8),
   out-of-scope command → 403, escalation mint → 403, narrower sub-mint → ok, and a scoped
   `/events` stream received ZERO sibling frames (no leak).
-- **Scoped-token env suppression:** a child spawned with `HYPERPANES_CONTROL_TOKEN` in env gets
-  `PANE_ID` + `CONTROL_TOKEN` + `CONTROL_PORT` but NOT `HYPERPANES_CONTROL_FILE` — it cannot
+- **Scoped-token env suppression:** a child spawned with `AVADA_CONTROL_TOKEN` in env gets
+  `PANE_ID` + `CONTROL_TOKEN` + `CONTROL_PORT` but NOT `AVADA_CONTROL_FILE` — it cannot
   read the master token. Scoping is meaningful end-to-end.
 - **E · messaging:** durable inbox, monotonic `seq`, cursor reads (`after=`) return only newer.
 - **G · strip / H · lock:** `?strip=1` returns clean text; an advisory lock refuses a non-owner
@@ -79,8 +79,8 @@ message bus beats output scraping.)
 **Design decisions taken during the B/C build** (the plan's open questions, resolved):
 - *Message delivery* → **durable per-pane inbox, at-least-once, monotonic-seq cursor reads +
   live push nudge** (a late/reconnecting node still reads its backlog). Bounded per pane.
-- *Scoped-token security* → a child is handed `HYPERPANES_CONTROL_TOKEN`/`_PORT` via pane env,
-  and that **suppresses the `HYPERPANES_CONTROL_FILE` injection**, so a scoped worker can never
+- *Scoped-token security* → a child is handed `AVADA_CONTROL_TOKEN`/`_PORT` via pane env,
+  and that **suppresses the `AVADA_CONTROL_FILE` injection**, so a scoped worker can never
   read the master token from `control.json`. Scoped tokens are in-memory, optionally TTL'd, and
   may only mint *narrower* sub-tokens (no escalation), validated against the live tree.
 - *Dumb workers* keep the `send_input`/`read_pane` fallback; the message bus + scoping are for
@@ -106,7 +106,7 @@ Consequences that shape every primitive below:
    scope); a parent may mint a *narrower* token for a child. (A) just uses the master token;
    (B) hands each manager a subtree-scoped token. Scoping is opt-in, never required.
 4. **Two node kinds, two comms paths.** An **MCP-capable** node (a real agent CLI with the
-   hyperpanes MCP configured) talks structured messages over the control plane. A **dumb**
+   avada MCP configured) talks structured messages over the control plane. A **dumb**
    process (no MCP) is driven by `send_input` and observed by reading its output. The design
    supports both; structured beats scraping wherever available.
 
@@ -133,7 +133,7 @@ Consequences that shape every primitive below:
 | **Worker "done/waiting" signal** | `activity: busy/idle/exited` field + `activity` event (heuristic) | ✅ (Phase A) |
 | **`open_pane` → new paneId** | `/command` request/response (correlationId) | ✅ (Phase A) |
 | **Structured role/identity** | `meta` map (`role`/`parent`/`agentType`/`task`) + `set_meta` | ✅ (Phase A) |
-| **Pane self-awareness (who am I)** | `HYPERPANES_PANE_ID` + `HYPERPANES_CONTROL_FILE` env | ✅ env (Phase A); `whoami` tool is Phase B |
+| **Pane self-awareness (who am I)** | `AVADA_PANE_ID` + `AVADA_CONTROL_FILE` env | ✅ env (Phase A); `whoami` tool is Phase B |
 | **Inter-node messaging** | durable per-pane inbox + `send_message`/`read_messages` + bus events | ✅ (Phase B) |
 | **Scoping / ownership** | `POST /tokens` scoped tokens, enforced on every route + scoped events | ✅ (Phase B) |
 | **Clean (de-ANSI'd) output** | `GET /panes/:id/output?strip=1` + `read_pane(strip)` | ✅ (Phase C) |
@@ -141,14 +141,14 @@ Consequences that shape every primitive below:
 
 ## The additions
 
-Grouped; each notes which side it touches — **app** = `C:\hyperpanes` control plane,
-**MCP** = `C:\hyperpanes-mcp` tool surface.
+Grouped; each notes which side it touches — **app** = `C:\avada` control plane,
+**MCP** = `C:\avada-mcp` tool surface.
 
 ### A. Pane self-awareness — the recursion enabler *(app)*
 On spawn, inject env into the pane's pty (`src/main/session.ts` builds `env`; `session:spawn`
 in `ipc.ts`):
-- `HYPERPANES_PANE_ID` — the pane's own id.
-- `HYPERPANES_CONTROL_FILE` — path to the discovery file (or, when scoping is on, a
+- `AVADA_PANE_ID` — the pane's own id.
+- `AVADA_CONTROL_FILE` — path to the discovery file (or, when scoping is on, a
   pre-minted **scoped token** so the child can only touch its subtree).
 An MCP-capable agent launched in that pane then auto-knows its identity and how to reach the
 control plane — without which a manager-in-a-pane can't act. A `whoami` MCP tool returns
@@ -216,7 +216,7 @@ the same pane. Low priority; until then document "one writer per pane."
   `send_input`/`read_pane` (or messages, if workers are MCP-capable). Scoping/whoami unused.
 - **(B) recursive org:** launch the tree from workspace JSON (windows=divisions,
   tabs=teams, panes=agents, `meta` = roles/parents). Each manager-pane boots MCP-capable,
-  reads `HYPERPANES_PANE_ID` + its scoped token (`whoami`), spawns sub-workers within scope,
+  reads `AVADA_PANE_ID` + its scoped token (`whoami`), spawns sub-workers within scope,
   and coordinates over the message bus (`send_to_parent` / `broadcast_subtree`). Same
   primitives, more levels.
 - **Mixed:** a manager may drive some MCP-capable sub-managers (messages) and some dumb
@@ -226,7 +226,7 @@ the same pane. Low priority; until then document "one writer per pane."
 
 - **Phase A — cheap, high-impact (unblocks solid single-orchestrator + makes the org
   self-describing):** B (activity), C (meta), D (open_pane→id), and the env half of A
-  (`HYPERPANES_PANE_ID`). All small; the activity detector already exists.
+  (`AVADA_PANE_ID`). All small; the activity detector already exists.
   **BUILT & static-verified 2026-06-05** (both repos green; live socket smoke still pending —
   see the status note at the top).
 - **Phase B — recursion & coordination:** E (message bus), F (scoping + scoped-token env), the
@@ -238,18 +238,18 @@ the same pane. Low priority; until then document "one writer per pane."
 ## Implementation — Phase A (file-level)
 
 The cheap bundle: **pane-id env (A)**, **activity (B)**, **meta (C)**, **open_pane→id (D)**.
-Keep the MCP (`C:\hyperpanes-mcp`) in lockstep — its zod is `.strict()`, so any new
+Keep the MCP (`C:\avada-mcp`) in lockstep — its zod is `.strict()`, so any new
 `PaneSpec`/`ControlPaneInfo` field must be added there too or it rejects valid input. Gate
 each change with `npm run typecheck && npm test && npm run build` on both repos.
 
-### A1 — `HYPERPANES_PANE_ID` env *(small)*
+### A1 — `AVADA_PANE_ID` env *(small)*
 - `src/renderer/components/Terminal.tsx` (~L362): add `paneId` to the `window.hp.spawn({…})`
   call (the `paneId` prop is in scope).
 - `src/preload/index.ts` `SpawnOptions` + `src/renderer/global.d.ts` `HpSpawnOptions`: add
   `paneId?: string`.
 - `src/main/session.ts`: `SpawnOptions` add `paneId?`; in the env block add
-  `if (opts.paneId) env.HYPERPANES_PANE_ID = opts.paneId;` and
-  `env.HYPERPANES_CONTROL_FILE = join(app.getPath('userData'),'control.json')` (path always;
+  `if (opts.paneId) env.AVADA_PANE_ID = opts.paneId;` and
+  `env.AVADA_CONTROL_FILE = join(app.getPath('userData'),'control.json')` (path always;
   may not exist until control is enabled — the agent checks). Scoped token is Phase B.
 
 ### B — activity (busy/idle/exited) *(medium)*

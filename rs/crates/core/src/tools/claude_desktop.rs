@@ -252,6 +252,6 @@ mod tests {
     fn a_store_that_is_not_there_is_just_an_empty_answer() {
         // Every platform without a confirmed store path, and every machine with no Claude
         // Desktop install, lands here — it must be quiet, not an error.
-        assert!(scan_in(Path::new("/nonexistent/hyperpanes/desktop/store")).is_empty());
+        assert!(scan_in(Path::new("/nonexistent/avada/desktop/store")).is_empty());
     }
 }

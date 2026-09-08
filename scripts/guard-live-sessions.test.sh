@@ -30,46 +30,46 @@ check() { # check <expect: deny|allow> <command>
 }
 
 # --- the bundle swap that killed a live daemon --------------------------------
-check deny "rm -rf /Applications/Hyperpanes.app"
-check deny "sudo rm -rf /Applications/Hyperpanes.app"
-check deny "rm -rf /Applications/Hyperpanes.app && ditto rs/packaging/out/macos-stage/Hyperpanes.app /Applications/Hyperpanes.app"
-check deny "ditto rs/packaging/out/macos-stage/Hyperpanes.app /Applications/Hyperpanes.app"
-check deny "cp -R build/Hyperpanes.app /Applications/"
-check deny "rsync -a stage/Hyperpanes.app/ /Applications/Hyperpanes.app/"
-check deny "mv /Applications/Hyperpanes.app /tmp/old.app"
-check deny "cargo build --release && rm -rf /Applications/Hyperpanes.app"
-check deny "find /Applications -name 'Hyperpanes.app' -exec rm -rf {} +"
+check deny "rm -rf /Applications/Avada.app"
+check deny "sudo rm -rf /Applications/Avada.app"
+check deny "rm -rf /Applications/Avada.app && ditto rs/packaging/out/macos-stage/Avada.app /Applications/Avada.app"
+check deny "ditto rs/packaging/out/macos-stage/Avada.app /Applications/Avada.app"
+check deny "cp -R build/Avada.app /Applications/"
+check deny "rsync -a stage/Avada.app/ /Applications/Avada.app/"
+check deny "mv /Applications/Avada.app /tmp/old.app"
+check deny "cargo build --release && rm -rf /Applications/Avada.app"
+check deny "find /Applications -name 'Avada.app' -exec rm -rf {} +"
 check deny "ls /Applications/*.app | xargs rm -rf"
-check deny "chflags -R nouchg /Applications/Hyperpanes.app"
+check deny "chflags -R nouchg /Applications/Avada.app"
 
 # --- ending the daemon, which ends every pane ---------------------------------
 check deny "pkill -f -- '--session-daemon'"
-check deny "killall hyperpanes"
-check deny "kill 31166 # hyperpanes daemon"
+check deny "killall avada"
+check deny "kill 31166 # avada daemon"
 
 # --- taking the keyboard away from the person using it ------------------------
-check deny "osascript -e 'tell application \"Hyperpanes\" to activate'"
+check deny "osascript -e 'tell application \"Avada\" to activate'"
 check deny "osascript -e 'tell application \"System Events\" to keystroke \"c\" using control down'"
-check deny "open -a Hyperpanes"
-check deny "hyperpanes ctl focus-pane 9c87051f-8951-47bd-a6bd-15c1e1028fe1"
+check deny "open -a Avada"
+check deny "avada ctl focus-pane 9c87051f-8951-47bd-a6bd-15c1e1028fe1"
 
 # --- a heredoc body is data, unless a shell is eating it ----------------------
-check allow "$(printf 'cat > docs/x.md <<%s\nrm -rf /Applications/Hyperpanes.app\nMD\n' "'MD'")"
-check deny  "$(printf 'bash <<%s\nrm -rf /Applications/Hyperpanes.app\nSH\n' "'SH'")"
+check allow "$(printf 'cat > docs/x.md <<%s\nrm -rf /Applications/Avada.app\nMD\n' "'MD'")"
+check deny  "$(printf 'bash <<%s\nrm -rf /Applications/Avada.app\nSH\n' "'SH'")"
 
 # --- the sanctioned path is not blocked ---------------------------------------
 check allow "bash scripts/install-macos.sh"
-check allow "scripts/install-macos.sh rs/packaging/out/macos-stage/Hyperpanes.app"
+check allow "scripts/install-macos.sh rs/packaging/out/macos-stage/Avada.app"
 
 # --- ordinary work must stay unobstructed -------------------------------------
 check allow "ls -l /Applications"
-check allow "codesign --verify --strict /Applications/Hyperpanes.app"
+check allow "codesign --verify --strict /Applications/Avada.app"
 check allow "rm -rf rs/packaging/out/macos-stage"
-check allow "cargo test -p hyperpanes-core --lib"
+check allow "cargo test -p avada-core --lib"
 check allow "git commit -m 'fix: something'"
-check allow "pgrep -fl hyperpanes"
-check allow "hyperpanes ctl read 3 --tail 40"
-check allow "hyperpanes ctl new-pane --window 1"
+check allow "pgrep -fl avada"
+check allow "avada ctl read 3 --tail 40"
+check allow "avada ctl new-pane --window 1"
 check allow "kill -0 4242"
 check allow "osascript -e 'display notification \"build done\"'"
 check allow "bash rs/packaging/macos/bundle.sh 0.0.28"

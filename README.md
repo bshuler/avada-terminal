@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Hyperpanes" width="128" height="128" />
+  <img src="docs/logo.png" alt="Avada" width="128" height="128" />
 </p>
 
-<h1 align="center">Hyperpanes</h1>
+<h1 align="center">Avada</h1>
 
 > **An agent‑first tiling terminal workspace — name, color‑frame, and tear off panes into windows, then watch and drive your AI agents from one frameless app.**
 
 <!-- Add a screenshot or GIF: drop the file at docs/screenshot.png and replace the block below with
-     ![Hyperpanes](docs/screenshot.png) — a tiled, multi-pane layout shows the app off best. -->
+     ![Avada](docs/screenshot.png) — a tiled, multi-pane layout shows the app off best. -->
 <p align="center"><em>📸 Screenshot coming soon — see <code>docs/screenshot.png</code>.</em></p>
 
 A desktop **terminal workspace**: tabbed windows that tile multiple live terminal panes, where each
@@ -28,7 +28,7 @@ MCP** lets an agent — or a whole recursive agent org — watch and drive your 
 [Agents & the Control API](#agents--the-control-api-mcp)).
 
 > [!NOTE]
-> **Status: early days (native v0.0.9).** Hyperpanes was rebuilt from scratch as a **native Rust
+> **Status: early days (native v0.0.9).** Avada was rebuilt from scratch as a **native Rust
 > app** (Slint · `alacritty_terminal` · `portable-pty`) — one self‑contained binary for **Windows,
 > Linux, and macOS**, replacing the original Electron build. Every feature below is implemented;
 > expect rough edges on the newer cross‑platform ports, and please file issues. Prebuilt downloads
@@ -149,9 +149,9 @@ MCP** lets an agent — or a whole recursive agent org — watch and drive your 
 
 Grab a prebuilt binary from the [**Releases page**](https://github.com/Eyalm321/hyperpanes/releases):
 
-- **Linux** — `hyperpanes-<ver>-x86_64.AppImage` (`chmod +x` and run), or the `.deb` / `.rpm`.
-- **macOS** — `hyperpanes-<ver>.dmg`.
-- **Windows** — `hyperpanes-<ver>-setup.exe`.
+- **Linux** — `avada-<ver>-x86_64.AppImage` (`chmod +x` and run), or the `.deb` / `.rpm`.
+- **macOS** — `avada-<ver>.dmg`.
+- **Windows** — `avada-<ver>-setup.exe`.
 
 Builds are currently unsigned, so your OS may warn on first launch.
 
@@ -161,7 +161,7 @@ The app is a Rust crate under `rs/crates/app` (its own standalone workspace — 
 
 ```bash
 cargo build --release --manifest-path rs/crates/app/Cargo.toml
-# → rs/crates/app/target/release/hyperpanes
+# → rs/crates/app/target/release/avada
 ```
 
 You need a Rust toolchain plus the usual Slint/winit native build deps (fontconfig, freetype,
@@ -192,7 +192,7 @@ cargo test --manifest-path rs/crates/app/Cargo.toml
 
 ### Benchmarks
 
-A separate **detect‑only** Node harness (`bench/`) compares Hyperpanes against other installed
+A separate **detect‑only** Node harness (`bench/`) compares Avada against other installed
 terminals (throughput, startup, memory) — it never installs, updates, or changes anything on your
 system.
 
@@ -253,7 +253,7 @@ maximized); bad values fall back safely.
 Launch one directly:
 
 ```bash
-hyperpanes ./workspaces/example.json
+avada ./workspaces/example.json
 ```
 
 Or use **Open** / **Save** in the top‑bar menu (or the palette). The most recent session is remembered
@@ -267,7 +267,7 @@ Skip the JSON file entirely and describe the panes inline. Each `-c` (or `--comm
 with its own tabs:
 
 ```bash
-hyperpanes --window --name app --layout main-stack \
+avada --window --name app --layout main-stack \
              -c "npm run dev" --label server --color "#e5484d" --cwd ./app --shell pwsh \
              -c "tail -f logs/app.log" --label logs --font 12 \
            --tab --name tests --layout columns \
@@ -289,7 +289,7 @@ hyperpanes --window --name app --layout main-stack \
 | `--layout <id>` | Current (or next) tab's layout: `auto` · `single` · `columns` · `rows` · `grid` · `main-stack`. |
 | `--name <name>` | Titles the current scope: window (after `--window`), tab (after `--tab`), else the workspace. |
 
-**New window vs. attach.** While the app is already running, a second `hyperpanes …` invocation
+**New window vs. attach.** While the app is already running, a second `avada …` invocation
 **attaches into the focused window** by default (its content shows up as new tab(s) there) rather than
 spawning a separate window. Use a `--window` separator or `--new-window` when you actually want a new
 window. Routing flags:
@@ -308,9 +308,9 @@ windows as new ones. `--attach` overrides that. A positional `.json` launch alwa
 > Without any `--window`/`--tab` it stays the simple single-tab launch. Inline `-c` flags take
 > precedence over a positional `.json` path. From a source build, run
 > `cargo run --manifest-path rs/crates/app/Cargo.toml -- -c "…"` (args after the `--`). On a packaged
-> install, call the `hyperpanes` executable (its
-> install folder is added to `PATH`). hyperpanes runs as a **single instance**: a second
-> `hyperpanes …` while it's open routes its content into the running app (attaching by default; see
+> install, call the `avada` executable (its
+> install folder is added to `PATH`). avada runs as a **single instance**: a second
+> `avada …` while it's open routes its content into the running app (attaching by default; see
 > above).
 
 ## Keyboard shortcuts
@@ -349,11 +349,11 @@ means Ctrl on Windows/Linux and Cmd on macOS.
 ## Agents & the Control API (MCP)
 
 > [!WARNING]
-> **Experimental, and off by default.** Turn it on only when you want to drive Hyperpanes from an
+> **Experimental, and off by default.** Turn it on only when you want to drive Avada from an
 > agent. It's been exercised end‑to‑end — including recursive manager→worker agent orgs over the
 > companion MCP server — but the surface is still evolving.
 
-Hyperpanes can expose a **local control API** so an external agent — or a companion **MCP server**
+Avada can expose a **local control API** so an external agent — or a companion **MCP server**
 (a separate project) — can observe and drive your panes. It's a loopback HTTP + WebSocket server
 with a deliberately tight security posture:
 
@@ -383,7 +383,7 @@ Three Rust crates under `rs/crates/`:
   shells (ConPTY on Windows, native Unix PTYs on Linux/macOS); output is decoded by an
   `alacritty_terminal` VTE and broadcast **by pane uid**, so a pty
   isn't tied to the window that spawned it — that's what lets a tab move between windows. `workspace/`
-  is the `.hyperpanes` / `.json` model + file I/O, `cli/` parses launch args + routing,
+  is the `.avada` / `.json` model + file I/O, `cli/` parses launch args + routing,
   `shell_integration` injects the cwd/prompt hooks, `single_instance` is the launch lock + hand‑off,
   and `control/` is the opt‑in loopback agent/MCP server.
 - **`terminal-widget`** — the Slint terminal pane. An `alacritty_terminal` grid → a `swash` glyph

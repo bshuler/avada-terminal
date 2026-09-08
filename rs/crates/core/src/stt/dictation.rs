@@ -695,7 +695,7 @@ mod tests {
         let s = SttSettings {
             // A template naming a program that does not exist still resolves to a
             // Custom recorder — the failure surfaces at spawn, with the reason.
-            record_template: Some(vec!["hyperpanes-no-such-recorder".into()]),
+            record_template: Some(vec!["avada-no-such-recorder".into()]),
             ..Default::default()
         };
         let err = d.start("p1", &s).unwrap_err();

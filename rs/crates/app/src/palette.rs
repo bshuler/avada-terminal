@@ -185,8 +185,8 @@ pub fn build(state: &State) -> Vec<Entry> {
     ));
     cmds.push(Entry::new(
         "Save to this repo",
-        "Write this tab into the checkout as .hyperpanes/project.json",
-        "project repo checkout hyperpanes save layout windows",
+        "Write this tab into the checkout as .avada/project.json",
+        "project repo checkout avada save layout windows",
         Command::SaveProject,
     ));
     cmds.push(Entry::new(

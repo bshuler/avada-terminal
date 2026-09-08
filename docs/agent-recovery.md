@@ -1,6 +1,6 @@
 # Agent-Pane API-Error Recovery
 
-Headless goal agents (spec agents, impl agents) run unattended for hours inside hyperpanes
+Headless goal agents (spec agents, impl agents) run unattended for hours inside avada
 panes. Two failure modes don't show up as a crash: the pane's Claude process hits an
 `API Error:` and either auto-retries (fine, still alive) or goes idle forever; or a stray
 tool-result record left over from a killed turn **poisons** the transcript so `--resume`
@@ -185,14 +185,14 @@ inlined `curl` line.
 
 ## Named failure mode: control-plane hijack by a dev/test instance
 
-`app.rs:44-46`: `HYPERPANES_CONTROL_FILE` takes **precedence** over the XDG-derived
+`app.rs:44-46`: `AVADA_CONTROL_FILE` takes **precedence** over the XDG-derived
 control-file path. Every agent pane inherits that variable pointing at the LIVE
-`~/.local/state/hyperpanes/control.json` — so a dev build booted from a pane with only
+`~/.local/state/avada/control.json` — so a dev build booted from a pane with only
 `XDG_STATE_HOME` overridden still writes its port+token over the live file, silently
 repointing every agent (and the orchestrator's MCP bridge) at a dead instance. This
 happened three times in one session while building this very feature. Two rules follow:
 
-- Any dev/test boot of a hyperpanes binary must override `HYPERPANES_CONTROL_FILE`
+- Any dev/test boot of a avada binary must override `AVADA_CONTROL_FILE`
   **on the command line itself** (not in prose, not via XDG alone) and assert afterwards
   that the live control.json is byte-identical to a pre-run snapshot —
   `scripts/g3-recovery-demo.sh` is the reference implementation.
