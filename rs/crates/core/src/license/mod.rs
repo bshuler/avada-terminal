@@ -19,6 +19,7 @@
 //! or a route answer, and reaches the wire in exactly two places: the `token` form field
 //! and the `Authorization` header of an introspection call.
 
+pub mod gate;
 pub mod introspect;
 pub mod store;
 pub mod stub_issuer;
@@ -26,6 +27,7 @@ pub mod stub_issuer;
 mod tests;
 pub mod verify;
 
+pub use gate::CachedGate;
 pub use introspect::{Discovery, IntrospectionClient};
 pub use store::{FileLicenseStore, LicenseStore, MemoryLicenseStore, StoreError, StoredLicense};
 pub use verify::{Jwk, Jwks, Verifier, VerifyError};

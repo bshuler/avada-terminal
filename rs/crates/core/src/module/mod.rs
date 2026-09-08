@@ -62,6 +62,9 @@
 //!   implementation. `Decision::Ask` is treated as a denial by the host.
 //! * **App (placeholder pane):** [`Host::status`] → `ModuleStatus`, which
 //!   `app::module_ui::placeholder` renders.
+//! * **Licensing (G8):** [`Licensing`] is asked before a module whose manifest says
+//!   `distribution.commercial` starts; a host with no gate installed runs everything.
+//!   `crate::license::CachedGate` is the implementation core provides.
 //! * **Transport:** Unix `socketpair` today; Windows named pipes land in track H7
 //!   (`transport::pair` returns an `Unsupported` error there until then).
 
@@ -75,7 +78,7 @@ pub mod token;
 pub mod transport;
 
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
-pub use host::{Host, HostConfig, HostError, HostEvent};
+pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
 pub use rail::{RailEntry, RailEvent, RailState, Row};
 pub use rpc::CommandSpec;
 pub use spawn::{HandshakeError, SpawnError};
@@ -135,6 +138,15 @@ pub(crate) mod testkit {
         }
     }
 
+    /// Make `manifest` describe a module that is sold. Both sides of the licence tests
+    /// go through here, because the host compares the record's manifest with the one the
+    /// module sends at handshake and a difference is a `ManifestMismatch`.
+    /// `Manifest::validate` only accepts `commercial` alongside an issuer.
+    pub(crate) fn sell(manifest: &mut Manifest) {
+        manifest.distribution.commercial = true;
+        manifest.distribution.issuer = Some("https://issuer.test".into());
+    }
+
     pub(crate) fn module_hello(manifest: &Manifest) -> ModuleHello {
         ModuleHello {
             kind: HelloKind::Module,
@@ -147,7 +159,7 @@ pub(crate) mod testkit {
     }
 
     /// Env var that turns this test binary into a module. Values: `normal`, `crash`,
-    /// `bad-manifest`, `no-cap`, `hang`, `silent`.
+    /// `bad-manifest`, `commercial`, `no-cap`, `hang`, `silent`.
     #[cfg(unix)]
     pub(crate) const MODE_ENV: &str = "AVADA_H1_FAKE_MODULE";
 
@@ -200,6 +212,9 @@ pub(crate) mod testkit {
         let mut manifest = manifest();
         if mode == "bad-manifest" {
             manifest.module.name = "Not Files".into();
+        }
+        if mode == "commercial" {
+            sell(&mut manifest);
         }
         let hello = conn
             .handshake(
@@ -638,5 +653,142 @@ mod host_tests {
         let gone = std::iter::from_fn(|| rail.recv_timeout(WAIT).ok())
             .any(|e| matches!(e, RailEvent::Gone { module } if module == id));
         assert!(gone);
+    }
+    /// A licence gate that always answers the same thing and remembers what it was
+    /// asked, so a test can prove a free module is never a licence question.
+    struct Fixed {
+        answer: crate::license::Gate,
+        asked: std::sync::Mutex<Vec<(ModuleId, u64)>>,
+    }
+
+    impl Fixed {
+        fn new(answer: crate::license::Gate) -> Arc<Fixed> {
+            Arc::new(Fixed {
+                answer,
+                asked: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn asked(&self) -> Vec<(ModuleId, u64)> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl Licensing for Fixed {
+        fn gate(&self, product: &ModuleId, major: u64) -> crate::license::Gate {
+            self.asked.lock().unwrap().push((product.clone(), major));
+            self.answer.clone()
+        }
+    }
+
+    /// Sell the fixture module. `Manifest::validate` only accepts `commercial` with an
+    /// issuer, so a record that skipped the issuer would not describe a real install.
+    fn commercial(r: &mut Rig) {
+        testkit::sell(&mut r.record.manifest);
+    }
+
+    #[test]
+    fn a_free_module_is_never_a_licence_question() {
+        let r = rig(&all_ui(), |_| {});
+        let gate = Fixed::new(crate::license::Gate::Refuse("refuses everything".into()));
+        r.host.set_licensing(gate.clone());
+        spawn(&r, "normal").unwrap();
+        let id = r.record.module_id.clone();
+        assert_eq!(r.host.status(&id), ModuleStatus::Running);
+        assert!(
+            gate.asked().is_empty(),
+            "a manifest without `commercial` must not reach the gate"
+        );
+        r.host.shutdown(&id).unwrap();
+    }
+
+    #[test]
+    fn a_commercial_module_runs_when_the_host_has_no_licence_gate() {
+        // The free edition ships no LicenseService, and already refuses a binary
+        // distribution at install time; failing open here protects nothing.
+        let mut r = rig(&all_ui(), |_| {});
+        commercial(&mut r);
+        assert!(r.host.licensing().is_none());
+        spawn(&r, "commercial").unwrap();
+        let id = r.record.module_id.clone();
+        assert_eq!(r.host.status(&id), ModuleStatus::Running);
+        r.host.shutdown(&id).unwrap();
+    }
+
+    #[test]
+    fn a_refused_licence_stops_the_spawn_and_leaves_the_module_broken() {
+        let mut r = rig(&all_ui(), |_| {});
+        commercial(&mut r);
+        let gate = Fixed::new(crate::license::Gate::Refuse(
+            "license for acme/avada-files expired 3 days ago".into(),
+        ));
+        r.host.set_licensing(gate.clone());
+        let id = r.record.module_id.clone();
+        match spawn(&r, "commercial") {
+            Err(HostError::Unlicensed(reason)) => assert!(reason.contains("expired"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+        match r.host.status(&id) {
+            ModuleStatus::Broken { reason } => assert!(reason.contains("expired"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+        // Asked once, about this module at the major it is installed at.
+        assert_eq!(gate.asked(), vec![(id, r.record.version.major)]);
+        // Nothing ran: no live status was announced and the rail stayed empty.
+        while let Ok(ev) = r.events.try_recv() {
+            if let HostEvent::Status { status, .. } = ev {
+                assert!(!status.is_live(), "{status:?}");
+            }
+        }
+        assert!(r.rail.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_licence_inside_its_grace_window_runs_and_says_so_on_a_toast() {
+        let mut r = rig(&all_ui(), |_| {});
+        commercial(&mut r);
+        r.host
+            .set_licensing(Fixed::new(crate::license::Gate::RunWithBanner(
+                "license expires in 3 days".into(),
+            )));
+        let id = r.record.module_id.clone();
+        spawn(&r, "commercial").unwrap();
+        assert_eq!(r.host.status(&id), ModuleStatus::Running);
+        // The banner is the first thing the app hears, ahead of Starting: the user
+        // learns a licence is running out before the module is even up.
+        match r.events.recv_timeout(WAIT).unwrap() {
+            HostEvent::Toast {
+                module,
+                text,
+                level,
+            } => {
+                assert_eq!(module, id);
+                assert_eq!(text, "license expires in 3 days");
+                assert_eq!(level, "warn");
+            }
+            other => panic!("{other:?}"),
+        }
+        r.host.shutdown(&id).unwrap();
+    }
+
+    #[test]
+    fn set_licensing_reaches_a_module_that_was_installed_before_it() {
+        let mut r = rig(&all_ui(), |_| {});
+        commercial(&mut r);
+        let id = r.record.module_id.clone();
+        spawn(&r, "commercial").unwrap();
+        assert_eq!(r.host.status(&id), ModuleStatus::Running);
+        r.host.shutdown(&id).unwrap();
+
+        // The gate arrives after the slot did. Because the slot shares the host's cell
+        // rather than a copy of it, the next start consults the new gate.
+        r.host
+            .set_licensing(Fixed::new(crate::license::Gate::Refuse(
+                "no seat left".into(),
+            )));
+        match r.host.reopen(&id) {
+            Err(HostError::Unlicensed(reason)) => assert_eq!(reason, "no seat left"),
+            other => panic!("{other:?}"),
+        }
     }
 }

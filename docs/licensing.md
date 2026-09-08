@@ -184,12 +184,51 @@ axum stack: the 401/403/503 ladder for each, install-from-file through to a
 closed gate after a revoke, the body rules for `path`/`url`, and the device flow
 through the routes.
 
+## The host gate
+
+The module host may not await. `LicenseService::gate_for_major` is `async`
+because verifying a token can need the issuer's JWKS over the network, while
+`module::host::Slot::start` is synchronous and runs on whichever thread asked for
+the module. A spawn that awaited an issuer would stall that thread whenever the
+network was slow, and would refuse on a laptop that is merely offline --- the
+exact case offline verification exists to serve.
+
+So the seam between them is synchronous and non-blocking:
+
+```rust
+pub trait Licensing: Send + Sync {
+    fn gate(&self, product: &ModuleId, major: u64) -> Gate;
+}
+```
+
+`license::CachedGate` implements it over a `LicenseService`, answering from
+decisions the service already made. It is keyed by `(product, major)` --- a
+licence covers majors up to a bound, so the same product can be licensed at one
+major and not the next --- and is refreshed from async code: at startup
+(`refresh_all`, one entry per installed commercial module), after an install or
+removal (`refresh`, `forget`), and on whatever check-in schedule the app keeps. A
+`(product, major)` nobody has refreshed refuses with a message that names the
+cache, not the licence, so an unwired host does not read as an expired token.
+
+`Host::set_licensing` installs the gate; the host and every slot share one cell,
+so a gate installed after a module was registered still governs its next start.
+What the host does with each answer:
+
+| Answer | Host |
+|---|---|
+| no `Licensing` installed | spawns --- the free edition has no licence service, and already refuses a `kind = "binary"` distribution at install time |
+| manifest not `commercial` | never asks |
+| `Run` | spawns |
+| `RunWithBanner(why)` | emits a `warn` `HostEvent::Toast` carrying `why`, **then** spawns, so the user hears about an expiring licence before the module is up |
+| `Refuse(why)` | does not spawn: `ModuleStatus::Broken { reason: why }` and `HostError::Unlicensed(why)` |
+
 ## Follow-ups (outside G8)
 
-* **Host wiring.** `module/host.rs` must call `gate_for_major(product, major)`
-  before spawning a module whose manifest is `distribution.commercial`, refuse on
-  `Gate::Refuse`, and surface `RunWithBanner`'s reason. `module/` is not this
-  track's to edit.
+* **App wiring.** Two calls the app does not yet make. Nothing calls
+  `Shared::install_license`, so every `/license/...` route answers 503 in a
+  running build; and nothing builds a `CachedGate`, so a build that *did* ship
+  commercial modules would refuse them all. Both belong with the module host the
+  app still does not construct.
 * **App UI.** Showing the banner, the licence list and the device-flow dialog is
   a later track.
 * **`checkin_all` on a schedule.** Nothing calls it yet; the app should, once per

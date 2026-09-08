@@ -14,6 +14,7 @@ use super::spawn::{self, HandshakeError, SpawnError};
 use super::supervisor::{ModuleStatus, RestartPolicy, Supervisor, Verdict};
 use super::token::Token;
 use super::transport::{Closer, LineReader, LineWriter};
+use crate::license::Gate;
 use avada_module_sdk::contract::methods;
 use avada_module_sdk::contract::{
     HelloKind, HostHello, Message, Notification, Request, Response, RpcError, WorkspaceInfo,
@@ -147,6 +148,8 @@ pub enum HostError {
     Timeout,
     /// The pipe went away mid-call.
     Closed,
+    /// A commercial module has no licence this host will accept; it is now `Broken`.
+    Unlicensed(String),
     /// Persisting or reading module data failed.
     Io(io::Error),
 }
@@ -163,6 +166,7 @@ impl std::fmt::Display for HostError {
             HostError::Rpc(e) => write!(f, "module error: {e}"),
             HostError::Timeout => f.write_str("module did not answer in time"),
             HostError::Closed => f.write_str("module connection closed"),
+            HostError::Unlicensed(reason) => write!(f, "not licensed: {reason}"),
             HostError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -194,6 +198,25 @@ struct SlotState {
     expected_exit: bool,
 }
 
+/// Consulted before a module whose manifest says `distribution.commercial = true` is
+/// spawned. `crate::license::LicenseService` decides what a licence means; this is only
+/// the seam through which the host asks.
+///
+/// Deliberately **synchronous and non-blocking**. `Slot::start` runs on whichever thread
+/// asked for the module, and `LicenseService::gate_for_major` is async because it may
+/// fetch an issuer's JWKS over the network --- a spawn that waited on that would stall
+/// the caller every time the network is slow, and would fail closed on a laptop that is
+/// merely offline. An implementation answers from what it already knows and refreshes
+/// somewhere else; [`crate::license::CachedGate`] is the one core provides.
+pub trait Licensing: Send + Sync {
+    /// May `product` run at major version `major`?
+    fn gate(&self, product: &ModuleId, major: u64) -> Gate;
+}
+
+/// Shared by the host and every slot so [`Host::set_licensing`] reaches modules that
+/// were already installed when it is called.
+type LicensingCell = Arc<Mutex<Option<Arc<dyn Licensing>>>>;
+
 /// One installed module, whether or not it is running.
 struct Slot {
     id: ModuleId,
@@ -207,12 +230,14 @@ struct Slot {
     state: Mutex<SlotState>,
     extra_env: Vec<(String, String)>,
     extra_args: Vec<String>,
+    licensing: LicensingCell,
 }
 
 struct Inner {
     config: Arc<HostConfig>,
     shared: Arc<Shared>,
     slots: Mutex<HashMap<ModuleId, Arc<Slot>>>,
+    licensing: LicensingCell,
 }
 
 /// The module host. Cheap to clone; all clones share one set of modules. Dropping the
@@ -238,6 +263,7 @@ impl Host {
                     events: Default::default(),
                 }),
                 slots: Mutex::new(HashMap::new()),
+                licensing: Arc::new(Mutex::new(None)),
             }),
         }
     }
@@ -245,6 +271,23 @@ impl Host {
     /// The configuration this host was built with.
     pub fn config(&self) -> &HostConfig {
         &self.inner.config
+    }
+
+    /// Install the licence gate consulted before a commercial module spawns.
+    ///
+    /// Until this is called the host runs every module it is given: the free edition
+    /// has no licence service at all, and it already refuses a `kind = "binary"`
+    /// distribution at install time, so failing open here costs nothing it was
+    /// protecting. A build that ships commercial modules calls this at startup.
+    /// Modules already installed see the change --- the gate is consulted at each
+    /// spawn, not captured when the slot is made.
+    pub fn set_licensing(&self, licensing: Arc<dyn Licensing>) {
+        *lock(&self.inner.licensing) = Some(licensing);
+    }
+
+    /// The installed licence gate, if any.
+    pub fn licensing(&self) -> Option<Arc<dyn Licensing>> {
+        lock(&self.inner.licensing).clone()
     }
 
     /// A receiver that sees every [`RailEvent`] from now on (`std::sync::mpsc`; each call
@@ -309,6 +352,7 @@ impl Host {
                 }),
                 extra_env: extra_env.to_vec(),
                 extra_args: extra_args.to_vec(),
+                licensing: self.inner.licensing.clone(),
             });
             slots.insert(record.module_id.clone(), slot.clone());
             slot
@@ -577,6 +621,28 @@ impl Slot {
         }
     }
 
+    /// `Some(reason)` when a commercial module may not run.
+    ///
+    /// A module whose manifest does not say `commercial` is never asked about, and a
+    /// host with no [`Licensing`] installed runs everything (see
+    /// [`Host::set_licensing`]). A licence inside its grace window runs and says why on
+    /// a toast, so the first the user hears of an expiring licence is not the module
+    /// vanishing.
+    fn license_refusal(&self) -> Option<String> {
+        if !self.record.manifest.distribution.commercial {
+            return None;
+        }
+        let licensing = lock(&self.licensing).clone()?;
+        match licensing.gate(&self.id, self.record.version.major) {
+            Gate::Run => None,
+            Gate::RunWithBanner(reason) => {
+                self.toast(reason, "warn");
+                None
+            }
+            Gate::Refuse(reason) => Some(reason),
+        }
+    }
+
     /// Hash → spawn → handshake → threads. Sets the status at every exit.
     fn start(self: &Arc<Self>) -> Result<(), HostError> {
         if let Err(e) = spawn::verify_hash(&self.binary, &self.record) {
@@ -596,6 +662,13 @@ impl Slot {
             };
             tracing::warn!(module = %self.id, "refusing to spawn: {err}");
             return Err(err);
+        }
+        if let Some(reason) = self.license_refusal() {
+            self.set_status(ModuleStatus::Broken {
+                reason: reason.clone(),
+            });
+            tracing::warn!(module = %self.id, "refusing to spawn: not licensed: {reason}");
+            return Err(HostError::Unlicensed(reason));
         }
         let generation = {
             let mut st = lock(&self.state);
