@@ -178,6 +178,7 @@ fn host_hello(granted: Vec<Capability>) -> String {
         data_dir: "/tmp/avada/modules/acme__avada-files".into(),
         workspace: None,
         token: None,
+        control_url: None,
     })
     .unwrap()
 }

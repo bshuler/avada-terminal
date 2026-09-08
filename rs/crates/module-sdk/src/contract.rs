@@ -70,6 +70,10 @@ pub struct HostHello {
     /// spawn, never persisted, never logged. Absent from a host older than this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// Base URL of the control server (`http://127.0.0.1:<port>`), so a module can call
+    /// HTTP routes with its `token`. Absent when the host has no control server running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_url: Option<String>,
 }
 
 /// Discriminator on the hello lines.
@@ -575,6 +579,7 @@ mod tests {
             data_dir: "/tmp/x".into(),
             workspace: None,
             token: None,
+            control_url: None,
         };
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["type"], "host.hello");

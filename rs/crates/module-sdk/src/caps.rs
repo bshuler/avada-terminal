@@ -93,6 +93,10 @@ pub enum Capability {
     /// Receive the host event stream.
     #[serde(rename = "events.subscribe")]
     EventsSubscribe,
+    /// Search, install, enable, disable and remove modules through the host's marketplace
+    /// routes. Installing runs a build on this machine, so this is an escape hatch.
+    #[serde(rename = "marketplace.manage")]
+    MarketplaceManage,
 }
 
 impl Capability {
@@ -124,6 +128,7 @@ impl Capability {
         Capability::SkillsMaterialize,
         Capability::ControlRoute,
         Capability::EventsSubscribe,
+        Capability::MarketplaceManage,
     ];
 
     /// The wire / manifest spelling, e.g. `fs.read`.
@@ -154,6 +159,7 @@ impl Capability {
             Capability::SkillsMaterialize => "skills.materialize",
             Capability::ControlRoute => "control.route",
             Capability::EventsSubscribe => "events.subscribe",
+            Capability::MarketplaceManage => "marketplace.manage",
         }
     }
 
@@ -190,6 +196,7 @@ impl Capability {
             Capability::SkillsMaterialize => "Install AI skills into your projects",
             Capability::ControlRoute => "Add commands to the control API and CLI",
             Capability::EventsSubscribe => "Watch for events in the app",
+            Capability::MarketplaceManage => "Install, enable and remove other modules",
         }
     }
 
@@ -198,7 +205,10 @@ impl Capability {
     pub fn is_escape_hatch(self) -> bool {
         matches!(
             self,
-            Capability::ProcessSpawn | Capability::FsWriteAny | Capability::FsReadAny
+            Capability::ProcessSpawn
+                | Capability::FsWriteAny
+                | Capability::FsReadAny
+                | Capability::MarketplaceManage
         )
     }
 }

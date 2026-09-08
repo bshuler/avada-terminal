@@ -328,6 +328,7 @@ mod tests {
             data_dir: "/tmp/d".into(),
             workspace: None,
             token: None,
+            control_url: None,
         })
         .unwrap()
     }

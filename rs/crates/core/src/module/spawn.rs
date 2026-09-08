@@ -233,6 +233,7 @@ mod tests {
             data_dir: "/nowhere".into(),
             workspace: None,
             token: None,
+            control_url: None,
         }
     }
 

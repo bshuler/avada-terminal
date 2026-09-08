@@ -106,6 +106,7 @@ or picks a profile.
 | `SkillsMaterialize` | `skills.materialize` | write skill files into projects (§8) |
 | `ControlRoute` | `control.route` | mount routes on the control server (§7) |
 | `EventsSubscribe` | `events.subscribe` | receive host events |
+| `MarketplaceManage` | `marketplace.manage` | search, install, enable, disable and remove modules through the host's marketplace routes (§7); an escape hatch, since installing builds and runs code |
 
 `contract::methods::required_capability(method)` maps every `host.*` method to
 the capability it needs, or `None` for the always-allowed ones. The host checks
@@ -232,6 +233,11 @@ not JSON, `503 {"error":"module unavailable"}` when the module is not installed
 or not running, `400 {"error":"module","code","message","data"}` when the module
 answered with a JSON-RPC error, and `502 {"error":"module failed"}` when the
 host could not complete the exchange (timeout, closed pipe).
+
+Calling routes over HTTP: the hello carries `control_url`
+(`http://127.0.0.1:<port>`, absent when the host runs without a control server)
+next to `token`; a module calls any control route it is granted with
+`Authorization: Bearer <token>` against that base, exactly as the CLI does.
 
 Registering: `host.routes.register` (gated on `control.route`) carries the
 module's whole route set; sending it again replaces the set, and an empty set

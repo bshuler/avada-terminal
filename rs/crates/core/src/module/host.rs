@@ -45,6 +45,9 @@ pub struct HostConfig {
     pub product: String,
     /// The workspace the modules are activated in, if any.
     pub workspace: Option<WorkspaceInfo>,
+    /// Base URL of the control server, handed to modules in the hello so they can call
+    /// HTTP routes with their token. `None` until the app wires it.
+    pub control_url: Option<String>,
     /// Restart budget after crashes.
     pub policy: RestartPolicy,
     /// How long a freshly spawned module has to say hello.
@@ -63,6 +66,7 @@ impl HostConfig {
             host_version: env!("CARGO_PKG_VERSION").to_string(),
             product: "Avada Terminal".to_string(),
             workspace: None,
+            control_url: None,
             policy: RestartPolicy::default(),
             handshake_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
@@ -569,6 +573,7 @@ impl Slot {
             data_dir: self.data_dir.to_string_lossy().into_owned(),
             workspace: self.config.workspace.clone(),
             token: None,
+            control_url: self.config.control_url.clone(),
         }
     }
 
