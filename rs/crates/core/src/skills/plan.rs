@@ -54,6 +54,29 @@ pub struct Truncated {
     pub cap: usize,
 }
 
+/// A capped rules file whose assembled text ran past the tool's cap, listing the
+/// module fences dropped from its end to bring it back under.
+///
+/// [`Truncated`] bounds one unit; this bounds the whole file. A tool that caps
+/// what it reads skips an over-cap file *entirely* rather than reading a prefix
+/// of it, so an accumulating rules file that grows past the cap silently takes
+/// every other module's rules down with it. Whole blocks are dropped, never
+/// partial ones: the fence contract is that regeneration replaces the text
+/// between a module's markers, and half a block is not that.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Overflow {
+    /// The rules file.
+    pub path: PathBuf,
+    /// Which tool caps it.
+    pub tool: String,
+    /// The assembled size before anything was dropped.
+    pub bytes: usize,
+    /// The tool's cap.
+    pub cap: usize,
+    /// Fence ids dropped, in the order they appeared in the file.
+    pub dropped: Vec<String>,
+}
+
 /// What [`super::Materializer::plan`] produces. Inspect it, show it, then hand it
 /// to [`apply`]. Everything is sorted; a plan for an already-materialized tree
 /// has no writes and no removals, which is what [`Plan::is_empty`] reports.
@@ -69,6 +92,9 @@ pub struct Plan {
     pub errors: Vec<UnitError>,
     /// Units cut to a tool's cap.
     pub truncated: Vec<Truncated>,
+    /// Rules files that ran past a tool's cap once assembled, and what was
+    /// dropped from the end to fit.
+    pub overflowed: Vec<Overflow>,
 }
 
 impl Plan {
@@ -90,6 +116,8 @@ impl Plan {
         self.errors.dedup();
         self.truncated.sort();
         self.truncated.dedup();
+        self.overflowed.sort();
+        self.overflowed.dedup();
     }
 
     /// Paths the plan writes, for tests and display.

@@ -29,10 +29,10 @@ use avada_module_sdk::manifest::{ModuleId, SkillsSection};
 use avada_module_sdk::skills::{fence, splice_fenced, Activation, SkillKind};
 
 use super::adapters::{
-    rel, AdapterStatus, Dialect, Layout, RulesDir, RulesForm, Scope, Tools, ADAPTERS, SHARED,
+    rel, AdapterStatus, Cap, Dialect, Layout, RulesDir, RulesForm, Scope, Tools, ADAPTERS, SHARED,
 };
 use super::index;
-use super::plan::{apply, Applied, FileWrite, Plan, Removal, Skipped, Truncated};
+use super::plan::{apply, Applied, FileWrite, Overflow, Plan, Removal, Skipped, Truncated};
 use super::unit::{emitted_name, load_units, sibling_files, Unit, UnitRef};
 
 /// Fence id of everything the host itself generates (the `@AGENTS.md` import line
@@ -244,6 +244,10 @@ struct Desired {
     sweep_dirs: BTreeSet<PathBuf>,
     /// Fenced files whose stale fences we remove.
     sweep_files: BTreeSet<PathBuf>,
+    /// Fenced rules file → the cap the tool applies to the whole file, and the
+    /// tool's id. Only the accumulating rules files appear here; a per-unit file
+    /// is bounded by [`body_for`] on its way in.
+    caps: BTreeMap<PathBuf, (Cap, String)>,
     /// Rules and workflow directories whose fenced `*.md` files we own.
     sweep_file_dirs: BTreeSet<PathBuf>,
 }
@@ -640,6 +644,9 @@ fn plan_tool(
             }
             continue;
         }
+        if let (Some(file), Some(cap)) = (layout.rules_file, layout.cap) {
+            d.caps.insert(rel(base, file), (cap, row.id.to_string()));
+        }
         if let (RulesForm::ImportShared(line), Some(rules_file), true) =
             (layout.rules_form, layout.rules_file, shared_has_rules)
         {
@@ -795,6 +802,48 @@ fn fence_ids(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Splice `keep` into `current`, dropping every fence of ours that `keep` does
+/// not carry. The result is the whole final file, the user's own bytes included.
+fn assemble(current: &str, keep: &[(String, String)]) -> String {
+    let ids: BTreeSet<&str> = keep.iter().map(|(id, _)| id.as_str()).collect();
+    let mut next = current.to_string();
+    for id in fence_ids(current) {
+        if !ids.contains(id.as_str()) {
+            next = splice_fenced(&next, &id, None);
+        }
+    }
+    for (id, block) in keep {
+        next = splice_fenced(&next, id, Some(block));
+    }
+    next
+}
+
+/// Assemble `keep` into `current`, dropping whole module blocks from the end
+/// until the result fits `cap` bytes. Returns the final text and the ids
+/// dropped, in the order they stood in the file.
+///
+/// The host's own fence (the `@AGENTS.md` import line) is never dropped: it is a
+/// single line, and dropping it would take the whole shared layer with it. Once
+/// every module block is gone the loop stops even if the file is still over cap,
+/// because what is left is the user's own bytes and they are not ours to cut.
+pub(crate) fn fit_cap(
+    current: &str,
+    keep: &mut Vec<(String, String)>,
+    cap: usize,
+) -> (String, Vec<String>) {
+    let mut next = assemble(current, keep);
+    let mut dropped: Vec<String> = Vec::new();
+    while next.len() > cap {
+        let Some(at) = keep.iter().rposition(|(id, _)| id != HOST_ID) else {
+            break;
+        };
+        dropped.push(keep.remove(at).0);
+        next = assemble(current, keep);
+    }
+    dropped.reverse();
+    (next, dropped)
+}
+
 /// Compare the desired state with the disk and fill the plan's writes and removals.
 fn diff(d: &Desired, plan: &mut Plan) {
     // Fenced files: splice against the current text, write only when it changes,
@@ -808,15 +857,26 @@ fn diff(d: &Desired, plan: &mut Plan) {
             String::new()
         };
         let wanted: &[(String, String)] = d.fenced.get(file).map(Vec::as_slice).unwrap_or(&[]);
-        let wanted_ids: BTreeSet<&str> = wanted.iter().map(|(id, _)| id.as_str()).collect();
-        let mut next = current.clone();
-        for id in fence_ids(&current) {
-            if !wanted_ids.contains(id.as_str()) {
-                next = splice_fenced(&next, &id, None);
+        let mut keep = wanted.to_vec();
+        let mut next = assemble(&current, &keep);
+        // The cap is the tool's limit on the *file*, and an over-cap file is
+        // skipped whole rather than read in part, so a file that grew past it
+        // would take every module's rules down with it. Drop whole blocks from
+        // the end until it fits, newest module first, keeping the host's own
+        // import line and never touching the user's own bytes.
+        if let Some((cap, tool)) = d.caps.get(file) {
+            let assembled = next.len();
+            let dropped;
+            (next, dropped) = fit_cap(&current, &mut keep, cap.bytes);
+            if !dropped.is_empty() {
+                plan.overflowed.push(Overflow {
+                    path: file.clone(),
+                    tool: tool.clone(),
+                    bytes: assembled,
+                    cap: cap.bytes,
+                    dropped,
+                });
             }
-        }
-        for (id, block) in wanted {
-            next = splice_fenced(&next, id, Some(block));
         }
         if next == current {
             continue;

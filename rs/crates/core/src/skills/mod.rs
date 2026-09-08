@@ -57,7 +57,7 @@ pub use materialize::{
     gated, is_ours, render_skill, render_skill_with, truncate_at_paragraph, Materializer,
     ModuleInput, Request, CAP_RESERVE, HOST_ID, INDEX_NAME, MARKER, SHARED_RULES, SHARED_SKILLS,
 };
-pub use plan::{apply, Applied, FileWrite, Plan, Removal, Skipped, Truncated};
+pub use plan::{apply, Applied, FileWrite, Overflow, Plan, Removal, Skipped, Truncated};
 pub use unit::{
     emitted_name, is_kebab, load_units, validate, Unit, UnitError, UnitRef, MAX_DESCRIPTION,
     MAX_NAME, SIBLING_DIRS,

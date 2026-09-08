@@ -165,9 +165,26 @@ full text is in <SKILL.md path>." The plan reports it in
 `Plan::truncated: Vec<Truncated { unit, tool, bytes, cap }>`. Nothing is ever
 dropped silently.
 
-The cap is per unit, not per file: a `CLAUDE.md` holding many modules' blocks
-can still exceed 4 MiB in total, and the `@AGENTS.md` import is not measured.
-The uncapped shared `AGENTS.md` keeps the full text.
+That bounds one unit. The file the units accumulate in is bounded separately,
+because the failure modes differ: a unit cut short loses its tail, but a
+`CLAUDE.md` that grows past 4 MiB is skipped *whole*, taking every other
+module's rules with it. So after the blocks are spliced into the file --- in
+`diff`, the one place the final text is known, the user's own bytes included ---
+`fit_cap` drops whole module blocks from the end until the result fits. Whole
+blocks, never partial ones: a fence's contract is that regeneration replaces the
+text between its markers, and half a block is not that. The host's own
+`@AGENTS.md` import line is never dropped (one line, and losing it would take
+the entire shared layer), and once every module block is gone the loop stops
+even if the file is still too big --- what is left is the user's own writing,
+which is not ours to cut. The plan reports it in
+`Plan::overflowed: Vec<Overflow { path, tool, bytes, cap, dropped }>`, where
+`dropped` lists the module ids in the order they stood in the file. The uncapped
+shared `AGENTS.md` keeps the full text of everything.
+
+Which module loses is positional, not a judgement: blocks are dropped from the
+end, and the order is the order the modules arrive in the request. A ranking
+worth defending --- oldest install first, or smallest-first so the most modules
+survive --- needs a signal the materializer is not given today.
 
 Gates: a module contributes to the project scope only when its accepted
 capability set holds `skills.materialize` and it is enabled in a workspace

@@ -933,6 +933,109 @@ fn an_over_cap_unit_is_cut_with_a_notice_and_reported() {
     fx.done();
 }
 
+#[test]
+fn fit_cap_drops_whole_blocks_from_the_end() {
+    let block = |i: usize| {
+        (
+            format!("acme/m{i}"),
+            format!("Module {i}.\n{}", "x".repeat(200)),
+        )
+    };
+    let size = |keep: &[(String, String)]| {
+        materialize::fit_cap("", &mut keep.to_vec(), usize::MAX)
+            .0
+            .len()
+    };
+    let two = size(&[block(0), block(1)]);
+    assert!(size(&[block(0), block(1), block(2)]) > two);
+
+    let mut keep = vec![block(0), block(1), block(2)];
+    let (text, dropped) = materialize::fit_cap("", &mut keep, two);
+    assert_eq!(dropped, vec!["acme/m2".to_string()]);
+    assert_eq!(text.len(), two);
+    assert!(text.contains("Module 1."));
+    assert!(!text.contains("Module 2."));
+    // Whole blocks, never a partial one: two openers, two closers, nothing half-written.
+    assert_eq!(text.matches(MARKER).count(), 2);
+    assert_eq!(text.matches("<!-- /avada:module=").count(), 2);
+}
+
+#[test]
+fn fit_cap_never_cuts_the_users_own_bytes() {
+    let user = "# My notes\n\nKeep every word of this.\n";
+    let mut keep = vec![("acme/one".to_string(), "y".repeat(500))];
+    let (text, dropped) = materialize::fit_cap(user, &mut keep, 10);
+    assert_eq!(dropped, vec!["acme/one".to_string()]);
+    assert!(keep.is_empty());
+    // Still over the cap, and that is the right answer: the remainder is the
+    // user's file, which we do not get to shorten.
+    assert!(text.len() > 10);
+    assert!(text.contains("Keep every word of this."));
+    assert!(!text.contains(MARKER));
+}
+
+#[test]
+fn fit_cap_keeps_the_hosts_import_line() {
+    let mut keep = vec![
+        (HOST_ID.to_string(), "@AGENTS.md".to_string()),
+        ("acme/one".to_string(), "z".repeat(400)),
+    ];
+    let (text, dropped) = materialize::fit_cap("", &mut keep, 60);
+    assert_eq!(dropped, vec!["acme/one".to_string()]);
+    assert_eq!(keep.len(), 1);
+    assert!(text.contains("@AGENTS.md"));
+    assert!(
+        text.len() > 60,
+        "the import line's own fence is over 60 bytes"
+    );
+}
+
+#[test]
+fn an_over_cap_rules_file_drops_whole_modules_and_reports_them() {
+    let mut fx = fixture("overflow");
+    let second = fx.tmp.join("mod2");
+    fx.modules.push(module(&second, "acme/more"));
+    let cap = adapter("claude-code").unwrap().user.unwrap().cap.unwrap();
+    // Two units, each comfortably under the per-unit cap, whose sum is not.
+    let filler = "lorem ipsum dolor sit amet\n\n".repeat(cap.bytes * 3 / 5 / 28);
+    unit(
+        &fx.module_dir,
+        None,
+        "one",
+        RULE,
+        &format!("MODULE ONE\n\n{filler}"),
+    );
+    unit(
+        &second,
+        None,
+        "two",
+        RULE,
+        &format!("MODULE TWO\n\n{filler}"),
+    );
+
+    let plan = fx.run(&claude(), true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    assert!(plan.truncated.is_empty(), "no single unit is over cap");
+    assert_eq!(plan.overflowed.len(), 1, "{:?}", plan.overflowed);
+    let o = &plan.overflowed[0];
+    assert_eq!(o.path, seg(&fx.home, ".claude/CLAUDE.md"));
+    assert_eq!((o.tool.as_str(), o.cap), ("claude-code", cap.bytes));
+    assert!(o.bytes > cap.bytes);
+    assert_eq!(o.dropped, vec!["acme/more".to_string()]);
+
+    let user = read(&seg(&fx.home, ".claude/CLAUDE.md"));
+    assert!(user.len() <= cap.bytes);
+    assert!(user.contains("MODULE ONE"));
+    assert!(!user.contains("MODULE TWO"));
+    // The shared file documents no cap, so both are there in full.
+    let shared = read(&fx.root.join("AGENTS.md"));
+    assert!(shared.contains("MODULE ONE") && shared.contains("MODULE TWO"));
+    assert!(shared.len() > cap.bytes);
+    // A second run wants the same trimmed file: nothing to do.
+    assert!(fx.plan(&claude(), true, None).is_empty());
+    fx.done();
+}
+
 // ---- gates ---------------------------------------------------------------------
 
 #[test]
