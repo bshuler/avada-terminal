@@ -119,6 +119,16 @@ impl CapabilityResolver {
             .unwrap_or_else(|| LegacyTokens.caps_for(token).unwrap_or_default())
     }
 
+    /// Whether an *installed* source claims `token` — the legacy path is not consulted, so
+    /// this is `false` for anything the token store has not vouched for and no source knows.
+    /// It is what lets a module token (issued by the module host, never by the token store)
+    /// count as an identity on the control server: the rights service claims it, so the
+    /// server knows who is calling before it asks what they may do.
+    pub fn claims(&self, token: &str) -> bool {
+        let sources = self.sources.read().unwrap();
+        sources.iter().any(|s| s.caps_for(token).is_some())
+    }
+
     /// `Ok` when `token` holds `cap`; `Err(cap)` otherwise, ready for
     /// [`capability_refusal`].
     pub fn check(&self, token: &str, cap: Capability) -> Result<(), Capability> {
@@ -1826,6 +1836,21 @@ mod capability_gate_tests {
         for cap in Capability::ALL {
             assert_eq!(r.check("anything", *cap), Ok(()));
         }
+    }
+
+    #[test]
+    fn a_claim_is_an_identity_but_the_legacy_path_is_not() {
+        let r = CapabilityResolver::new();
+        // Nothing installed: the legacy path answers "all" for caps, yet claims nobody.
+        assert!(!r.claims("t-anyone"));
+        assert!(r.check("t-anyone", Capability::FsWrite).is_ok());
+        r.install(Arc::new(Claims {
+            token: "t-module",
+            caps: Some(BTreeSet::new()),
+        }));
+        // An empty claim is still a claim: the token is known, it just holds nothing.
+        assert!(r.claims("t-module"));
+        assert!(!r.claims("t-other"));
     }
 
     #[test]

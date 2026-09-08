@@ -201,9 +201,9 @@ pub(crate) struct Gate {
 
 /// Refuse a caller whose token does not hold the route's capability with 403
 /// `{"error":"capability","capability":"<name>"}`. Runs before the handler and only for a
-/// token the token store recognises — an unknown or absent token falls through so the
-/// handler's own 401 stays byte-exact. The token is read from the Bearer header, else from
-/// `?token=` (the WebSocket route's way in); it is never logged.
+/// token that is an identity (see [`identify`]) — an unknown or absent token falls through
+/// so the handler's own 401 stays byte-exact. The token is read from the Bearer header, else
+/// from `?token=` (the WebSocket route's way in); it is never logged.
 async fn capability_gate(State(gate): State<Gate>, req: Request, next: Next) -> Response {
     let token = bearer_header(req.headers()).or_else(|| {
         Query::<HashMap<String, String>>::try_from_uri(req.uri())
@@ -211,13 +211,7 @@ async fn capability_gate(State(gate): State<Gate>, req: Request, next: Next) -> 
             .and_then(|Query(q)| q.get("token").cloned())
     });
     if let Some(token) = token {
-        let known = gate
-            .shared
-            .tokens
-            .lock()
-            .unwrap()
-            .resolve(Some(&token), now_ms())
-            .is_some();
+        let known = identify(&gate.shared, Some(&token)).is_some();
         if known {
             if let Err(cap) = gate.shared.caps.check(&token, gate.cap) {
                 tracing::warn!(capability = cap.name(), "request refused: capability");
@@ -262,19 +256,29 @@ fn bearer_header(headers: &HeaderMap) -> Option<String> {
 #[tracing::instrument(level = "debug", skip_all)]
 fn authorize(shared: &Arc<Shared>, headers: &HeaderMap) -> Result<TokenInfo, Response> {
     let token = bearer_header(headers);
-    shared
-        .tokens
-        .lock()
-        .unwrap()
-        .resolve(token.as_deref(), now_ms())
-        .ok_or_else(|| {
-            // The token value is a secret: log only whether one was presented at all.
-            tracing::warn!(
-                bearer_present = token.is_some(),
-                "request rejected: unauthorized"
-            );
-            jstatus(401, json!({ "error": "unauthorized" }))
+    identify(shared, token.as_deref()).ok_or_else(|| {
+        // The token value is a secret: log only whether one was presented at all.
+        tracing::warn!(
+            bearer_present = token.is_some(),
+            "request rejected: unauthorized"
+        );
+        jstatus(401, json!({ "error": "unauthorized" }))
+    })
+}
+
+/// Who is calling: the token store's answer (master, device, scoped) or, failing that, a
+/// token an installed capability source claims — a module's token, which the module host
+/// issues and the rights service vouches for. A module token is root-scoped (scope narrows
+/// panes; a module is narrowed by its capabilities instead) and never expires here (the host
+/// rotates it by restarting the module). `None` is the 401.
+fn identify(shared: &Shared, token: Option<&str>) -> Option<TokenInfo> {
+    let stored = shared.tokens.lock().unwrap().resolve(token, now_ms());
+    stored.or_else(|| {
+        token.filter(|t| shared.caps.claims(t)).map(|_| TokenInfo {
+            scope: None,
+            expires_at: None,
         })
+    })
 }
 
 /// A resolved, in-scope pane: its session uid plus the canonical pane id (the caller may have
@@ -2322,12 +2326,7 @@ async fn events_ws(
 ) -> Response {
     // Token from the `?token=` query (WS clients can't set Authorization reliably) or a Bearer header.
     let token = q.get("token").cloned().or_else(|| bearer_header(&headers));
-    let info = shared
-        .tokens
-        .lock()
-        .unwrap()
-        .resolve(token.as_deref(), now_ms());
-    let Some(info) = info else {
+    let Some(info) = identify(&shared, token.as_deref()) else {
         return (StatusCode::UNAUTHORIZED, "").into_response();
     };
     let scope = info.scope;
@@ -4280,5 +4279,73 @@ mod table {
                 desc.method
             );
         }
+    }
+
+    /// A module token comes from the module host, not the token store. The rights service
+    /// (an installed capability source) claims it, and that claim is an identity: the token
+    /// clears the 401 on every route and meets each route's capability gate on its own
+    /// merits. Nothing else changes — an unclaimed token is still nobody.
+    #[tokio::test]
+    async fn a_module_token_is_an_identity_gated_only_by_its_rights() {
+        let s = boot_with_control_tag(true, "table-module-token").await;
+        // Not registered with the token store — claimed by a source alone.
+        s.shared.caps.install(Arc::new(Fixed {
+            token: "tok-module".to_string(),
+            caps: [Capability::WorkspaceRead, Capability::EventsSubscribe]
+                .into_iter()
+                .collect(),
+        }));
+        // Identity without a capability: an authorized route that gates nothing.
+        let (status, _) = call(&s, Verb::Get, "/schema", "tok-module").await;
+        assert_eq!(status, 200, "a claimed token is no longer 401");
+        // A held capability: through.
+        let (status, _) = call(&s, Verb::Get, "/state", "tok-module").await;
+        assert_eq!(status, 200);
+        // An unheld capability: refused by name, not as a stranger.
+        let (status, body) = call(&s, Verb::Get, "/settings", "tok-module").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (
+                403,
+                r#"{"capability":"settings.read","error":"capability"}"#
+            )
+        );
+        // The WebSocket route takes the same identity from the query.
+        let r = client()
+            .get(format!("{}/events?token=tok-module", s.base))
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            r.status().as_u16(),
+            101,
+            "module token upgrades the event stream"
+        );
+        // A token nobody claims is still nobody: 401 everywhere, never 403.
+        let (status, body) = call(&s, Verb::Get, "/schema", "tok-stranger").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (401, r#"{"error":"unauthorized"}"#)
+        );
+        let (status, body) = call(&s, Verb::Get, "/state", "tok-stranger").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (401, r#"{"error":"unauthorized"}"#)
+        );
+        // (Upgrade headers so the 401 is the handler's, not the extractor's 400.)
+        let r = client()
+            .get(format!("{}/events?token=tok-stranger", s.base))
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 401);
     }
 }
