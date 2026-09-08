@@ -15,7 +15,7 @@
 //! Bearer via `Authorization: Bearer` or `?token=` (WS only). Every body shape matches the TS
 //! source (omit-when-unset; ordered structs where field order is observable).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -124,6 +124,19 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("settings.patch", settings_patch),
         h("fs.read", fs_read),
         h("events", events_ws),
+        // ---- track F2 marketplace (mirrors the fenced block in descriptor_table)
+        h("marketplace.search", marketplace_search),
+        h("marketplace.show", marketplace_show),
+        h("marketplace.install", marketplace_install),
+        h("marketplace.jobs", marketplace_jobs),
+        h("marketplace.job", marketplace_job),
+        h("marketplace.enable", marketplace_enable),
+        h("marketplace.disable", marketplace_disable),
+        h("marketplace.uninstall", marketplace_uninstall),
+        h("marketplace.installed", marketplace_installed),
+        h("marketplace.toolchain", marketplace_toolchain),
+        h("marketplace.signin", marketplace_signin),
+        h("marketplace.signin.poll", marketplace_signin_poll),
         h("schema", schema_get),
     ]
 }
@@ -2394,6 +2407,292 @@ async fn method_not_allowed() -> Response {
 #[tracing::instrument(level = "debug", ret)]
 async fn not_found(uri: Uri) -> Response {
     jstatus(404, json!({ "error": "not found", "path": uri.path() }))
+}
+
+// ---- marketplace: /marketplace/... (track F2) ---------------------------------------------
+
+/// The installed marketplace, or the 503 every marketplace route answers until the app
+/// installs one (`Shared::install_marketplace`). Same contract as the module host: the
+/// route is listed, the service is simply not reachable yet.
+// deferred per repo lint policy (test.yml): the error arm is a full Response
+#[allow(clippy::result_large_err)]
+fn marketplace_of(shared: &Arc<Shared>) -> Result<Arc<crate::marketplace::Marketplace>, Response> {
+    let mp = shared.marketplace.read().unwrap().clone();
+    mp.ok_or_else(|| jstatus(503, json!({ "error": "marketplace unavailable" })))
+}
+
+/// Identity first (401 before a stranger learns whether a marketplace exists), then the
+/// service (503). The capability gate (403) already ran in the router.
+#[allow(clippy::result_large_err)]
+fn marketplace_for(
+    shared: &Arc<Shared>,
+    headers: &HeaderMap,
+) -> Result<Arc<crate::marketplace::Marketplace>, Response> {
+    authorize(shared, headers)?;
+    marketplace_of(shared)
+}
+
+/// A marketplace refusal as a response: the status is the error's own
+/// (`MarketplaceError::http_status`), the body its message. A missing toolchain carries
+/// the install guide under its own key so a client can show it verbatim.
+fn marketplace_error(e: crate::marketplace::MarketplaceError) -> Response {
+    use crate::marketplace::MarketplaceError;
+    let status = e.http_status();
+    let body = match &e {
+        MarketplaceError::Toolchain(guide) => json!({
+            "error": "toolchain missing",
+            "guide": guide,
+        }),
+        _ => json!({ "error": e.to_string() }),
+    };
+    tracing::debug!(status, error = %e, "marketplace refusal");
+    jstatus(status, body)
+}
+
+/// An optional JSON object body: nothing is `{}`, unparsable is 400. Bodies are read raw
+/// so the identity and service checks run before axum's own 415/422 would.
+#[allow(clippy::result_large_err)]
+fn marketplace_body(body: &Bytes) -> Result<Value, Response> {
+    if body.is_empty() {
+        return Ok(json!({}));
+    }
+    match serde_json::from_slice::<Value>(body) {
+        Ok(v) if v.is_object() => Ok(v),
+        Ok(_) => Err(jstatus(
+            400,
+            json!({ "error": "bad request", "message": "body must be a JSON object" }),
+        )),
+        Err(e) => Err(jstatus(
+            400,
+            json!({ "error": "bad request", "message": e.to_string() }),
+        )),
+    }
+}
+
+fn body_str(body: &Value, key: &str) -> Option<String> {
+    body.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_search(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let words = q.get("q").cloned().unwrap_or_default();
+    match mp.search(&words).await {
+        Ok(hits) => ok_json(json!({ "modules": hits })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_show(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    match mp.show(&owner, &repo).await {
+        Ok(view) => ok_json(view),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// `{module, tag?, accepted?, workspace?, commit?}` → 202 `{job}`: the pipeline runs in
+/// the background and `marketplace.job` shows it move.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_install(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(module) = body_str(&body, "module").filter(|m| !m.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing module" }));
+    };
+    let accepted = match body.get("accepted") {
+        None | Some(Value::Null) => None,
+        Some(v) => match serde_json::from_value::<BTreeSet<Capability>>(v.clone()) {
+            Ok(set) => Some(set),
+            Err(e) => {
+                return jstatus(
+                    400,
+                    json!({ "error": "bad request", "message": format!("accepted: {e}") }),
+                )
+            }
+        },
+    };
+    let mut req = crate::marketplace::InstallRequest::new(&module);
+    req.tag = body_str(&body, "tag");
+    req.accepted = accepted;
+    req.workspace = body_str(&body, "workspace");
+    req.expected_commit = body_str(&body, "commit");
+    match mp.install(req) {
+        Ok(job) => jstatus(202, json!({ "job": job })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_jobs(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    ok_json(json!({ "jobs": mp.jobs() }))
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_job(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    match mp.job(&id) {
+        Ok(job) => ok_json(job),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// Shared body of enable/disable: `{workspace}` → `{module, enabled: {workspace: bool}}`.
+async fn marketplace_set_enabled(
+    shared: Arc<Shared>,
+    headers: HeaderMap,
+    owner: String,
+    repo: String,
+    body: Bytes,
+    enabled: bool,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(workspace) = body_str(&body, "workspace").filter(|w| !w.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing workspace" }));
+    };
+    let module = format!("{owner}/{repo}");
+    match mp.set_enabled(&workspace, &module, enabled) {
+        Ok(map) => ok_json(json!({ "module": module, "enabled": map })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_enable(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    marketplace_set_enabled(shared, headers, owner, repo, body, true).await
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_disable(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    marketplace_set_enabled(shared, headers, owner, repo, body, false).await
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_uninstall(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo, version)): Path<(String, String, String)>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let module = format!("{owner}/{repo}");
+    match mp.uninstall(&module, &version) {
+        Ok(()) => ok_json(json!({ "ok": true, "module": module, "version": version })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_installed(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    match mp.installed() {
+        Ok(list) => ok_json(json!({ "modules": list })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// The readiness report: the toolchain, whether a free build can run, the guide when it
+/// cannot, and whether a GitHub token is stored (never the token).
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_toolchain(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let tc = mp.toolchain();
+    ok_json(json!({
+        "ready": tc.ready(),
+        "missing": tc.missing(),
+        "guide": tc.guide(),
+        "toolchain": tc,
+        "signed_in": mp.signed_in(),
+    }))
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_signin(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    match mp.signin_start().await {
+        Ok(view) => ok_json(view),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_signin_poll(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    match mp.signin_poll(&id).await {
+        Ok(view) => ok_json(view),
+        Err(e) => marketplace_error(e),
+    }
 }
 
 // ---- module routes: /m/<owner>/<repo>/... ---------------------------------------------------
@@ -4781,5 +5080,592 @@ mod table {
         assert_eq!(status, 400);
         assert_eq!(body["error"], "bad request");
         assert!(rec.calls().is_empty());
+    }
+}
+
+/// Track F2: the `/marketplace/...` routes over the real axum stack, with a marketplace
+/// built from the fake GitHub, the local bare-repo fixtures and the fake `cargo`
+/// (`crate::marketplace::testing`). No network, no real toolchain, no real HOME.
+#[cfg(test)]
+mod marketplace_routes {
+    use super::golden::{boot_with_control_tag, client, Server};
+    use crate::control::descriptor_table::core_routes;
+    use crate::control::dispatch::CapabilitySource;
+    use crate::marketplace::job::Phase;
+    use crate::marketplace::testing::{
+        files_state, manifest_for, reopen, rig, scratch, DeviceOutcome, FakeCargo,
+        FAKE_ACCESS_TOKEN, FILES,
+    };
+    use avada_module_sdk::caps::Capability;
+    use avada_module_sdk::descriptor::{ParamLocation, Verb};
+    use serde_json::{json, Value};
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct Fixed {
+        token: String,
+        caps: BTreeSet<Capability>,
+    }
+
+    impl CapabilitySource for Fixed {
+        fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>> {
+            (token == self.token).then(|| self.caps.clone())
+        }
+    }
+
+    fn limited(s: &Server, token: &str, caps: &[Capability]) {
+        s.shared
+            .tokens
+            .lock()
+            .unwrap()
+            .add_device(token.to_string(), "limited".into(), None, None);
+        s.shared.caps.install(Arc::new(Fixed {
+            token: token.to_string(),
+            caps: caps.iter().copied().collect(),
+        }));
+    }
+
+    async fn send(
+        s: &Server,
+        verb: Verb,
+        path: &str,
+        token: Option<&str>,
+        body: Option<&str>,
+    ) -> (u16, Value, String) {
+        let url = format!("{}{}", s.base, path);
+        let c = client();
+        let mut req = match verb {
+            Verb::Get => c.get(&url),
+            Verb::Post => c.post(&url),
+            Verb::Put => c.put(&url),
+            Verb::Patch => c.patch(&url),
+            Verb::Delete => c.delete(&url),
+        };
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        if let Some(b) = body {
+            req = req
+                .header("content-type", "application/json")
+                .body(b.to_string());
+        }
+        let r = req.send().await.unwrap();
+        let status = r.status().as_u16();
+        let text = r.text().await.unwrap();
+        let v = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+        (status, v, text)
+    }
+
+    async fn get(s: &Server, path: &str) -> (u16, Value) {
+        let (st, v, _) = send(s, Verb::Get, path, Some(&s.token), None).await;
+        (st, v)
+    }
+
+    async fn post(s: &Server, path: &str, body: &str) -> (u16, Value) {
+        let (st, v, _) = send(s, Verb::Post, path, Some(&s.token), Some(body)).await;
+        (st, v)
+    }
+
+    fn marketplace_routes() -> Vec<avada_module_sdk::descriptor::RouteDescriptor> {
+        core_routes()
+            .into_iter()
+            .filter(|r| r.method.starts_with("marketplace."))
+            .collect()
+    }
+
+    /// A path with every `{param}` replaced by something concrete.
+    fn concrete(path: &str) -> String {
+        path.replace("{owner}", "acme")
+            .replace("{repo}", "avada-files")
+            .replace("{version}", "1.0.0")
+            .replace("{id}", "nope")
+    }
+
+    #[test]
+    fn the_table_lists_twelve_gated_routes_with_their_path_params_declared() {
+        let routes = marketplace_routes();
+        let methods: Vec<&str> = routes.iter().map(|r| r.method.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "marketplace.search",
+                "marketplace.show",
+                "marketplace.install",
+                "marketplace.jobs",
+                "marketplace.job",
+                "marketplace.enable",
+                "marketplace.disable",
+                "marketplace.uninstall",
+                "marketplace.installed",
+                "marketplace.toolchain",
+                "marketplace.signin",
+                "marketplace.signin.poll",
+            ]
+        );
+        for r in &routes {
+            assert_eq!(
+                r.capability,
+                Some(Capability::MarketplaceManage),
+                "{}",
+                r.method
+            );
+            assert!(r.path.starts_with("/marketplace/"), "{}", r.path);
+            // Every `{x}` in the path is a declared Path param and vice versa.
+            let in_path: BTreeSet<String> = r
+                .path
+                .split('/')
+                .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+                .map(str::to_string)
+                .collect();
+            let declared: BTreeSet<String> = r
+                .params
+                .iter()
+                .filter(|p| p.location == ParamLocation::Path)
+                .map(|p| p.name.clone())
+                .collect();
+            assert_eq!(in_path, declared, "{}", r.method);
+            for p in r
+                .params
+                .iter()
+                .filter(|p| p.location == ParamLocation::Path)
+            {
+                assert!(
+                    p.required,
+                    "{}: path param {} must be required",
+                    r.method, p.name
+                );
+            }
+        }
+        assert_eq!(
+            routes
+                .iter()
+                .filter(|r| matches!(r.verb, Verb::Post))
+                .count(),
+            4
+        );
+        assert_eq!(
+            routes
+                .iter()
+                .filter(|r| matches!(r.verb, Verb::Delete))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn every_route_is_401_then_403_then_503_until_a_marketplace_is_installed() {
+        let s = boot_with_control_tag(true, "mp-gates").await;
+        limited(&s, "tok-nothing", &[]);
+        limited(&s, "tok-mp", &[Capability::MarketplaceManage]);
+        for r in marketplace_routes() {
+            let path = concrete(&r.path);
+            let (st, v, _) = send(&s, r.verb, &path, None, None).await;
+            assert_eq!(st, 401, "{}", r.method);
+            assert_eq!(v["error"], "unauthorized", "{}", r.method);
+            let (st, _, _) = send(&s, r.verb, &path, Some("tok-nothing"), None).await;
+            assert_eq!(st, 403, "{} let an empty token through", r.method);
+            for tok in ["tok-mp", s.token.as_str()] {
+                let (st, v, _) = send(&s, r.verb, &path, Some(tok), None).await;
+                assert_eq!(st, 503, "{} with {tok}", r.method);
+                assert_eq!(v["error"], "marketplace unavailable", "{}", r.method);
+            }
+        }
+        // Installing takes effect on the next request; no router rebuild.
+        let r = rig(
+            "routes-gates",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        s.shared.install_marketplace(Arc::clone(&r.mp));
+        let (st, v) = get(&s, "/marketplace/installed").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["modules"], json!([]));
+        let (st, v, _) = send(
+            &s,
+            Verb::Get,
+            "/marketplace/installed",
+            Some("tok-nothing"),
+            None,
+        )
+        .await;
+        assert_eq!(st, 403, "{v}");
+    }
+
+    #[tokio::test]
+    async fn install_enable_disable_uninstall_through_the_routes() {
+        let s = boot_with_control_tag(true, "mp-install").await;
+        let r = rig(
+            "routes-install",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        let sha = r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+        r.github
+            .state
+            .lock()
+            .unwrap()
+            .tags
+            .insert(FILES.into(), vec![("v1.0.0".into(), sha.clone())]);
+        s.shared.install_marketplace(Arc::clone(&r.mp));
+
+        // Search and show go through the fake GitHub; the install goes through the
+        // local git fixture.
+        let (st, v) = get(&s, "/marketplace/search?q=files").await;
+        assert_eq!(st, 200, "{v}");
+        let names: Vec<&str> = v["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["full_name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, [FILES]);
+        let (st, v) = get(&s, "/marketplace/modules/acme/avada-files").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["module"], FILES);
+        assert_eq!(v["newest_tag"], "v1.0.0");
+        assert_eq!(v["tags"][0]["commit"], sha);
+        assert_eq!(v["installed"], json!([]));
+
+        // Install: 202 with the job, then the job moves under GET /marketplace/jobs/{id}.
+        let (st, v) = post(
+            &s,
+            "/marketplace/install",
+            &json!({ "module": FILES, "workspace": "ws1", "commit": sha }).to_string(),
+        )
+        .await;
+        assert_eq!(st, 202, "{v}");
+        let id = v["job"]["id"].as_str().unwrap().to_string();
+        assert_eq!(v["job"]["module"], FILES);
+        assert_eq!(v["job"]["phase"], json!(Phase::Fetch));
+        let mut seen_phases = BTreeSet::new();
+        let mut done = Value::Null;
+        for _ in 0..1500 {
+            let (st, v) = get(&s, &format!("/marketplace/jobs/{id}")).await;
+            assert_eq!(st, 200, "{v}");
+            seen_phases.insert(v["phase"].as_str().unwrap().to_string());
+            let phase: Phase = serde_json::from_value(v["phase"].clone()).unwrap();
+            if phase.is_terminal() {
+                done = v;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(done["phase"], json!(Phase::Done), "{done}");
+        assert_eq!(done["version"], "1.0.0");
+        assert_eq!(done["tag"], "v1.0.0");
+        assert_eq!(done["progress"], 100);
+        assert!(seen_phases.contains("done"), "{seen_phases:?}");
+        let (st, v) = get(&s, "/marketplace/jobs").await;
+        assert_eq!(st, 200);
+        assert_eq!(v["jobs"][0]["id"], id);
+        assert_eq!(v["jobs"].as_array().unwrap().len(), 1);
+
+        // The install record and workspace state are visible.
+        let (st, v) = get(&s, "/marketplace/installed").await;
+        assert_eq!(st, 200, "{v}");
+        let m = &v["modules"][0];
+        assert_eq!(m["module"], FILES);
+        assert_eq!(m["version"], "1.0.0");
+        assert_eq!(m["active"], true);
+        assert_eq!(m["tag"], "v1.0.0");
+        assert_eq!(m["commit"], sha);
+        assert!(m["sha256"].as_str().unwrap().len() == 64, "{m}");
+        assert_eq!(m["enabled"], json!({ "ws1": true }));
+        assert_eq!(m["broken"], Value::Null);
+        let (_, v) = get(&s, "/marketplace/modules/acme/avada-files").await;
+        assert_eq!(v["installed"], json!(["1.0.0"]));
+        assert_eq!(v["active"], "1.0.0");
+
+        // Disable, enable, and the refusals around them.
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/disable",
+            r#"{"workspace":"ws1"}"#,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["enabled"], json!({ "ws1": false }));
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/enable",
+            r#"{"workspace":"ws2"}"#,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["enabled"], json!({ "ws1": false, "ws2": true }));
+        let (st, v) = post(&s, "/marketplace/modules/acme/avada-files/enable", "").await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["error"], "missing workspace");
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/enable",
+            r#"{"workspace":"../x"}"#,
+        )
+        .await;
+        assert_eq!(st, 400, "{v}");
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-git/enable",
+            r#"{"workspace":"ws1"}"#,
+        )
+        .await;
+        assert_eq!(st, 404, "{v}");
+        assert_ne!(
+            v["error"], "not found",
+            "must not look like an unmounted route"
+        );
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/enable",
+            "{not json",
+        )
+        .await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["error"], "bad request");
+
+        // Uninstall the only version; the second try is 404, and the state is gone.
+        let (st, v, _) = send(
+            &s,
+            Verb::Delete,
+            "/marketplace/modules/acme/avada-files/1.0.0",
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["ok"], true);
+        let (st, v, _) = send(
+            &s,
+            Verb::Delete,
+            "/marketplace/modules/acme/avada-files/1.0.0",
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(st, 404, "{v}");
+        assert_ne!(v["error"], "not found");
+        let (st, v, _) = send(
+            &s,
+            Verb::Delete,
+            "/marketplace/modules/acme/avada-files/not-a-version",
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(
+            st, 404,
+            "an unparsable version is simply not installed: {v}"
+        );
+        let (_, v) = get(&s, "/marketplace/installed").await;
+        assert_eq!(v["modules"], json!([]));
+        let (_, v) = get(&s, "/marketplace/modules/acme/avada-files").await;
+        assert_eq!(v["enabled"], json!({}));
+        let (st, v) = get(&s, "/marketplace/jobs/nope").await;
+        assert_eq!(st, 404, "{v}");
+        assert_eq!(v["error"], "no job `nope`");
+    }
+
+    #[tokio::test]
+    async fn install_refusals_are_statuses_and_a_failed_build_is_a_failed_job() {
+        let s = boot_with_control_tag(true, "mp-refuse").await;
+        let r = rig(
+            "routes-refuse",
+            files_state(),
+            FakeCargo::Fails,
+            Duration::from_secs(300),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+        r.fixtures.repo(
+            "acme/avada-git",
+            "v2.0.0",
+            &manifest_for("acme/avada-git", "2.0.0", "kind = \"binary\"", ""),
+        );
+        s.shared.install_marketplace(Arc::clone(&r.mp));
+
+        for (body, status, error) in [
+            ("{oops", 400, "bad request"),
+            ("[]", 400, "bad request"),
+            ("{}", 400, "missing module"),
+            (r#"{"module":""}"#, 400, "missing module"),
+            (
+                r#"{"module":"nope"}"#,
+                400,
+                "`nope` is not an owner/repo module id",
+            ),
+            (
+                r#"{"module":"acme/avada-files","workspace":"a b"}"#,
+                400,
+                "`a b` is not a usable workspace key",
+            ),
+            (
+                r#"{"module":"acme/avada-files","accepted":["not.a.cap"]}"#,
+                400,
+                "bad request",
+            ),
+        ] {
+            let (st, v) = post(&s, "/marketplace/install", body).await;
+            assert_eq!(st, status, "{body}: {v}");
+            assert_eq!(v["error"], error, "{body}: {v}");
+        }
+        assert!(
+            r.mp.jobs().is_empty(),
+            "a malformed request must not start a job"
+        );
+
+        // Refusals the pipeline finds while fetching or verifying — a binary module, a tag
+        // that does not exist, a tag naming a different commit — are failed jobs: the
+        // route answers 202 once the request is well-formed, and the job says why.
+        for (body, needle) in [
+            (
+                r#"{"module":"acme/avada-git","tag":"v2.0.0"}"#,
+                "prebuilt binary",
+            ),
+            (
+                r#"{"module":"acme/avada-files","tag":"v9.9.9"}"#,
+                "no tag `v9.9.9`",
+            ),
+            (
+                r#"{"module":"acme/avada-files","commit":"0000000000000000000000000000000000000000"}"#,
+                "names commit",
+            ),
+        ] {
+            let (st, v) = post(&s, "/marketplace/install", body).await;
+            assert_eq!(st, 202, "{body}: {v}");
+            let id = v["job"]["id"].as_str().unwrap().to_string();
+            let done = crate::marketplace::testing::wait(&r.mp, &id).await;
+            assert_eq!(done.phase, Phase::Failed, "{body}: {done:?}");
+            let (_, v) = get(&s, &format!("/marketplace/jobs/{id}")).await;
+            assert_eq!(v["phase"], "failed", "{body}: {v}");
+            let e = v["error"].as_str().unwrap();
+            assert!(e.starts_with("refused: "), "{body}: {e}");
+            assert!(e.contains(needle), "{body}: {e}");
+        }
+        let (_, v) = get(&s, "/marketplace/installed").await;
+        assert_eq!(v["modules"], json!([]), "refusals install nothing");
+
+        // The build fails: the job starts (202) and ends Failed, with the compiler's tail.
+        let (st, v) = post(
+            &s,
+            "/marketplace/install",
+            r#"{"module":"acme/avada-files","accepted":["fs.read"]}"#,
+        )
+        .await;
+        assert_eq!(st, 202, "{v}");
+        let id = v["job"]["id"].as_str().unwrap().to_string();
+        let done = crate::marketplace::testing::wait(&r.mp, &id).await;
+        assert_eq!(done.phase, Phase::Failed);
+        let (st, v) = get(&s, &format!("/marketplace/jobs/{id}")).await;
+        assert_eq!(st, 200);
+        assert_eq!(v["phase"], json!(Phase::Failed));
+        assert!(v["error"].as_str().unwrap().contains("build"), "{v}");
+        assert!(
+            v["log_tail"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|l| l.as_str().unwrap().contains("E0425")),
+            "{v}"
+        );
+        let (_, v) = get(&s, "/marketplace/installed").await;
+        assert_eq!(v["modules"], json!([]), "a failed build installs nothing");
+
+        // The toolchain report, and the 412 with the guide when the toolchain is gone.
+        let (st, v) = get(&s, "/marketplace/toolchain").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["ready"], true);
+        assert_eq!(v["missing"], json!([]));
+        assert_eq!(v["guide"], Value::Null);
+        assert_eq!(v["signed_in"], false);
+        let bare = reopen(
+            &r.root,
+            &r.fixtures,
+            &r.github,
+            Arc::clone(&r.tokens),
+            Some(scratch("routes-no-tools")),
+            Duration::from_secs(300),
+        );
+        s.shared.install_marketplace(bare);
+        let (st, v) = get(&s, "/marketplace/toolchain").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["ready"], false);
+        assert!(v["guide"].as_str().unwrap().contains("rustup"), "{v}");
+        let (st, v) = post(
+            &s,
+            "/marketplace/install",
+            r#"{"module":"acme/avada-files"}"#,
+        )
+        .await;
+        assert_eq!(st, 412, "{v}");
+        assert_eq!(v["error"], "toolchain missing");
+        assert!(v["guide"].as_str().unwrap().contains("rustup"), "{v}");
+    }
+
+    #[tokio::test]
+    async fn sign_in_routes_show_the_user_code_and_never_the_token() {
+        let s = boot_with_control_tag(true, "mp-signin").await;
+        let r = rig(
+            "routes-signin",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        s.shared.install_marketplace(Arc::clone(&r.mp));
+        let (st, v, text) = send(&s, Verb::Post, "/marketplace/signin", Some(&s.token), None).await;
+        assert_eq!(st, 200, "{v}");
+        let id = v["id"].as_str().unwrap().to_string();
+        assert!(!v["user_code"].as_str().unwrap().is_empty());
+        assert!(v["verification_uri"]
+            .as_str()
+            .unwrap()
+            .contains("/login/device"));
+        assert_eq!(v["status"], "pending");
+        assert!(!text.contains("device_code"), "{text}");
+        let (st, v, text) = send(
+            &s,
+            Verb::Get,
+            &format!("/marketplace/signin/{id}"),
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["status"], "pending");
+        assert!(!text.contains(FAKE_ACCESS_TOKEN));
+        r.github.state.lock().unwrap().outcome = DeviceOutcome::Approved;
+        let (st, v, text) = send(
+            &s,
+            Verb::Get,
+            &format!("/marketplace/signin/{id}"),
+            Some(&s.token),
+            None,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["status"], "done");
+        assert!(
+            !text.contains(FAKE_ACCESS_TOKEN),
+            "the token must never leave the store"
+        );
+        assert!(r.mp.signed_in());
+        let (_, v) = get(&s, "/marketplace/toolchain").await;
+        assert_eq!(v["signed_in"], true);
+        let (st, v) = get(&s, "/marketplace/signin/nope").await;
+        assert_eq!(st, 404, "{v}");
+        assert_eq!(v["error"], "no sign-in `nope`");
     }
 }

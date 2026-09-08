@@ -295,6 +295,137 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             vec![p("path", Query, "string", true, "Absolute path")],
         )),
         route("events", "/events", Get, "WebSocket event stream"),
+        // ---- track F2 marketplace
+        with(
+            route(
+                "marketplace.search",
+                "/marketplace/search",
+                Get,
+                "Search GitHub for modules (topic avada-module)",
+            ),
+            vec![p("q", Query, "string", false, "Search words")],
+        ),
+        with(
+            route(
+                "marketplace.show",
+                "/marketplace/modules/{owner}/{repo}",
+                Get,
+                "One module: repo, manifest, tags, installed versions",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.install",
+                "/marketplace/install",
+                Post,
+                "Start an install job (clone, verify, build, record)",
+            ),
+            vec![
+                p("module", Body, "string", true, "owner/repo"),
+                p(
+                    "tag",
+                    Body,
+                    "string",
+                    false,
+                    "Tag; newest vX.Y.Z when absent",
+                ),
+                p("accepted", Body, "array", false, "Capabilities granted"),
+                p(
+                    "workspace",
+                    Body,
+                    "string",
+                    false,
+                    "Enable here once installed",
+                ),
+                p("commit", Body, "string", false, "Commit the tag must name"),
+            ],
+        ),
+        route(
+            "marketplace.jobs",
+            "/marketplace/jobs",
+            Get,
+            "Every install job",
+        ),
+        with(
+            route(
+                "marketplace.job",
+                "/marketplace/jobs/{id}",
+                Get,
+                "One install job's phase, progress and log tail",
+            ),
+            vec![path_id("id", "Job id")],
+        ),
+        with(
+            route(
+                "marketplace.enable",
+                "/marketplace/modules/{owner}/{repo}/enable",
+                Post,
+                "Enable an installed module in a workspace",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p("workspace", Body, "string", true, "Workspace key"),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.disable",
+                "/marketplace/modules/{owner}/{repo}/disable",
+                Post,
+                "Disable an installed module in a workspace",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p("workspace", Body, "string", true, "Workspace key"),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.uninstall",
+                "/marketplace/modules/{owner}/{repo}/{version}",
+                Delete,
+                "Remove one installed version",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                path_id("version", "Installed version"),
+            ],
+        ),
+        route(
+            "marketplace.installed",
+            "/marketplace/installed",
+            Get,
+            "Every installed module version and where it is enabled",
+        ),
+        route(
+            "marketplace.toolchain",
+            "/marketplace/toolchain",
+            Get,
+            "Whether rustup/cargo/git are present, with an install guide",
+        ),
+        route(
+            "marketplace.signin",
+            "/marketplace/signin",
+            Post,
+            "Start a GitHub device-flow sign-in",
+        ),
+        with(
+            route(
+                "marketplace.signin.poll",
+                "/marketplace/signin/{id}",
+                Get,
+                "Poll a sign-in until it is done",
+            ),
+            vec![path_id("id", "Sign-in id")],
+        ),
+        // ---- end track F2 marketplace
         route(
             "schema",
             "/schema",
@@ -361,6 +492,8 @@ pub fn core_capability(method: &str) -> Option<Capability> {
         // Master-only *and* reads any path the user can.
         "fs.read" => FsReadAny,
         "events" => EventsSubscribe,
+        // Track F2: every marketplace route is the one escape hatch, no finer grain.
+        m if m.starts_with("marketplace.") => MarketplaceManage,
         other => panic!("core route {other:?} has no capability assignment"),
     })
 }

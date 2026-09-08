@@ -126,6 +126,10 @@ pub struct Shared {
     /// installs the module host; until then every module route answers 503, never 404 —
     /// the route is listed, the module is simply not reachable yet.
     pub modules: RwLock<Option<Arc<dyn crate::control::modules::RouteInvoker>>>,
+    /// Whoever answers `/marketplace/...` (`crate::marketplace`). Empty until the app
+    /// installs one; until then every marketplace route answers 503, never 404 — same
+    /// contract as `modules`.
+    pub marketplace: RwLock<Option<Arc<crate::marketplace::Marketplace>>>,
 }
 
 impl Shared {
@@ -170,6 +174,7 @@ impl Shared {
             schema: crate::control::schema::SchemaState::new(),
             caps: crate::control::dispatch::CapabilityResolver::new(),
             modules: RwLock::new(None),
+            marketplace: RwLock::new(None),
         })
     }
 
@@ -177,6 +182,12 @@ impl Shared {
     /// the app has started it. Takes effect on the next request; no router rebuild.
     pub fn install_route_invoker(&self, invoker: Arc<dyn crate::control::modules::RouteInvoker>) {
         *self.modules.write().unwrap() = Some(invoker);
+    }
+
+    /// Install (or replace) the marketplace that answers `/marketplace/...`. Takes effect
+    /// on the next request; no router rebuild.
+    pub fn install_marketplace(&self, mp: Arc<crate::marketplace::Marketplace>) {
+        *self.marketplace.write().unwrap() = Some(mp);
     }
 
     /// Set the requested bind address/port (from `control_settings`) BEFORE `run_server`.
