@@ -519,6 +519,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if ctl_cli::wants_ctl(&argv0) {
         return ctl_cli::run(&argv0).map_err(Into::into);
     }
+    if ctl_cli::wants_schema_cli(&argv0) {
+        return ctl_cli::run_schema(&argv0).map_err(Into::into);
+    }
 
     // Extract the baked-in OFL fonts (Fira Code / JetBrains Mono) so they always resolve.
     crate::prefs::init_bundled_fonts();
@@ -1017,6 +1020,7 @@ pub(crate) fn goal_key(field: usize, menu_open: bool, msg: &KeyMsg) -> Option<Co
 #[tracing::instrument(level = "debug", ret)]
 fn pipeable_cli(argv: &[String]) -> bool {
     ctl_cli::wants_ctl(argv)
+        || ctl_cli::wants_schema_cli(argv)
         || pair::wants_pair(argv)
         || devices::wants_devices(argv)
         || devices::wants_revoke(argv)
