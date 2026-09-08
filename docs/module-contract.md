@@ -163,7 +163,7 @@ version-1 peer must serve.
 | `host.fs.list` | `{ path }` → `{ entries: [{ name, kind }] }` |
 | `host.events.subscribe` | `{ kinds: [string] }` |
 | `host.toast` | `{ text, level? }` |
-| `host.routes.register` | `{ routes: [RouteDescriptor] }` |
+| `host.routes.register` | `{ routes: [RouteDescriptor] }` — the whole set; registering again replaces it (§7) |
 | `host.keychain.get` / `host.keychain.set` | `{ key }` → `{ value? }` / `{ key, value }` |
 
 **Module serves** (host calls):
@@ -232,6 +232,25 @@ not JSON, `503 {"error":"module unavailable"}` when the module is not installed
 or not running, `400 {"error":"module","code","message","data"}` when the module
 answered with a JSON-RPC error, and `502 {"error":"module failed"}` when the
 host could not complete the exchange (timeout, closed pipe).
+
+Registering: `host.routes.register` (gated on `control.route`) carries the
+module's whole route set; sending it again replaces the set, and an empty set
+withdraws every route. The host stamps each descriptor's `module` with the
+caller's id and answers `InvalidParams` (naming the route) for a descriptor
+that names another module, names no `capability`, asks for a scope other than
+`token` (a module can neither open a route to the world nor restrict one to the
+master token), or for a batch `validate_table` rejects (duplicate method,
+duplicate mount, an undeclared `{param}`). The accepted set is published as
+`HostEvent::Routes`; `control::modules::attach_host` (the app's one wiring
+call: it also installs the host as the `/m/...` invoker) folds it into the
+schema registry, so the routes show up in `GET /schema` and answer at
+`/m/<owner>/<repo>/...` a moment later. Method names are global across the
+core and every module: a set whose name clashes is refused by the registry,
+logged, and the module's previous set stands. When the module's status stops
+being live (crash, disable, shutdown) its routes leave the registry — `404`
+from then on — and come back when the restarted process registers again, as
+`examples/hello.rs` does with `GET /greet/{name}` → `module.route.invoke`
+`{ route: "hello.greet", params: { name } }`.
 
 ## 8. Skills
 

@@ -17,6 +17,8 @@
 #![cfg(unix)]
 
 use std::collections::BTreeSet;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::Receiver;
@@ -37,6 +39,46 @@ use serde_json::{json, Value};
 const WAIT: Duration = Duration::from_secs(60);
 
 /// A private scratch directory, removed on drop.
+/// One raw HTTP/1.1 exchange against the control server (same helper as
+/// `control_parity.rs`, so the `/m/...` leg uses no HTTP client crate).
+fn request(port: u16, method: &str, path: &str, token: Option<&str>) -> (u16, String) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    if let Some(t) = token {
+        req.push_str(&format!("Authorization: Bearer {t}\r\n"));
+    }
+    req.push_str("\r\n");
+    stream.write_all(req.as_bytes()).expect("write");
+    let mut resp = String::new();
+    stream.read_to_string(&mut resp).expect("read");
+    let status: u16 = resp
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("status code");
+    let body = resp
+        .split_once("\r\n\r\n")
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
+    (status, body)
+}
+
+/// The schema bridge applies host events on its own thread, so a route appears (and
+/// vanishes) a moment after the test sees the event: poll until the status settles.
+fn request_until(port: u16, path: &str, token: Option<&str>, want: u16) -> (u16, String) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let (status, body) = request(port, "GET", path, token);
+        if status == want || Instant::now() > deadline {
+            return (status, body);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+const MASTER: &str = "e2e-master-token";
+
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -143,7 +185,11 @@ fn record(manifest: Manifest, sha256: String) -> InstallRecord {
         version: manifest.module.version.clone(),
         artifact_sha256: sha256,
         source: DistributionKind::Source,
-        accepted: BTreeSet::from([Capability::UiRail, Capability::UiCommands]),
+        accepted: BTreeSet::from([
+            Capability::UiRail,
+            Capability::UiCommands,
+            Capability::ControlRoute,
+        ]),
         manifest,
         installed_at: 1_700_000_000,
         kind: InstallKind::Manual,
@@ -237,6 +283,13 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
     let host = new_host(scratch.path("data"), &rights);
     let rail = host.rail_events();
     let events = host.events();
+    // The control server, wired to this host: `/m/avada/hello/...` forwards to the
+    // module and the schema follows its routes. Attached before the spawn so the first
+    // `host.routes.register` is seen.
+    let (shared, port) =
+        avada_core::control::server::serve_for_test(scratch.path("control.json"), true, MASTER)
+            .expect("boot the control server");
+    let _bridge = avada_core::control::modules::attach_host(shared.clone(), &host);
     host.spawn_with(
         &rights,
         &verified.binary,
@@ -283,6 +336,51 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].id, "greet");
 
+    // ---- the control-plane route: registered, in the schema, served over HTTP -----
+    let routes = next(&events, "HostEvent::Routes", |ev| match ev {
+        HostEvent::Routes { module, routes } if module == id => Some(routes),
+        _ => None,
+    });
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].method, "hello.greet");
+    assert_eq!(
+        routes[0].module.as_ref(),
+        Some(&id),
+        "the host fills in the owner"
+    );
+    assert_eq!(routes[0].mounted_path(), "/m/avada/hello/greet/{name}");
+    assert_eq!(host.routes(&id), routes);
+    let (status, body) = request_until(port, "/m/avada/hello/greet/Avada", Some(MASTER), 200);
+    assert_eq!(status, 200, "{body}");
+    let answer: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(answer["greeting"], json!("Hello, Avada"));
+    assert_eq!(
+        answer["count"],
+        json!(1),
+        "the route shares the process's counter"
+    );
+    let schema: Value =
+        serde_json::from_str(&request(port, "GET", "/schema", Some(MASTER)).1).unwrap();
+    let listed = schema["routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["method"] == json!("hello.greet"))
+        .expect("the module's route is in GET /schema");
+    assert_eq!(listed["module"], json!("avada/hello"));
+    assert_eq!(listed["path"], json!("/greet/{name}"));
+    // The usual order of refusals in front of the module: no token, no such route,
+    // wrong verb.
+    assert_eq!(request(port, "GET", "/m/avada/hello/greet/x", None).0, 401);
+    assert_eq!(
+        request(port, "GET", "/m/avada/hello/nope", Some(MASTER)).0,
+        404
+    );
+    assert_eq!(
+        request(port, "POST", "/m/avada/hello/greet/x", Some(MASTER)).0,
+        405
+    );
+
     // ---- activate and command round-trips ---------------------------------------
     let activated = host.activate(&id, None).expect("module.activate");
     assert_eq!(activated["activated"], json!(true));
@@ -291,10 +389,10 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
         .invoke_command(&id, "greet", json!({ "name": "Avada" }))
         .expect("module.command.invoke");
     assert_eq!(greeted["greeting"], json!("Hello, Avada"));
-    assert_eq!(greeted["count"], json!(1));
+    assert_eq!(greeted["count"], json!(2), "the HTTP greeting counted too");
     let again = host.invoke_command(&id, "greet", Value::Null).unwrap();
     assert_eq!(again["greeting"], json!("Hello, world"));
-    assert_eq!(again["count"], json!(2), "same process, second greeting");
+    assert_eq!(again["count"], json!(3), "same process, third greeting");
 
     // ---- crash and restart ------------------------------------------------------
     // `crash` makes the example exit 3 without answering, so the call itself fails.
@@ -338,12 +436,22 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
         RailEvent::Rows { module, rows, .. } if module == id => Some(rows),
         _ => None,
     });
-    let fresh = host.invoke_command(&id, "greet", Value::Null).unwrap();
+    // The new process registered its route again, and the bridge put it back.
+    let routes = next(&events, "HostEvent::Routes after restart", |ev| match ev {
+        HostEvent::Routes { module, routes } if module == id => Some(routes),
+        _ => None,
+    });
+    assert_eq!(routes[0].method, "hello.greet");
+    let (status, body) = request_until(port, "/m/avada/hello/greet/again", Some(MASTER), 200);
+    assert_eq!(status, 200, "{body}");
+    let answer: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
-        fresh["count"],
+        answer["count"],
         json!(1),
         "a new process starts counting again"
     );
+    let fresh = host.invoke_command(&id, "greet", Value::Null).unwrap();
+    assert_eq!(fresh["count"], json!(2));
 
     // ---- clean shutdown ---------------------------------------------------------
     host.shutdown(&id).expect("module.shutdown");
@@ -380,6 +488,22 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
     }
     assert!(matches!(host.status(&id), ModuleStatus::Disabled { .. }));
     assert!(host.rail_state(&id).entries.is_empty());
+    // The Disabled status took the route out of the schema: 404 now, never 200. (Until
+    // the bridge caught up the answer was 503 — listed but nobody home — which is also
+    // not a greeting.)
+    let (status, body) = request_until(port, "/m/avada/hello/greet/x", Some(MASTER), 404);
+    assert_eq!(status, 404, "{body}");
+    let schema: Value =
+        serde_json::from_str(&request(port, "GET", "/schema", Some(MASTER)).1).unwrap();
+    assert!(
+        !schema["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == json!("hello.greet")),
+        "the route left GET /schema with the module"
+    );
+    drop(shared);
 
     // ---- a binary that changed since it was accepted is refused ----------------
     let tampered = scratch.path("hello-tampered");

@@ -19,6 +19,7 @@ use avada_module_sdk::contract::{
     HelloKind, HostHello, Message, Notification, Request, Response, RpcError, WorkspaceInfo,
     CONTRACT_VERSION,
 };
+use avada_module_sdk::descriptor::RouteDescriptor;
 use avada_module_sdk::rail::RowActivate;
 use avada_module_sdk::rights::InstallRecord;
 use avada_module_sdk::ModuleId;
@@ -103,6 +104,16 @@ pub enum HostEvent {
         module: ModuleId,
         /// The page description, as sent (a `PrefsPage`).
         page: Value,
+    },
+    /// The module (re)registered its control-plane routes (`host.routes.register`).
+    /// The whole set, each stamped with the module id; `control::modules::attach_host`
+    /// mounts them under `/m/<owner>/<repo>/...` and takes them down when the module
+    /// stops.
+    Routes {
+        /// Which module.
+        module: ModuleId,
+        /// The whole set.
+        routes: Vec<RouteDescriptor>,
     },
 }
 
@@ -342,6 +353,14 @@ impl Host {
     pub fn commands(&self, id: &ModuleId) -> Vec<CommandSpec> {
         match lock(&self.inner.slots).get(id) {
             Some(slot) => slot.dispatcher.commands(),
+            None => Vec::new(),
+        }
+    }
+
+    /// The control-plane routes the module registered (each stamped with its id).
+    pub fn routes(&self, id: &ModuleId) -> Vec<RouteDescriptor> {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => slot.dispatcher.routes(),
             None => Vec::new(),
         }
     }

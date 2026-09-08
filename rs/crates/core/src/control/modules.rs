@@ -9,13 +9,16 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use avada_module_sdk::contract::methods::MODULE_ROUTE_INVOKE;
 use avada_module_sdk::descriptor::RouteDescriptor;
 use avada_module_sdk::manifest::ModuleId;
 use serde_json::{json, Map, Value};
 
-use crate::module::{Host, HostError};
+use crate::control::schema::SchemaState;
+use crate::control::server::Shared;
+use crate::module::{Host, HostError, HostEvent};
 
 /// One matched request on its way to a module.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +105,46 @@ impl RouteInvoker for Host {
                 .map_err(InvokeError::from)
         })
     }
+}
+
+/// Fold one host event into the schema registry: a module's `host.routes.register`
+/// becomes its route set (replacing the previous one), and a status that is no longer
+/// live (crashed, disabled, broken, shut down) takes the set down again — the module
+/// re-registers when it comes back, since registration is part of its startup. A set the
+/// registry refuses (a method name that clashes with the core's or another module's, or a
+/// capability the module does not hold) is logged and the module's previous set stands;
+/// the module itself already got an `InvalidParams` for anything the host could check
+/// alone. Every other event is somebody else's business.
+pub fn apply_host_event(schema: &SchemaState, event: &HostEvent) {
+    match event {
+        HostEvent::Routes { module, routes } => {
+            if let Err(e) = schema.register_module_routes(module, routes.clone()) {
+                tracing::warn!(module = %module, error = %e, "module routes refused");
+            }
+        }
+        HostEvent::Status { module, status } if !status.is_live() => {
+            schema.with(|r| r.unregister_module_routes(module));
+        }
+        _ => {}
+    }
+}
+
+/// Wire a module host into the control server: the host answers `/m/...` calls, and a
+/// thread named `module-routes` keeps the schema registry in step with the host's
+/// events (see [`apply_host_event`]). The thread owns only an event receiver, so it ends
+/// on its own once the host is dropped; the handle is returned for tests that want to
+/// join it.
+pub fn attach_host(shared: Arc<Shared>, host: &Host) -> std::thread::JoinHandle<()> {
+    shared.install_route_invoker(Arc::new(host.clone()));
+    let events = host.events();
+    std::thread::Builder::new()
+        .name("module-routes".into())
+        .spawn(move || {
+            while let Ok(event) = events.recv() {
+                apply_host_event(&shared.schema, &event);
+            }
+        })
+        .expect("spawn module-routes thread")
 }
 
 /// What the registry says about a request path under one module.
@@ -226,6 +269,112 @@ mod tests {
             match_route(&routes, &acme, Verb::Get, "/stat"),
             Match::NoRoute
         );
+    }
+
+    #[test]
+    fn host_events_put_routes_in_the_schema_and_a_dead_module_takes_them_out() {
+        use crate::module::ModuleStatus;
+        let schema = SchemaState::new();
+        let acme = ModuleId::new("acme/files").unwrap();
+        let mounted = |schema: &SchemaState| -> Vec<String> {
+            schema.with(|r| {
+                r.routes()
+                    .iter()
+                    .filter(|d| d.module.as_ref() == Some(&acme))
+                    .map(|d| d.mounted_path())
+                    .collect()
+            })
+        };
+        apply_host_event(
+            &schema,
+            &HostEvent::Routes {
+                module: acme.clone(),
+                routes: vec![desc(&acme, "acme.tree", Verb::Get, "/tree")],
+            },
+        );
+        assert_eq!(mounted(&schema), vec!["/m/acme/files/tree"]);
+        assert!(schema
+            .document("0")
+            .routes
+            .iter()
+            .any(|d| d.method == "acme.tree"));
+        // A second registration replaces the first.
+        apply_host_event(
+            &schema,
+            &HostEvent::Routes {
+                module: acme.clone(),
+                routes: vec![desc(&acme, "acme.stat", Verb::Get, "/stat")],
+            },
+        );
+        assert_eq!(mounted(&schema), vec!["/m/acme/files/stat"]);
+        // Live statuses leave the set alone; a crash removes it.
+        for live in [ModuleStatus::Starting, ModuleStatus::Running] {
+            apply_host_event(
+                &schema,
+                &HostEvent::Status {
+                    module: acme.clone(),
+                    status: live,
+                },
+            );
+            assert_eq!(mounted(&schema).len(), 1);
+        }
+        apply_host_event(
+            &schema,
+            &HostEvent::Status {
+                module: acme.clone(),
+                status: ModuleStatus::Crashed { restarts: 1 },
+            },
+        );
+        assert!(mounted(&schema).is_empty());
+        // Events that are not about routes are ignored.
+        apply_host_event(
+            &schema,
+            &HostEvent::Toast {
+                module: acme.clone(),
+                text: "hi".into(),
+                level: "info".into(),
+            },
+        );
+        assert!(mounted(&schema).is_empty());
+    }
+
+    #[test]
+    fn a_set_the_registry_refuses_leaves_the_previous_set_standing() {
+        let schema = SchemaState::new();
+        let acme = ModuleId::new("acme/files").unwrap();
+        let core_method = schema.with(|r| {
+            r.routes()
+                .iter()
+                .find(|d| d.module.is_none())
+                .map(|d| d.method.clone())
+                .expect("the core table has routes")
+        });
+        let before = schema.with(|r| r.routes().len());
+        apply_host_event(
+            &schema,
+            &HostEvent::Routes {
+                module: acme.clone(),
+                routes: vec![desc(&acme, "acme.tree", Verb::Get, "/tree")],
+            },
+        );
+        assert_eq!(schema.with(|r| r.routes().len()), before + 1);
+        // A method name the core already owns is refused; the registry is unchanged.
+        apply_host_event(
+            &schema,
+            &HostEvent::Routes {
+                module: acme.clone(),
+                routes: vec![desc(&acme, &core_method, Verb::Get, "/clash")],
+            },
+        );
+        let after: Vec<String> = schema.with(|r| {
+            r.routes()
+                .iter()
+                .filter(|d| d.module.as_ref() == Some(&acme))
+                .map(|d| d.method.clone())
+                .collect()
+        });
+        assert_eq!(after, vec!["acme.tree"]);
+        assert_eq!(schema.with(|r| r.routes().len()), before + 1);
     }
 
     #[test]

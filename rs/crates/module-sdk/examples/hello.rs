@@ -5,9 +5,12 @@
 //! 1. handshakes ([`Connection::handshake`], which negotiates the contract version),
 //! 2. registers one rail entry (`host.rail.register`) and a tier-1 row list
 //!    (`host.rows.set`), plus one command when `ui.commands` was granted,
-//! 3. answers `module.activate`, `module.deactivate`, `module.command.invoke` and
-//!    `module.row.activate`,
-//! 4. returns from `main` when `module.shutdown` arrives (or the pipe closes).
+//! 3. registers one control-plane route (`host.routes.register`, `GET /greet/{name}`)
+//!    when `control.route` was granted, which the host serves at
+//!    `/m/avada/hello/greet/{name}` and forwards as `module.route.invoke`,
+//! 4. answers `module.activate`, `module.deactivate`, `module.command.invoke`,
+//!    `module.row.activate` and `module.route.invoke`,
+//! 5. returns from `main` when `module.shutdown` arrives (or the pipe closes).
 //!
 //! `hello --manifest` prints the embedded `avada.toml` and exits, so an installer or a
 //! test can record exactly the manifest the module will present.
@@ -18,7 +21,7 @@
 /// The manifest this module presents in its hello.
 ///
 /// Top-level keys come before the first table header (TOML rule).
-pub const MANIFEST: &str = r#"capabilities = ["ui.rail", "ui.commands"]
+pub const MANIFEST: &str = r#"capabilities = ["ui.rail", "ui.commands", "control.route"]
 
 [module]
 id = "avada/hello"
@@ -136,6 +139,22 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
         )?;
     }
 
+    if conn.has(Capability::ControlRoute) {
+        // The host fills in `module`; `capability` is what a *caller's* token needs.
+        conn.call(
+            methods::HOST_ROUTES_REGISTER,
+            json!({ "routes": [{
+                "method": "hello.greet",
+                "path": "/greet/{name}",
+                "verb": "GET",
+                "capability": "workspace.read",
+                "summary": "Greet someone and count the greetings",
+                "params": [{ "name": "name", "location": "path", "kind": "string", "required": true, "summary": "Who to greet" }],
+                "scope": "token",
+            }] }),
+        )?;
+    }
+
     let mut greetings: u64 = 0;
     while let Some(msg) = conn.recv()? {
         match msg {
@@ -165,6 +184,22 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
                         }
                     }
                     methods::MODULE_ROW_ACTIVATE => req.ok(json!({ "row": req.params["row"] })),
+                    methods::MODULE_ROUTE_INVOKE => {
+                        match req.params["route"].as_str() {
+                            Some("hello.greet") => {
+                                greetings += 1;
+                                let who = req.params["params"]["name"]
+                                    .as_str()
+                                    .unwrap_or("world")
+                                    .to_string();
+                                req.ok(json!({ "greeting": format!("Hello, {who}"), "count": greetings }))
+                            }
+                            other => req.err(RpcError::new(
+                                ErrorCode::InvalidParams,
+                                format!("unknown route {other:?}"),
+                            )),
+                        }
+                    }
                     _ => req.err(RpcError::new(
                         ErrorCode::MethodNotFound,
                         format!("hello does not serve {}", req.method),

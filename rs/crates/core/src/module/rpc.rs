@@ -12,6 +12,7 @@ use super::host::HostEvent;
 use super::rail::{FanOut, RailEvent, RailState};
 use avada_module_sdk::contract::methods::{self, required_capability};
 use avada_module_sdk::contract::{ErrorCode, Notification, Request, Response, RpcError};
+use avada_module_sdk::descriptor::{validate_table, RouteDescriptor, Scope};
 use avada_module_sdk::rail::{validate_entry, RegisterRail, SetRows};
 use avada_module_sdk::ModuleId;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,7 @@ pub const SERVED: &[&str] = &[
     methods::HOST_PREFS_DECLARE,
     methods::HOST_PREFS_GET,
     methods::HOST_TOAST,
+    methods::HOST_ROUTES_REGISTER,
 ];
 
 /// One command a module registered (`host.command.register`).
@@ -125,6 +127,14 @@ pub(crate) struct Dispatcher {
     pub commands: Mutex<Vec<CommandSpec>>,
     /// Preferences.
     pub prefs: Mutex<Prefs>,
+    /// Control-plane routes the module registered, stamped with its id.
+    pub routes: Mutex<Vec<RouteDescriptor>>,
+}
+
+/// `host.routes.register` params.
+#[derive(Deserialize)]
+struct RegisterRoutes {
+    routes: Vec<RouteDescriptor>,
 }
 
 fn invalid_params(e: impl std::fmt::Display) -> RpcError {
@@ -148,6 +158,7 @@ impl Dispatcher {
             rail: Mutex::new(RailState::default()),
             commands: Mutex::new(Vec::new()),
             prefs: Mutex::new(Prefs::load(data_dir)),
+            routes: Mutex::new(Vec::new()),
         }
     }
 
@@ -190,13 +201,13 @@ impl Dispatcher {
             methods::HOST_PREFS_DECLARE => self.prefs_declare(params),
             methods::HOST_PREFS_GET => Ok(self.lock_prefs().as_result()),
             methods::HOST_TOAST => self.toast(params),
+            methods::HOST_ROUTES_REGISTER => self.routes_register(params),
             methods::HOST_PANES_SPAWN
             | methods::HOST_PANES_INPUT
             | methods::HOST_FS_READ
             | methods::HOST_FS_WRITE
             | methods::HOST_FS_LIST
             | methods::HOST_EVENTS_SUBSCRIBE
-            | methods::HOST_ROUTES_REGISTER
             | methods::HOST_KEYCHAIN_GET
             | methods::HOST_KEYCHAIN_SET => Err(unsupported(method)),
             other => Err(RpcError::new(
@@ -298,6 +309,53 @@ impl Dispatcher {
         Ok(Value::Null)
     }
 
+    /// `host.routes.register`: the whole set at once (registering again replaces). Every
+    /// descriptor is stamped with this module's id — one that names another module is
+    /// refused, as is one without a capability (the control server would refuse it
+    /// later, silently from the module's point of view) or with a scope other than
+    /// `token` (a module cannot open a route to the world or restrict one to the
+    /// master token). The batch is validated as a table here so the module gets an
+    /// `InvalidParams` naming the route; cross-module collisions are the registry's
+    /// call and are logged by the bridge.
+    fn routes_register(&self, params: &Value) -> Result<Value, RpcError> {
+        let RegisterRoutes { mut routes } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        for r in &mut routes {
+            if let Some(other) = &r.module {
+                if other != &self.module {
+                    return Err(invalid_params(format!(
+                        "route `{}` names module `{other}`; this module is `{}`",
+                        r.method, self.module
+                    )));
+                }
+            }
+            r.module = Some(self.module.clone());
+            if r.capability.is_none() {
+                return Err(invalid_params(format!(
+                    "route `{}` names no capability; every module route must",
+                    r.method
+                )));
+            }
+            if r.scope != Scope::Token {
+                return Err(invalid_params(format!(
+                    "route `{}` asks for scope `{}`; module routes are token-scoped",
+                    r.method,
+                    serde_json::to_value(r.scope)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default()
+                )));
+            }
+        }
+        validate_table(&routes).map_err(invalid_params)?;
+        *self.routes.lock().unwrap_or_else(|e| e.into_inner()) = routes.clone();
+        self.shared.events.send(HostEvent::Routes {
+            module: self.module.clone(),
+            routes,
+        });
+        Ok(Value::Null)
+    }
+
     /// Replace the stored values (the host's side of "prefs set"), persist them, and
     /// hand back the `module.prefs.changed` params to send.
     pub(crate) fn set_prefs(&self, values: Map<String, Value>) -> std::io::Result<Value> {
@@ -310,6 +368,14 @@ impl Dispatcher {
     /// Everything the module registered, for the placeholder and the palette.
     pub(crate) fn commands(&self) -> Vec<CommandSpec> {
         self.commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The control-plane routes the module registered, stamped with its id.
+    pub(crate) fn routes(&self) -> Vec<RouteDescriptor> {
+        self.routes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -414,7 +480,6 @@ pub(crate) mod tests {
             methods::HOST_FS_WRITE,
             methods::HOST_FS_LIST,
             methods::HOST_EVENTS_SUBSCRIBE,
-            methods::HOST_ROUTES_REGISTER,
             methods::HOST_KEYCHAIN_GET,
             methods::HOST_KEYCHAIN_SET,
         ] {
@@ -535,6 +600,118 @@ pub(crate) mod tests {
             HostEvent::Commands { commands, .. } if commands[0].id == "reveal"
         ));
         assert_eq!(rig.d.commands().len(), 1);
+    }
+
+    fn route(method: &str, path: &str) -> Value {
+        let params: Vec<Value> = path
+            .split('/')
+            .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+            .map(|name| json!({ "name": name, "location": "path", "kind": "string", "required": true, "summary": "" }))
+            .collect();
+        json!({
+            "method": method,
+            "path": path,
+            "verb": "GET",
+            "capability": "workspace.read",
+            "summary": "",
+            "params": params,
+            "scope": "token",
+        })
+    }
+
+    #[test]
+    fn routes_register_stamps_the_module_and_reaches_the_event_stream() {
+        let rig = rig(&[Capability::ControlRoute]);
+        rig.d
+            .call(
+                methods::HOST_ROUTES_REGISTER,
+                &json!({ "routes": [route("acme.tree", "/tree"), route("acme.open", "/files/{id}")] }),
+            )
+            .unwrap();
+        let routes = match rig.events.recv().unwrap() {
+            HostEvent::Routes { module, routes } => {
+                assert_eq!(module.as_str(), "acme/avada-files");
+                routes
+            }
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(routes.len(), 2);
+        assert!(
+            routes
+                .iter()
+                .all(|r| r.module.as_ref().map(|m| m.as_str()) == Some("acme/avada-files")),
+            "the host fills in the owner"
+        );
+        assert_eq!(routes[1].mounted_path(), "/m/acme/avada-files/files/{id}");
+        assert_eq!(rig.d.routes(), routes);
+        // Registering again replaces the set; an empty set is a valid way to withdraw.
+        rig.d
+            .call(methods::HOST_ROUTES_REGISTER, &json!({ "routes": [] }))
+            .unwrap();
+        assert!(matches!(
+            rig.events.recv().unwrap(),
+            HostEvent::Routes { routes, .. } if routes.is_empty()
+        ));
+        assert!(rig.d.routes().is_empty());
+    }
+
+    #[test]
+    fn routes_register_refuses_what_the_control_server_would_and_says_which_route() {
+        let rig = rig(&[Capability::ControlRoute]);
+        let refused = |routes: Value| -> String {
+            let e = rig
+                .d
+                .call(methods::HOST_ROUTES_REGISTER, &json!({ "routes": routes }))
+                .unwrap_err();
+            assert_eq!(e.kind(), ErrorCode::InvalidParams);
+            e.message
+        };
+        // Another module's id.
+        let mut foreign = route("acme.tree", "/tree");
+        foreign["module"] = json!("other/widget");
+        let msg = refused(json!([foreign]));
+        assert!(
+            msg.contains("acme.tree") && msg.contains("other/widget"),
+            "{msg}"
+        );
+        // Its own id spelled out is fine.
+        let mut own = route("acme.tree", "/tree");
+        own["module"] = json!("acme/avada-files");
+        rig.d
+            .call(methods::HOST_ROUTES_REGISTER, &json!({ "routes": [own] }))
+            .unwrap();
+        rig.events.recv().unwrap();
+        // No capability.
+        let mut bare = route("acme.tree", "/tree");
+        bare["capability"] = Value::Null;
+        let msg = refused(json!([bare]));
+        assert!(msg.contains("no capability"), "{msg}");
+        // Master or public scope.
+        let mut master = route("acme.tree", "/tree");
+        master["scope"] = json!("master");
+        let msg = refused(json!([master]));
+        assert!(
+            msg.contains("`master`") && msg.contains("token-scoped"),
+            "{msg}"
+        );
+        // A path capture that is not declared as a param, and a duplicate method.
+        let mut undeclared = route("acme.open", "/files/{id}");
+        undeclared["params"] = json!([]);
+        refused(json!([undeclared]));
+        refused(json!([
+            route("acme.tree", "/tree"),
+            route("acme.tree", "/other")
+        ]));
+        // Nothing refused reached the event stream, and the last good set stands.
+        assert!(rig.events.try_recv().is_err());
+        assert_eq!(rig.d.routes().len(), 1);
+        // Without `control.route` the gate answers first.
+        let bare = super::tests::rig(&[]);
+        let e = bare
+            .d
+            .call(methods::HOST_ROUTES_REGISTER, &json!({ "routes": [] }))
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
     }
 
     #[test]
