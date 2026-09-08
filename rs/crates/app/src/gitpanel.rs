@@ -2,7 +2,7 @@
 //! pointed at — branch, upstream divergence, and the staged / changed / untracked files.
 //!
 //! Read-only on purpose. The panel *shows* the working tree and lets you open a file from
-//! it (the same reveal the FILES mode uses); staging, committing and discarding are
+//! it (the same reveal a files module gets); staging, committing and discarding are
 //! destructive and are not wired to a one-click row.
 //!
 //! Everything here comes from ONE `git status --porcelain=v2 --branch -z` run, parsed

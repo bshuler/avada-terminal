@@ -4241,76 +4241,6 @@ impl App {
                 });
         }
 
-        // ---- the left panel's FILES mode (D14) ----
-        // Every one of these carries the row's PATH rather than its index: the row list is
-        // rebuilt from disk by the very clicks that dispatch from it, so an index would name
-        // a different row by the time the command ran.
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_files_click(move |path| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::FilesClick(path.to_string()));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_files_open(move |path| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::FilesOpen(path.to_string()));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_files_context(move |path, x, y| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::OpenFileContext(path.to_string(), x, y));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_files_query_changed(move |q| {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::FilesSetQuery(q.to_string()));
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_files_up(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::FilesUp);
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_files_refresh(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::FilesRefresh);
-                    }
-                });
-        }
         // ---- left panel: Git mode (J) ----
         // The rows carry git's REPO-RELATIVE path; `State::git_abs` resolves it. No Stage /
         // Unstage / Discard: this view is read-only by design.
@@ -4392,9 +4322,9 @@ impl App {
                 });
         }
         // `mode` is `in-out` and the strip writes it in Slint, so Rust would otherwise never
-        // learn the panel had been switched. Entering FILES reads the filesystem and
-        // entering GIT runs `git status`, so the strip says so rather than leaving the
-        // resync to notice a mode it can't see — the resync must never do either.
+        // learn the panel had been switched. Entering GIT runs `git status`, so the strip
+        // says so rather than leaving the resync to notice a mode it cannot see — the
+        // resync must never run a subprocess.
         {
             let app = app.clone();
             let id = win.id;
@@ -4412,14 +4342,9 @@ impl App {
                     if leaving_rail {
                         app.run_command(&w, Command::RailBack);
                     }
-                    let cmd = if mode == crate::paneview::LEFT_MODE_FILES {
-                        Command::FilesRefresh
-                    } else if mode == crate::paneview::LEFT_MODE_GIT {
-                        Command::GitRefresh
-                    } else {
-                        return;
-                    };
-                    app.run_command(&w, cmd);
+                    if mode == crate::paneview::LEFT_MODE_GIT {
+                        app.run_command(&w, Command::GitRefresh);
+                    }
                 });
         }
 
@@ -4449,6 +4374,33 @@ impl App {
                             &w,
                             Command::RailRow(key.into(), row.into(), gesture.into()),
                         );
+                    }
+                });
+        }
+
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::RailAdapter>()
+                .on_row_context(move |key, row, x, y| {
+                    if let Some(w) = app.window_by_id(id) {
+                        app.run_command(
+                            &w,
+                            Command::RailContext(key.into(), row.into(), x, y),
+                        );
+                    }
+                });
+        }
+
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::RailAdapter>()
+                .on_query_changed(move |q| {
+                    if let Some(w) = app.window_by_id(id) {
+                        app.run_command(&w, Command::RailQuery(q.to_string()));
                     }
                 });
         }

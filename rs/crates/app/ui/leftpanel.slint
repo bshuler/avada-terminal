@@ -33,7 +33,7 @@
 
 import { Theme } from "theme.slint";
 import { TipArea } from "tooltip.slint";
-import { LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftFileRow, LeftGitRow, LeftPanelAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
+import { LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftGitRow, LeftPanelAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
 // The explorer alone uses a real `ListView`: its model is a whole project tree, and only a
 // ListView instantiates the visible rows. Every other section here is a short hand-rolled
 // Flickable, which is cheaper for a list you can count.
@@ -84,8 +84,8 @@ component GridGlyph inherits Rectangle {
     Rectangle { x: 8px;   y: 8px;   width: 5px; height: 5px; border-radius: 1px; background: root.ink; }
 }
 
-// The FILES mode's mark: a folder outline. Drawn here for the same reason GridGlyph is —
-// mode 1 is not a tool, so it has no registry icon and no brand.
+// A folder outline. Drawn here for the same reason GridGlyph is — the built-in modes are
+// not tools, so they have no registry icon and no brand.
 component FolderGlyph inherits Path {
     in property <color> ink;
     width: 14px;
@@ -99,7 +99,8 @@ component FolderGlyph inherits Path {
 }
 
 // The GIT mode's mark: a branch — a trunk with one fork, three nodes. Drawn here for the
-// same reason GridGlyph and FolderGlyph are: mode 2 is not a tool and has no registry icon.
+// same reason GridGlyph and FolderGlyph are: a built-in mode is not a tool and so has no
+// registry icon.
 component BranchGlyph inherits Rectangle {
     in property <color> ink;
     width: 14px;
@@ -349,14 +350,11 @@ component ModeButton inherits Rectangle {
     }
     // 0 is the workspace mode and each negative is one built-in view — none of the three
     // is a tool, so each draws its own glyph. Anything positive is a registry icon kind.
-    // Tested EXACTLY, never as `< 0`: a catch-all negative branch would draw the folder for
-    // every built-in that is ever added after Files.
+    // Tested EXACTLY, never as `< 0`: a catch-all negative branch would draw one built-in's
+    // glyph for every built-in that is ever added after it. -1 was the explorer's folder and
+    // is now unused — deliberately not recycled, since a stale -1 anywhere would then draw
+    // something plausible instead of nothing.
     if root.mode-row.icon == 0 : GridGlyph {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2 - 1px;
-        ink: root.active ? Theme.text : Theme.subtext;
-    }
-    if root.mode-row.icon == -1 : FolderGlyph {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2 - 1px;
         ink: root.active ? Theme.text : Theme.subtext;
@@ -431,10 +429,11 @@ component RailButton inherits Rectangle {
     }
 }
 
-// One tier-1 row a module projected under its rail entry (track H4). Mirrors
-// `FileRowView` — indent by depth, a chevron for an expandable row, label over detail —
-// so a module's list is indistinguishable from the built-in explorer at a glance. The
-// module's own icon path (viewbox 16x16) replaces the file glyph when it ships one.
+// One tier-1 row a module projected under its rail entry (track H4). Shaped like the
+// built-in explorer this list replaced — indent by depth, a chevron for an expandable row,
+// label over detail — so a module's list is indistinguishable from a native section at a
+// glance. The module's own icon path (viewbox 16x16) replaces the file glyph when it
+// ships one.
 component RailRowView inherits Rectangle {
     in property <RailRowItem> item;
     callback clicked();
@@ -443,8 +442,17 @@ component RailRowView inherits Rectangle {
 
     height: root.item.detail == "" ? 20px : 30px;
     border-radius: 4px;
-    background: ta.has-hover ? Theme.surface : transparent;
+    background: root.item.selected ? Theme.surface2 : (ta.has-hover ? Theme.surface : transparent);
+    // The selected row also gets an accent edge. A reveal's whole job is to answer "where is
+    // this row" at a glance, and a fill one step off the panel background did not survive
+    // being one row among forty — especially when the panel had just opened and the eye had
+    // no idea where to land. Inherited from the explorer this list replaced.
+    border-width: root.item.selected ? 1px : 0px;
+    border-color: Theme.accent;
     property <length> indent: 4px + min(root.item.depth, 8) * 11px;
+    // A dimmed row is still listed and still clickable — a hidden file, an ignored path —
+    // it just stops competing for the eye with the rows the module considers primary.
+    opacity: root.item.dimmed && !root.item.selected ? 0.55 : 1.0;
 
     if root.item.expandable : ChevronGlyph {
         x: root.indent;
@@ -478,7 +486,7 @@ component RailRowView inherits Rectangle {
         spacing: 1px;
         Text {
             text: root.item.label;
-            color: root.item.expandable ? Theme.text : Theme.subtext;
+            color: root.item.selected || root.item.expandable ? Theme.text : Theme.subtext;
             font-size: 11px;
             overflow: elide;
         }
@@ -501,10 +509,23 @@ component RailRowView inherits Rectangle {
             }
         }
         // The row is a text label with a glyph; the label is its name, the chevron's
-        // state its expansion.
+        // state its expansion. `button` rather than `list-item` because it is what every
+        // rail test — and every screen reader — already reaches these rows by.
         accessible-role: button;
         accessible-label: root.item.label;
+        accessible-description: root.item.detail;
+        accessible-expandable: root.item.expandable;
         accessible-expanded: root.item.expanded;
+        // `marks` verbatim, so a mark a module invents that the panel draws nothing for is
+        // still announced rather than silently dropped.
+        accessible-item-selectable: true;
+        accessible-item-selected: root.item.selected;
+        accessible-value: root.item.marks;
+        // Declared rather than left to default: Slint reports only the accessible
+        // properties an element actually sets, so an unstated `enabled` reaches a screen
+        // reader as "unknown", not as "yes". Every rail row is actionable — a module that
+        // wants one inert takes it out of the list.
+        accessible-enabled: self.enabled;
     }
 }
 
@@ -1232,96 +1253,6 @@ component HeadButton inherits Rectangle {
     }
 }
 
-// One row of the FILES tree. Indent is `depth`, so the flattening in Rust is the whole
-// hierarchy the view knows about — there is no nesting here to disagree with it.
-component FileRowView inherits Rectangle {
-    in property <LeftFileRow> item;
-    callback clicked();
-    callback opened();
-    callback context(length, length);
-
-    // The row is what a screen reader (and the headless harness) reaches: named by the
-    // file name, with the directory as its description; a directory row is expandable
-    // and says whether it is open; a note row (kind 2) is inert and says so.
-    accessible-role: list-item;
-    accessible-label: root.item.label;
-    accessible-description: root.item.detail;
-    accessible-enabled: root.item.kind != 2;
-    accessible-expandable: root.item.kind == 0;
-    accessible-expanded: root.item.kind == 0 && root.item.expanded;
-    accessible-item-selectable: root.item.kind != 2;
-    accessible-item-selected: root.item.selected;
-
-    height: root.item.detail == "" ? 20px : 30px;
-    border-radius: 4px;
-    // A note row is inert: no hover, no selection, no pointer.
-    background: root.item.kind == 2
-        ? transparent
-        : (root.item.selected ? Theme.surface2 : (ta.has-hover ? Theme.surface : transparent));
-    // The selected row also gets an accent edge. A reveal's whole job is to answer "where is
-    // this file" at a glance, and a fill one step off the panel background did not survive
-    // being one row among forty — especially when the panel had just opened and the eye had
-    // no idea where to land.
-    border-width: root.item.selected && root.item.kind != 2 ? 1px : 0px;
-    border-color: Theme.accent;
-
-    // Two indent steps per level, clamped so a deep path still leaves room for its name.
-    property <length> indent: 4px + min(root.item.depth, 8) * 11px;
-
-    // A directory's disclosure chevron doubles as its icon — one mark, not two, at this width.
-    if root.item.kind == 0 : ChevronGlyph {
-        x: root.indent;
-        y: (parent.height - self.height) / 2;
-        open: root.item.expanded;
-        ink: Theme.subtext;
-    }
-    if root.item.kind == 1 : FileGlyph {
-        x: root.indent;
-        y: (parent.height - self.height) / 2;
-        ink: root.item.selected ? Theme.text : Theme.subtext;
-    }
-
-    VerticalLayout {
-        x: root.indent + 17px;
-        width: parent.width - self.x - 6px;
-        height: 100%;
-        alignment: center;
-        spacing: 1px;
-        Text {
-            text: root.item.label;
-            color: root.item.kind == 2
-                ? Theme.subtext
-                : (root.item.selected ? Theme.text : (root.item.kind == 0 ? Theme.text : Theme.subtext));
-            font-size: 11px;
-            // The tail of a filename is what distinguishes it, so eliding the HEAD is what
-            // keeps a 260px panel readable. Slint elides the tail; the Rust side therefore
-            // ships names short enough to fit and this is a last resort.
-            overflow: elide;
-        }
-        if root.item.detail != "" : Text {
-            text: root.item.detail;
-            color: Theme.subtext;
-            font-size: 9px;
-            overflow: elide;
-        }
-    }
-
-    // Unconditional rather than wrapped in an `if`, so the background above can read its
-    // hover; a note row makes it `enabled: false`, which also stops it hovering at all.
-    ta := TouchArea {
-        enabled: root.item.kind != 2;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        double-clicked => { root.opened(); }
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
-                root.context(self.absolute-position.x + self.mouse-x,
-                             self.absolute-position.y + self.mouse-y);
-            }
-        }
-    }
-}
-
 // One changed file in the GIT view: a status letter, the file name, its directory.
 //
 // The letter is the badge because it is git's own vocabulary — a human who reads `git
@@ -1426,8 +1357,8 @@ export component LeftPanel inherits Rectangle {
     // Mode 2 shows ONE of two things: the working tree as it is now, or the single commit
     // a clicked hash asked for. Naming both here keeps the nine `if` gates below honest —
     // an `&&` forgotten on one of them would have drawn the two views on top of each other.
-    property <bool> git-tree: LeftPanelAdapter.mode == 2 && !LeftPanelAdapter.git-commit-open;
-    property <bool> git-commit: LeftPanelAdapter.mode == 2 && LeftPanelAdapter.git-commit-open;
+    property <bool> git-tree: LeftPanelAdapter.mode == 1 && !LeftPanelAdapter.git-commit-open;
+    property <bool> git-commit: LeftPanelAdapter.mode == 1 && LeftPanelAdapter.git-commit-open;
 
     background: Theme.mantle;
     clip: true;
@@ -1504,8 +1435,8 @@ export component LeftPanel inherits Rectangle {
                 active: LeftPanelAdapter.mode == i;
                 // Pure UI state — switching views is not a `State` mutation, so it does
                 // not travel Seam #2. See `mode` in types.slint.
-                // The mode itself is pure UI state, but entering FILES has to read the
-                // filesystem, so Rust is told rather than left to notice.
+                // Rust is told anyway: a mode carries a root (GIT wants the repo, a tool
+                // wants its transcripts), and that scan is Rust's to start.
                 clicked => { LeftPanelAdapter.mode = i; LeftPanelAdapter.mode-changed(i); }
             }
             for e in RailAdapter.entries : RailButton {
@@ -1534,6 +1465,52 @@ export component LeftPanel inherits Rectangle {
             toggled => { }
             acted => { LeftPanelAdapter.mode = 0; LeftPanelAdapter.mode-changed(0); }
         }
+        // The filter box, shown only for an entry that asked for one. Typing here does not
+        // filter the list in place — it notifies the module (`rail.query`), and what comes
+        // back is whatever that module decided a query means. The panel never guesses.
+        if LeftPanelAdapter.mode == -1 && RailAdapter.filterable : Rectangle {
+            height: 26px;
+            border-radius: 6px;
+            background: Theme.bg;
+            border-width: 1px;
+            border-color: rq.has-focus ? Theme.accent : Theme.border;
+            HorizontalLayout {
+                padding-left: 7px;
+                padding-right: 7px;
+                spacing: 5px;
+                VerticalLayout {
+                    alignment: center;
+                    SearchGlyph { ink: rq.has-focus ? Theme.text : Theme.faint; }
+                }
+                rq := TextInput {
+                    text <=> RailAdapter.query;
+                    color: Theme.text;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    single-line: true;
+                    horizontal-stretch: 1;
+                    accessible-role: text-input;
+                    accessible-label: "Filter " + RailAdapter.active-label;
+                    edited => { RailAdapter.query-changed(self.text); }
+                    key-pressed(e) => {
+                        if (e.text == Key.Escape) {
+                            self.text = "";
+                            RailAdapter.query-changed("");
+                            return EventResult.accept;
+                        }
+                        return EventResult.reject;
+                    }
+                }
+            }
+            if RailAdapter.query == "" : Text {
+                x: 24px;
+                text: "Filter…";
+                color: Theme.faint;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
         if LeftPanelAdapter.mode == -1 : Rectangle {
             vertical-stretch: 2;
             clip: true;
@@ -1544,18 +1521,29 @@ export component LeftPanel inherits Rectangle {
                 color: Theme.subtext;
                 font-size: 11px;
             }
-            Flickable {
+            // Watched, not bound. A module marking a row `selected` bumps `scroll-seq`, and
+            // only that change moves the viewport — binding `viewport-y` to the target
+            // directly would drag the list back every time the human scrolled away from it.
+            property <int> scroll-seq: RailAdapter.scroll-seq;
+            changed scroll-seq => {
+                // Put the row a little below the top edge rather than flush against it, so
+                // the rows above it stay visible and the highlight reads as "here, in this
+                // folder" instead of "here, at the top of a list of unknown depth".
+                rlv.viewport-y = -max(0px, min(
+                    RailAdapter.scroll-y - 40px,
+                    max(0px, rlv.viewport-height - rlv.visible-height)));
+            }
+            // A real ListView, not the hand-rolled Flickable the built-in sections use: a
+            // module's list is a whole project tree and only a ListView instantiates the
+            // rows you can see.
+            rlv := ListView {
                 width: 100%;
                 height: 100%;
-                viewport-width: self.width;
-                VerticalLayout {
-                    alignment: start;
-                    for r in RailAdapter.rows : RailRowView {
-                        item: r;
-                        clicked => { RailAdapter.row-activate(RailAdapter.active, r.id, r.expandable ? "toggle" : "open"); }
-                        opened => { RailAdapter.row-activate(RailAdapter.active, r.id, "open"); }
-                        context(x, y) => { RailAdapter.row-activate(RailAdapter.active, r.id, "context"); }
-                    }
+                for r in RailAdapter.rows : RailRowView {
+                    item: r;
+                    clicked => { RailAdapter.row-activate(RailAdapter.active, r.id, r.expandable ? "toggle" : "open"); }
+                    opened => { RailAdapter.row-activate(RailAdapter.active, r.id, "open"); }
+                    context(x, y) => { RailAdapter.row-context(RailAdapter.active, r.id, x, y); }
                 }
             }
         }
@@ -1747,126 +1735,7 @@ export component LeftPanel inherits Rectangle {
             }
         }
 
-        // ===== mode 1: the project explorer =====
-        //
-        // A rooted tree plus a finder, the way an IDE's sidebar works. Both draw the same
-        // `files` model — Rust swaps a flattened tree for a ranked flat list when the query
-        // is non-empty — so the view never has to know which of the two it is showing.
-
-        // The root's own name, and the two things you do to a root: leave it, re-read it.
-        if LeftPanelAdapter.mode == 1 : HorizontalLayout {
-            spacing: 4px;
-            padding-bottom: 2px;
-            VerticalLayout {
-                alignment: center;
-                FolderGlyph { ink: Theme.subtext; }
-            }
-            Text {
-                text: LeftPanelAdapter.files-root;
-                color: Theme.text;
-                font-size: 11px;
-                font-weight: 700;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                // The interesting half of a path is its tail, but Slint elides the tail, so
-                // Rust ships the basename here and the full path lives in the tooltip.
-                overflow: elide;
-            }
-            VerticalLayout {
-                alignment: center;
-                HeadButton {
-                    tip: "Go to parent folder";
-                    glyph: 0;
-                    clicked => { LeftPanelAdapter.files-up(); }
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                HeadButton {
-                    tip: "Re-read from disk";
-                    glyph: 1;
-                    clicked => { LeftPanelAdapter.files-refresh(); }
-                }
-            }
-        }
-
-        // The finder. Typing here does not filter the tree in place — it replaces it with a
-        // ranked list of every match under the root, and clearing it puts the tree back
-        // exactly as it was, because the expansion set is untouched by either.
-        if LeftPanelAdapter.mode == 1 : Rectangle {
-            height: 26px;
-            border-radius: 6px;
-            background: Theme.bg;
-            border-width: 1px;
-            border-color: fq.has-focus ? Theme.accent : Theme.border;
-            HorizontalLayout {
-                padding-left: 7px;
-                padding-right: 7px;
-                spacing: 5px;
-                VerticalLayout {
-                    alignment: center;
-                    SearchGlyph { ink: fq.has-focus ? Theme.text : Theme.faint; }
-                }
-                fq := TextInput {
-                    text <=> LeftPanelAdapter.files-query;
-                    color: Theme.text;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    single-line: true;
-                    horizontal-stretch: 1;
-                    edited => { LeftPanelAdapter.files-query-changed(self.text); }
-                    key-pressed(e) => {
-                        if (e.text == Key.Escape) {
-                            self.text = "";
-                            LeftPanelAdapter.files-query-changed("");
-                            return EventResult.accept;
-                        }
-                        return EventResult.reject;
-                    }
-                }
-            }
-            if LeftPanelAdapter.files-query == "" : Text {
-                x: 24px;
-                text: "Find file…";
-                color: Theme.faint;
-                font-size: 11px;
-                vertical-alignment: center;
-            }
-        }
-
-        // A real ListView, not the hand-rolled Flickable the other sections use: this model
-        // is a whole project tree and only a ListView instantiates the rows you can see.
-        if LeftPanelAdapter.mode == 1 : Rectangle {
-            vertical-stretch: 1;
-            clip: true;
-            // Watched, not bound. A reveal bumps `files-scroll-seq`, and only that change
-            // moves the viewport — binding `viewport-y` to the target directly would drag
-            // the list back to the revealed row every time the human scrolled away from it.
-            property <int> scroll-seq: LeftPanelAdapter.files-scroll-seq;
-            changed scroll-seq => {
-                // Put the row a little below the top edge rather than flush against it, so
-                // the rows above it stay visible and the highlight reads as "here, in this
-                // folder" instead of "here, at the top of a list of unknown depth".
-                lv.viewport-y = -max(0px, min(
-                    LeftPanelAdapter.files-scroll-y - 40px,
-                    max(0px, lv.viewport-height - lv.visible-height)));
-            }
-            lv := ListView {
-                width: 100%;
-                height: 100%;
-                for f in LeftPanelAdapter.files : FileRowView {
-                    item: f;
-                    // Every callback carries the row's PATH. The list is rebuilt from disk by
-                    // the very clicks that dispatch from it, so an index would name a
-                    // different row by the time Rust read it.
-                    clicked => { LeftPanelAdapter.files-click(f.path); }
-                    opened => { LeftPanelAdapter.files-open(f.path); }
-                    context(cx, cy) => { LeftPanelAdapter.files-context(f.path, cx, cy); }
-                }
-            }
-        }
-
-        // ===== mode 2: the working tree =====
+        // ===== mode 1: the working tree =====
         //
         // Read-only on purpose. Everything a git panel usually offers as a one-click row
         // action — stage, unstage, discard — is destructive or history-touching, and a
@@ -2029,7 +1898,7 @@ export component LeftPanel inherits Rectangle {
             }
         }
 
-        // ===== mode 2, the other half: ONE commit =====
+        // ===== mode 1, the other half: ONE commit =====
         //
         // Reached by clicking a hash in a pane's output. Deliberately the same rows as the
         // working tree, wired to the same three callbacks: a file is a file, and a commit's
@@ -2114,9 +1983,9 @@ export component LeftPanel inherits Rectangle {
         // ===== the tool modes: one favourited tool's locally resumable sessions =====
         // A sibling of the four workspace sections rather than a wrapper around them: this
         // layout's stretch maths is load-bearing (b0c6637), and adding a nesting level to
-        // switch views would change it for the workspace mode too. With `mode > 2` every
+        // switch views would change it for the workspace mode too. With `mode > 1` every
         // section above is `false` and contributes nothing, so this is the only child left.
-        if LeftPanelAdapter.mode > 2 && LeftPanelAdapter.sessions.length == 0 : Text {
+        if LeftPanelAdapter.mode > 1 && LeftPanelAdapter.sessions.length == 0 : Text {
             // A cold cache is empty for the same reason a tool with no history is, so say
             // which one it is: the scan runs off the UI thread and lands a tick later.
             text: LeftPanelAdapter.sessions-scanning
@@ -2127,7 +1996,7 @@ export component LeftPanel inherits Rectangle {
             wrap: word-wrap;
         }
 
-        if LeftPanelAdapter.mode > 2 && LeftPanelAdapter.sessions.length > 0 : Rectangle {
+        if LeftPanelAdapter.mode > 1 && LeftPanelAdapter.sessions.length > 0 : Rectangle {
             vertical-stretch: 1;
             clip: true;
             Flickable {

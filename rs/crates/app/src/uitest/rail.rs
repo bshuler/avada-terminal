@@ -91,11 +91,11 @@ fn module_entries_follow_the_built_in_modes_on_one_strip() {
             );
             found.absolute_position().x
         };
-        let (workspace, files, git) = (x("Workspace"), x("Files"), x("Git"));
+        let (workspace, git) = (x("Workspace"), x("Git"));
         let (market, tree) = (x("Marketplace"), x("Files (acme)"));
         assert!(
-            workspace < files && files < git,
-            "the built-ins keep their order: {workspace} {files} {git}"
+            workspace < git,
+            "the built-ins keep their order: {workspace} {git}"
         );
         assert!(
             git < market && market < tree,

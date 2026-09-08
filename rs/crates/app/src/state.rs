@@ -247,6 +247,11 @@ impl ClosedItem {
 /// so the number is a live-session budget, not just a list length.
 pub const CLOSED_STACK_CAP: usize = 20;
 
+/// The rail entry id a file-tree module is expected to register. The app used to *be* that
+/// tree; it now only knows the entry's NAME, so anything that reveals a path can find the
+/// module currently providing one without either side naming the other.
+pub const FILES_ENTRY: &str = "files";
+
 /// How many consecutive pump ticks may attempt to hand the keyboard to a newly selected pane
 /// before giving up (see [`State::sync_pane_keyboard_focus`]). The hand-off normally lands on
 /// the first or second: the first can arrive before Slint has instantiated the pane's element,
@@ -1490,52 +1495,26 @@ pub struct State {
     /// The open cursor-anchored context menu (pane header / tab strip), if any. Built fresh on
     /// each right-click so its gating + checkmarks reflect the moment it opened.
     pub ctx: Option<crate::contextmenu::CtxMenu>,
-    // ---- left panel: Files mode (D14) ----
-    /// The Files explorer's root — the project the human is looking at, not the whole disk.
-    /// `None` until the mode is first opened, when it is derived from the focused pane's cwd.
-    pub files_root: Option<PathBuf>,
-    /// The focused pane's cwd that [`State::files_root`] was derived from. The explorer and
-    /// the git view are anchored to the SELECTED pane (K), so this is what tells them the
-    /// anchor has moved: while it still matches the focused pane, an explicitly chosen root
-    /// (`files_go_up`, a re-root) is the human's and is left alone.
-    pub files_root_from: Option<String>,
-    /// Which directories are expanded. Absolute paths, so an expansion survives the tree
-    /// being rebuilt from disk (which happens on every event that can change it).
-    pub files_expanded: BTreeSet<PathBuf>,
-    /// The selected row, kept as a path rather than an index: a rebuild reorders rows, and
-    /// an index would quietly come to mean a different file.
-    pub files_sel: Option<PathBuf>,
-    /// The finder query. Non-empty swaps the tree for a flat ranked match list.
-    pub files_query: String,
-    /// The stored projection the panel draws. Rebuilt by [`State::rebuild_files`] on a real
-    /// event only — never per frame, which is what listing directories in the resync would
-    /// have meant.
-    pub files_rows: Vec<crate::filetree::FileRow>,
-    /// The line/column a `file:line:col` click carried, held for whichever tool opens the
-    /// revealed file next. Cleared as soon as the selection moves to a different file, so a
-    /// stale line number can never ride along to an unrelated open.
-    pub files_target_line: Option<u32>,
-    pub files_target_col: Option<u32>,
-    /// How far down the row list a reveal wants the explorer scrolled, in logical pixels from
-    /// the top of the list. Selecting a row is only half of showing it: in a tree of any size
-    /// the selected row is usually below the fold, and a panel that opened at row 0 with the
-    /// highlight off screen answered "where is this file" with a blank list.
-    pub files_scroll_y: f32,
-    /// Bumped by every reveal, and by nothing else. The view scrolls when this CHANGES rather
-    /// than tracking `files_scroll_y` as a binding, so an ordinary frame — and every scroll the
-    /// human does with the wheel — leaves the viewport exactly where they left it.
-    pub files_scroll_seq: i32,
-    /// When the last reveal asked to be scrolled to, or `None` once that has been honoured
-    /// for long enough. While it is live the pump re-asserts the scroll every frame — see
-    /// [`State::scroll_files_to_selection`] for why one assertion is not enough.
-    pub files_scroll_hold: Option<Instant>,
+    // ---- the window's project anchor ----
+    //
+    // Named for what it is rather than for the panel that used to own it: the built-in file
+    // explorer became the `bshuler/avada-files` module, but the *project* it was rooted at is
+    // still what the git panel reads and what a new pane inherits as its cwd.
+    /// The project the human is looking at, not the whole disk. `None` until something needs
+    /// it, when it is derived from the focused pane's cwd.
+    pub project_root: Option<PathBuf>,
+    /// The focused pane's cwd that [`State::project_root`] was derived from. The git view is
+    /// anchored to the SELECTED pane (K), so this is what tells it the anchor has moved:
+    /// while it still matches the focused pane, an explicitly chosen root is the human's and
+    /// is left alone.
+    pub project_root_from: Option<String>,
     // ---- left panel: Git mode (J) ----
-    /// The working tree the panel last read, rooted at the same project the explorer is
-    /// rooted at. A stored projection for the same reason `files_rows` is one: reading it
-    /// means running `git status`, which must happen on an event and never per frame.
+    /// The working tree the panel last read, rooted at the window's project anchor, so the
+    /// two can never disagree about which project is on screen. A stored projection because
+    /// reading it means running `git status`: an event may, a frame may not.
     pub git: crate::gitpanel::GitStatus,
-    /// The selected row, as a REPO-RELATIVE path (git's own identity for the file), for the
-    /// same index-is-not-identity reason `files_sel` is a path.
+    /// The selected row, as a REPO-RELATIVE path (git's own identity for the file), because
+    /// a row index is a position and a rebuilt list moves positions around.
     pub git_sel: Option<String>,
     /// The commit the panel is showing INSTEAD of the working tree, after a hash was clicked
     /// in a pane's output. `None` is the ordinary working-tree view. Loaded once on the click
@@ -1555,6 +1534,16 @@ pub struct State {
     /// `State` is behind a `RefCell` borrow for the whole of a command dispatch: calling
     /// into the host from here would let a host callback re-enter it.
     pub rail_requests: Vec<RailRequest>,
+    /// While set, every tick re-asserts the rail's scroll target for
+    /// [`crate::paneview::RAIL_SCROLL_HOLD`]. A reveal asks for a scroll on a frame where
+    /// the list cannot yet honour it — the module has not answered, the panel is being
+    /// instantiated, the `ListView` has not measured the new rows — so the ask is repeated
+    /// for a few frames rather than fired once into a view that is not there.
+    pub rail_scroll_hold: Option<std::time::Instant>,
+    /// Host events queued for `avada_core::module::Host::emit`, as `(kind, payload)`.
+    /// Queued rather than emitted for the same re-entrancy reason as
+    /// [`State::rail_requests`], and drained beside it.
+    pub module_events: Vec<(String, serde_json::Value)>,
     /// Capability rights for every installed module — the truth the Preferences rights
     /// page projects and the ask toast answers against (track H2). Constructed empty and
     /// rooted at the real app-support dir; nothing is read or written until a module is
@@ -1778,23 +1767,16 @@ impl State {
             esc_holding: false,
             esc_fired: false,
             ctx: None,
-            files_root: None,
-            files_root_from: None,
-            files_expanded: BTreeSet::new(),
-            files_sel: None,
-            files_query: String::new(),
-            files_rows: Vec::new(),
-            files_target_line: None,
-            files_target_col: None,
-            files_scroll_y: 0.0,
-            files_scroll_seq: 0,
-            files_scroll_hold: None,
+            project_root: None,
+            project_root_from: None,
             git: crate::gitpanel::GitStatus::none(),
             git_commit: None,
             git_sel: None,
             left_mode_request: None,
             rail: Default::default(),
             rail_requests: Vec::new(),
+            rail_scroll_hold: None,
+            module_events: Vec::new(),
             rights: avada_core::rights::RightsService::new(),
             rights_selected: None,
             rights_effects: Vec::new(),
@@ -2051,8 +2033,8 @@ impl State {
     ///    was, not where the window happens to be pointed now.
     /// 2. the focused pane's live cwd in this tab — "open another pane HERE" is what splitting
     ///    a terminal means, and the focused pane is the one the human is looking at.
-    /// 3. the project the left panel is anchored to ([`State::files_root`] — the same anchor
-    ///    FILES and GIT draw, deliberately reused so there is ONE notion of "this window's
+    /// 3. the project the left panel is anchored to ([`State::project_root`] — the same anchor
+    ///    the GIT view draws, deliberately reused so there is ONE notion of "this window's
     ///    project" rather than a second one that can disagree with what is on screen).
     /// 4. the directory the process was launched from ([`launch_dir`]), so `cd project &&
     ///    avada` opens in `project`.
@@ -2080,7 +2062,7 @@ impl State {
         first_existing_dir(vec![
             explicit,
             self.focused_cwd(),
-            self.files_root
+            self.project_root
                 .as_ref()
                 .map(|r| r.to_string_lossy().into_owned()),
             launch_dir(),
@@ -3818,8 +3800,8 @@ impl State {
     /// They are not URLs, so `open_link` refused them and the click did nothing at all: no
     /// error, no motion, just a dead link in the middle of a document.
     ///
-    /// Resolved against the previewed file's own directory and revealed in the explorer, the
-    /// same place a path clicked in a terminal lands. Only paths that EXIST resolve; anything
+    /// Resolved against the previewed file's own directory and revealed in the files rail,
+    /// the same place a terminal's clicked path lands. Only paths that EXIST resolve; anything
     /// else falls through to `open_link` and gets its refusal, which is what keeps a
     /// `javascript:` or `file:///etc/…` href in a downloaded document inert.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -4882,7 +4864,7 @@ impl State {
     }
 
     /// Right-click on a link: open the menu the target deserves, anchored at window-logical
-    /// `(ax, ay)`. A file gets the explorer's own row menu — the same rows a right-click on
+    /// `(ax, ay)`. A file gets the file row menu — the same rows a right-click on
     /// it in the left panel offers — a URL or a commit gets an open/copy menu. Returns `false`
     /// when nothing under the pointer is a link (or clickable paths are off), so the widget can
     /// let the click be the paste it has always been; only what is underlined earns a menu,
@@ -4908,19 +4890,18 @@ impl State {
         true
     }
 
-    // ---- left panel: Files mode (D14) ----
+    // ---- the window's project anchor ----
     //
-    // The explorer is an ordinary IDE file tree: one root, directories you open a level at a
-    // time, and a query box that swaps the tree for a ranked flat list. Everything it draws
-    // is the stored `files_rows` projection, rebuilt only by the handful of methods below —
-    // see the module doc on [`crate::filetree`] for why that is not done in the resync.
+    // What is left of the built-in explorer after it became `bshuler/avada-files`: the
+    // project it was rooted at. The git view reads it, a new pane inherits it as its cwd,
+    // and a files module is handed it as its workspace root.
 
-    /// Where the explorer should root itself when it has not been given a root yet: the
+    /// Where the window should root itself when it has not been given a root yet: the
     /// repository containing the focused pane's live cwd, that cwd if it is in no repo, and
     /// only then the home directory. A tree rooted at `/` is technically the whole disk and
     /// practically useless.
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    fn default_files_root(&self) -> PathBuf {
+    fn default_project_root(&self) -> PathBuf {
         if let Some(cwd) = self.focused_cwd() {
             if let Some(root) = crate::sidebar::git_root_of(&cwd) {
                 return root;
@@ -4945,16 +4926,16 @@ impl State {
             .filter(|c| !c.is_empty())
     }
 
-    /// The explorer's root, deriving and remembering one on first use.
+    /// The window's project root, deriving and remembering one on first use.
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn files_root(&mut self) -> PathBuf {
-        if self.files_root.is_none() {
-            self.files_root = Some(self.default_files_root());
+    pub fn project_root(&mut self) -> PathBuf {
+        if self.project_root.is_none() {
+            self.project_root = Some(self.default_project_root());
         }
-        self.files_root.clone().unwrap_or_default()
+        self.project_root.clone().unwrap_or_default()
     }
 
-    /// Re-anchor the explorer (and with it the git view) on the SELECTED pane (K).
+    /// Re-anchor the project (and with it the git view) on the SELECTED pane (K).
     ///
     /// Both left-panel views describe the pane you are looking at, so focusing a pane in a
     /// different project moves them there. Three guards keep that from being expensive or
@@ -4964,8 +4945,9 @@ impl State {
     ///   string compare and touches no filesystem;
     /// * a `cd` that stays inside the same repository derives the same root, and a root that
     ///   did not move is not re-applied, so the tree you had open does not collapse under you;
-    /// * an explicit re-root (`files_go_up`, a chosen directory) leaves the anchor alone and
-    ///   therefore survives until the selected pane itself changes. That root is the human's.
+    /// * an explicit re-root (a module's "go up", a chosen directory) leaves the anchor
+    ///   alone and therefore survives until the selected pane itself changes: it is the
+    ///   human's.
     ///
     /// `mode` is the panel's current mode, because re-reading the working tree means running
     /// `git`: it is spawned when the git view is the one on screen, and otherwise left for
@@ -4981,15 +4963,15 @@ impl State {
             return;
         }
         let cwd = self.focused_cwd();
-        if self.files_root_from == cwd && self.files_root.is_some() {
+        if self.project_root_from == cwd && self.project_root.is_some() {
             return;
         }
-        self.files_root_from = cwd;
-        let want = self.default_files_root();
-        if self.files_root.as_deref() == Some(want.as_path()) {
+        self.project_root_from = cwd;
+        let want = self.default_project_root();
+        if self.project_root.as_deref() == Some(want.as_path()) {
             return;
         }
-        self.files_set_root(want);
+        self.set_project_root(want);
         if mode == crate::paneview::LEFT_MODE_GIT {
             self.rebuild_git();
         } else {
@@ -5066,6 +5048,30 @@ impl State {
         self.dirty = true;
     }
 
+    /// A row under the active module entry was right-clicked, at window-logical `(x, y)`.
+    ///
+    /// Two destinations, which is why it is not `rail_row(.., Context)`. The module hears
+    /// the gesture like any other — it may want to re-project, or to note which row the
+    /// human is pointing at. And when the row's `data` carries a `path`, the HOST opens its
+    /// own file menu over it, so a tier-1 module inherits the app's whole "Open in…" list
+    /// (`docs/module-contract.md` §10.6) without shipping a single menu row. A row with no
+    /// `path` still reaches the module; there is simply no host menu to draw for it.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn rail_context(&mut self, key: &str, row: &str, x: f32, y: f32) {
+        self.rail_row(key, row, RailGesture::Context);
+        let path = self
+            .rail
+            .rows(key)
+            .iter()
+            .find(|r| r.id == row)
+            .and_then(|r| r.data.get("path"))
+            .and_then(|p| p.as_str())
+            .map(PathBuf::from);
+        if let Some(path) = path {
+            self.open_file_context(&path, x, y);
+        }
+    }
+
     /// Take everything queued for the module host since the last drain.
     pub fn take_rail_requests(&mut self) -> Vec<RailRequest> {
         std::mem::take(&mut self.rail_requests)
@@ -5119,181 +5125,137 @@ impl State {
         std::mem::take(&mut self.rights_effects)
     }
 
-    /// Re-read the tree (or re-run the query) from disk and re-project the rows. Every
-    /// method below ends here, and nothing else does — one place reads the filesystem, so
-    /// "what the panel shows" and "what is on disk" can only differ for one event.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn rebuild_files(&mut self) {
-        let root = self.files_root();
-        self.files_rows = if self.files_query.trim().is_empty() {
-            crate::filetree::flatten(&root, &self.files_expanded)
-        } else {
-            crate::filetree::find(&root, &self.files_query)
-        };
-        self.dirty = true;
-    }
 
-    /// Re-root the explorer. Collapsing everything is deliberate: expansions are paths under
-    /// the old root and would either vanish or, worse, half-apply.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn files_set_root(&mut self, dir: PathBuf) {
-        self.files_root = Some(dir);
-        self.files_expanded.clear();
-        self.files_sel = None;
-        self.rebuild_files();
-    }
-
-    /// Root the explorer one directory higher — the tree's only navigation that leaves the
-    /// project, and the way out when the derived root guessed too narrowly.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn files_go_up(&mut self) {
-        let root = self.files_root();
-        if let Some(parent) = root.parent().map(|p| p.to_path_buf()) {
-            if parent != root {
-                // The directory we came from stays open, so going up reads as zooming out
-                // rather than as losing your place.
-                self.files_set_root(parent);
-                self.files_expanded.insert(root);
-                self.rebuild_files();
-            }
-        }
-    }
-
-    /// Open or shut a directory row.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn files_toggle(&mut self, path: &Path) {
-        if self.files_expanded.contains(path) {
-            self.files_expanded.remove(path);
-        } else {
-            self.files_expanded.insert(path.to_path_buf());
-        }
-        self.rebuild_files();
-    }
-
-    /// A single click on a row: a directory opens or shuts, a file is selected. Selecting is
-    /// all a click does to a file on purpose — the panel is where the human *chooses* how to
-    /// act on the path (double-click to preview, or the row menu for everything else), which
-    /// is the whole point of routing a clicked filename here instead of into the OS handler.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn files_click(&mut self, path: &Path) {
-        if path.is_dir() {
-            self.files_toggle(path);
-            return;
-        }
-        // A different file means the line number a terminal click carried no longer belongs
-        // to what is selected.
-        if self.files_sel.as_deref() != Some(path) {
-            self.files_target_line = None;
-            self.files_target_col = None;
-        }
-        self.files_sel = Some(path.to_path_buf());
-        self.dirty = true;
-    }
-
-    /// Set the finder query. Empty restores the tree.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn files_set_query(&mut self, q: String) {
-        if self.files_query == q {
-            return;
-        }
-        self.files_query = q;
-        self.rebuild_files();
-    }
-
-    /// Show `path` in the explorer: switch the panel to Files mode, re-root if the path is
-    /// outside the current root, expand exactly the directories that lead to it, and select
-    /// it. A directory reveals itself; a file reveals its parent and is selected inside it.
+    /// Point the window's project anchor at `dir`.
     ///
-    /// `line`/`col` come from a `file:line:col` hit in a pane's output and are held for
-    /// whichever tool opens the file next — clicking a stack frame should land on the frame.
+    /// Once the whole tree the explorer drew; now only the anchor, because the tree itself
+    /// belongs to `bshuler/avada-files`. The module keeps its own root and hears about this
+    /// one through `module.activate`.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn set_project_root(&mut self, dir: PathBuf) {
+        self.project_root = Some(dir);
+        self.dirty = true;
+    }
+
+    /// The active entry's filter box was edited.
+    ///
+    /// Notified, never applied: `rail.query` tells the module what was typed and the module
+    /// answers with the list it wants drawn. A host that filtered the rows it already has
+    /// would be guessing at a vocabulary it does not own — the module's rows may be a tree
+    /// whose matches are not even loaded, which is exactly the case for a file explorer.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn rail_query(&mut self, query: &str) {
+        let Some(key) = self.rail.active.clone() else {
+            return;
+        };
+        let Some((_, entry)) = key.split_once('#') else {
+            return;
+        };
+        self.emit_module_event(
+            avada_core::module::methods::events::RAIL_QUERY,
+            serde_json::json!({ "entry": entry, "query": query }),
+        );
+    }
+
+    /// The rail key of the entry a files module registered, if one is live.
+    ///
+    /// Matched on the ENTRY id rather than the module id, so a fork or a replacement that
+    /// registers `files` inherits every reveal in the app without the host learning its
+    /// name. The host names a contract, not a vendor.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn files_entry_key(&self) -> Option<String> {
+        self.rail
+            .entries()
+            .into_iter()
+            .find(|v| v.entry.id == FILES_ENTRY)
+            .map(|v| v.key)
+    }
+
+    /// Queue one host event for every module that subscribed to `kind`.
+    ///
+    /// Drained by whoever owns the `module::Host` alongside
+    /// [`State::take_rail_requests`]; `avada_core::module::Host::emit` is the far end. The
+    /// state layer deliberately does not know whether anybody is listening — that is a fact
+    /// about live child processes, and it changes between the queue and the drain.
+    pub fn emit_module_event(&mut self, kind: &str, payload: serde_json::Value) {
+        self.module_events.push((kind.to_string(), payload));
+        self.dirty = true;
+    }
+
+    /// Take everything queued for `Host::emit` since the last drain.
+    pub fn take_module_events(&mut self) -> Vec<(String, serde_json::Value)> {
+        std::mem::take(&mut self.module_events)
+    }
+
+    /// Show `path` in whichever module owns the `files` rail entry: open the panel on that
+    /// entry and emit `files.reveal`. The module expands the directories leading to the
+    /// path, marks its row `selected`, and the host scrolls to the mark — see
+    /// `docs/module-contract.md` §10.1 and §10.4.
+    ///
+    /// `line`/`col` come from a `file:line:col` hit in a pane's output and ride along in the
+    /// payload for whichever tool opens the file next.
+    ///
+    /// With no files module installed there is nothing to reveal *into*, so the human is
+    /// told that rather than being given a panel that silently does nothing.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn reveal_in_files(&mut self, path: &Path, line: Option<u32>, col: Option<u32>) {
-        let root = self.files_root();
-        if !path.starts_with(&root) {
-            // Re-root at the revealed path's own project rather than refusing: a click in a
-            // pane running somewhere else is exactly when the explorer should follow.
-            let base = if path.is_dir() {
-                path.to_path_buf()
-            } else {
-                path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
-            };
-            let new_root = crate::sidebar::git_root_of(&base.to_string_lossy()).unwrap_or(base);
-            self.files_root = Some(new_root);
-            self.files_expanded.clear();
-        }
-        // A reveal is an answer to "where is this", so it must not arrive filtered.
-        self.files_query.clear();
-        let root = self.files_root();
-        for dir in crate::filetree::ancestors_within(&root, path) {
-            self.files_expanded.insert(dir);
-        }
-        if path.is_dir() {
-            self.files_expanded.insert(path.to_path_buf());
-        }
-        self.files_sel = Some(path.to_path_buf());
-        self.files_target_line = line;
-        self.files_target_col = col;
-        self.left_mode_request = Some(crate::paneview::LEFT_MODE_FILES);
-        self.left_panel_open = true;
-        // Claim the follow-the-focused-pane anchor for the root we just chose. A reveal
-        // normally OPENS the panel, and while it was closed `sync_left_root` never ran — so
-        // the anchor still holds whatever cwd was current the last time it was open (or
-        // nothing at all). Left stale, the very next tick would compare it against the
-        // focused pane's cwd, decide the panel had fallen behind, and re-root onto that
-        // pane's project — which clears `files_expanded` and `files_sel` and undoes the
-        // reveal before the human's eye reaches the panel. Clicking a path that lives
-        // outside the pane's own project is exactly when a reveal is most useful, and was
-        // exactly the case that lost it.
-        self.files_root_from = self.focused_cwd();
-        self.rebuild_files();
-        self.scroll_files_to_selection();
-    }
-
-    /// Point the explorer's viewport at the selected row (see [`State::files_scroll_y`]).
-    /// Called after a reveal has rebuilt the rows, so it measures the list the panel is
-    /// about to draw. A selection that is not in the rows — a file under a directory the
-    /// flatten truncated — leaves the viewport alone rather than guessing at an offset.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    fn scroll_files_to_selection(&mut self) {
-        let Some(sel) = self.files_sel.clone() else {
+        let Some(key) = self.files_entry_key() else {
+            self.toast_active("install the Files module to reveal paths");
             return;
         };
-        if let Some(y) = crate::filetree::scroll_offset_for(&self.files_rows, &sel) {
-            self.files_scroll_y = y;
-            self.files_scroll_seq = self.files_scroll_seq.wrapping_add(1);
-            // One bump is not enough, for two reasons that both come down to the view not
-            // being ready on the frame that asks. When the reveal is what OPENS the panel,
-            // the explorer's subtree does not exist yet on this frame; it is instantiated
-            // with the bumped sequence already in place, so its `changed` watcher has
-            // nothing to notice and never fires. And even with the panel already in FILES,
-            // the new rows and the new sequence reach the view in the same change batch, so
-            // the watcher's clamp reads a ListView that has not been laid out against the
-            // model yet — a viewport height of zero clamps the target straight back to the
-            // top. Holding the request open for a few frames lets it land on one where the
-            // list both exists and has measured itself.
-            self.files_scroll_hold = Some(Instant::now());
-            self.dirty = true;
+        // Re-anchor on the revealed path's own project. A click in a pane running somewhere
+        // else is exactly when the project should follow, and the module reads this root
+        // back on its next activation.
+        let base = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
+        };
+        if !base.as_os_str().is_empty() {
+            let root = crate::sidebar::git_root_of(&base.to_string_lossy()).unwrap_or(base);
+            if self.project_root.as_deref() != Some(root.as_path()) {
+                self.set_project_root(root);
+            }
         }
+        // Claim the follow-the-focused-pane anchor for the root just chosen. A reveal
+        // normally OPENS the panel, and while it was closed `sync_left_root` never ran — so
+        // the anchor still holds whatever cwd was current the last time it was open. Left
+        // stale, the very next tick would decide the panel had fallen behind and re-root
+        // onto the focused pane's project, undoing the reveal before the human's eye
+        // reached the panel.
+        self.project_root_from = self.focused_cwd();
+        self.rail_activate(&key);
+        let mut payload = serde_json::json!({ "path": path.display().to_string() });
+        if let Some(l) = line {
+            payload["line"] = serde_json::json!(l);
+        }
+        if let Some(c) = col {
+            payload["col"] = serde_json::json!(c);
+        }
+        self.emit_module_event(avada_core::module::methods::events::FILES_REVEAL, payload);
+        // Held open across the round trip: the module has to hear the event, walk its tree
+        // and push rows back before there is a `selected` row to scroll to at all.
+        self.rail_scroll_hold = Some(std::time::Instant::now());
     }
 
-    /// Open the row menu for `path`, anchored at window-logical `(x, y)`. Selecting the row
-    /// first is what makes the menu's own "Open in…" rows agree with what is highlighted.
+    /// Open the row menu for `path`, anchored at window-logical `(x, y)`.
+    ///
+    /// Reached from a clicked filename in a pane and from a `context` gesture on a module
+    /// row: the menu is the HOST's, so a tier-1 module gets the app's own "Open in…" list
+    /// without shipping one (`docs/module-contract.md` §10).
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn open_file_context(&mut self, path: &Path, x: f32, y: f32) {
-        if !path.is_dir() && self.files_sel.as_deref() != Some(path) {
-            self.files_click(path);
-        }
         self.ctx = Some(crate::contextmenu::file_menu(self, path, x, y));
         self.dirty = true;
     }
 
     // ---- left panel: Git mode (J) ----
     //
-    // A read-only view of one repository's working tree. It roots itself wherever the
-    // explorer is rooted, so the two left-panel views can never disagree about which
-    // project you are looking at, and going up in Files moves Git with it.
+    // A read-only view of one repository's working tree. It roots itself at
+    // [`State::project_root`], the same anchor a files module is handed, so the panel and
+    // the module can never disagree about which project you are looking at.
     //
-    // Nothing watches the repository — same as the explorer. The status is re-read when the
+    // Nothing watches the repository. The status is re-read when the
     // mode is entered and when the header's refresh is pressed, and at no other time: a
     // panel that shelled out to `git` on a timer would spawn a process behind a human who
     // had walked away from the machine.
@@ -5301,7 +5263,7 @@ impl State {
     /// Re-run `git status` for the current root and store the projection.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn rebuild_git(&mut self) {
-        let root = self.files_root();
+        let root = self.project_root();
         self.git = crate::gitpanel::status_for(&root.to_string_lossy()).unwrap_or_default();
         // A path that is no longer reported cannot stay selected — the rows it would be
         // highlighting are gone.
@@ -5315,8 +5277,8 @@ impl State {
         self.dirty = true;
     }
 
-    /// A single click on a git row: select it. Selecting is all a click does, exactly as in
-    /// the explorer — the row's verbs live on the double-click (open) and the row menu.
+    /// A single click on a git row: select it. Selecting is all a click does — the row's
+    /// verbs live on the double-click (open) and the row menu.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn git_click(&mut self, path: &str) {
         self.git_sel = Some(path.to_string());
@@ -5352,8 +5314,8 @@ impl State {
         let Some(commit) = avada_core::git::load_commit(std::path::Path::new(cwd), hash) else {
             return false;
         };
-        if self.files_root.as_deref() != Some(commit.root.as_path()) {
-            self.files_set_root(commit.root.clone());
+        if self.project_root.as_deref() != Some(commit.root.as_path()) {
+            self.set_project_root(commit.root.clone());
         }
         self.git_commit = Some(commit);
         self.git_sel = None;
@@ -11518,25 +11480,29 @@ mod git_mode {
     }
 
     /// The mode strip and `mode_tools[mode - LEFT_MODE_TOOL_BASE]` only agree if the fixed
-    /// slots are exactly the ones the tools start after. Adding a fourth built-in without
-    /// moving the base would silently point every favourite one tool to the left.
+    /// slots are exactly the ones the tools start after. Adding a third built-in without
+    /// moving the base would silently point every favourite one tool to the left — and so
+    /// would REMOVING one, which is what happened when the explorer became a module.
     #[test]
     fn the_fixed_modes_end_where_the_tools_begin() {
         use crate::paneview::*;
         assert_eq!(LEFT_MODE_WORKSPACE, 0);
-        assert_eq!(LEFT_MODE_FILES, 1);
-        assert_eq!(LEFT_MODE_GIT, 2);
+        assert_eq!(LEFT_MODE_GIT, 1);
         assert_eq!(LEFT_MODE_TOOL_BASE, LEFT_MODE_GIT + 1);
+        // A module surface never takes an index in this list: it is drawn from
+        // `RailAdapter` at a mode of its own, below every built-in.
+        assert!(LEFT_MODE_RAIL < LEFT_MODE_WORKSPACE);
     }
 
-    /// The icon sentinels are matched EXACTLY in Slint, so each built-in needs a value of
-    /// its own and none may collide with a registry icon id (which is positive) or with the
-    /// workspace grid (which is 0).
+    /// The icon sentinel is matched EXACTLY in Slint, so the built-in glyph needs a value
+    /// that collides neither with a registry icon id (which is positive) nor with the
+    /// workspace grid (which is 0). The folder sentinel `-1` went with the explorer; `-2`
+    /// deliberately did NOT move down to fill the hole, because the number is drawn on
+    /// screen by a Slint `if` and renumbering it buys nothing.
     #[test]
     fn each_built_in_glyph_has_its_own_sentinel() {
-        use crate::paneview::{LEFT_MODE_FILES_ICON, LEFT_MODE_GIT_ICON};
-        assert_ne!(LEFT_MODE_FILES_ICON, LEFT_MODE_GIT_ICON);
-        assert!(LEFT_MODE_FILES_ICON < 0 && LEFT_MODE_GIT_ICON < 0);
+        use crate::paneview::LEFT_MODE_GIT_ICON;
+        assert_eq!(LEFT_MODE_GIT_ICON, -2);
     }
 
     /// A git row carries git's REPO-RELATIVE path; everything downstream (opening the file,
@@ -11555,13 +11521,14 @@ mod git_mode {
         );
     }
 
-    /// The explorer follows the SELECTED pane (K): its root is derived from the focused
+    /// The project anchor follows the SELECTED pane (K): it is derived from the focused
     /// pane's cwd, and moves when that pane's cwd moves to another project. A `cd` that
     /// stays inside the same repository derives the same root and must NOT re-root — that
-    /// would collapse the tree under a human who only changed directory.
+    /// would collapse the tree under a human who only changed directory, in the git view
+    /// and in whatever a files module has open at the same root.
     #[test]
     fn the_root_follows_the_selected_pane_but_not_a_cd_inside_it() {
-        use crate::paneview::LEFT_MODE_FILES;
+        use crate::paneview::LEFT_MODE_GIT;
         let base = std::env::temp_dir().join(format!("hp-anchor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (a, b) = (base.join("a"), base.join("b"));
@@ -11592,48 +11559,45 @@ mod git_mode {
         };
 
         set_cwd(&mut st, &a);
-        st.sync_left_root(LEFT_MODE_FILES);
-        let root_a = st.files_root.clone().expect("rooted on the selected pane");
+        st.sync_left_root(LEFT_MODE_GIT);
+        let root_a = st.project_root.clone().expect("rooted on the selected pane");
         assert!(
             root_a.ends_with("a"),
             "rooted at {root_a:?}, wanted the a repo"
         );
 
-        // A cd deeper into the SAME repository derives the same root: expansions survive.
-        st.files_expanded.insert(a.join("sub"));
+        // A cd deeper into the SAME repository derives the same root, and a root that did
+        // not move is not re-applied — which is what keeps everything rooted on it, the git
+        // view and a module's open tree alike, from being rebuilt under the human.
         set_cwd(&mut st, &a.join("sub"));
-        st.sync_left_root(LEFT_MODE_FILES);
-        assert_eq!(st.files_root.as_deref(), Some(root_a.as_path()));
-        assert!(
-            st.files_expanded.contains(&a.join("sub")),
-            "a cd inside the root must not collapse the tree"
-        );
+        st.sync_left_root(LEFT_MODE_GIT);
+        assert_eq!(st.project_root.as_deref(), Some(root_a.as_path()));
 
         // A pane in a different project moves the panel there.
         set_cwd(&mut st, &b);
-        st.sync_left_root(LEFT_MODE_FILES);
+        st.sync_left_root(LEFT_MODE_GIT);
         assert!(
-            st.files_root.as_deref().is_some_and(|r| r.ends_with("b")),
+            st.project_root.as_deref().is_some_and(|r| r.ends_with("b")),
             "rooted at {:?}, wanted the b repo",
-            st.files_root
+            st.project_root
         );
 
         // An explicitly chosen root is the human's: it survives every tick until the
         // selected pane itself moves.
-        st.files_go_up();
-        let manual = st.files_root.clone().unwrap();
-        st.sync_left_root(LEFT_MODE_FILES);
-        st.sync_left_root(LEFT_MODE_FILES);
-        assert_eq!(st.files_root.as_deref(), Some(manual.as_path()));
+        st.set_project_root(b.join("chosen"));
+        let manual = st.project_root.clone().unwrap();
+        st.sync_left_root(LEFT_MODE_GIT);
+        st.sync_left_root(LEFT_MODE_GIT);
+        assert_eq!(st.project_root.as_deref(), Some(manual.as_path()));
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// The panel roots itself where the explorer is rooted, so the two views can never
-    /// disagree about which project is on screen — and a selection that the refreshed
-    /// status no longer reports is dropped rather than left pointing at nothing.
+    /// The panel roots itself at the window's project anchor, so it can never disagree with
+    /// the rest of the window about which project is on screen — and a selection that the
+    /// refreshed status no longer reports is dropped rather than left pointing at nothing.
     #[test]
-    fn rebuild_reads_the_explorers_root_and_drops_a_stale_selection() {
+    fn rebuild_reads_the_project_root_and_drops_a_stale_selection() {
         let root = std::env::temp_dir().join(format!("hp-state-git-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -11652,7 +11616,7 @@ mod git_mode {
         std::fs::write(root.join("loose.txt"), "hi").unwrap();
 
         let mut st = fresh();
-        st.files_root = Some(root.clone());
+        st.project_root = Some(root.clone());
         st.git_sel = Some("gone.txt".into());
         st.rebuild_git();
 

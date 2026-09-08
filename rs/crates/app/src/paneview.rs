@@ -23,7 +23,7 @@ use crate::state::{Overlay, PaneState, State};
 use crate::theme;
 use crate::{
     AppWindow, ClaudeSessionItem, CtxTab, DividerItem, FramePaletteOption, HiRect, KeybindingItem,
-    LayoutOption, LeftFileRow, LeftGitRow, LeftModeRow, LeftPaneRow, LeftPanelAdapter,
+    LayoutOption, LeftGitRow, LeftModeRow, LeftPaneRow, LeftPanelAdapter,
     LeftSessionItem, LeftSessionRow, LeftSetRow, LeftTabRow, LeftWorkspaceRow, MenuEntry,
     PaletteItem, PaneItem, PaneViewRow, PrefBrowserRow, PrefOption, PrefToolRow, ProjectItem,
     TabItem, WorktreeRow,
@@ -107,7 +107,6 @@ pub struct Ui {
     pub lp_modes: Rc<VecModel<LeftModeRow>>,
     /// The current tool mode's resumable sessions, pre-sorted by (project, recency).
     pub lp_sessions: Rc<VecModel<LeftSessionItem>>,
-    pub lp_files: Rc<VecModel<LeftFileRow>>,
     pub lp_git_staged: Rc<VecModel<LeftGitRow>>,
     pub lp_git_changed: Rc<VecModel<LeftGitRow>>,
     pub lp_git_untracked: Rc<VecModel<LeftGitRow>>,
@@ -174,7 +173,6 @@ impl Ui {
             lp_detached: Rc::new(VecModel::default()),
             lp_modes: Rc::new(VecModel::default()),
             lp_sessions: Rc::new(VecModel::default()),
-            lp_files: Rc::new(VecModel::default()),
             lp_git_staged: Rc::new(VecModel::default()),
             lp_git_changed: Rc::new(VecModel::default()),
             lp_git_untracked: Rc::new(VecModel::default()),
@@ -229,7 +227,6 @@ impl Ui {
         lp.set_detached(ModelRc::from(self.lp_detached.clone()));
         lp.set_modes(ModelRc::from(self.lp_modes.clone()));
         lp.set_sessions(ModelRc::from(self.lp_sessions.clone()));
-        lp.set_files(ModelRc::from(self.lp_files.clone()));
         lp.set_git_staged(ModelRc::from(self.lp_git_staged.clone()));
         lp.set_git_changed(ModelRc::from(self.lp_git_changed.clone()));
         lp.set_git_untracked(ModelRc::from(self.lp_git_untracked.clone()));
@@ -727,13 +724,16 @@ fn build_dividers(state: &State, area: (f32, f32)) -> Vec<DividerItem> {
 
 /// Rebuild every UI model + scalar from `State` (the resync step). Called when
 /// `state.dirty` is set.
-/// Left-panel mode indices. WORKSPACE, FILES and GIT are fixed slots that no settings
-/// change can move: the favourited tools start at [`LEFT_MODE_TOOL_BASE`], so a mode index
-/// and `mode_tools[mode - LEFT_MODE_TOOL_BASE]` mean the same thing in Rust and in Slint.
+/// Left-panel mode indices. WORKSPACE and GIT are fixed slots that no settings change can
+/// move: the favourited tools start at [`LEFT_MODE_TOOL_BASE`], so a mode index and
+/// `mode_tools[mode - LEFT_MODE_TOOL_BASE]` mean the same thing in Rust and in Slint.
+///
+/// There used to be a third built-in between them — the file explorer, mode 1. It is now
+/// the `bshuler/avada-files` module and lives on the rail ([`LEFT_MODE_RAIL`]) like any
+/// other module surface, so every index after it moved down by one.
 pub const LEFT_MODE_WORKSPACE: i32 = 0;
-pub const LEFT_MODE_FILES: i32 = 1;
-pub const LEFT_MODE_GIT: i32 = 2;
-pub const LEFT_MODE_TOOL_BASE: i32 = 3;
+pub const LEFT_MODE_GIT: i32 = 1;
+pub const LEFT_MODE_TOOL_BASE: i32 = 2;
 
 /// The mode a *module's* rail entry puts the panel into (track H4). Negative on purpose:
 /// the built-in modes are indices into `LeftPanelAdapter.modes` and the module entries are
@@ -790,17 +790,37 @@ pub fn fill_rail(app: &AppWindow, rail: &crate::leftpanel::ModuleRail) {
                 expandable: r.expandable,
                 expanded: r.expanded,
                 icon: crate::leftpanel::icon_commands(r.icon.as_deref()).into(),
+                // Shipped verbatim as well as interpreted: the two marks the panel draws
+                // get their own booleans, and the whole set goes across so a mark this
+                // build does not know is still announced rather than silently dropped.
+                marks: r.marks.join(" ").into(),
+                selected: crate::leftpanel::has_mark(r, crate::leftpanel::MARK_SELECTED),
+                dimmed: crate::leftpanel::has_mark(r, crate::leftpanel::MARK_HIDDEN),
             })
             .collect(),
     ));
+
+    // A tier-1 entry gets the filter box. The module is not asked first: `rail.query` is a
+    // notification and the host only delivers it to a module that subscribed, so a module
+    // that does not want one simply never hears from it. (A `filterable` flag on
+    // `RailEntry` would say so properly — see the SDK note in the Wave 2 report.)
+    let tier1 = rail
+        .active
+        .as_deref()
+        .and_then(|k| rail.lookup(k))
+        .is_some_and(|v| v.entry.tier as i32 == 1);
+    ad.set_filterable(tier1);
+
+    // Both written every tick, which is inert: the view watches `scroll_seq` and only a
+    // change in it moves the viewport (see `RailRowView`'s list in leftpanel.slint).
+    ad.set_scroll_y(rail.scroll_y());
+    ad.set_scroll_seq(rail.scroll_seq);
 }
 
-/// The FILES and GIT rows' icon numbers. `LeftModeRow::icon` is a registry icon id when
-/// positive and 0 already means "the workspace grid", so each built-in glyph needs a value
-/// of its own — negative, because the registry will only ever grow upward. The strip tests
-/// these EXACTLY (not `< 0`): a second built-in is only distinguishable from the first if
-/// nobody treats "negative" as a synonym for "folder".
-pub const LEFT_MODE_FILES_ICON: i32 = -1;
+/// The GIT row's icon number. `LeftModeRow::icon` is a registry icon id when positive and
+/// 0 already means "the workspace grid", so a built-in glyph needs a value of its own —
+/// negative, because the registry will only ever grow upward. The strip tests this EXACTLY
+/// (not `< 0`), which is what keeps a second built-in distinguishable from the first.
 pub const LEFT_MODE_GIT_ICON: i32 = -2;
 
 /// How long the computed grid size must hold still before the pty is told about it.
@@ -817,11 +837,11 @@ pub const LEFT_MODE_GIT_ICON: i32 = -2;
 /// deliberate resize reaches the shell before it can be noticed.
 const PTY_RESIZE_SETTLE: Duration = Duration::from_millis(300);
 
-/// How long a reveal keeps re-asserting its scroll target at the explorer
-/// (see [`State::scroll_files_to_selection`]). Long enough to outlast the panel being
+/// How long a reveal keeps re-asserting its scroll target at a module's row list (see
+/// [`crate::leftpanel::ModuleRail::bump_scroll`]). Long enough to outlast the panel being
 /// instantiated and the ListView measuring its new model; short enough that the human
 /// cannot scroll away inside it and be dragged back.
-const FILES_SCROLL_HOLD: Duration = Duration::from_millis(250);
+pub const RAIL_SCROLL_HOLD: Duration = Duration::from_millis(250);
 
 /// Push any pane whose grid has finished moving to its session, and nothing sooner.
 ///
@@ -1547,14 +1567,6 @@ pub fn resync(
                     brand: crate::theme::accent_for(0, palette),
                 },
                 LeftModeRow {
-                    label: "Files".into(),
-                    // Negative is the second "not a tool" sentinel — a folder glyph. It has
-                    // to be distinguishable from 0 rather than sharing it, because the strip
-                    // switches on this number to pick which geometry it draws.
-                    icon: LEFT_MODE_FILES_ICON,
-                    brand: crate::theme::accent_for(0, palette),
-                },
-                LeftModeRow {
                     label: "Git".into(),
                     icon: LEFT_MODE_GIT_ICON,
                     brand: crate::theme::accent_for(0, palette),
@@ -1596,8 +1608,8 @@ pub fn resync(
             // ---- the mode the Rust side asked for ----
             // `mode` is `in-out` and the strip writes it directly, so Rust normally has no
             // say. A reveal (clicking a filename in a pane) is the exception: it has to put
-            // the panel into FILES itself. Taken before the session list is computed so the
-            // whole frame agrees about which mode it is drawing.
+            // the panel on the files module's rail entry itself. Taken before the session
+            // list is computed so the whole frame agrees about which mode it is drawing.
             if let Some(m) = state.left_mode_request.take() {
                 if m == LEFT_MODE_RAIL || (m >= 0 && (m as usize) < mode_row_count) {
                     lp.set_mode(m);
@@ -1615,47 +1627,7 @@ pub fn resync(
                 lp.set_mode(LEFT_MODE_WORKSPACE);
             }
 
-            // ---- mode 1: the explorer ----
-            // The rows are a stored projection, rebuilt only when something asks the
-            // filesystem a question (see [`crate::filetree`]); the resync just ships them.
-            if lp.get_mode() == LEFT_MODE_FILES {
-                let root = state.files_root();
-                lp.set_files_root(
-                    root.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| root.display().to_string())
-                        .into(),
-                );
-                if state.files_rows.is_empty() && state.files_query.trim().is_empty() {
-                    state.rebuild_files();
-                }
-                let file_rows: Vec<LeftFileRow> = state
-                    .files_rows
-                    .iter()
-                    .map(|r| LeftFileRow {
-                        depth: r.depth,
-                        kind: r.kind,
-                        expanded: r.expanded,
-                        label: r.label.as_str().into(),
-                        detail: r.detail.as_str().into(),
-                        path: r.path.display().to_string().into(),
-                        selected: state.files_sel.as_deref() == Some(r.path.as_path()),
-                    })
-                    .collect();
-                sync_model(&ui.lp_files, file_rows);
-                // Ship the reveal's scroll target. The sequence number is what the view
-                // watches, so writing both every tick is inert until a reveal bumps it.
-                // A reveal keeps the bump coming for a short window (the pump's tick owns
-                // the clock), because the frame that asks for the scroll is usually one on
-                // which the list cannot honour it — see `State::scroll_files_to_selection`.
-                if state.files_scroll_hold.is_some() {
-                    state.files_scroll_seq = state.files_scroll_seq.wrapping_add(1);
-                }
-                lp.set_files_scroll_y(state.files_scroll_y);
-                lp.set_files_scroll_seq(state.files_scroll_seq);
-            }
-
-            // ---- mode 2: the working tree ----
+            // ---- mode 1: the working tree ----
             // Also a stored projection: reading it runs `git status`, which happens on a
             // real event (entering the mode, the refresh button) and never per frame.
             if lp.get_mode() == LEFT_MODE_GIT {
@@ -2094,11 +2066,12 @@ pub fn pump(
     // ---- a reveal's scroll, held open for a few frames ----
     // The clock lives here rather than in `resync` so that closing the panel mid-window ends
     // the hold like any other frame does, instead of leaving the pump dirty forever.
-    if let Some(since) = state.files_scroll_hold {
-        if Instant::now().duration_since(since) < FILES_SCROLL_HOLD {
+    if let Some(since) = state.rail_scroll_hold {
+        if Instant::now().duration_since(since) < RAIL_SCROLL_HOLD {
+            state.rail.bump_scroll();
             state.dirty = true;
         } else {
-            state.files_scroll_hold = None;
+            state.rail_scroll_hold = None;
         }
     }
 

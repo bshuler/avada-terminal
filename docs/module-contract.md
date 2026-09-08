@@ -377,6 +377,27 @@ any window exists, and a slow or busy UI never blocks the module.
 A `kind` the app does not know becomes a toast, not a pane. Requires
 `panes.spawn`.
 
+### 10.6 The row menu: who draws a right-click
+
+A `context` gesture on a row reaches the module in the ordinary way — a
+`module.row.activate` with `gesture: "context"` — and the module may do whatever
+it likes with it.
+
+It does **not** have to draw a menu, and at tier 1 it cannot: a tier-1 module
+sends rows and has no surface to put a popup on. So the **host** draws one as
+well, from the row's own `data`:
+
+* if `data.path` is a string, the app opens its own file menu over that path —
+  the same rows a right-click on a filename inside a pane gets (open, open in a
+  new pane, reveal in the OS file manager, copy path, and whatever else that
+  build ships);
+* if it is not, no host menu opens, and the gesture is still delivered.
+
+A module gets the app's whole "Open in…" list, kept current by the app, by doing
+nothing but putting a `path` in the row it already sends. Nothing about the menu
+is negotiated: the host owns the vocabulary, and a module that wants verbs of its
+own registers commands (§7) instead.
+
 ## 11. Pane kinds reserved for modules
 
 `avada_core::tools::kind::PaneKind::Module(ModulePaneRef)` is the pane a

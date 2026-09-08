@@ -233,7 +233,7 @@ fn states() -> Vec<(&'static str, Setup)> {
                 .into(),
             );
         }),
-        ("left panel: files", |w| {
+        ("left panel: a module's rows", |w| {
             install_modes(w);
             install_files(w);
         }),
@@ -342,33 +342,54 @@ fn every_touch_area_has_an_accessible_ancestor_within_reach() {
 
 // ===== fixtures =====
 
-/// The files mode showing a project: an open directory, a file inside it, and the note a
-/// directory shows when it is empty.
+/// A files module showing a project: an open directory, a file inside it, one file the
+/// module marked `selected`, and a hidden one it dimmed.
+///
+/// Pushed through the same `fill_rail` projection `paneview::resync` uses, so what these
+/// tests read is what a real `host.rows.set` would put on screen.
 fn install_files(w: &crate::AppWindow) {
-    let lp = w.global::<crate::LeftPanelAdapter>();
-    lp.set_open(true);
-    lp.set_mode(crate::paneview::LEFT_MODE_FILES);
-    lp.set_files_root("proj".into());
-    let row = |depth: i32, kind: i32, expanded: bool, label: &str, detail: &str, path: &str| {
-        crate::LeftFileRow {
-            depth,
-            kind,
-            expanded,
+    let module = avada_core::rights::ModuleId::new("bshuler/avada-files").expect("a module id");
+    let mut rail = crate::leftpanel::ModuleRail::default();
+    rail.apply(avada_core::module::RailEvent::Registered {
+        module: module.clone(),
+        entries: vec![serde_json::from_value(serde_json::json!({
+            "id": "files", "label": "Files", "tier": 1, "order": 0
+        }))
+        .expect("a rail entry")],
+    });
+    let row = |depth: u8, label: &str, detail: &str, expandable, expanded, marks: &[&str]| {
+        avada_core::module::Row {
+            id: format!("/proj/{label}"),
             label: label.into(),
             detail: detail.into(),
-            path: path.into(),
-            selected: false,
+            depth,
+            expandable,
+            expanded,
+            icon: None,
+            marks: marks.iter().map(|m| m.to_string()).collect(),
+            data: serde_json::json!({}),
         }
     };
-    lp.set_files(
-        std::rc::Rc::new(slint::VecModel::from(vec![
-            row(0, 0, true, "src", "", "/proj/src"),
-            row(1, 1, false, "main.rs", "src", "/proj/src/main.rs"),
-            row(0, 0, false, "target", "", "/proj/target"),
-            row(0, 2, false, "(empty)", "", ""),
-        ]))
-        .into(),
-    );
+    rail.apply(avada_core::module::RailEvent::Rows {
+        module: module.clone(),
+        entry: "files".into(),
+        rows: vec![
+            row(0, "src", "", true, true, &[]),
+            row(1, "main.rs", "src", false, false, &[]),
+            row(0, "target", "", true, false, &[]),
+            row(0, ".env", "", false, false, &["hidden"]),
+            row(0, "README.md", "", false, false, &["selected"]),
+        ],
+    });
+    rail.activate(&crate::leftpanel::entry_key(&module, "files"));
+    w.global::<crate::LeftPanelAdapter>().set_open(true);
+    crate::paneview::fill_rail(w, &rail);
+    // The rows live behind `if LeftPanelAdapter.mode == -1`, so a rail that is merely
+    // *activated* draws nothing: activation is `RailAdapter` state, and the mode is what
+    // decides whether the panel is showing the module's list or a built-in section. Without
+    // this the whole block is absent from the tree and every lookup below finds zero.
+    w.global::<crate::LeftPanelAdapter>()
+        .set_mode(crate::paneview::LEFT_MODE_RAIL);
 }
 
 fn git_row(path: &str, code: &str) -> crate::LeftGitRow {
@@ -429,46 +450,57 @@ fn grid_rows(name: &str, body: &str) -> Vec<crate::PaneViewRow> {
 
 // ===== lookup by label: the left panel's rows =====
 
-/// A file row is reached by its file name; a directory row is expandable and says
-/// whether it is open; a plain file is neither; a note row exists but is disabled.
+/// A module's row is reached by its label; an expandable row says whether it is open; a
+/// leaf is neither; the row the module marked `selected` announces itself as selected.
+///
+/// This is the accessibility contract a tier-1 module gets for free — it never writes a
+/// line of Slint, so if the panel does not announce its rows, nothing else will.
 #[test]
-fn a_file_row_is_reached_by_its_name_and_says_whether_it_is_open() {
+fn a_module_row_is_reached_by_its_label_and_says_whether_it_is_open() {
     ui(|| {
         let w = window();
         install_modes(&w);
         install_files(&w);
 
-        let src = only(&w, "src", AccessibleRole::ListItem);
+        let src = only(&w, "src", AccessibleRole::Button);
         assert_eq!(src.accessible_expandable(), Some(true));
         assert_eq!(src.accessible_expanded(), Some(true), "src is open");
         assert_eq!(src.accessible_item_selected(), Some(false));
 
-        let target = only(&w, "target", AccessibleRole::ListItem);
+        let target = only(&w, "target", AccessibleRole::Button);
         assert_eq!(
             target.accessible_expanded(),
             Some(false),
             "target is folded"
         );
 
-        let main = only(&w, "main.rs", AccessibleRole::ListItem);
+        let main = only(&w, "main.rs", AccessibleRole::Button);
         assert_eq!(
             main.accessible_expandable(),
             Some(false),
-            "a file does not open"
+            "a leaf does not open"
         );
         assert_eq!(main.accessible_expanded(), Some(false));
         assert_eq!(
             main.accessible_description().as_deref(),
             Some("src"),
-            "the directory is the description"
+            "the module's `detail` is the description"
         );
         assert_eq!(main.accessible_enabled(), Some(true));
 
-        let note = only(&w, "(empty)", AccessibleRole::ListItem);
+        let readme = only(&w, "README.md", AccessibleRole::Button);
         assert_eq!(
-            note.accessible_enabled(),
-            Some(false),
-            "a note row is inert"
+            readme.accessible_item_selected(),
+            Some(true),
+            "the `selected` mark is what a reveal has to announce"
+        );
+        // Every mark verbatim, including ones the panel draws nothing for: a module may
+        // invent a vocabulary this build has never heard of and it must still be spoken.
+        assert_eq!(
+            only(&w, ".env", AccessibleRole::Button)
+                .accessible_value()
+                .as_deref(),
+            Some("hidden")
         );
     });
 }

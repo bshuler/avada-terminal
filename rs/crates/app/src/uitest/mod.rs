@@ -14,6 +14,7 @@
 // helpers below. The orchestrator owns this file and the list; a track owns its file.
 mod annotations;
 mod datatree;
+mod files;
 mod image;
 mod links;
 mod matrix;
@@ -68,6 +69,17 @@ fn window() -> crate::AppWindow {
     let w = crate::AppWindow::new().expect("the component tree builds");
     w.window().set_size(slint::PhysicalSize::new(1280, 800));
     w
+}
+
+/// Let one frame happen.
+///
+/// A `ListView` is virtualized: it only instantiates the rows inside its own viewport, and
+/// it recomputes that window when the frame is drawn — not when `viewport-y` is assigned.
+/// So a test that scrolls (or that changes anything a layout has to settle) and then looks
+/// straight away is reading the *previous* frame's tree, where the row it just revealed
+/// does not exist yet. The backend runs on mock time, so this costs nothing but the tick.
+fn settle() {
+    i_slint_backend_testing::mock_elapsed_time(50);
 }
 
 /// Click an element the way a mouse would: move onto its centre, press, release. This goes
@@ -318,19 +330,17 @@ fn a_clean_working_tree_shows_no_diff_button() {
 // ===== the mode strip =====
 //
 // Every left-panel feature is reached through this strip, so a strip that does not switch
-// makes every mode below it unreachable. It is drawn as three glyph buttons with no text.
+// makes every mode below it unreachable. It is drawn as glyph buttons with no text.
 
-/// Publish the three built-in modes the way `paneview` does on every resync.
+/// Publish the built-in modes the way `paneview` does on every resync.
+///
+/// Two, not three: the explorer that used to sit between them is the `bshuler/avada-files`
+/// module now, and a module reaches the strip through `RailAdapter.entries` instead.
 fn install_modes(w: &crate::AppWindow) {
     let rows = vec![
         crate::LeftModeRow {
             label: "Workspace".into(),
             icon: 0,
-            brand: slint::Color::from_rgb_u8(0, 0, 0),
-        },
-        crate::LeftModeRow {
-            label: "Files".into(),
-            icon: -1,
             brand: slint::Color::from_rgb_u8(0, 0, 0),
         },
         crate::LeftModeRow {
@@ -375,37 +385,6 @@ fn the_mode_strip_switches_to_git_and_tells_rust() {
             crate::paneview::LEFT_MODE_GIT,
             "the click must also reach mode-changed, which is what triggers git status"
         );
-    });
-}
-
-/// The same for Files, so a failure above reads as "the strip" and not "the git mode".
-#[test]
-fn the_mode_strip_switches_to_files_and_tells_rust() {
-    ui(|| {
-        let w = window();
-        install_modes(&w);
-        w.global::<crate::LeftPanelAdapter>()
-            .set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
-
-        let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
-        {
-            let saw = saw.clone();
-            w.global::<crate::LeftPanelAdapter>()
-                .on_mode_changed(move |m| saw.set(m));
-        }
-
-        let found = by_label(&w, "Files");
-        assert_eq!(
-            found.len(),
-            1,
-            "the strip must show exactly one Files button"
-        );
-        click(&w, &found[0]);
-        assert_eq!(
-            w.global::<crate::LeftPanelAdapter>().get_mode(),
-            crate::paneview::LEFT_MODE_FILES
-        );
-        assert_eq!(saw.get(), crate::paneview::LEFT_MODE_FILES);
     });
 }
 

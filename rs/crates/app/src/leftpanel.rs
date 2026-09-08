@@ -866,6 +866,59 @@ pub struct ModuleRail {
         std::collections::BTreeMap<avada_core::rights::ModuleId, avada_core::module::RailState>,
     /// The key of the module entry the panel is showing, if a module entry is active.
     pub active: Option<String>,
+    /// Bumped whichever way whenever the row a module marks [`MARK_SELECTED`] changes.
+    /// The view WATCHES this rather than binding to `scroll_y`, so the viewport moves on
+    /// the reveal and never on a tick the human spent scrolling somewhere else.
+    pub scroll_seq: i32,
+    /// The last `(entry key, row id)` seen marked selected, so re-pushing the same list —
+    /// which a module does on every keystroke of a filter — does not re-scroll.
+    selection: Option<(String, String)>,
+}
+
+/// The mark a module puts on the one row it wants shown: highlighted, and scrolled to.
+///
+/// The host does not choose a selection; a tier-1 module owns its list entirely, and this
+/// is the only vocabulary it has for "this row, of the four hundred I just sent you".
+pub const MARK_SELECTED: &str = "selected";
+
+/// The mark for a row that is listed but should not compete for the eye — a dotfile, an
+/// ignored path. Drawn dimmed rather than filtered out, because a module that wanted it
+/// gone would simply not have sent it.
+pub const MARK_HIDDEN: &str = "hidden";
+
+/// Whether `row` carries `mark`. Marks are an unordered set on the wire (a `Vec` only
+/// because JSON has no set), so membership is the only question worth asking.
+pub fn has_mark(row: &avada_core::module::Row, mark: &str) -> bool {
+    row.marks.iter().any(|m| m == mark)
+}
+
+/// The row heights `RailRowView` lays out: a row with a detail line is taller.
+///
+/// Duplicated from the `.slint` because Slint cannot be asked, and pinned by
+/// [`tests::the_scroll_offset_sums_the_rows_above_the_selection`] — the same arrangement
+/// the built-in explorer used before it became a module.
+const ROW_H: f32 = 20.0;
+const ROW_H_DETAIL: f32 = 30.0;
+
+/// How far down the list the first [`MARK_SELECTED`] row starts, in logical pixels, or
+/// `None` when nothing is selected.
+///
+/// A sum rather than `index * height` because the rows are not all the same height: a row
+/// the module gave a detail line to is 30px and one without is 20px, so counting rows
+/// would drift by 10px for every detailed row above the target.
+pub fn scroll_offset(rows: &[avada_core::module::Row]) -> Option<f32> {
+    let mut y = 0.0;
+    for r in rows {
+        if has_mark(r, MARK_SELECTED) {
+            return Some(y);
+        }
+        y += if r.detail.is_empty() {
+            ROW_H
+        } else {
+            ROW_H_DETAIL
+        };
+    }
+    None
 }
 
 /// One entry as the strip draws it: the module's [`RailEntry`](avada_core::module::RailEntry)
@@ -1015,9 +1068,35 @@ impl ModuleRail {
         entry: &str,
         rows: Vec<avada_core::module::Row>,
     ) {
+        // Taken BEFORE the move, and compared against what the entry last had selected:
+        // a module that re-sends the same list with the same selection (which is what a
+        // filter does on every keystroke) must not drag the viewport back each time.
+        let selection = rows
+            .iter()
+            .find(|r| has_mark(r, MARK_SELECTED))
+            .map(|r| (entry_key(module, entry), r.id.clone()));
         if let Some(state) = self.modules.get_mut(module) {
             let _ = state.set_rows(entry, rows);
+            if selection.is_some() && selection != self.selection {
+                self.scroll_seq = self.scroll_seq.wrapping_add(1);
+            }
+            self.selection = selection;
         }
+    }
+
+    /// Re-assert the current scroll target for one more frame.
+    ///
+    /// The frame that asks for a scroll is usually one on which the list cannot honour it —
+    /// the panel is being instantiated, or the `ListView` has not measured the new model —
+    /// so the request is repeated for a short window (`paneview::RAIL_SCROLL_HOLD`) rather
+    /// than fired once into a view that is not there yet.
+    pub fn bump_scroll(&mut self) {
+        self.scroll_seq = self.scroll_seq.wrapping_add(1);
+    }
+
+    /// How far down the active entry's list its selected row starts, in logical pixels.
+    pub fn scroll_y(&self) -> f32 {
+        scroll_offset(self.active_rows()).unwrap_or(0.0)
     }
 
     /// The module is gone: its entries and rows leave the rail. Returns true when the
@@ -1108,6 +1187,95 @@ impl ModuleRail {
 mod tests {
     use super::*;
     use avada_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
+
+    /// A module's row list, with `which` marked `selected` and every `n`th row given a
+    /// detail line (which makes it taller — the whole reason the offset is measured rather
+    /// than counted).
+    fn marked(n: usize, which: Option<usize>, detail_every: usize) -> Vec<avada_core::module::Row> {
+        (0..n)
+            .map(|i| avada_core::module::Row {
+                id: format!("r{i}"),
+                label: format!("r{i}"),
+                detail: if detail_every > 0 && i % detail_every == 0 {
+                    "src".into()
+                } else {
+                    String::new()
+                },
+                depth: 0,
+                expandable: false,
+                expanded: false,
+                icon: None,
+                marks: if which == Some(i) {
+                    vec![MARK_SELECTED.into()]
+                } else {
+                    vec![]
+                },
+                data: serde_json::Value::Null,
+            })
+            .collect()
+    }
+
+    /// Reveal-in-files ends here: the module marks a row and the host has to work out where
+    /// that row is. It is a SUM of the heights above it, not `index * ROW_H`, because a row
+    /// with a detail line is half again as tall — counting instead of measuring puts the
+    /// viewport progressively further off the longer the list is.
+    #[test]
+    fn the_scroll_offset_sums_the_rows_above_the_selection() {
+        assert_eq!(scroll_offset(&marked(5, Some(0), 0)), Some(0.0));
+        assert_eq!(scroll_offset(&marked(5, Some(3), 0)), Some(3.0 * ROW_H));
+        // Rows 0 and 2 are tall, row 1 is short; the mark is on row 3.
+        assert_eq!(
+            scroll_offset(&marked(5, Some(3), 2)),
+            Some(ROW_H_DETAIL + ROW_H + ROW_H_DETAIL)
+        );
+    }
+
+    /// Nothing marked is not "the top": it means the module has not answered the reveal
+    /// yet. `Some(0.0)` would jerk the list to the top of a tree the human was reading.
+    #[test]
+    fn no_mark_means_no_scroll_at_all_rather_than_scroll_to_the_top() {
+        assert_eq!(scroll_offset(&marked(5, None, 0)), None);
+        assert_eq!(scroll_offset(&[]), None);
+    }
+
+    /// A filter re-sends the whole list on EVERY keystroke, usually with the same row still
+    /// selected. If that bumped the sequence the viewport would be yanked back to the mark
+    /// between one letter and the next, so the bump is tied to the selection CHANGING.
+    #[test]
+    fn re_sending_the_same_selection_does_not_scroll_again() {
+        let module = avada_core::rights::ModuleId::new("bshuler/avada-files").unwrap();
+        let mut rail = ModuleRail::default();
+        rail.apply(avada_core::module::RailEvent::Registered {
+            module: module.clone(),
+            entries: vec![serde_json::from_value(serde_json::json!({
+                "id": "files", "label": "Files", "tier": 1, "order": 0
+            }))
+            .unwrap()],
+        });
+
+        rail.set_rows(&module, "files", marked(5, None, 0));
+        let quiet = rail.scroll_seq;
+
+        rail.set_rows(&module, "files", marked(5, Some(3), 0));
+        let after_reveal = rail.scroll_seq;
+        assert_ne!(after_reveal, quiet, "a new selection has to be scrolled to");
+
+        rail.set_rows(&module, "files", marked(5, Some(3), 0));
+        assert_eq!(
+            rail.scroll_seq, after_reveal,
+            "the same row selected again is not a new reveal"
+        );
+
+        rail.set_rows(&module, "files", marked(5, Some(1), 0));
+        assert_ne!(rail.scroll_seq, after_reveal, "a different row is");
+
+        assert!(rail.activate(&entry_key(&module, "files")));
+        assert_eq!(
+            rail.scroll_y(),
+            ROW_H,
+            "and the offset the panel reads back is the active entry's"
+        );
+    }
 
     #[test]
     fn liveness_decays_over_the_window() {

@@ -545,23 +545,6 @@ export struct LeftSessionRow {
     live: float,
 }
 
-// One row of the FILES mode's tree, already flattened into draw order by
-// `crate::filetree`. `depth` is the indent level, `kind` is 0 dir / 1 file / 2 an inert
-// note ("Empty directory", "… more matches"), and `path` is the absolute path the row
-// stands for — the row's identity, because the list is rebuilt from disk by the very
-// clicks that dispatch from it and an index would name a different file afterwards.
-export struct LeftFileRow {
-    depth: int,
-    kind: int,
-    expanded: bool,
-    label: string,
-    // The finder's second line (the match's directory, relative to the root). Empty in the
-    // tree, where the indent already says where a row sits.
-    detail: string,
-    path: string,
-    selected: bool,
-}
-
 // One changed file in the GIT mode, already assigned to its section by `crate::gitpanel`.
 // `path` is REPO-RELATIVE, exactly as git reported it, and is the row's identity; `label`
 // is the file name and `detail` its parent directory (empty at the repo root). `code` is
@@ -656,10 +639,13 @@ export global LeftPanelAdapter {
     callback adopt-session(string);
 
     // ---- panel modes ----
-    // Which view the panel is showing: 0 = WORKSPACE (the tree above), 1 = FILES (the
-    // project explorer), 2 = GIT (the working tree), n >= 3 = `modes[n]`, a favourited
-    // tool's resumable-session list. Files and Git sit at fixed indices rather than after
-    // the favourites because neither is a tool and neither can be un-starred away. `in-out` because the strip sets it directly
+    // Which view the panel is showing: 0 = WORKSPACE (the tree above), 1 = GIT (the
+    // working tree), n >= 2 = `modes[n]`, a favourited tool's resumable-session list, and
+    // -1 = a module rail entry (`RailAdapter.active` says which). Git sits at a fixed index
+    // rather than after the favourites because it is not a tool and cannot be un-starred
+    // away; the file explorer used to sit beside it at 1 and no longer does — it is the
+    // `bshuler/avada-files` module now, so it arrives on the rail at -1 like any other
+    // module and shifts everything after it down one. `in-out` because the strip sets it directly
     // — switching views is pure UI state, not a `State` mutation, so it does not go through
     // Seam #2 (the mode does not survive a restart, and should not: the panel always opens
     // on the workspace tree).
@@ -678,38 +664,11 @@ export global LeftPanelAdapter {
     // A session row clicked → resume session `0` of the current mode's tool.
     callback resume-session(string);
     // The strip was clicked. `mode` is already set (it is `in-out`); this only tells Rust,
-    // which needs to know because entering FILES has to read the filesystem and nothing
-    // else in this adapter is allowed to.
+    // which needs to know because a mode's contents are computed on entry — the working-tree
+    // mode has to go and read the repository, and nothing in this adapter is allowed to.
     callback mode-changed(int);
 
-    // ---- mode 1: the file explorer ----
-    // The flattened tree, or the finder's ranked matches when `files-query` is non-empty.
-    in property <[LeftFileRow]> files;
-    // The tree's root, for the header. Absolute; the view shows the tail.
-    in property <string> files-root;
-    // The finder box. `in-out` so a reveal (which clears the filter) reaches the box, while
-    // typing still writes it before the callback fires.
-    in-out property <string> files-query;
-    // A row clicked once → a directory opens/shuts, a file is selected.
-    callback files-click(string);
-    // A row double-clicked → open it (a view pane for a file, a re-root for a directory).
-    callback files-open(string);
-    // A row right-clicked at window-logical (`1`, `2`) → the row menu.
-    callback files-context(string, length, length);
-    // The finder box changed.
-    callback files-query-changed(string);
-    // Re-root one directory higher.
-    callback files-up();
-    // Re-read the tree from disk (nothing watches the filesystem).
-    callback files-refresh();
-    // Where a reveal wants the explorer scrolled, measured from the top of the row list.
-    in property <length> files-scroll-y;
-    // Bumped by a reveal and by nothing else. The view jumps when this CHANGES rather than
-    // binding to `files-scroll-y`, so an ordinary frame — and every scroll the human makes
-    // with the wheel — leaves the viewport exactly where they left it.
-    in property <int> files-scroll-seq;
-
-    // ---- mode 2: the working tree ----
+    // ---- mode 1: the working tree ----
     // Read-only by design: staging, committing and discarding are one-click destructive and
     // are not wired to a row. The three sections are separate models rather than one list
     // plus a section column, so each keeps its own disclosure state the way the workspace
@@ -742,7 +701,7 @@ export global LeftPanelAdapter {
     // Open a pane with the working tree's whole diff against HEAD. One file's diff is
     // reached through the row's own context menu, the same way the commit view does it.
     callback git-diff();
-    // ---- mode 2, commit view: ONE commit, in place of the working tree ----
+    // ---- mode 1, commit view: ONE commit, in place of the working tree ----
     // Reached by clicking a hash in a pane's output. A commit is immutable, so unlike the
     // working tree there is nothing here to refresh — only a way back out.
     in property <bool> git-commit-open;
@@ -896,13 +855,24 @@ export struct RailRowItem {
     expandable: bool,
     expanded: bool,
     icon: string,
+    // The module's marks, space-joined and verbatim (`docs/module-contract.md` §10.1). An
+    // open vocabulary: the host understands the two below and passes the rest through, so a
+    // module can mark a row for a future host without one that does not know the word
+    // dropping it.
+    marks: string,
+    // Carries the `selected` mark. Precomputed in Rust because Slint cannot split a string,
+    // and because this is what the list highlights and scrolls to.
+    selected: bool,
+    // Carries the `hidden` mark: drawn dimmed rather than dropped. Hiding a row the module
+    // deliberately sent would be lying about what it found.
+    dimmed: bool,
 }
 
 export global RailAdapter {
     // True once at least one module entry exists; the strip draws module buttons after
     // the built-in ones only then.
     in property <bool> present: false;
-    // Module entries, sorted by `order` then module id. Built-ins (workspace, files, git,
+    // Module entries, sorted by `order` then module id. Built-ins (workspace, git,
     // favourited tools) stay in `LeftPanelAdapter.modes`; the strip draws both lists.
     in property <[RailEntryRow]> entries: [];
     // The key of the active module entry, or empty. While non-empty
@@ -918,6 +888,37 @@ export global RailAdapter {
     callback activate(string /* key */);
     // A row was clicked: entry key, row id, gesture (`open`, `toggle`, `context`).
     callback row-activate(string /* key */, string /* row id */, string /* gesture */);
+    // A row was RIGHT-clicked, with the pointer's window position. Separate from
+    // `row-activate` because this gesture has two destinations at once: the module hears
+    // it like any other gesture, and the HOST opens its own file menu over the row's
+    // `data.path` — which is how a tier-1 module gets "Open in…" without shipping a menu.
+    callback row-context(string /* key */, string /* row id */, length /* x */, length /* y */);
+
+    // ---- the filter box (`rail.query`) ----
+    //
+    // Owned by the HOST, not by the module: a tier-1 module sends rows and has no way to
+    // draw a text field, so the panel draws one and tells every subscriber what was typed.
+    // True while the active entry is tier 1. NOT "and its module wanted one": `RailEntry`
+    // has no `filterable` field and the SDK is frozen for this wave, so the box is offered
+    // to every tier-1 entry and a module that never subscribed simply never hears the
+    // typing. See the Wave 2 report's SDK note.
+    in property <bool> filterable: false;
+    // `in-out` so clearing the filter from Rust (a reveal must not arrive filtered) reaches
+    // the box, while typing still writes it before the callback fires.
+    in-out property <string> query: "";
+    // The box changed. Rust emits `rail.query` `{ entry, query }` to the subscribers.
+    callback query-changed(string);
+
+    // ---- scrolling to the `selected` mark ----
+    //
+    // `host.rows.set` carries no selection field on purpose: selection is a mark, so a
+    // module that wants none says nothing. Rust measures the row list, finds the first row
+    // marked `selected`, and puts its offset here.
+    in property <length> scroll-y;
+    // Bumped when a scroll is asked for and by nothing else, so the view jumps on a CHANGE
+    // rather than binding to `scroll-y` — an ordinary frame, and every scroll the human
+    // makes with the wheel, leaves the viewport exactly where they left it.
+    in property <int> scroll-seq;
 }
 
 // ---- track V1: the data viewer pane: a JSON/YAML/TOML document as collapsible rows.

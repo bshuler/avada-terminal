@@ -77,6 +77,11 @@ pub mod supervisor;
 pub mod token;
 pub mod transport;
 
+/// The wire vocabulary, straight from the SDK. Re-exported so the app — which does not and
+/// should not depend on the module SDK — spells `files.reveal` and friends exactly once,
+/// in the crate that defines them.
+pub use avada_module_sdk::contract::methods;
+
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
 pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate};

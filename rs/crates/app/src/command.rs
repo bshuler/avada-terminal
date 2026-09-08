@@ -81,15 +81,15 @@ pub enum Command {
     /// a non-PTY view pane, so it is deliberately next to "Open Folder" in the pane menu.
     OpenFileBrowser(usize),
 
-    // ---- left panel: Files mode (D14/D15) ----
+    // ---- files: revealing a path, and the host menu a file row gets ----
     //
-    // Every row of the explorer dispatches one of these. They carry a **path**, never a row
-    // index, because the row list is rebuilt from disk on each of these commands and an index
-    // captured before the rebuild would name a different file after it.
-    /// Show `path` in the left panel's Files tree: switch the panel to Files mode, re-root if
-    /// the path lies outside the current root, open the directories leading to it, and select
-    /// it. `line`/`col` come from a `file:line:col` hit in a pane's output and are held for
-    /// whichever tool opens the file next.
+    // The tree itself is no longer the app's: it is the `files` rail entry a module
+    // registers (`bshuler/avada-files` by default). What stays here is what only the HOST
+    // can do — deciding which entry a reveal goes to, and building the "Open in…" menu out
+    // of the tool registry, which a module has no way to see.
+    /// Show `path` in whichever module owns the `files` rail entry: open the panel on that
+    /// entry, re-anchor the window's project, and emit `files.reveal`. `line`/`col` come
+    /// from a `file:line:col` hit in a pane's output and ride along in the payload.
     ///
     /// This is where a plain click on a filename in a pane lands. It deliberately opens
     /// nothing: the human picks the tool from the row menu, which is the whole reason a
@@ -99,23 +99,12 @@ pub enum Command {
         line: Option<u32>,
         col: Option<u32>,
     },
-    /// Single click on an explorer row: a directory opens/shuts, a file is selected.
-    FilesClick(String),
-    OpenFileContext(String, f32, f32),
-    /// Open or shut an explorer directory without selecting anything (the chevron).
-    /// Double click on an explorer file: open it in a read-only view pane — the Markdown
-    /// renderer for `.md`, the plain file viewer otherwise.
+    /// Open `0` in a read-only view pane — the Markdown renderer for `.md`, the plain file
+    /// viewer otherwise. Also where a git row's "open" lands.
     FilesOpen(String),
-    /// The finder box changed. A non-empty query replaces the tree with ranked matches.
-    FilesSetQuery(String),
-    /// Re-root the explorer at `0` (the row menu's "Browse Containing Folder", and a
-    /// double-click on a directory).
+    /// Make `0` the window's project root and reveal it (the row menu's "Open as Root" and
+    /// "Browse Containing Folder").
     FilesSetRoot(String),
-    /// Re-root one directory higher — the way out when the derived root guessed too narrowly.
-    FilesUp,
-    /// Re-read the tree from disk. Nothing watches the filesystem, so this is how a human
-    /// says "I changed something outside the app".
-    FilesRefresh,
     // ---- left panel: Git mode (J) ----
     //
     // Read-only: there is deliberately no Stage / Unstage / Discard here. The rows carry
@@ -143,6 +132,14 @@ pub enum Command {
     /// gesture (`open` / `toggle` / `context`); an unknown gesture is dropped rather than
     /// guessed, since the module acts on it.
     RailRow(String, String, String),
+    /// A module row was right-clicked, at window-logical `(x, y)`. Not folded into
+    /// [`Command::RailRow`] with a `context` gesture because it goes two ways at once: the
+    /// module is told, and the host opens its own file menu over the row's path.
+    RailContext(String, String, f32, f32),
+    /// The filter box under the active tier-1 module entry was edited. Carries the whole
+    /// query rather than a keystroke, because it is a `rail.query` event to the module and
+    /// the module re-sends the list it wants shown; the host never filters anything itself.
+    RailQuery(String),
     // ---- module capability rights (H2) ----
     /// A click on the Preferences rights page or on the app-wide ask toast. The payload is
     /// already parsed (`prefs::rights::wire` drops an unreadable module id or capability
@@ -687,23 +684,17 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             );
         }
 
-        // ---- left panel: Files mode (D14/D15) ----
+        // ---- reveal a path in whatever module owns the `files` rail entry ----
         Command::RevealInFiles { path, line, col } => {
             state.reveal_in_files(std::path::Path::new(&path), line, col);
         }
-        Command::FilesClick(path) => state.files_click(std::path::Path::new(&path)),
-        Command::OpenFileContext(path, x, y) => {
-            state.open_file_context(std::path::Path::new(&path), x, y)
-        }
-        Command::FilesSetQuery(q) => state.files_set_query(q),
-        Command::FilesSetRoot(dir) => state.files_set_root(std::path::PathBuf::from(dir)),
-        Command::FilesUp => state.files_go_up(),
-        Command::FilesRefresh => {
-            // Entering the mode (or pressing refresh) re-anchors first: the explorer is
-            // rooted on the SELECTED pane, and focus may well have moved while another
-            // mode was on screen.
-            state.sync_left_root(crate::paneview::LEFT_MODE_FILES);
-            state.rebuild_files();
+        Command::FilesSetRoot(dir) => {
+            // "Open as Root" re-anchors the window's project and reveals the directory, so
+            // the module re-roots there on its own terms. The host no longer owns a tree to
+            // point at one.
+            let dir = std::path::PathBuf::from(dir);
+            state.set_project_root(dir.clone());
+            state.reveal_in_files(&dir, None, None);
         }
         // ---- left panel: the module rail (H4) ----
         Command::RailActivate(key) => state.rail_activate(&key),
@@ -714,6 +705,8 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             };
             state.rail_row(&key, &row, g);
         }
+        Command::RailContext(key, row, x, y) => state.rail_context(&key, &row, x, y),
+        Command::RailQuery(q) => state.rail_query(&q),
         // ---- module capability rights (H2) ----
         Command::Rights(cmd) => state.rights_apply(&cmd),
         // ---- left panel: Git mode (J) ----
@@ -723,8 +716,8 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         }
         Command::GitClick(path) => state.git_click(&path),
         Command::GitOpen(path) => {
-            // Resolved here and re-dispatched rather than duplicated: a git row and an
-            // explorer row must open a file the same way, and there is one implementation.
+            // Resolved here and re-dispatched rather than duplicated: a git row and a
+            // module's file row must open a file the same way, and there is one path.
             let Some(abs) = state.git_abs(&path) else {
                 return Effect::None;
             };
@@ -808,7 +801,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::FilesOpen(path) => {
             let p = std::path::PathBuf::from(&path);
             if p.is_dir() {
-                state.files_set_root(p);
+                state.set_project_root(p);
                 return Effect::None;
             }
             // `.md` gets the renderer, everything else the plain viewer — the same split the
@@ -1475,7 +1468,7 @@ mod git_commit_diff_tests {
         std::fs::write(r.root.join("sub/a.txt"), "changed\n").expect("dirty the tree");
         let mgr = mgr();
         let mut st = fresh();
-        st.files_set_root(r.root.clone());
+        st.set_project_root(r.root.clone());
         st.rebuild_git();
         assert!(st.git.is_repo(), "the panel found the repo");
         assert!(
@@ -1515,7 +1508,7 @@ mod git_commit_diff_tests {
         std::fs::write(r.root.join("sub/a.txt"), "changed\n").expect("dirty the tree");
         let mgr = mgr();
         let mut st = fresh();
-        st.files_set_root(r.root.clone());
+        st.set_project_root(r.root.clone());
         st.rebuild_git();
         dispatch(&mut st, Command::GitDiff(None), &mgr);
         let pane = st.active_tab().panes.last().expect("a pane opened");
@@ -1533,7 +1526,7 @@ mod git_commit_diff_tests {
         let r = repo("untracked");
         std::fs::write(r.root.join("sub/new.txt"), "brand new\n").expect("add an untracked file");
         let mut st = fresh();
-        st.files_set_root(r.root.clone());
+        st.set_project_root(r.root.clone());
         st.rebuild_git();
         assert!(
             st.git.rows.iter().any(|w| w.path == "sub/new.txt"),
@@ -1713,6 +1706,180 @@ mod rail_command_tests {
             &mgr,
         );
         assert!(st.take_rail_requests().is_empty());
+    }
+
+    /// The filter box. A tier-1 module cannot draw a text field, so the panel draws one and
+    /// forwards every edit as a `rail.query` host event — the whole box, not a keystroke.
+    ///
+    /// Notified, never applied: the host must NOT filter the rows it already holds. A file
+    /// explorer's matches usually are not loaded yet, so a host-side filter would silently
+    /// turn "find in project" into "find among the folders you already opened".
+    #[test]
+    fn the_filter_box_forwards_the_typed_query_and_filters_nothing_itself() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let key = entry_key(&module(), "browse");
+        dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
+        let before = st.rail.rows(&key).len();
+        let _ = st.take_module_events();
+
+        dispatch(&mut st, Command::RailQuery("inst".into()), &mgr);
+
+        assert_eq!(
+            st.take_module_events(),
+            vec![(
+                avada_core::module::methods::events::RAIL_QUERY.to_string(),
+                serde_json::json!({ "entry": "browse", "query": "inst" })
+            )],
+            "the entry is named in the payload: one event kind serves every rail entry"
+        );
+        assert_eq!(
+            st.rail.rows(&key).len(),
+            before,
+            "the rows only ever change when the module sends new ones"
+        );
+    }
+
+    /// Typing with nothing active is not an error, but it must not invent an entry to
+    /// address — an event with the wrong `entry` would filter somebody else's list.
+    #[test]
+    fn typing_with_no_active_entry_sends_nothing() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        dispatch(&mut st, Command::RailQuery("inst".into()), &mgr);
+        assert!(st.take_module_events().is_empty());
+    }
+
+    /// A right-click has two destinations at once (`docs/module-contract.md` §10.6): the
+    /// module hears the gesture, AND the host opens its own file menu over the row's
+    /// `data.path`. That is how a tier-1 module inherits the app's whole "Open in…" list
+    /// without shipping one menu row of its own.
+    #[test]
+    fn a_right_click_tells_the_module_and_opens_the_hosts_own_file_menu() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let key = entry_key(&module(), "browse");
+        // A real path, because the menu is built from what is actually on disk.
+        let here = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+        st.apply_rail_event(RailEvent::Rows {
+            module: module(),
+            entry: "browse".into(),
+            rows: vec![Row {
+                data: serde_json::json!({ "path": here }),
+                ..row("manifest")
+            }],
+        });
+        dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
+        let _ = st.take_rail_requests();
+
+        dispatch(
+            &mut st,
+            Command::RailContext(key.clone(), "manifest".into(), 12.0, 34.0),
+            &mgr,
+        );
+
+        assert_eq!(
+            st.take_rail_requests(),
+            vec![RailRequest::Row {
+                module: module(),
+                entry: "browse".into(),
+                row: "manifest".into(),
+                data: serde_json::json!({ "path": here }),
+                gesture: RailGesture::Context,
+            }],
+            "the module is told even though the host also drew a menu"
+        );
+        let menu = st.ctx.as_ref().expect("the host opened its own row menu");
+        let labels: Vec<String> = menu.entries.iter().map(|e| e.label.to_string()).collect();
+        assert!(
+            labels.iter().any(|l| l == "Open in Terminal"),
+            "this list is the app's file menu, unchanged: {labels:?}"
+        );
+    }
+
+    /// A row with no `path` still reaches the module. The host simply has nothing to draw a
+    /// file menu over — and must not draw an empty one, which would look like a hang.
+    #[test]
+    fn a_right_click_on_a_row_without_a_path_reaches_the_module_and_opens_no_menu() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let key = entry_key(&module(), "browse");
+        dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
+        let _ = st.take_rail_requests();
+
+        dispatch(
+            &mut st,
+            Command::RailContext(key, "installed".into(), 12.0, 34.0),
+            &mgr,
+        );
+
+        assert_eq!(st.take_rail_requests().len(), 1, "the module still hears it");
+        assert!(st.ctx.is_none(), "and no menu opens over a row with no path");
+    }
+
+    /// Reveal-in-files, the one thing the deleted built-in mode did that nothing else in
+    /// the app can do: a `path:line:col` hit in a pane opens the explorer ON that path.
+    ///
+    /// The host does not walk a tree any more — it opens the panel on whatever entry is
+    /// called `files` and emits `files.reveal`; the module expands the ancestors and marks
+    /// the row. Matching on the ENTRY id, not the module id, is deliberate: a fork that
+    /// registers `files` inherits every reveal in the app.
+    #[test]
+    fn a_reveal_opens_the_files_entry_and_emits_files_reveal() {
+        let mgr = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.apply_rail_event(RailEvent::Registered {
+            module: module(),
+            entries: vec![entry("files")],
+        });
+        let _ = st.take_module_events();
+
+        let here = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+        dispatch(
+            &mut st,
+            Command::RevealInFiles {
+                path: here.into(),
+                line: Some(12),
+                col: None,
+            },
+            &mgr,
+        );
+
+        assert_eq!(
+            st.rail.active.as_deref(),
+            Some(entry_key(&module(), "files").as_str()),
+            "a reveal has to bring the explorer to the front, not just message it"
+        );
+        assert!(st.left_panel_open);
+        assert_eq!(st.left_mode_request, Some(LEFT_MODE_RAIL));
+
+        let events = st.take_module_events();
+        let (kind, payload) = events
+            .iter()
+            .find(|(k, _)| k == avada_core::module::methods::events::FILES_REVEAL)
+            .expect("the reveal was emitted");
+        assert_eq!(kind, "files.reveal");
+        assert_eq!(payload["path"], serde_json::json!(here));
+        assert_eq!(payload["line"], serde_json::json!(12));
+    }
+
+    /// No files module installed: there is nothing to reveal *into*. Say so, rather than
+    /// opening a panel that does nothing — a silent no-op reads as a broken link.
+    #[test]
+    fn a_reveal_with_no_files_module_tells_the_human_instead_of_going_quiet() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        dispatch(
+            &mut st,
+            Command::RevealInFiles {
+                path: "/tmp/x.rs".into(),
+                line: None,
+                col: None,
+            },
+            &mgr,
+        );
+        assert!(st.take_module_events().is_empty());
+        assert!(st.rail.active.is_none());
     }
 
     /// The module crashed while its surface was showing: the panel must go back to a
