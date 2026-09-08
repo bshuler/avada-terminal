@@ -136,6 +136,18 @@ pub enum HostEvent {
         /// The module surface, for `kind: "module"`.
         surface: Option<String>,
     },
+    /// The module wrote to a pane's input (`host.panes.input`). The host has already
+    /// answered the module; delivering the bytes is the app's job, and a `pane_id` the
+    /// app no longer has is dropped rather than reported — the module may well have been
+    /// typing into a pane the human closed a frame earlier.
+    PaneInput {
+        /// Which module.
+        module: ModuleId,
+        /// The pane, as minted by an earlier `host.panes.spawn`.
+        pane_id: String,
+        /// The bytes to feed the pane, exactly as the module sent them.
+        text: String,
+    },
 }
 
 /// Why a host operation failed.

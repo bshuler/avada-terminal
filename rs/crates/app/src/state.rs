@@ -3267,7 +3267,7 @@ impl State {
     /// transient failure passing) is noticed in the same sitting.
     const HYPERPANE_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
-    /// Refresh the shipped skills from the bundle and return the Hyperpane directory.
+    /// Refresh the shipped files from the bundle and return the Hyperpane directory.
     ///
     /// Failing that (a read-only or missing data dir) there is nowhere to put the tab, so
     /// `None` — the caller leaves it uncreated rather than open an agent into some arbitrary

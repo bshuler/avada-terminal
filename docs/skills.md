@@ -130,19 +130,22 @@ turning a tool off removes what was written for it and turning it back on
 restores them. The shared layer is written whatever is detected.
 
 The disabled set persists in `skills-settings.json` under the config dir
-(`persistence::skills_settings`, `{ "disabledTools": ["cline", ...] }`), and
-`hyperpane::materialize()` reads it:
+(`persistence::skills_settings`, `{ "disabledTools": ["cline", ...] }`), and the
+intended read is
 `Tools::detect_here_with(skills_settings::load().disabled_tools).with("claude-code")`.
 Loading is forgiving — a missing or corrupt file, a non-array value, a
 non-string element, or an id no adapter in this build claims all coerce to
 "nothing disabled", which is the safe direction for a toggle that gates writes.
 
-Claude Code is force-added after the toggles, not before: the Hyperpane tab
-exists to run it, so its files belong in that directory even on a machine where
-the binary is not installed. That forcing makes it *present*, not *enabled* — if
-the user switched it off, `Tools::has` still says no and the sweep removes what
-an earlier run wrote. Nothing writes the file yet; the per-tool toggles are
-still owed a surface in the app's settings UI.
+That call currently has **no caller**. `hyperpane::materialize()` used to be it,
+back when the Hyperpane skill was built in; the skill left with the
+`bshuler/avada-hyperpane` module and the host copy-out no longer materializes
+anything. The next caller is whatever drives materialization from the module
+registry at install time, which is where the force-add of Claude Code belongs
+too: it makes a tool *present*, not *enabled* — if the user switched it off,
+`Tools::has` still says no and the sweep removes what an earlier run wrote.
+Nothing writes the settings file yet either; the per-tool toggles are still owed
+a surface in the app's settings UI.
 
 ### Size caps
 
@@ -261,9 +264,11 @@ assert!(mat.plan(&request).is_empty());     // idempotent
 ```
 
 `ModuleInput { id, name, version, version_dir, skills, accepted, enabled }` is
-what the registry knows per installed module. `hyperpane::materialize()` is the
-first caller: the built-in `avada/hyperpane` module materialized into the
-Hyperpane tab's directory with Claude Code always on.
+what the registry knows per installed module — the only shape this materializer
+accepts. There is no built-in module any more: `bshuler/avada-hyperpane` carries
+the Hyperpane rule and arrives through the marketplace like any other, so its
+skills reach the tab's directory as an installed module's `[skills] paths`, not
+as a special case in `hyperpane::materialize()`.
 
 ## Extending
 

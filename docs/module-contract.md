@@ -361,7 +361,7 @@ a link click, a "reveal in files" menu item, a pane's working directory. If no
 live module has subscribed, the app says so on a toast rather than silently
 dropping it.
 
-### 10.5 Opening panes: `host.panes.spawn`
+### 10.5 Opening and driving panes: `host.panes.spawn`, `host.panes.input`
 
 `host.panes.spawn { kind, path?, surface? } → { pane_id }`. The **host** mints
 the id (uuid v4) and answers immediately; the pane itself is opened later by
@@ -372,10 +372,28 @@ any window exists, and a slow or busy UI never blocks the module.
 | `kind` | Meaning |
 |---|---|
 | `file` | open `path` in the host's own viewer |
+| `shell` | a terminal, started in `path` — what a shell-tier module asks for |
 | `module` | a pane owned by the module, showing `surface` (§11) |
 
 A `kind` the app does not know becomes a toast, not a pane. Requires
 `panes.spawn`.
+
+`host.panes.input { pane_id, text } → {}` types into a pane the module opened,
+and is the other half of shell tier: spawn a terminal, then drive it. It returns
+as soon as the intent is on the event stream (`HostEvent::PaneInput { module,
+pane_id, text }`) for the same reason `spawn` does — the pane lives on the UI
+thread, and a module that waited for the keystroke to land would block its own
+request loop.
+
+An **unknown `pane_id` is not an error**. The host does not own the pane table;
+answering "no such pane" would cost a synchronous round trip to the UI thread per
+keystroke, and the app simply drops input for a pane it has closed. An *empty* id
+is refused with `InvalidParams`, because that is a module bug rather than a race.
+
+Requires `panes.input`, which is granted **separately** from `panes.spawn` on
+purpose: opening a terminal and typing into somebody's shell are different
+powers, and a module that may do the first should not silently acquire the
+second.
 
 ### 10.6 The row menu: who draws a right-click
 

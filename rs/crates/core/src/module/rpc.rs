@@ -35,6 +35,7 @@ pub const SERVED: &[&str] = &[
     methods::HOST_FS_LIST,
     methods::HOST_FS_READ,
     methods::HOST_PANES_SPAWN,
+    methods::HOST_PANES_INPUT,
     methods::HOST_EVENTS_SUBSCRIBE,
 ];
 
@@ -173,6 +174,13 @@ struct SpawnPane {
     surface: Option<String>,
 }
 
+/// `host.panes.input` params.
+#[derive(Deserialize)]
+struct PaneInput {
+    pane_id: String,
+    text: String,
+}
+
 /// `host.events.subscribe` params.
 #[derive(Deserialize)]
 struct Subscribe {
@@ -248,11 +256,11 @@ impl Dispatcher {
             methods::HOST_FS_LIST => self.fs_list(params),
             methods::HOST_FS_READ => self.fs_read(params),
             methods::HOST_PANES_SPAWN => self.panes_spawn(params),
+            methods::HOST_PANES_INPUT => self.panes_input(params),
             methods::HOST_EVENTS_SUBSCRIBE => self.events_subscribe(params),
-            methods::HOST_PANES_INPUT
-            | methods::HOST_FS_WRITE
-            | methods::HOST_KEYCHAIN_GET
-            | methods::HOST_KEYCHAIN_SET => Err(unsupported(method)),
+            methods::HOST_FS_WRITE | methods::HOST_KEYCHAIN_GET | methods::HOST_KEYCHAIN_SET => {
+                Err(unsupported(method))
+            }
             other => Err(RpcError::new(
                 ErrorCode::MethodNotFound,
                 format!("unknown method `{other}`"),
@@ -526,6 +534,31 @@ impl Dispatcher {
         Ok(json!({ "pane_id": pane_id }))
     }
 
+    /// `host.panes.input` `{ pane_id, text }` -> `{}`.
+    ///
+    /// Typing into a pane the module opened, which is the whole point of a shell-tier
+    /// module: it spawns a terminal and then drives it. Like `panes.spawn` this returns
+    /// the moment the intent is on the event stream — the pane lives on the UI thread and
+    /// a module that waited for the keystroke to land would block its own request loop.
+    ///
+    /// An unknown `pane_id` is not an error here. The host does not own the pane table (the
+    /// app does), and answering "no such pane" would mean a synchronous round trip to the
+    /// UI thread for every keystroke; the app drops input for a pane it has closed.
+    /// An *empty* id is refused, because that is a module bug rather than a race.
+    fn panes_input(&self, params: &Value) -> Result<Value, RpcError> {
+        let PaneInput { pane_id, text } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if pane_id.trim().is_empty() {
+            return Err(invalid_params("pane_id must not be empty"));
+        }
+        self.shared.events.send(HostEvent::PaneInput {
+            module: self.module.clone(),
+            pane_id,
+            text,
+        });
+        Ok(json!({}))
+    }
+
     /// `host.events.subscribe { kinds }`: the whole set, replacing any earlier one. An
     /// empty set unsubscribes.
     fn events_subscribe(&self, params: &Value) -> Result<Value, RpcError> {
@@ -666,7 +699,6 @@ pub(crate) mod tests {
     fn unsupported_methods_say_so_after_the_gate() {
         let rig = rig(&all_caps());
         for m in [
-            methods::HOST_PANES_INPUT,
             methods::HOST_FS_WRITE,
             methods::HOST_KEYCHAIN_GET,
             methods::HOST_KEYCHAIN_SET,
@@ -1146,6 +1178,58 @@ pub(crate) mod tests {
             super::tests::rig(&[])
                 .d
                 .call(methods::HOST_PANES_SPAWN, &json!({ "kind": "file" }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::CapabilityDenied
+        );
+    }
+
+    #[test]
+    fn panes_input_announces_the_keystrokes_and_needs_its_own_capability() {
+        let rig = rig(&[Capability::PanesInput]);
+        assert_eq!(
+            rig.d
+                .call(
+                    methods::HOST_PANES_INPUT,
+                    &json!({ "pane_id": "p-1", "text": "ls\r" })
+                )
+                .unwrap(),
+            json!({})
+        );
+        match rig.events.recv().unwrap() {
+            HostEvent::PaneInput {
+                module,
+                pane_id,
+                text,
+            } => {
+                assert_eq!(module, testkit::module_id());
+                assert_eq!(pane_id, "p-1");
+                assert_eq!(text, "ls\r");
+            }
+            other => panic!("{other:?}"),
+        }
+        // An empty id is a module bug and is refused before anything is announced; an
+        // unknown one is a race with a closed pane and is not.
+        assert_eq!(
+            rig.d
+                .call(
+                    methods::HOST_PANES_INPUT,
+                    &json!({ "pane_id": " ", "text": "x" })
+                )
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams
+        );
+        assert!(rig.events.try_recv().is_err());
+        // `panes.spawn` does not imply `panes.input`: spawning a pane and typing into one
+        // are separately granted.
+        assert_eq!(
+            super::tests::rig(&[Capability::PanesSpawn])
+                .d
+                .call(
+                    methods::HOST_PANES_INPUT,
+                    &json!({ "pane_id": "p-1", "text": "x" })
+                )
                 .unwrap_err()
                 .kind(),
             ErrorCode::CapabilityDenied

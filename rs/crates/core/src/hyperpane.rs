@@ -1,39 +1,27 @@
 //! The always-on **Hyperpane** tab's working directory.
 //!
-//! The tab runs the user's coding CLI in [`paths::hyperpane_dir`], and everything that agent
-//! knows about driving this app — the skill, its reference, the README a human reads — is a
-//! file in that directory. Those files ship with the binary under
-//! `resources/claude/hyperpane/`; this module copies them out to the durable location on every
-//! start, so an upgraded app teaches its agent the new verbs without the user doing anything.
+//! The tab runs the user's coding CLI in [`paths::hyperpane_dir`], and the files that make that
+//! directory a useful place to start — the README a human reads, the `.claude/` settings and
+//! reference material — ship with the binary under `resources/claude/hyperpane/`. This module
+//! copies them out to the durable location on every start, so an upgraded app refreshes them
+//! without the user doing anything.
 //!
 //! The copy is one-directional and additive: files the app ships are overwritten, and nothing
 //! else in the directory is ever touched. That split is the whole contract — the agent keeps
 //! notes there and the user drops files in, and neither can be clobbered by an upgrade, while
-//! a locally-edited `SKILL.md` is app-owned and *will* be replaced.
+//! a locally-edited shipped file is app-owned and *will* be replaced.
 //!
-//! The shipped `skills/` subtree is not copied as-is: it is the built-in `avada/hyperpane`
-//! module's skill source, and [`crate::skills::Materializer`] turns it into the fenced
-//! `AGENTS.md` / `CLAUDE.md` sections and `.agents/skills/` directories every agent tool reads.
-//! [`materialize`] is the shim the app calls; [`materialize_into`] is the same thing with every
-//! input injectable so tests never touch the real home or the real machine's tools.
+//! What this module deliberately no longer does is materialize skills. The rule that teaches an
+//! agent about `avada ctl` belongs to the `bshuler/avada-hyperpane` module and travels with it;
+//! [`crate::skills::Materializer`] runs over *installed modules*, from the registry, and has no
+//! special case for this directory any more. Seeding a directory is a host job; deciding what
+//! an agent is told is a module's.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use avada_module_sdk::caps::Capability;
-use avada_module_sdk::descriptor::SchemaDocument;
-use avada_module_sdk::manifest::{ModuleId, SkillsSection};
-
-use crate::persistence::{paths, skills_settings};
-use crate::skills::{Materializer, ModuleInput, Request, Tools};
-
-/// Module id of the shipped Hyperpane skill. Built in, always accepted.
-pub const MODULE_ID: &str = "avada/hyperpane";
-
-/// The directory under the shipped tree that holds the module's skill units.
-const SKILLS_SUBDIR: &str = "skills";
+use crate::persistence::paths;
 
 /// The shipped copy of the Hyperpane directory, or `None` when the app is running from a tree
 /// that doesn't carry it.
@@ -61,91 +49,34 @@ pub fn source_dir() -> Option<PathBuf> {
 /// The directory is created even when nothing ships (a stripped build, a dev binary run from a
 /// tree without its resources): the tab still needs a cwd, and an empty one is a working — if
 /// unhelpful — starting point, which is strictly better than the tab failing to open.
-///
-/// Claude Code is added regardless of detection: this tab exists to run it, so its files
-/// belong here even on a machine where the binary hasn't been installed yet. That forcing
-/// covers *not detected*, not *not wanted* — a tool the user switched off in
-/// [`skills_settings`] stays disabled, Claude Code included, and
-/// [`crate::skills::Tools::has`] keeps anything from being written for it.
 #[tracing::instrument(level = "debug", ret)]
 pub fn materialize() -> io::Result<PathBuf> {
-    let tools = Tools::detect_here_with(skills_settings::load().disabled_tools).with("claude-code");
-    materialize_into(
-        &paths::hyperpane_dir(),
-        source_dir().as_deref(),
-        &tools,
-        None,
-    )
+    materialize_into(&paths::hyperpane_dir(), source_dir().as_deref())
 }
 
-/// [`materialize`] with every input explicit: copy the shipped tree at `src` (if any) onto
-/// `dest`, then materialize the built-in module's skills into `dest` as a project root for
-/// `tools`. `schema`, when given, also emits the `avada-modules` index skill.
-#[tracing::instrument(level = "debug", skip(schema), ret)]
-pub fn materialize_into(
-    dest: &Path,
-    src: Option<&Path>,
-    tools: &Tools,
-    schema: Option<&SchemaDocument>,
-) -> io::Result<PathBuf> {
+/// [`materialize`] with both paths explicit: copy the shipped tree at `src` (if any) onto
+/// `dest`, creating `dest` either way. Injectable so tests never touch the real home.
+#[tracing::instrument(level = "debug", ret)]
+pub fn materialize_into(dest: &Path, src: Option<&Path>) -> io::Result<PathBuf> {
     fs::create_dir_all(dest)?;
-    let Some(src) = src else {
-        return Ok(dest.to_path_buf());
-    };
-    copy_over(src, dest)?;
-    let module = ModuleInput {
-        id: ModuleId::new(MODULE_ID).map_err(|e| io::Error::other(e.to_string()))?,
-        name: "Hyperpane".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        version_dir: src.to_path_buf(),
-        skills: SkillsSection {
-            paths: vec![SKILLS_SUBDIR.into()],
-        },
-        accepted: BTreeSet::from([Capability::SkillsMaterialize]),
-        enabled: true,
-    };
-    let roots = [dest.to_path_buf()];
-    let mat = Materializer::new();
-    let plan = mat.plan(&Request {
-        modules: std::slice::from_ref(&module),
-        roots: &roots,
-        home: None,
-        tools,
-        schema,
-        workspace: Some("hyperpane"),
-    });
-    for e in &plan.errors {
-        tracing::warn!(path = %e.path.display(), error = %e.error, "hyperpane skill unit rejected");
-    }
-    let applied = mat.apply(&plan);
-    for (path, err) in &applied.failed {
-        tracing::warn!(path = %path.display(), error = %err, "hyperpane skill write failed");
+    if let Some(src) = src {
+        copy_over(src, dest)?;
     }
     Ok(dest.to_path_buf())
 }
 
 /// Recursively copy `src` onto `dest`, overwriting collisions and leaving everything else in
 /// `dest` alone. Errors on individual entries are skipped rather than aborting the walk: a
-/// single unreadable file should not cost the agent its whole skill set.
-///
-/// The top-level `skills/` directory is the materializer's source, not something the agent
-/// reads, so it stays behind.
+/// single unreadable file should not cost the agent its whole starting directory.
 #[tracing::instrument(level = "debug", ret)]
 fn copy_over(src: &Path, dest: &Path) -> io::Result<()> {
-    copy_tree(src, dest, true)
-}
-
-fn copy_tree(src: &Path, dest: &Path, top: bool) -> io::Result<()> {
     for entry in fs::read_dir(src)? {
         let Ok(entry) = entry else { continue };
         let from = entry.path();
         let to = dest.join(entry.file_name());
         if from.is_dir() {
-            if top && entry.file_name() == SKILLS_SUBDIR {
-                continue;
-            }
             if fs::create_dir_all(&to).is_ok() {
-                let _ = copy_tree(&from, &to, false);
+                let _ = copy_over(&from, &to);
             }
         } else {
             let _ = fs::copy(&from, &to);
@@ -157,7 +88,6 @@ fn copy_tree(src: &Path, dest: &Path, top: bool) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avada_module_sdk::skills::{Activation, Skill, SkillKind};
 
     fn scratch(tag: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(format!("hp-{tag}-{}", uuid::Uuid::new_v4()));
@@ -220,16 +150,10 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    /// `build.rs` (frozen) names these five paths in `rerun-if-changed`; a rename that left
+    /// them behind would silently stop re-staging the resources.
     #[test]
-    fn shipped_skill_unit_is_an_always_on_rule() {
-        let path = shipped().join("skills").join("hyperpane").join("SKILL.md");
-        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let s = Skill::parse(&text).unwrap();
-        assert_eq!(s.frontmatter.name, "hyperpane");
-        assert_eq!(s.frontmatter.kind, SkillKind::Rule);
-        assert_eq!(s.frontmatter.activation, Activation::Always);
-        assert!(s.body.contains("avada ctl"));
-        // build.rs (frozen) lists these five paths in rerun-if-changed; they must keep existing.
+    fn the_shipped_tree_still_holds_what_build_rs_watches() {
         for rel in [
             "README.md",
             ".claude/settings.json",
@@ -242,15 +166,24 @@ mod tests {
         }
     }
 
+    /// The skill unit left with the `bshuler/avada-hyperpane` module. Nothing under the shipped
+    /// tree may claim module ownership any more: a stray `skills/` directory here would be
+    /// content the host ships and no registry knows about, which is exactly the confusion the
+    /// extraction removed.
     #[test]
-    fn materialize_into_copies_the_tree_and_fences_the_rule() {
+    fn the_host_ships_no_module_skills_of_its_own() {
+        assert!(
+            !shipped().join("skills").exists(),
+            "skill units belong to the hyperpane module, not to resources/claude/hyperpane"
+        );
+    }
+
+    #[test]
+    fn materialize_into_copies_the_tree_and_leaves_local_files_be() {
         let tmp = scratch("into");
         let dest = tmp.join("dest");
-        let tools = Tools::only(["claude-code"]);
-        let out = materialize_into(&dest, Some(&shipped()), &tools, None).unwrap();
+        let out = materialize_into(&dest, Some(&shipped())).unwrap();
         assert_eq!(out, dest);
-
-        // What it did before: the legacy tree copied, `skills/` source left behind.
         assert!(dest.join("README.md").is_file());
         assert!(dest
             .join(".claude")
@@ -258,24 +191,14 @@ mod tests {
             .join("avada")
             .join("SKILL.md")
             .is_file());
-        assert!(!dest.join("skills").exists());
-
-        // What it does now: the fenced rule in AGENTS.md and the import in CLAUDE.md.
-        let agents = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
-        assert!(agents.starts_with("<!-- avada:module=avada/hyperpane -->\n"));
-        assert!(agents.contains("avada ctl"));
-        let claude = fs::read_to_string(dest.join("CLAUDE.md")).unwrap();
-        assert!(claude.contains("<!-- avada:module=avada/modules -->\n@AGENTS.md\n"));
+        // No fences, no imports: materialization is the module registry's job now.
+        assert!(!dest.join("AGENTS.md").exists());
+        assert!(!dest.join("CLAUDE.md").exists());
 
         // The agent's own notes survive a second run, which changes nothing.
         fs::write(dest.join("notes.md"), "mine").unwrap();
-        let before_agents = agents.clone();
-        materialize_into(&dest, Some(&shipped()), &tools, None).unwrap();
+        materialize_into(&dest, Some(&shipped())).unwrap();
         assert_eq!(fs::read_to_string(dest.join("notes.md")).unwrap(), "mine");
-        assert_eq!(
-            fs::read_to_string(dest.join("AGENTS.md")).unwrap(),
-            before_agents
-        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -283,9 +206,9 @@ mod tests {
     fn materialize_into_without_a_source_still_makes_the_dir() {
         let tmp = scratch("nosrc");
         let dest = tmp.join("dest");
-        materialize_into(&dest, None, &Tools::none(), None).unwrap();
+        materialize_into(&dest, None).unwrap();
         assert!(dest.is_dir());
-        assert!(!dest.join("AGENTS.md").exists());
+        assert!(!dest.join("README.md").exists());
         let _ = fs::remove_dir_all(&tmp);
     }
 }
