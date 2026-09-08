@@ -7,6 +7,7 @@ import { PaneItem, DividerItem, PaletteItem, PrefOption, FramePaletteOption } fr
 import { TerminalPane, KeyMsg, ToolIcon } from "@widgets";
 import { TipArea } from "tooltip.slint";
 import { ViewPane } from "viewpanes.slint";
+import { ModulePlaceholder } from "placeholder.slint";
 
 // A draggable resize seam. Reports the cursor's offset from the seam centre each
 // move; the controller converts that to a size-fraction delta and re-tiles, which
@@ -714,6 +715,10 @@ export component PaneView inherits Rectangle {
                     // whole rather than re-derived as a range on `kind` — this is
                     // the single place Family B diverges from Family A, and it must
                     // not be a test that a new kind can fall out of silently.
+                    // A module pane (kind 10, track H1): the slot stays in the grid and the
+                    // placeholder draws in it while the module is crashed, disabled, not
+                    // installed or broken; a running module's surface lands here in H4.
+                    if pane.kind == 10 : ModulePlaceholder { x: 4px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; pane-uid: pane.uid; }
                     if pane.is-view : ViewPane {
                         x: 4px;
                         y: 2px;

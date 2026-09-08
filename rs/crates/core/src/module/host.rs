@@ -1,0 +1,832 @@
+//! The host: one [`Host`] per process, one slot per installed module. Everything the
+//! rest of the crate (and `core/tests/module_host_e2e.rs`) touches is on `Host`.
+//!
+//! Threads per running module: a **reader** (drains the socket, answers `host.*`
+//! requests through the [`Dispatcher`], routes responses to whoever is waiting) and a
+//! **waiter** (notices the process exit and drives the [`Supervisor`]). Neither holds a
+//! lock across I/O. Host→module calls are synchronous: write the request, block on a
+//! one-shot channel with a timeout.
+
+use super::gate::CapabilityGate;
+use super::rail::{RailEvent, RailState};
+use super::rpc::{CommandSpec, Dispatcher, Shared};
+use super::spawn::{self, HandshakeError, SpawnError};
+use super::supervisor::{ModuleStatus, RestartPolicy, Supervisor, Verdict};
+use super::token::Token;
+use super::transport::{Closer, LineReader, LineWriter};
+use avada_module_sdk::contract::methods;
+use avada_module_sdk::contract::{
+    HelloKind, HostHello, Message, Notification, Request, Response, RpcError, WorkspaceInfo,
+    CONTRACT_VERSION,
+};
+use avada_module_sdk::rail::RowActivate;
+use avada_module_sdk::rights::InstallRecord;
+use avada_module_sdk::ModuleId;
+use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Child;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Static facts about this host, fixed at construction.
+#[derive(Debug, Clone)]
+pub struct HostConfig {
+    /// Every module gets `data_root/<owner__repo>/` as its private data dir.
+    pub data_root: PathBuf,
+    /// Reported in the host hello.
+    pub host_version: String,
+    /// Reported in the host hello (`Avada Terminal`).
+    pub product: String,
+    /// The workspace the modules are activated in, if any.
+    pub workspace: Option<WorkspaceInfo>,
+    /// Restart budget after crashes.
+    pub policy: RestartPolicy,
+    /// How long a freshly spawned module has to say hello.
+    pub handshake_timeout: Duration,
+    /// How long `module.shutdown` gets before the process is killed.
+    pub shutdown_grace: Duration,
+    /// How long a host→module request may take before it fails with `Timeout`.
+    pub call_timeout: Duration,
+}
+
+impl HostConfig {
+    /// Defaults from the contract: 10 s hello, 5 s shutdown grace, 5 s calls.
+    pub fn new(data_root: impl Into<PathBuf>) -> Self {
+        HostConfig {
+            data_root: data_root.into(),
+            host_version: env!("CARGO_PKG_VERSION").to_string(),
+            product: "Avada Terminal".to_string(),
+            workspace: None,
+            policy: RestartPolicy::default(),
+            handshake_timeout: Duration::from_secs(10),
+            shutdown_grace: Duration::from_secs(5),
+            call_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// What the host tells the application. Delivered through [`Host::events`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostEvent {
+    /// A module asked for a toast (`host.toast`), or the host has something to say about
+    /// a module (restart, disable). `level` is `info`, `warn` or `error`.
+    Toast {
+        /// Which module.
+        module: ModuleId,
+        /// The text.
+        text: String,
+        /// The level.
+        level: String,
+    },
+    /// The module's status changed.
+    Status {
+        /// Which module.
+        module: ModuleId,
+        /// The new status.
+        status: ModuleStatus,
+    },
+    /// The module (re)registered its command palette entries.
+    Commands {
+        /// Which module.
+        module: ModuleId,
+        /// The whole set.
+        commands: Vec<CommandSpec>,
+    },
+    /// The module declared its preferences page.
+    PrefsDeclared {
+        /// Which module.
+        module: ModuleId,
+        /// The page description, as sent (a `PrefsPage`).
+        page: Value,
+    },
+}
+
+/// Why a host operation failed.
+#[derive(Debug)]
+pub enum HostError {
+    /// No record was ever given to the host for this id.
+    NotInstalled(ModuleId),
+    /// The binary hash differs from the record; the module is now `Broken`.
+    HashMismatch {
+        /// From the record.
+        expected: String,
+        /// Now on disk.
+        actual: String,
+    },
+    /// The process could not be started.
+    Spawn(SpawnError),
+    /// The hello exchange failed; the module is `Broken` (manifest) or `Disabled`.
+    Handshake(HandshakeError),
+    /// The module said hello but not within `handshake_timeout`.
+    HandshakeTimeout,
+    /// The module is not running, so it cannot be called.
+    NotRunning(ModuleId),
+    /// The module answered a host→module request with an error.
+    Rpc(RpcError),
+    /// The module did not answer within `call_timeout`.
+    Timeout,
+    /// The pipe went away mid-call.
+    Closed,
+    /// Persisting or reading module data failed.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostError::NotInstalled(id) => write!(f, "module `{id}` is not installed"),
+            HostError::HashMismatch { .. } => f.write_str("binary hash mismatch"),
+            HostError::Spawn(e) => write!(f, "{e}"),
+            HostError::Handshake(e) => write!(f, "handshake: {e}"),
+            HostError::HandshakeTimeout => f.write_str("module did not say hello in time"),
+            HostError::NotRunning(id) => write!(f, "module `{id}` is not running"),
+            HostError::Rpc(e) => write!(f, "module error: {e}"),
+            HostError::Timeout => f.write_str("module did not answer in time"),
+            HostError::Closed => f.write_str("module connection closed"),
+            HostError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+impl std::error::Error for HostError {}
+
+impl From<io::Error> for HostError {
+    fn from(e: io::Error) -> Self {
+        HostError::Io(e)
+    }
+}
+
+/// One live process: everything a thread needs to talk to it.
+struct Live {
+    writer: Arc<Mutex<LineWriter>>,
+    closer: Closer,
+    child: Arc<Mutex<Child>>,
+    token: Token,
+    pending: Arc<Mutex<HashMap<u64, Sender<Response>>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+struct SlotState {
+    status: ModuleStatus,
+    live: Option<Live>,
+    /// Bumped at every start; threads of an older generation stand down.
+    generation: u64,
+    /// Set by `shutdown`: the next exit is not a crash.
+    expected_exit: bool,
+}
+
+/// One installed module, whether or not it is running.
+struct Slot {
+    id: ModuleId,
+    record: InstallRecord,
+    binary: PathBuf,
+    data_dir: PathBuf,
+    config: Arc<HostConfig>,
+    shared: Arc<Shared>,
+    dispatcher: Dispatcher,
+    supervisor: Mutex<Supervisor>,
+    state: Mutex<SlotState>,
+    extra_env: Vec<(String, String)>,
+    extra_args: Vec<String>,
+}
+
+struct Inner {
+    config: Arc<HostConfig>,
+    shared: Arc<Shared>,
+    slots: Mutex<HashMap<ModuleId, Arc<Slot>>>,
+}
+
+/// The module host. Cheap to clone; all clones share one set of modules. Dropping the
+/// last clone shuts every module down.
+#[derive(Clone)]
+pub struct Host {
+    inner: Arc<Inner>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Host {
+    /// A host with `gate` deciding every capability check.
+    pub fn new(config: HostConfig, gate: Arc<dyn CapabilityGate>) -> Host {
+        Host {
+            inner: Arc::new(Inner {
+                config: Arc::new(config),
+                shared: Arc::new(Shared {
+                    gate,
+                    rail_events: Default::default(),
+                    events: Default::default(),
+                }),
+                slots: Mutex::new(HashMap::new()),
+            }),
+        }
+    }
+
+    /// The configuration this host was built with.
+    pub fn config(&self) -> &HostConfig {
+        &self.inner.config
+    }
+
+    /// A receiver that sees every [`RailEvent`] from now on (`std::sync::mpsc`; each call
+    /// gets its own channel, all fed the same events).
+    pub fn rail_events(&self) -> Receiver<RailEvent> {
+        self.inner.shared.rail_events.subscribe()
+    }
+
+    /// A receiver that sees every [`HostEvent`] from now on. Same fan-out as
+    /// [`rail_events`](Self::rail_events).
+    pub fn events(&self) -> Receiver<HostEvent> {
+        self.inner.shared.events.subscribe()
+    }
+
+    /// Hash-check, start and handshake the module described by `record`, whose binary
+    /// is at `binary`. Returns once the module is `Running`, or with the reason it is
+    /// not. Calling it again for a module that is already live restarts nothing and
+    /// returns `Ok`. Re-registering a record for a stopped module replaces it.
+    pub fn spawn(&self, record: &InstallRecord, binary: &Path) -> Result<(), HostError> {
+        self.spawn_with(record, binary, &[], &[])
+    }
+
+    /// [`spawn`](Self::spawn) with extra environment and arguments for the child; tests
+    /// use this to steer a fake module.
+    pub fn spawn_with(
+        &self,
+        record: &InstallRecord,
+        binary: &Path,
+        extra_env: &[(String, String)],
+        extra_args: &[String],
+    ) -> Result<(), HostError> {
+        let slot = {
+            let mut slots = lock(&self.inner.slots);
+            if let Some(existing) = slots.get(&record.module_id) {
+                if lock(&existing.state).status.is_live() {
+                    return Ok(());
+                }
+            }
+            let data_dir = self
+                .inner
+                .config
+                .data_root
+                .join(record.module_id.dir_name());
+            let slot = Arc::new(Slot {
+                id: record.module_id.clone(),
+                record: record.clone(),
+                binary: binary.to_path_buf(),
+                dispatcher: Dispatcher::new(
+                    record.module_id.clone(),
+                    self.inner.shared.clone(),
+                    &data_dir,
+                ),
+                data_dir,
+                config: self.inner.config.clone(),
+                shared: self.inner.shared.clone(),
+                supervisor: Mutex::new(Supervisor::new(self.inner.config.policy.clone())),
+                state: Mutex::new(SlotState {
+                    status: ModuleStatus::NotInstalled,
+                    live: None,
+                    generation: 0,
+                    expected_exit: false,
+                }),
+                extra_env: extra_env.to_vec(),
+                extra_args: extra_args.to_vec(),
+            });
+            slots.insert(record.module_id.clone(), slot.clone());
+            slot
+        };
+        slot.start()
+    }
+
+    /// Where a module is in its life; `NotInstalled` for an id the host never saw.
+    pub fn status(&self, id: &ModuleId) -> ModuleStatus {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => lock(&slot.state).status.clone(),
+            None => ModuleStatus::NotInstalled,
+        }
+    }
+
+    /// Every module the host knows and its status.
+    pub fn statuses(&self) -> Vec<(ModuleId, ModuleStatus)> {
+        let slots = lock(&self.inner.slots);
+        let mut out: Vec<_> = slots
+            .values()
+            .map(|s| (s.id.clone(), lock(&s.state).status.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// The record the module was spawned from.
+    pub fn record(&self, id: &ModuleId) -> Option<InstallRecord> {
+        lock(&self.inner.slots).get(id).map(|s| s.record.clone())
+    }
+
+    /// The module's private data directory.
+    pub fn data_dir(&self, id: &ModuleId) -> Option<PathBuf> {
+        lock(&self.inner.slots).get(id).map(|s| s.data_dir.clone())
+    }
+
+    /// What the module currently has on the rail (empty when it is not running).
+    pub fn rail_state(&self, id: &ModuleId) -> RailState {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => lock(&slot.dispatcher.rail).clone(),
+            None => RailState::default(),
+        }
+    }
+
+    /// The commands the module registered.
+    pub fn commands(&self, id: &ModuleId) -> Vec<CommandSpec> {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => slot.dispatcher.commands(),
+            None => Vec::new(),
+        }
+    }
+
+    /// The module's stored preference values.
+    pub fn prefs(&self, id: &ModuleId) -> Map<String, Value> {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => lock(&slot.dispatcher.prefs).values.clone(),
+            None => Map::new(),
+        }
+    }
+
+    /// Replace the module's preference values, persist them under its data dir and,
+    /// if it is running, push `module.prefs.changed`.
+    pub fn set_prefs(&self, id: &ModuleId, values: Map<String, Value>) -> Result<(), HostError> {
+        let slot = self.slot(id)?;
+        let params = slot.dispatcher.set_prefs(values)?;
+        if let Some(writer) = slot.writer() {
+            let n = Notification::new(methods::MODULE_PREFS_CHANGED, params);
+            lock(&writer).write_message(&Message::Notification(n))?;
+        }
+        Ok(())
+    }
+
+    /// Whether `presented` is the token minted for this module's current run. Constant
+    /// time; false when the module is not running.
+    pub fn token_matches(&self, id: &ModuleId, presented: &str) -> bool {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => lock(&slot.state)
+                .live
+                .as_ref()
+                .is_some_and(|l| l.token.matches(presented)),
+            None => false,
+        }
+    }
+
+    /// `module.activate` with the host's workspace (or `workspace` if given).
+    pub fn activate(
+        &self,
+        id: &ModuleId,
+        workspace: Option<WorkspaceInfo>,
+    ) -> Result<Value, HostError> {
+        let ws = workspace.or_else(|| self.inner.config.workspace.clone());
+        self.slot(id)?
+            .request(methods::MODULE_ACTIVATE, json!({ "workspace": ws }))
+    }
+
+    /// `module.deactivate`.
+    pub fn deactivate(&self, id: &ModuleId) -> Result<Value, HostError> {
+        self.slot(id)?
+            .request(methods::MODULE_DEACTIVATE, Value::Null)
+    }
+
+    /// `module.command.invoke {id, args}`.
+    pub fn invoke_command(
+        &self,
+        id: &ModuleId,
+        command: &str,
+        args: Value,
+    ) -> Result<Value, HostError> {
+        let params = if args.is_null() {
+            json!({ "id": command })
+        } else {
+            json!({ "id": command, "args": args })
+        };
+        self.slot(id)?
+            .request(methods::MODULE_COMMAND_INVOKE, params)
+    }
+
+    /// `module.row.activate`.
+    pub fn activate_row(&self, id: &ModuleId, row: &RowActivate) -> Result<Value, HostError> {
+        let params = serde_json::to_value(row).map_err(io::Error::other)?;
+        self.slot(id)?.request(methods::MODULE_ROW_ACTIVATE, params)
+    }
+
+    /// Any host→module request by name; the typed wrappers above are preferred.
+    pub fn call(&self, id: &ModuleId, method: &str, params: Value) -> Result<Value, HostError> {
+        self.slot(id)?.request(method, params)
+    }
+
+    /// Ask the module to stop (`module.shutdown`), wait up to `shutdown_grace`, then
+    /// kill it. Its status becomes `Disabled { reason: "shut down" }`. No-op for a
+    /// module that is not running.
+    pub fn shutdown(&self, id: &ModuleId) -> Result<(), HostError> {
+        self.slot(id)?.shutdown("shut down");
+        Ok(())
+    }
+
+    /// Start a stopped, crashed, disabled or broken module again from a clean restart
+    /// budget. The binary is re-hashed, so a `Broken` module stays broken unless it was
+    /// reinstalled in place.
+    pub fn reopen(&self, id: &ModuleId) -> Result<(), HostError> {
+        let slot = self.slot(id)?;
+        if lock(&slot.state).status.is_live() {
+            return Ok(());
+        }
+        lock(&slot.supervisor).reset();
+        slot.start()
+    }
+
+    /// Shut every running module down, in parallel, each with its own grace period.
+    pub fn shutdown_all(&self) {
+        let slots: Vec<Arc<Slot>> = lock(&self.inner.slots).values().cloned().collect();
+        let handles: Vec<_> = slots
+            .into_iter()
+            .filter(|s| lock(&s.state).status.is_live())
+            .map(|s| thread::spawn(move || s.shutdown("host shut down")))
+            .collect();
+        for h in handles {
+            let _ = h.join();
+        }
+    }
+
+    /// Forget a module entirely (after shutting it down). Its data dir is kept.
+    pub fn remove(&self, id: &ModuleId) {
+        let slot = lock(&self.inner.slots).remove(id);
+        if let Some(slot) = slot {
+            slot.shutdown("removed");
+            self.inner
+                .shared
+                .rail_events
+                .send(RailEvent::Gone { module: id.clone() });
+        }
+    }
+
+    fn slot(&self, id: &ModuleId) -> Result<Arc<Slot>, HostError> {
+        lock(&self.inner.slots)
+            .get(id)
+            .cloned()
+            .ok_or_else(|| HostError::NotInstalled(id.clone()))
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let slots: Vec<Arc<Slot>> = lock(&self.slots).drain().map(|(_, s)| s).collect();
+        for s in slots {
+            if lock(&s.state).status.is_live() {
+                s.shutdown("host dropped");
+            }
+        }
+    }
+}
+
+impl Slot {
+    fn set_status(&self, status: ModuleStatus) {
+        lock(&self.state).status = status.clone();
+        self.shared.events.send(HostEvent::Status {
+            module: self.id.clone(),
+            status,
+        });
+    }
+
+    fn toast(&self, text: String, level: &str) {
+        self.shared.events.send(HostEvent::Toast {
+            module: self.id.clone(),
+            text,
+            level: level.to_string(),
+        });
+    }
+
+    fn writer(&self) -> Option<Arc<Mutex<LineWriter>>> {
+        lock(&self.state).live.as_ref().map(|l| l.writer.clone())
+    }
+
+    fn host_hello(&self) -> HostHello {
+        HostHello {
+            kind: HelloKind::Host,
+            contract_version: CONTRACT_VERSION,
+            host_version: self.config.host_version.clone(),
+            product: self.config.product.clone(),
+            granted: self.record.accepted.iter().cloned().collect(),
+            methods: super::rpc::SERVED.iter().map(|s| s.to_string()).collect(),
+            data_dir: self.data_dir.to_string_lossy().into_owned(),
+            workspace: self.config.workspace.clone(),
+        }
+    }
+
+    /// Hash → spawn → handshake → threads. Sets the status at every exit.
+    fn start(self: &Arc<Self>) -> Result<(), HostError> {
+        if let Err(e) = spawn::verify_hash(&self.binary, &self.record) {
+            let err = match e {
+                SpawnError::HashMismatch { expected, actual } => {
+                    self.set_status(ModuleStatus::Broken {
+                        reason: "binary changed since it was installed".into(),
+                    });
+                    HostError::HashMismatch { expected, actual }
+                }
+                other => {
+                    self.set_status(ModuleStatus::Broken {
+                        reason: other.to_string(),
+                    });
+                    HostError::Spawn(other)
+                }
+            };
+            tracing::warn!(module = %self.id, "refusing to spawn: {err}");
+            return Err(err);
+        }
+        let generation = {
+            let mut st = lock(&self.state);
+            st.generation += 1;
+            st.expected_exit = false;
+            st.live = None;
+            st.generation
+        };
+        self.set_status(ModuleStatus::Starting);
+        if let Err(e) = std::fs::create_dir_all(&self.data_dir) {
+            self.set_status(ModuleStatus::Disabled {
+                reason: format!("cannot create data dir: {e}"),
+            });
+            return Err(HostError::Io(e));
+        }
+        let spawned = match spawn::spawn(
+            &self.binary,
+            &self.data_dir,
+            &self.extra_env,
+            &self.extra_args,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                self.set_status(ModuleStatus::Disabled {
+                    reason: e.to_string(),
+                });
+                return Err(HostError::Spawn(e));
+            }
+        };
+        let spawn::Spawned {
+            mut child,
+            mut reader,
+            mut writer,
+            closer,
+        } = spawned;
+        let token = Token::mint();
+
+        // The handshake runs on its own thread so a module that never speaks cannot
+        // wedge the caller: on timeout the closer turns its blocking read into EOF.
+        let (tx, rx) = mpsc::channel();
+        let record = self.record.clone();
+        let reply = self.host_hello();
+        let hs_token = token.clone();
+        thread::spawn(move || {
+            let r = spawn::handshake(&mut reader, &mut writer, &record, &reply, &hs_token);
+            let _ = tx.send((r, reader, writer));
+        });
+        let (result, reader, writer) = match rx.recv_timeout(self.config.handshake_timeout) {
+            Ok(x) => x,
+            Err(_) => {
+                closer.close();
+                let _ = child.kill();
+                let _ = child.wait();
+                self.set_status(ModuleStatus::Disabled {
+                    reason: "did not say hello in time".into(),
+                });
+                return Err(HostError::HandshakeTimeout);
+            }
+        };
+        if let Err(e) = result {
+            closer.close();
+            let _ = child.kill();
+            let _ = child.wait();
+            let status = match &e {
+                HandshakeError::ManifestMismatch => ModuleStatus::Broken {
+                    reason: "manifest differs from the install record".into(),
+                },
+                HandshakeError::Contract { .. } => ModuleStatus::Broken {
+                    reason: e.to_string(),
+                },
+                other => ModuleStatus::Disabled {
+                    reason: other.to_string(),
+                },
+            };
+            tracing::warn!(module = %self.id, "handshake refused: {e}");
+            self.set_status(status);
+            return Err(HostError::Handshake(e));
+        }
+
+        let live = Live {
+            writer: Arc::new(Mutex::new(writer)),
+            closer,
+            child: Arc::new(Mutex::new(child)),
+            token,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: Arc::new(AtomicU64::new(1)),
+        };
+        let child = live.child.clone();
+        let writer = live.writer.clone();
+        let pending = live.pending.clone();
+        lock(&self.state).live = Some(live);
+        self.set_status(ModuleStatus::Running);
+
+        let me = self.clone();
+        thread::spawn(move || me.read_loop(generation, reader, writer, pending));
+        let me = self.clone();
+        thread::spawn(move || me.wait_loop(generation, child));
+        Ok(())
+    }
+
+    fn read_loop(
+        &self,
+        generation: u64,
+        mut reader: LineReader,
+        writer: Arc<Mutex<LineWriter>>,
+        pending: Arc<Mutex<HashMap<u64, Sender<Response>>>>,
+    ) {
+        loop {
+            let msg = match reader.read_message() {
+                Ok(Some(m)) => m,
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::debug!(module = %self.id, "module stream: {e}");
+                    break;
+                }
+            };
+            match msg {
+                Message::Request(req) => {
+                    let resp = self.dispatcher.handle(&req);
+                    if lock(&writer)
+                        .write_message(&Message::Response(resp))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Message::Notification(n) => self.dispatcher.notification(&n),
+                Message::Response(resp) => {
+                    let id = match &resp.id {
+                        avada_module_sdk::contract::Id::Num(n) => Some(*n),
+                        _ => None,
+                    };
+                    if let Some(tx) = id.and_then(|n| lock(&pending).remove(&n)) {
+                        let _ = tx.send(resp);
+                    }
+                }
+            }
+        }
+        // Whoever is still waiting on a response will never get one.
+        lock(&pending).clear();
+        let _ = generation;
+    }
+
+    fn wait_loop(self: Arc<Self>, generation: u64, child: Arc<Mutex<Child>>) {
+        let exit = loop {
+            // Bind the poll result first: a guard living in the scrutinee would stay
+            // held across the arms, and `shutdown` needs the same lock to kill.
+            let polled = lock(&child).try_wait();
+            match polled {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => thread::sleep(Duration::from_millis(15)),
+                Err(_) => break None,
+            }
+        };
+        let expected = {
+            let mut st = lock(&self.state);
+            if st.generation != generation {
+                return;
+            }
+            if let Some(live) = st.live.take() {
+                live.closer.close();
+            }
+            st.expected_exit
+        };
+        self.shared.rail_events.send(RailEvent::Gone {
+            module: self.id.clone(),
+        });
+        *lock(&self.dispatcher.rail) = RailState::default();
+        if expected {
+            return;
+        }
+        let code = exit
+            .and_then(|s| s.code())
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        tracing::warn!(module = %self.id, code, "module exited unexpectedly");
+        let verdict = lock(&self.supervisor).on_crash(Instant::now());
+        match verdict {
+            Verdict::Restart { delay, attempt } => {
+                self.set_status(ModuleStatus::Crashed { restarts: attempt });
+                self.toast(
+                    format!(
+                        "{} crashed (exit {code}); restarting in {} ms",
+                        self.id,
+                        delay.as_millis()
+                    ),
+                    "warn",
+                );
+                thread::sleep(delay);
+                {
+                    let st = lock(&self.state);
+                    if st.generation != generation || st.expected_exit {
+                        return;
+                    }
+                }
+                if let Err(e) = self.start() {
+                    tracing::warn!(module = %self.id, "restart failed: {e}");
+                }
+            }
+            Verdict::Disable { reason } => {
+                self.toast(format!("{} disabled: {reason}", self.id), "error");
+                self.set_status(ModuleStatus::Disabled { reason });
+            }
+        }
+    }
+
+    fn request(&self, method: &str, params: Value) -> Result<Value, HostError> {
+        let (writer, pending, id) = {
+            let st = lock(&self.state);
+            let live = st
+                .live
+                .as_ref()
+                .ok_or_else(|| HostError::NotRunning(self.id.clone()))?;
+            (
+                live.writer.clone(),
+                live.pending.clone(),
+                live.next_id.fetch_add(1, Ordering::Relaxed),
+            )
+        };
+        let (tx, rx) = mpsc::channel();
+        lock(&pending).insert(id, tx);
+        let req = Request::new(id, method, params);
+        if let Err(e) = lock(&writer).write_message(&Message::Request(req)) {
+            lock(&pending).remove(&id);
+            return Err(HostError::Io(e));
+        }
+        match rx.recv_timeout(self.config.call_timeout) {
+            Ok(resp) => match (resp.result, resp.error) {
+                (_, Some(e)) => Err(HostError::Rpc(e)),
+                (Some(v), None) => Ok(v),
+                (None, None) => Ok(Value::Null),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                lock(&pending).remove(&id);
+                Err(HostError::Timeout)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::Closed),
+        }
+    }
+
+    /// `module.shutdown`, grace, kill. Idempotent.
+    fn shutdown(&self, reason: &str) {
+        let live = {
+            let mut st = lock(&self.state);
+            st.expected_exit = true;
+            match st.live.as_ref() {
+                Some(l) => (l.writer.clone(), l.child.clone()),
+                None => {
+                    if st.status.is_live() {
+                        drop(st);
+                        self.set_status(ModuleStatus::Disabled {
+                            reason: reason.into(),
+                        });
+                    }
+                    return;
+                }
+            }
+        };
+        self.set_status(ModuleStatus::Disabled {
+            reason: reason.into(),
+        });
+        let (writer, child) = live;
+        let n = Notification::new(methods::MODULE_SHUTDOWN, Value::Null);
+        let _ = lock(&writer).write_message(&Message::Notification(n));
+        let deadline = Instant::now() + self.config.shutdown_grace;
+        loop {
+            // Same as `wait_loop`: take the poll result, then release the lock, or the
+            // kill below would wait on a guard this very thread still holds.
+            let polled = lock(&child).try_wait();
+            match polled {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                _ => {
+                    tracing::warn!(module = %self.id, "did not exit in time; killing");
+                    let mut c = lock(&child);
+                    let _ = c.kill();
+                    let _ = c.wait();
+                    break;
+                }
+            }
+        }
+        // Let the waiter thread notice and emit `Gone` before we return, so a caller
+        // that polls status/rail right after sees a consistent picture.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while lock(&self.state).live.is_some() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+}

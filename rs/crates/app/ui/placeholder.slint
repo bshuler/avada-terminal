@@ -1,0 +1,124 @@
+// The module placeholder pane (track H1, docs/modules-fanout-plan.md §4): what a module's
+// slot in the grid shows while the module is crashed, disabled, not installed or broken.
+// The pane keeps its rect either way — the workspace file recorded a `module:` pane and
+// the layout must not shift under the user because a process died — and offers the three
+// ways out: reopen it, open another pane like it, or install it from the marketplace.
+//
+// The component is instantiated per pane by `paneview.slint` and looks its own slot up
+// in `ModulePlaceholderAdapter.slots` by pane uid.
+
+import { Theme } from "theme.slint";
+import { ModulePlaceholderAdapter, ModulePlaceholderSlot } from "types.slint";
+
+// One action button. Named for the same reason `AbButton` (askbrowser.slint) is: a button
+// whose caption is a child `Text` announces nothing itself, so a screen reader — and a
+// headless UI test — would see an anonymous rectangle beside a stray caption.
+component PhButton inherits Rectangle {
+    in property <string> label;
+    // the accessible name, which carries the module id so two placeholders side by side
+    // are told apart; defaults to the caption.
+    in property <string> name: root.label;
+    in property <bool> primary: false;
+    callback clicked;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-action-default => { root.clicked(); }
+    height: 30px;
+    width: cap.preferred-width + 24px;
+    border-radius: 7px;
+    background: root.primary ? (ta.has-hover ? Theme.accent.brighter(10%) : Theme.accent)
+                             : (ta.has-hover ? Theme.surface2 : Theme.surface);
+    border-width: 1px;
+    border-color: ta.has-hover || root.primary ? Theme.accent : Theme.border;
+    cap := Text {
+        x: 12px;
+        y: 0;
+        height: parent.height;
+        text: root.label;
+        color: root.primary ? Theme.bg : Theme.text;
+        font-size: 13px;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// The slot's body: heading, id line, explanation and the buttons the reason offers.
+component PhBody inherits Rectangle {
+    in property <ModulePlaceholderSlot> item;
+    VerticalLayout {
+        alignment: center;
+        padding: 24px;
+        spacing: 8px;
+        Text {
+            text: root.item.title;
+            color: Theme.text;
+            font-size: 18px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            // `owner/repo` and, when the workspace pinned one, the version it was saved
+            // with — a re-install can bring a different one, and the user should see that.
+            text: root.item.pinned-version == "" ? root.item.module-id
+                : root.item.module-id + " @ " + root.item.pinned-version;
+            color: Theme.subtext;
+            font-size: 12px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.item.message;
+            color: Theme.text;
+            font-size: 13px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        if root.item.detail != "" : Text {
+            text: root.item.detail;
+            color: Theme.faint;
+            font-size: 12px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            padding-top: 8px;
+            if root.item.show-reopen : PhButton {
+                label: "Reopen";
+                name: "Reopen " + root.item.module-id;
+                primary: true;
+                clicked => { ModulePlaceholderAdapter.reopen(root.item.pane-uid, root.item.module-id); }
+            }
+            if root.item.show-install : PhButton {
+                label: "Install from marketplace";
+                name: "Install " + root.item.module-id + " from marketplace";
+                primary: true;
+                clicked => { ModulePlaceholderAdapter.install(root.item.pane-uid, root.item.module-id); }
+            }
+            PhButton {
+                label: "Open another like it";
+                name: "Open another pane like " + root.item.module-id;
+                clicked => { ModulePlaceholderAdapter.open-another(root.item.pane-uid, root.item.module-id); }
+            }
+        }
+    }
+}
+
+export component ModulePlaceholder inherits Rectangle {
+    in property <string> pane-uid;
+    background: Theme.bg;
+    clip: true;
+    // A single-valued global cannot describe several tiled module panes, so the adapter
+    // holds one slot per pane and each placeholder picks out its own by uid. The `for`
+    // over the (short) slot list is the cheapest lookup Slint offers without a map type.
+    for item in ModulePlaceholderAdapter.slots : Rectangle {
+        if item.pane-uid == root.pane-uid : PhBody {
+            item: item;
+        }
+    }
+}

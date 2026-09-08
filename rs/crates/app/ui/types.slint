@@ -766,9 +766,41 @@ export global LeftPanelAdapter {
 
 // ---- track H1: the placeholder a module slot shows while the module is crashed,
 // disabled or not installed (module id, pinned version, reason, the buttons).
+//
+// A global is one value, but a tab can tile several module panes, so the adapter carries a
+// model of slots keyed by the pane's session uid (`PaneItem.uid`): the `ModulePlaceholder`
+// component picks out its own slot and the grid keeps the pane rect whatever the module
+// does. `module_ui::placeholder` (Rust) builds the slots from `ModuleStatus` + the pane's
+// `ModulePaneRef`; every callback carries the pane uid and module id so the controller
+// can act on the right pane without a row index that goes stale.
+export struct ModulePlaceholderSlot {
+    // `PaneItem.uid` of the pane this slot belongs to.
+    pane-uid: string,
+    // `owner/repo`.
+    module-id: string,
+    // the version the workspace pinned, "" when it recorded none.
+    pinned-version: string,
+    // one of "crashed" | "disabled" | "not-installed" | "broken".
+    reason: string,
+    // heading: the module's display name, or the repo half of the id.
+    title: string,
+    // the one-line explanation under the heading.
+    message: string,
+    // the host's human-readable reason (crash count, disable/broken reason), "" if none.
+    detail: string,
+    // which of the three buttons this reason offers (open-another is always offered).
+    show-reopen: bool,
+    show-install: bool,
+}
+
 export global ModulePlaceholderAdapter {
-    // filled in by track H1
+    // true while at least one slot is showing (the controller sets it with `slots`).
     in property <bool> present: false;
+    in property <[ModulePlaceholderSlot]> slots: [];
+    // (pane uid, module id) on every callback.
+    callback reopen(string, string);
+    callback open-another(string, string);
+    callback install(string, string);
 }
 
 // ---- track H2: the Preferences rights page: one row per capability per module,
