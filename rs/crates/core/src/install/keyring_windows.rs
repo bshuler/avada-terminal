@@ -6,14 +6,16 @@
 //! `CRED_PERSIST_LOCAL_MACHINE` so it survives a logoff and is readable only by this
 //! user account (the vault is per-user and DPAPI-protected).
 //!
-//! **Status: stub.** `CredReadW` / `CredWriteW` / `CredFree` live in the
-//! `Win32_Security_Credentials` feature of the `windows` crate, which is not in the
-//! frozen feature list for this wave. Everything that does not touch that feature —
-//! the target-name scheme and its validation, the error shape, the trait plumbing —
-//! is here and tested on every OS; [`CredentialManagerKeyStore::get_or_create`] returns
-//! a typed `Unsupported` error until the feature lands, at which point only the body of
-//! the private `vault` module changes. Callers keep using [`FileKeyStore`] as the
-//! fallback in the meantime, exactly as on Unix.
+//! The vault calls (`CredReadW` / `CredWriteW` / `CredFree`) are compiled only on
+//! Windows. Everything that does not touch them — the target-name scheme and its
+//! validation, the error shape, the trait plumbing — is here and tested on every OS;
+//! on a non-Windows build [`CredentialManagerKeyStore::get_or_create`] returns a typed
+//! `Unsupported` error so the fallback to [`FileKeyStore`] is a decision the caller
+//! makes, not a silent one.
+//!
+//! A create/create race between two processes is lost the same way the file store
+//! loses it: the loser re-reads and adopts the winner's key. A credential whose blob
+//! is not exactly `KEY_LEN` bytes is refused as corrupt, never truncated or padded.
 //!
 //! Key bytes are never logged, printed, or placed in an error, here or anywhere.
 //!
@@ -57,7 +59,8 @@ pub fn error_path(target: &str) -> PathBuf {
     PathBuf::from(format!("cred://{target}"))
 }
 
-/// The one error the stub returns.
+/// The one error the non-Windows build returns.
+#[cfg(not(windows))]
 fn unsupported(target: &str) -> KeyError {
     KeyError::Io {
         path: error_path(target),
@@ -87,17 +90,123 @@ impl KeyStore for CredentialManagerKeyStore {
     }
 }
 
-/// The vault calls. Today every path is the stub; the real body goes here.
+/// The vault calls, compiled only where the vault exists.
+#[cfg(not(windows))]
 mod vault {
     use super::{unsupported, KeyError, SecretKey};
 
-    /// STUB — needs `Win32_Security_Credentials` (`CredReadW`, `CredWriteW`,
-    /// `CredFree`, `CREDENTIALW`, `CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`).
-    /// Planned body: `CredReadW(target, CRED_TYPE_GENERIC)` → 32-byte blob → key;
-    /// `ERROR_NOT_FOUND` → `SecretKey::generate()`, `CredWriteW` with the bytes as the
-    /// blob, re-read to lose a create/create race the same way the file store loses it.
     pub(super) fn read_or_create(target: &str) -> Result<SecretKey, KeyError> {
         Err(unsupported(target))
+    }
+}
+
+/// The vault calls: one generic credential per target name, the key as its blob.
+#[cfg(windows)]
+mod vault {
+    use super::{error_path, KeyError, SecretKey};
+    use crate::install::keyring::{wipe, KEY_LEN};
+    use std::io;
+    use windows::core::{HRESULT, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows::Win32::Security::Credentials::{
+        CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+
+    /// NUL-terminated UTF-16, the string shape every `*W` call takes.
+    pub(super) fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn vault_err(target: &str, e: windows::core::Error) -> KeyError {
+        KeyError::Io {
+            path: error_path(target),
+            source: io::Error::other(e),
+        }
+    }
+
+    fn corrupt(target: &str, what: &str) -> KeyError {
+        KeyError::Io {
+            path: error_path(target),
+            source: io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("credential is not a {KEY_LEN}-byte install key: {what}"),
+            ),
+        }
+    }
+
+    /// A `CREDENTIALW` the vault allocated; `CredFree` on drop, so every early return
+    /// below releases it.
+    struct Owned(*mut CREDENTIALW);
+
+    impl Drop for Owned {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: the pointer came from a successful CredReadW and is freed once.
+                unsafe { CredFree(self.0.cast::<std::ffi::c_void>()) };
+            }
+        }
+    }
+
+    /// The key stored under `target`, `None` if there is no such credential.
+    #[allow(unsafe_code)] // CredReadW and the blob it returns; SAFETY notes inline
+    pub(super) fn read(target: &str) -> Result<Option<SecretKey>, KeyError> {
+        let name = wide(target);
+        let mut raw: *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: `name` is NUL-terminated and outlives the call; `raw` is a valid
+        // out-pointer the vault fills on success.
+        let res = unsafe { CredReadW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None, &mut raw) };
+        if let Err(e) = res {
+            if e.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) {
+                return Ok(None);
+            }
+            return Err(vault_err(target, e));
+        }
+        let owned = Owned(raw);
+        if owned.0.is_null() {
+            return Err(corrupt(target, "CredReadW succeeded with no credential"));
+        }
+        // SAFETY: non-null and vault-allocated; `owned` keeps it alive for this scope.
+        let cred = unsafe { &*owned.0 };
+        let len = cred.CredentialBlobSize as usize;
+        if len != KEY_LEN || cred.CredentialBlob.is_null() {
+            return Err(corrupt(target, &format!("blob is {len} bytes")));
+        }
+        // SAFETY: the vault guarantees `CredentialBlob` points at `CredentialBlobSize`
+        // readable bytes, which we just checked equals KEY_LEN.
+        let bytes = unsafe { std::slice::from_raw_parts(cred.CredentialBlob, KEY_LEN) }.to_vec();
+        Ok(Some(SecretKey::new(bytes)))
+    }
+
+    /// Store `key` under `target`, replacing any credential already there.
+    #[allow(unsafe_code)] // CredWriteW; SAFETY note inline
+    pub(super) fn write(target: &str, key: &SecretKey) -> Result<(), KeyError> {
+        let mut name = wide(target);
+        let mut blob = key.expose().to_vec();
+        let cred = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: PWSTR(name.as_mut_ptr()),
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            ..Default::default()
+        };
+        // SAFETY: every pointer in `cred` targets a buffer that outlives the call;
+        // CredWriteW copies the blob into the vault and does not retain the pointers.
+        let res = unsafe { CredWriteW(&cred, 0) };
+        wipe(&mut blob);
+        res.map_err(|e| vault_err(target, e))
+    }
+
+    pub(super) fn read_or_create(target: &str) -> Result<SecretKey, KeyError> {
+        if let Some(key) = read(target)? {
+            return Ok(key);
+        }
+        write(target, &SecretKey::generate())?;
+        // Re-read rather than return the generated key: if another process wrote
+        // between our read and write, whichever blob the vault holds now is the key
+        // everyone must agree on.
+        read(target)?.ok_or_else(|| corrupt(target, "vanished between write and read"))
     }
 }
 
@@ -127,6 +236,7 @@ mod tests {
         assert!(matches!(target_name(&long), Err(KeyError::BadKeyId(_))));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn stub_refuses_with_a_typed_unsupported_error_and_no_key_material() {
         let store = CredentialManagerKeyStore::new();
@@ -144,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn stub_validates_the_id_before_touching_the_vault() {
+    fn validates_the_id_before_touching_the_vault() {
         let store = CredentialManagerKeyStore::new();
         assert!(matches!(
             store.get_or_create("../escape"),
@@ -159,5 +269,75 @@ mod tests {
         let store = CredentialManagerKeyStore::new();
         takes(&store);
         send_sync(&store);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod vault_tests {
+    use super::*;
+    use crate::install::keyring::KEY_LEN;
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::Security::Credentials::{
+        CredDeleteW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+
+    /// A throwaway credential that is deleted when the test ends, pass or fail.
+    struct Scratch {
+        id: String,
+        target: String,
+    }
+
+    impl Scratch {
+        fn new() -> Self {
+            let id = format!("test-{}", uuid::Uuid::new_v4());
+            let target = target_name(&id).unwrap();
+            Scratch { id, target }
+        }
+    }
+
+    impl Drop for Scratch {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            let name = vault::wide(&self.target);
+            // SAFETY: NUL-terminated name that outlives the call. A missing credential
+            // is fine here — the test may have deleted it itself.
+            let _ = unsafe { CredDeleteW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None) };
+        }
+    }
+
+    #[test]
+    fn creates_once_then_reads_the_same_key_back() {
+        let scratch = Scratch::new();
+        let store = CredentialManagerKeyStore::new();
+        assert!(matches!(vault::read(&scratch.target), Ok(None)));
+        let first = store.get_or_create(&scratch.id).unwrap();
+        let second = store.get_or_create(&scratch.id).unwrap();
+        assert_eq!(first.expose().len(), KEY_LEN);
+        assert_eq!(first.expose(), second.expose());
+        assert!(matches!(vault::read(&scratch.target), Ok(Some(_))));
+    }
+
+    #[test]
+    #[allow(unsafe_code)] // plants a malformed credential; SAFETY note inline
+    fn a_blob_of_the_wrong_length_is_refused_as_corrupt() {
+        let scratch = Scratch::new();
+        let mut name = vault::wide(&scratch.target);
+        let mut blob = vec![7u8; 5];
+        let cred = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: PWSTR(name.as_mut_ptr()),
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            ..Default::default()
+        };
+        // SAFETY: buffers outlive the call; CredWriteW copies them.
+        unsafe { CredWriteW(&cred, 0) }.unwrap();
+        match CredentialManagerKeyStore::new().get_or_create(&scratch.id) {
+            Err(KeyError::Io { source, .. }) => {
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData)
+            }
+            other => panic!("expected a corrupt-blob error, got {other:?}"),
+        }
     }
 }

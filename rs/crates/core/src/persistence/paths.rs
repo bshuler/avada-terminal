@@ -392,9 +392,15 @@ fn write_tmp(tmp: &Path, contents: &[u8], private: bool) -> std::io::Result<()> 
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let _ = private;
     let mut f = opts.open(tmp)?;
+    // NTFS has no mode bits: the owner-only DACL goes on after the file exists and
+    // before any byte is written, so a reader racing the rename never sees it open.
+    #[cfg(windows)]
+    if private {
+        crate::persistence::acl_windows::restrict_to_owner(tmp)?;
+    }
     f.write_all(contents)?;
     f.flush()
 }

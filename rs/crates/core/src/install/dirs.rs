@@ -114,7 +114,12 @@ pub fn ensure_private_dir(dir: &Path) -> Result<(), InstallError> {
 /// Create `dir` (and its parents). Plain create on this platform.
 #[cfg(not(unix))]
 pub fn ensure_private_dir(dir: &Path) -> Result<(), InstallError> {
-    std::fs::create_dir_all(dir).map_err(|e| io_at(dir, e))
+    std::fs::create_dir_all(dir).map_err(|e| io_at(dir, e))?;
+    // The Windows counterpart of 0700: an owner-only DACL on the directory, which
+    // new children inherit.
+    #[cfg(windows)]
+    crate::persistence::acl_windows::restrict_to_owner(dir).map_err(|e| io_at(dir, e))?;
+    Ok(())
 }
 
 /// Make the artifact runnable by its owner and nobody else (0700 on Unix).

@@ -55,7 +55,7 @@ impl SecretKey {
 
 /// Overwrite `bytes` with zeros in a way the optimizer cannot elide, even though the
 /// buffer is about to be freed.
-fn wipe(bytes: &mut [u8]) {
+pub(super) fn wipe(bytes: &mut [u8]) {
     for b in bytes.iter_mut() {
         // SAFETY: `b` is a valid, aligned, exclusively borrowed `u8`.
         unsafe { std::ptr::write_volatile(b, 0) };
@@ -231,6 +231,10 @@ impl FileKeyStore {
         file.write_all(key.expose())
             .and_then(|_| file.sync_all())
             .map_err(|e| io_err(path, e))?;
+        // `create_new` + mode 0o600 did this on Unix at open time; NTFS has no mode
+        // bits, so the owner-only DACL is applied to the file we just wrote.
+        #[cfg(windows)]
+        crate::persistence::acl_windows::restrict_to_owner(path).map_err(|e| io_err(path, e))?;
         Ok(true)
     }
 }

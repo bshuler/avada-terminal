@@ -262,8 +262,8 @@ impl<R: Read, W: Write> Connection<R, W> {
     }
 }
 
-/// Open the connection the host handed this process. Unix only for now; Windows
-/// named-pipe support lands with the host side (Wave 1, track H6).
+/// Open the connection the host handed this process: an inherited socketpair end on
+/// Unix (`AVADA_MODULE_FD`), a named pipe on Windows (`AVADA_MODULE_PIPE`).
 #[cfg(unix)]
 #[allow(unsafe_code)] // the one place a raw fd enters the SDK; see SAFETY below
 pub fn from_env(
@@ -281,6 +281,24 @@ pub fn from_env(
     // SAFETY: the host created this descriptor for us and nothing else in this
     // process owns it; the env var is the contract that says so.
     let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    let writer = stream.try_clone()?;
+    Ok(Connection::new(stream, writer))
+}
+
+/// Windows: the host listens on a named pipe and puts its path in `AVADA_MODULE_PIPE`;
+/// opening it read+write is the connect. One handle is duplicated so the reader and
+/// writer halves can live on different threads, as on Unix.
+#[cfg(windows)]
+pub fn from_env() -> Result<Connection<std::fs::File, std::fs::File>, ClientError> {
+    let path = std::env::var(ENV_PIPE).map_err(|_| {
+        ClientError::Handshake(format!(
+            "{ENV_PIPE} is not set; was this binary launched by the host?"
+        ))
+    })?;
+    let stream = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)?;
     let writer = stream.try_clone()?;
     Ok(Connection::new(stream, writer))
 }
