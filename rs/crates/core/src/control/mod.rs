@@ -16,6 +16,7 @@ pub mod dispatch;
 pub mod events;
 pub mod readmodel;
 pub mod routes;
+pub mod schema;
 pub mod server;
 pub mod speech_service;
 pub mod supervisor;

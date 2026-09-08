@@ -11,6 +11,8 @@
 //! localStorage blob so the two never fight over a file.
 
 use avada_core::persistence::paths;
+
+pub mod rights;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

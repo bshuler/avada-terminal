@@ -757,3 +757,48 @@ export global LeftPanelAdapter {
     // through the row's own context menu, where the rest of that file's verbs already live.
     callback git-commit-diff();
 }
+
+// ============================================================================
+// Wave 1 adapter globals (docs/modules-fanout-plan.md §4). The orchestrator declared
+// each one empty; the owning track fills in ONLY its own block. Keep the blocks apart
+// so parallel edits merge cleanly.
+// ============================================================================
+
+// ---- track H1: the placeholder a module slot shows while the module is crashed,
+// disabled or not installed (module id, pinned version, reason, the buttons).
+export global ModulePlaceholderAdapter {
+    // filled in by track H1
+    in property <bool> present: false;
+}
+
+// ---- track H2: the Preferences rights page: one row per capability per module,
+// `never|always|workspace|ask`, profiles, and the held-update diff.
+export global RightsAdapter {
+    // filled in by track H2
+    in property <bool> present: false;
+}
+
+// ---- track H4: the left-panel rail: a list of string-id entries with a path-string
+// icon and a tier slot, registered by modules at handshake.
+export global RailAdapter {
+    // filled in by track H4
+    in property <bool> present: false;
+}
+
+// ---- track V1: the data viewer pane: a JSON/YAML/TOML document as collapsible rows.
+export global DataTreeAdapter {
+    // filled in by track V1
+    in property <bool> present: false;
+}
+
+// ---- track V2: the table viewer pane: CSV/TSV as header + cell rows.
+export global TableAdapter {
+    // filled in by track V2
+    in property <bool> present: false;
+}
+
+// ---- track V3: the image viewer pane: fit-never-upscale, caption, checkerboard.
+export global ImagePaneAdapter {
+    // filled in by track V3
+    in property <bool> present: false;
+}

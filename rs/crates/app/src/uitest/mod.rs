@@ -10,6 +10,18 @@
 //! developer's machine they never take focus.
 #![cfg(test)]
 
+// One file per Wave 1 track (docs/modules-fanout-plan.md §4); each `use super::*`s the
+// helpers below. The orchestrator owns this file and the list; a track owns its file.
+mod annotations;
+mod datatree;
+mod image;
+mod links;
+mod matrix;
+mod placeholder;
+mod rail;
+mod rights;
+mod table;
+
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition};

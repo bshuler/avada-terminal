@@ -19,13 +19,16 @@ pub mod control;
 /// Reading one commit out of a repository — what a clicked hash needs to become a view.
 pub mod git;
 pub mod hyperpane;
+pub mod install;
 pub mod layout;
 pub mod logging;
+pub mod module;
 pub mod open;
 pub mod paths;
 pub mod permissions;
 pub mod persistence;
 pub mod resume_queue;
+pub mod rights;
 pub mod session;
 pub mod session_manager;
 pub mod shell_integration;
