@@ -1753,7 +1753,23 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Wait for the *precondition*, not a fixed duration. A flat sleep here is a bet that
+        // the child's `printf` has reached the pane's scrollback, and on a loaded machine that
+        // bet loses: `detect_api_error` then sees an empty tail, returns `None`, the
+        // unknown-class guard never fires, and the call falls through to
+        // `resolve_recover_target` — which fails with "pane has no cwd", a completely
+        // different error than the one under test. Polling makes the fast path fast and the
+        // slow path correct instead of flaky.
+        let uid = m.pane(&pane_id).expect("pane exists").session_uid.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !pane_tail(&s, &uid).contains("API Error") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never wrote its API-Error tail; tail was {:?}",
+                pane_tail(&s, &uid)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
 
         let resume = json!({ "type": "recoverPane", "paneId": pane_id, "action": "resume" });
         let r = handle_command(&mut m, &s, None, None, &resume, &speech());

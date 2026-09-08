@@ -499,7 +499,21 @@ pub(crate) async fn rig_with(
     ttl: Duration,
     git_head_lies: bool,
 ) -> Rig {
-    let root = scratch(&format!("root-{name}"));
+    // `modules` matters: [`state_dir_beside`] takes the *parent* of the modules root, so a
+    // rig rooted directly at `$TMPDIR/<unique>` would put its workspace state and HTTP cache
+    // in `$TMPDIR/marketplace` — one directory shared by every rig in the suite *and* by
+    // every previous run on the machine. That leaked for real: a `set_enabled` in one test
+    // made `show().enabled` non-empty in another, and because the leak lands on disk it
+    // survived between runs, so which test failed depended on history. Rooting at
+    // `<unique>/modules` mirrors production (`.../avada/modules` beside `.../avada/marketplace`)
+    // and gives each rig its own.
+    let root = scratch(&format!("root-{name}")).join("modules");
+    std::fs::create_dir_all(&root).unwrap();
+    assert_ne!(
+        state_dir_beside(&root).parent(),
+        Some(std::env::temp_dir().as_path()),
+        "rig state dir would be shared with every other test in the suite"
+    );
     let fixtures = Fixtures::new(name);
     let github = FakeGitHub::start(state).await;
     let tokens = Arc::new(MemoryTokenStore::new());
@@ -576,6 +590,27 @@ pub(crate) fn files_state() -> FakeState {
 }
 
 // ---- tests
+
+/// The sharp edge behind [`state_dir_beside`]: it names a sibling of the modules root, so
+/// *the root's parent* is what decides whether two callers share state. In production that
+/// parent is the app's own data directory and sharing is exactly right — one marketplace per
+/// install. In a test it is whatever directory the scratch root was made in, and a root placed
+/// directly in `$TMPDIR` silently hands every test on the machine the same
+/// `$TMPDIR/marketplace`. That is why [`rig_with`] appends a `modules` component instead of
+/// using its scratch dir as the root.
+#[test]
+fn the_state_dir_is_a_sibling_of_the_modules_root() {
+    assert_eq!(
+        state_dir_beside(Path::new("/data/avada/modules")),
+        Path::new("/data/avada/marketplace"),
+        "production shape: one state dir per install"
+    );
+    assert_eq!(
+        state_dir_beside(Path::new("/tmp/unique-per-test")),
+        Path::new("/tmp/marketplace"),
+        "a root with no parent of its own collapses onto a shared sibling"
+    );
+}
 
 #[tokio::test]
 async fn install_from_source_records_pins_and_enables() {
@@ -1278,7 +1313,8 @@ fn errors_map_to_statuses_and_read_well() {
 #[tokio::test]
 #[ignore = "hits api.github.com"]
 async fn real_github_search_and_tags() {
-    let root = scratch("real");
+    // `modules` for the same reason as in `rig_with`: the cache dir hangs off the parent.
+    let root = scratch("real").join("modules");
     let api = HttpGitHub::new(
         GitHubConfig::default(),
         Cache::new(state_dir_beside(&root).join(CACHE_DIR)),
