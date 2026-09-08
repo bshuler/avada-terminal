@@ -21,14 +21,15 @@ use std::time::Duration;
 
 use avada_module_sdk::caps::Capability;
 use avada_module_sdk::descriptor::Verb;
+use avada_module_sdk::manifest::ModuleId;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, Request, State};
 use axum::handler::Handler;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{on, MethodFilter, MethodRouter};
+use axum::routing::{any, on, MethodFilter, MethodRouter};
 use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -39,6 +40,7 @@ use crate::control::dispatch;
 use crate::control::dispatch::{capability_refusal, verb_capability};
 use crate::control::events::ControlEvent;
 use crate::control::input::{keys_to_bytes, submit_newlines, KeysResult, SUBMIT_DELAY_MS};
+use crate::control::modules::{match_route, InvokeError, Match, RouteCall};
 use crate::control::nudge;
 use crate::control::output::{
     detect_awaiting_input, next_poll_delay, slice_since, wait_decision, WaitVerdict,
@@ -184,6 +186,12 @@ pub fn router(shared: Arc<Shared>) -> Router {
             .expect("at least one method per path");
         app = app.route(&path, merged);
     }
+    // Module routes are not in the table: they arrive at runtime through the schema
+    // registry, so one wildcard per shape takes every verb and `module_route` does the
+    // lookup, the gate and the 404/405 itself.
+    app = app
+        .route("/m/{owner}/{repo}", any(module_route))
+        .route("/m/{owner}/{repo}/{*rest}", any(module_route));
     app.method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .with_state(shared)
@@ -2388,6 +2396,114 @@ async fn not_found(uri: Uri) -> Response {
     jstatus(404, json!({ "error": "not found", "path": uri.path() }))
 }
 
+// ---- module routes: /m/<owner>/<repo>/... ---------------------------------------------------
+
+fn verb_of(method: &Method) -> Option<Verb> {
+    match *method {
+        Method::GET => Some(Verb::Get),
+        Method::POST => Some(Verb::Post),
+        Method::PUT => Some(Verb::Put),
+        Method::PATCH => Some(Verb::Patch),
+        Method::DELETE => Some(Verb::Delete),
+        _ => None,
+    }
+}
+
+/// Every request under `/m/`. Order matters and mirrors the core routes: identity first
+/// (401 before a stranger learns which modules exist), then the registry lookup (404 /
+/// 405 with the fallback bodies), then the descriptor's capability (403), then the
+/// forward. A listed route whose module is not reachable is 503, a module that fails
+/// mid-call is 502, and the module's own JSON-RPC error comes back as 400 with its
+/// code and message — the client sent something the module refused.
+#[tracing::instrument(level = "debug", skip_all, fields(method = %method, path = %uri.path()))]
+async fn module_route(
+    State(shared): State<Arc<Shared>>,
+    Path(caps): Path<HashMap<String, String>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Response {
+    let token = match authorize(&shared, &headers) {
+        Ok(_) => bearer_header(&headers).unwrap_or_default(),
+        Err(r) => return r,
+    };
+    let owner = caps.get("owner").cloned().unwrap_or_default();
+    let repo = caps.get("repo").cloned().unwrap_or_default();
+    let rest = caps.get("rest").cloned().unwrap_or_default();
+    let Ok(module) = ModuleId::new(&format!("{owner}/{repo}")) else {
+        return jstatus(404, json!({ "error": "not found", "path": uri.path() }));
+    };
+    let Some(verb) = verb_of(&method) else {
+        return method_not_allowed().await;
+    };
+    let sub = format!("/{rest}");
+    let matched = shared
+        .schema
+        .with(|reg| match_route(reg.routes(), &module, verb, &sub));
+    let (desc, mut params) = match matched {
+        Match::Route(desc, params) => (desc, params),
+        Match::WrongVerb => return method_not_allowed().await,
+        Match::NoRoute => return jstatus(404, json!({ "error": "not found", "path": uri.path() })),
+    };
+    if let Some(cap) = desc.capability {
+        if let Err(cap) = shared.caps.check(&token, cap) {
+            tracing::warn!(capability = cap.name(), "module route refused: capability");
+            let (code, body) = capability_refusal(cap);
+            return jstatus(code, body);
+        }
+    }
+    for (k, v) in query {
+        params.entry(k).or_insert(Value::String(v));
+    }
+    let body = if body.is_empty() {
+        None
+    } else {
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                return jstatus(
+                    400,
+                    json!({ "error": "bad request", "message": format!("body is not JSON: {e}") }),
+                )
+            }
+        }
+    };
+    let invoker = shared.modules.read().unwrap().clone();
+    let Some(invoker) = invoker else {
+        return jstatus(
+            503,
+            json!({ "error": "module unavailable", "module": module.as_str() }),
+        );
+    };
+    let call = RouteCall {
+        module: module.clone(),
+        route: desc.method.clone(),
+        params,
+        body,
+    };
+    match invoker.invoke(call).await {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(InvokeError::Unavailable(message)) => jstatus(
+            503,
+            json!({ "error": "module unavailable", "module": module.as_str(), "message": message }),
+        ),
+        Err(InvokeError::Module {
+            code,
+            message,
+            data,
+        }) => jstatus(
+            400,
+            json!({ "error": "module", "code": code, "message": message, "data": data }),
+        ),
+        Err(InvokeError::Failed(message)) => jstatus(
+            502,
+            json!({ "error": "module failed", "module": module.as_str(), "message": message }),
+        ),
+    }
+}
+
 // ---- query-param parsing (mirrors the TS posNum / nonNegNum / Number(tail)) ----------------
 
 #[tracing::instrument(level = "debug", ret)]
@@ -4347,5 +4463,323 @@ mod table {
             .await
             .unwrap();
         assert_eq!(r.status().as_u16(), 401);
+    }
+
+    // ---- module routes: /m/<owner>/<repo>/... -----------------------------------------------
+
+    use crate::control::modules::{InvokeError, InvokeFuture, RouteCall, RouteInvoker};
+    use avada_module_sdk::descriptor::{Param, ParamLocation, RouteDescriptor, Scope};
+    use avada_module_sdk::manifest::ModuleId;
+    use std::sync::Mutex;
+
+    /// An invoker that remembers every call and answers with a fixed result.
+    struct Recorder {
+        calls: Mutex<Vec<RouteCall>>,
+        reply: Mutex<Result<Value, InvokeError>>,
+    }
+
+    impl Recorder {
+        fn install(s: &Server, reply: Result<Value, InvokeError>) -> Arc<Recorder> {
+            let r = Arc::new(Recorder {
+                calls: Mutex::new(vec![]),
+                reply: Mutex::new(reply),
+            });
+            s.shared.install_route_invoker(r.clone());
+            r
+        }
+        fn calls(&self) -> Vec<RouteCall> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl RouteInvoker for Recorder {
+        fn invoke(&self, call: RouteCall) -> InvokeFuture<'_> {
+            self.calls.lock().unwrap().push(call);
+            let reply = self.reply.lock().unwrap().clone();
+            Box::pin(async move { reply })
+        }
+    }
+
+    fn files() -> ModuleId {
+        ModuleId::new("acme/files").unwrap()
+    }
+
+    fn module_desc(method: &str, verb: Verb, path: &str, cap: Capability) -> RouteDescriptor {
+        RouteDescriptor {
+            method: method.into(),
+            path: path.into(),
+            verb,
+            capability: Some(cap),
+            summary: method.into(),
+            // The registry insists every `{name}` capture is declared.
+            params: path
+                .split('/')
+                .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+                .map(|name| Param {
+                    name: name.to_string(),
+                    location: ParamLocation::Path,
+                    kind: "string".into(),
+                    required: true,
+                    summary: String::new(),
+                })
+                .collect(),
+            scope: Scope::Token,
+            module: Some(files()),
+            response: None,
+        }
+    }
+
+    /// `acme/files` publishes `GET /tree` (workspace.read) and `POST /files/{id}` (fs.write).
+    fn register_files(s: &Server) {
+        s.shared
+            .schema
+            .register_module_routes(
+                &files(),
+                vec![
+                    module_desc("tree", Verb::Get, "/tree", Capability::WorkspaceRead),
+                    module_desc("open", Verb::Post, "/files/{id}", Capability::FsWrite),
+                ],
+            )
+            .unwrap();
+    }
+
+    async fn send(
+        s: &Server,
+        verb: Verb,
+        path: &str,
+        token: &str,
+        body: Option<&str>,
+    ) -> (u16, Value) {
+        let url = format!("{}{}", s.base, path);
+        let c = client();
+        let mut req = match verb {
+            Verb::Get => c.get(&url),
+            Verb::Post => c.post(&url),
+            Verb::Put => c.put(&url),
+            Verb::Patch => c.patch(&url),
+            Verb::Delete => c.delete(&url),
+        }
+        .header("authorization", format!("Bearer {token}"));
+        if let Some(b) = body {
+            req = req
+                .header("content-type", "application/json")
+                .body(b.to_string());
+        }
+        let r = req.send().await.unwrap();
+        let status = r.status().as_u16();
+        let text = r.text().await.unwrap();
+        let v = serde_json::from_str::<Value>(&text)
+            .unwrap_or_else(|_| panic!("non-JSON body {text:?} (status {status})"));
+        (status, v)
+    }
+
+    #[tokio::test]
+    async fn a_registered_module_route_reaches_the_module_with_path_and_query_params() {
+        let s = boot_with_control_tag(true, "mroute-ok").await;
+        register_files(&s);
+        let rec = Recorder::install(&s, Ok(json!({ "entries": ["a", "b"] })));
+
+        let (status, body) = send(
+            &s,
+            Verb::Get,
+            "/m/acme/files/tree?depth=2&tree=root",
+            &s.token,
+            None,
+        )
+        .await;
+        assert_eq!((status, body), (200, json!({ "entries": ["a", "b"] })));
+
+        let (status, body) = send(
+            &s,
+            Verb::Post,
+            "/m/acme/files/files/f%201?id=shadowed&mode=rw",
+            &s.token,
+            Some(r#"{"lines":[1,2]}"#),
+        )
+        .await;
+        assert_eq!((status, body), (200, json!({ "entries": ["a", "b"] })));
+
+        let calls = rec.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].module, files());
+        assert_eq!(calls[0].route, "tree");
+        assert_eq!(
+            Value::Object(calls[0].params.clone()),
+            json!({ "depth": "2", "tree": "root" })
+        );
+        assert_eq!(calls[0].body, None);
+        // The path capture is decoded and wins over a query key of the same name.
+        assert_eq!(calls[1].route, "open");
+        assert_eq!(
+            Value::Object(calls[1].params.clone()),
+            json!({ "id": "f 1", "mode": "rw" })
+        );
+        assert_eq!(calls[1].body, Some(json!({ "lines": [1, 2] })));
+    }
+
+    #[tokio::test]
+    async fn a_module_route_is_gated_by_the_descriptor_capability_not_the_verb() {
+        let s = boot_with_control_tag(true, "mroute-cap").await;
+        register_files(&s);
+        let rec = Recorder::install(&s, Ok(json!(null)));
+        limited(&s, "tok-reader", &[Capability::WorkspaceRead]);
+
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", "tok-reader", None).await;
+        assert_eq!((status, body), (200, json!(null)));
+        let (status, body) = send(
+            &s,
+            Verb::Post,
+            "/m/acme/files/files/f1",
+            "tok-reader",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(
+            (status, body),
+            (
+                403,
+                json!({ "error": "capability", "capability": "fs.write" })
+            )
+        );
+        // A module token (claimed by a source, unknown to the token store) works the same way.
+        s.shared.caps.install(Arc::new(Fixed {
+            token: "tok-module".into(),
+            caps: [Capability::FsWrite].into_iter().collect(),
+        }));
+        let (status, _) = send(
+            &s,
+            Verb::Post,
+            "/m/acme/files/files/f1",
+            "tok-module",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let (status, _) = send(&s, Verb::Get, "/m/acme/files/tree", "tok-module", None).await;
+        assert_eq!(status, 403);
+        // Only the three allowed calls reached the module.
+        assert_eq!(
+            rec.calls()
+                .iter()
+                .map(|c| c.route.as_str())
+                .collect::<Vec<_>>(),
+            ["tree", "open"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stranger_gets_401_before_learning_whether_a_module_route_exists() {
+        let s = boot_with_control_tag(true, "mroute-401").await;
+        register_files(&s);
+        Recorder::install(&s, Ok(json!(null)));
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", "tok-stranger", None).await;
+        assert_eq!((status, body), (401, json!({ "error": "unauthorized" })));
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/nope", "tok-stranger", None).await;
+        assert_eq!((status, body), (401, json!({ "error": "unauthorized" })));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_module_path_is_404_and_a_wrong_verb_is_405_with_the_fallback_bodies() {
+        let s = boot_with_control_tag(true, "mroute-404").await;
+        register_files(&s);
+        Recorder::install(&s, Ok(json!(null)));
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/nope", &s.token, None).await;
+        assert_eq!(
+            (status, body),
+            (
+                404,
+                json!({ "error": "not found", "path": "/m/acme/files/nope" })
+            )
+        );
+        // The shape must match exactly: an extra segment is a different path.
+        let (status, _) = send(&s, Verb::Get, "/m/acme/files/tree/deeper", &s.token, None).await;
+        assert_eq!(status, 404);
+        // Another module's prefix knows nothing about acme/files' routes.
+        let (status, _) = send(&s, Verb::Get, "/m/other/files/tree", &s.token, None).await;
+        assert_eq!(status, 404);
+        // An owner/repo that cannot be a module id is 404 too, not a 500.
+        let (status, _) = send(&s, Verb::Get, "/m/AC%20ME/files/tree", &s.token, None).await;
+        assert_eq!(status, 404);
+        let (status, body) = send(&s, Verb::Delete, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(
+            (status, body),
+            (405, json!({ "error": "method not allowed" }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_module_route_registers_and_unregisters_live_without_a_router_rebuild() {
+        let s = boot_with_control_tag(true, "mroute-live").await;
+        Recorder::install(&s, Ok(json!("hi")));
+        let (status, _) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(status, 404);
+        register_files(&s);
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!((status, body), (200, json!("hi")));
+        s.shared
+            .schema
+            .with(|reg| reg.unregister_module_routes(&files()));
+        let (status, _) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(status, 404);
+    }
+
+    #[tokio::test]
+    async fn a_listed_route_without_a_reachable_module_is_503_and_module_errors_map_to_400_502() {
+        let s = boot_with_control_tag(true, "mroute-err").await;
+        register_files(&s);
+        // No invoker installed yet: the app has not started the module host.
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(
+            (status, body),
+            (
+                503,
+                json!({ "error": "module unavailable", "module": "acme/files" })
+            )
+        );
+        let rec = Recorder::install(&s, Err(InvokeError::Unavailable("not running".into())));
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(status, 503);
+        assert_eq!(body["message"], "not running");
+        *rec.reply.lock().unwrap() = Err(InvokeError::Module {
+            code: -32602,
+            message: "depth must be a number".into(),
+            data: Some(json!({ "param": "depth" })),
+        });
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(
+            (status, body),
+            (
+                400,
+                json!({
+                    "error": "module",
+                    "code": -32602,
+                    "message": "depth must be a number",
+                    "data": { "param": "depth" }
+                })
+            )
+        );
+        *rec.reply.lock().unwrap() = Err(InvokeError::Failed("module did not answer".into()));
+        let (status, body) = send(&s, Verb::Get, "/m/acme/files/tree", &s.token, None).await;
+        assert_eq!(status, 502);
+        assert_eq!(body["error"], "module failed");
+        assert_eq!(body["message"], "module did not answer");
+    }
+
+    #[tokio::test]
+    async fn a_body_that_is_not_json_is_refused_before_the_module_sees_it() {
+        let s = boot_with_control_tag(true, "mroute-body").await;
+        register_files(&s);
+        let rec = Recorder::install(&s, Ok(json!(null)));
+        let (status, body) = send(
+            &s,
+            Verb::Post,
+            "/m/acme/files/files/f1",
+            &s.token,
+            Some("not json"),
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert_eq!(body["error"], "bad request");
+        assert!(rec.calls().is_empty());
     }
 }

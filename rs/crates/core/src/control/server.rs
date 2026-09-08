@@ -14,7 +14,7 @@ use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::runtime::Handle;
@@ -122,6 +122,10 @@ pub struct Shared {
     /// Which capabilities a token holds (`control::dispatch::CapabilityResolver`). Empty means
     /// the legacy answer: every accepted token holds everything.
     pub caps: crate::control::dispatch::CapabilityResolver,
+    /// Whoever answers `/m/<owner>/<repo>/...` (`control::modules`). Empty until the app
+    /// installs the module host; until then every module route answers 503, never 404 —
+    /// the route is listed, the module is simply not reachable yet.
+    pub modules: RwLock<Option<Arc<dyn crate::control::modules::RouteInvoker>>>,
 }
 
 impl Shared {
@@ -165,7 +169,14 @@ impl Shared {
             settings: Mutex::new(None),
             schema: crate::control::schema::SchemaState::new(),
             caps: crate::control::dispatch::CapabilityResolver::new(),
+            modules: RwLock::new(None),
         })
+    }
+
+    /// Install (or replace) the thing that answers module routes — the module host, once
+    /// the app has started it. Takes effect on the next request; no router rebuild.
+    pub fn install_route_invoker(&self, invoker: Arc<dyn crate::control::modules::RouteInvoker>) {
+        *self.modules.write().unwrap() = Some(invoker);
     }
 
     /// Set the requested bind address/port (from `control_settings`) BEFORE `run_server`.

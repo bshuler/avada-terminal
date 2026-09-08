@@ -217,6 +217,22 @@ names (`is_method_name`: dotted segments, lowercase). The host's `GET /schema`
 returns a `SchemaDocument` listing core and module routes; the CLI generates its
 verbs from it.
 
+On the wire a registered route answers at `/m/<owner>/<repo><path>`. The
+control server looks the request up in the live schema registry (so a route
+appears the moment it is registered and vanishes when it is not), then forwards
+it as `module.route.invoke` with `route` = the descriptor's `method`, `params`
+= the `{param}` captures merged with the query string (a capture wins on a
+clash), and `body` = the request body parsed as JSON when one was sent. The
+module's returned value is the HTTP body. Status codes, in the order they are
+checked: `401` for a bearer that is not an identity, `404` when nothing the
+module registered has that shape, `405` when the shape matches but the verb
+does not, `403 {"error":"capability","capability":…}` when the caller lacks
+the descriptor's capability, `400 {"error":"bad request"}` for a body that is
+not JSON, `503 {"error":"module unavailable"}` when the module is not installed
+or not running, `400 {"error":"module","code","message","data"}` when the module
+answered with a JSON-RPC error, and `502 {"error":"module failed"}` when the
+host could not complete the exchange (timeout, closed pipe).
+
 ## 8. Skills
 
 `skills::Skill::parse` reads a `SKILL.md`: YAML-ish front matter (`name`,

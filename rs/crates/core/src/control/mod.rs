@@ -14,6 +14,7 @@ pub mod dictation_service;
 pub mod discovery_guard;
 pub mod dispatch;
 pub mod events;
+pub mod modules;
 pub mod readmodel;
 pub mod routes;
 pub mod schema;
