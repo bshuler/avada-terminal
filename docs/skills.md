@@ -136,10 +136,14 @@ No preference stores the disabled set yet; `hyperpane::materialize()` calls
 ### Size caps
 
 Each `Layout` may declare `cap: Some(Cap { bytes, source })`. Only Claude Code
-declares one: 4 MiB for `CLAUDE.md` (project and user), from
-code.claude.com/docs/en/memory: "Claude Code loads a CLAUDE.md file of up to 4
-MiB in full and skips a larger file". No cap is documented for Aider, Cline,
-Kiro, Augment or Continue, so their layouts carry `None` and nothing is cut.
+declares one: 4 MiB, from code.claude.com/docs/en/memory: "Claude Code loads a
+CLAUDE.md file of up to 4 MiB in full and skips a larger file" (re-verified
+2026-09-08 against that page, quoted verbatim). The cap sits on the whole
+layout, not on one file, so it also bounds a `.claude/rules/*.md` and a
+`SKILL.md` — code.claude.com/docs/en/skills documents no cap of its own (only
+"keep `SKILL.md` under 500 lines" as advice), and an unbounded write is the
+worse default. No cap is documented for Aider, Cline, Kiro, Augment or
+Continue, so their layouts carry `None` and nothing is cut.
 
 A unit whose body exceeds `cap.bytes - CAP_RESERVE` (2 KiB for front matter,
 fences and the notice) is truncated at the last blank line before the limit

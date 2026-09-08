@@ -232,6 +232,9 @@ const CLAUDE_CODE_CAP: Cap = Cap {
 ///   `~/.claude/CLAUDE.md`, `~/.claude/rules/`, a 4 MiB file cap.
 ///   `code.claude.com/docs/en/skills`: `.claude/skills/<name>/SKILL.md`,
 ///   `~/.claude/skills/`, `disable-model-invocation: true` for manual skills.
+///   That page documents no size cap for a skill (only "keep `SKILL.md` under
+///   500 lines" as advice), so the 4 MiB memory-file cap is applied to skill
+///   files too rather than leaving them uncapped.
 /// * **Aider** — `CONVENTIONS.md` is the documented convention (read via
 ///   `--read`); no user-level file, no on-demand form.
 /// * **Cline** — `docs.cline.bot/features/cline-rules`: `.clinerules/` holds
