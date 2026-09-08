@@ -545,18 +545,6 @@ export struct LeftSessionRow {
     live: float,
 }
 
-// One changed file in the GIT mode, already assigned to its section by `crate::gitpanel`.
-// `path` is REPO-RELATIVE, exactly as git reported it, and is the row's identity; `label`
-// is the file name and `detail` its parent directory (empty at the repo root). `code` is
-// the one-letter status badge (`A` `M` `D` `R` `C` `T` `U` `?`).
-export struct LeftGitRow {
-    path: string,
-    label: string,
-    detail: string,
-    code: string,
-    selected: bool,
-}
-
 // One entry in the panel's MODE strip. Mode 0 is always WORKSPACE (the tab/pane tree);
 // every further mode is one favourited CLI tool, showing that tool's locally resumable
 // sessions. `icon` is the registry icon kind the shared `ToolIcon` switches on (0 for the
@@ -664,60 +652,9 @@ export global LeftPanelAdapter {
     // A session row clicked → resume session `0` of the current mode's tool.
     callback resume-session(string);
     // The strip was clicked. `mode` is already set (it is `in-out`); this only tells Rust,
-    // which needs to know because a mode's contents are computed on entry — the working-tree
-    // mode has to go and read the repository, and nothing in this adapter is allowed to.
+    // which needs to know because a mode's contents are computed on entry — a tool mode's
+    // session list is scanned then, and nothing in this adapter is allowed to scan.
     callback mode-changed(int);
-
-    // ---- mode 1: the working tree ----
-    // Read-only by design: staging, committing and discarding are one-click destructive and
-    // are not wired to a row. The three sections are separate models rather than one list
-    // plus a section column, so each keeps its own disclosure state the way the workspace
-    // mode's four sections do.
-    in property <[LeftGitRow]> git-staged;
-    in property <[LeftGitRow]> git-changed;
-    in property <[LeftGitRow]> git-untracked;
-    // The header line, already assembled by Rust ("main  ↑2  ↓1"). Empty when `git-repo`
-    // is false.
-    in property <string> git-head;
-    // The repo's own directory name, for the header.
-    in property <string> git-root;
-    // Each section's heading, counted by Rust ("CHANGES · 3"). Formatted there rather than
-    // concatenated here for the same reason `git-head` is: the panel draws strings.
-    in property <string> git-staged-title;
-    in property <string> git-changed-title;
-    in property <string> git-untracked-title;
-    // Whether the panel's root is inside a repository at all. False draws the empty state
-    // instead of three empty sections, which would read as "a clean tree".
-    in property <bool> git-repo;
-    // A row clicked once → select it.
-    callback git-click(string);
-    // A row double-clicked → open it in a view pane.
-    callback git-open(string);
-    // A row right-clicked at window-logical (`1`, `2`) → the same file menu the explorer
-    // opens, so a path acts the same however it was reached.
-    callback git-context(string, length, length);
-    // Re-run `git status` (nothing watches the repository).
-    callback git-refresh();
-    // Open a pane with the working tree's whole diff against HEAD. One file's diff is
-    // reached through the row's own context menu, the same way the commit view does it.
-    callback git-diff();
-    // ---- mode 1, commit view: ONE commit, in place of the working tree ----
-    // Reached by clicking a hash in a pane's output. A commit is immutable, so unlike the
-    // working tree there is nothing here to refresh — only a way back out.
-    in property <bool> git-commit-open;
-    // The commit's subject line, and "abc1234 · author · 2026-09-01" under it — both
-    // assembled by Rust, like every other string this panel draws.
-    in property <string> git-commit-title;
-    in property <string> git-commit-meta;
-    // The files the commit touched, in the same row shape the working tree uses: the two
-    // lists answer the same question about the same repository, one now and one then.
-    in property <[LeftGitRow]> git-commit-files;
-    in property <string> git-commit-files-title;
-    // Back to the working tree.
-    callback git-commit-close();
-    // Open a pane running `git show` on the whole commit. One file's diff is reached
-    // through the row's own context menu, where the rest of that file's verbs already live.
-    callback git-commit-diff();
 }
 
 // ============================================================================
@@ -872,8 +809,8 @@ export global RailAdapter {
     // True once at least one module entry exists; the strip draws module buttons after
     // the built-in ones only then.
     in property <bool> present: false;
-    // Module entries, sorted by `order` then module id. Built-ins (workspace, git,
-    // favourited tools) stay in `LeftPanelAdapter.modes`; the strip draws both lists.
+    // Module entries, sorted by `order` then module id. Built-ins (the workspace tree and
+    // the favourited tools) stay in `LeftPanelAdapter.modes`; the strip draws both lists.
     in property <[RailEntryRow]> entries: [];
     // The key of the active module entry, or empty. While non-empty
     // `LeftPanelAdapter.mode` is -1 so every built-in section is hidden at once.

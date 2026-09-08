@@ -470,7 +470,13 @@ pub fn pane_menu(state: &State, idx: usize, x: f32, y: f32, in_taskbar: bool) ->
 /// pane and tab menus this one needs no target index — which is what lets the row list be
 /// rebuilt from disk by the very click that dispatches from it.
 #[tracing::instrument(level = "debug", skip(state))]
-pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMenu {
+pub fn file_menu(
+    state: &State,
+    path: &std::path::Path,
+    git: Option<&crate::state::GitOrigin>,
+    x: f32,
+    y: f32,
+) -> CtxMenu {
     let mut b = Build::new();
     let p = path.display().to_string();
     let is_dir = path.is_dir();
@@ -479,41 +485,44 @@ pub fn file_menu(state: &State, path: &std::path::Path, x: f32, y: f32) -> CtxMe
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
 
-    // A file reached from the commit view gets the verb that view exists for, first, because
-    // it is why the row was clicked. Everything below still applies: whatever revision put
-    // the name in the list, the file on disk is an ordinary file.
-    if let Some(c) = state.git_commit.as_ref() {
-        if let Some(rel) = path
-            .strip_prefix(&c.root)
+    // A row a module listed out of a repository gets the diff verb first, because it is why
+    // that row was clicked. Everything below still applies: whatever revision put the name
+    // in the list, the file on disk is an ordinary file.
+    //
+    // This is also the only place the diff verb can live. Running `git show` means spawning
+    // a process, which no module may do; the module supplies the fact (which revision this
+    // row came from) and the host supplies the verb.
+    if let Some(g) = git {
+        // The repository root itself is the whole-tree / whole-commit diff — the job the
+        // panel's header button used to have, now reachable from the row that means "all
+        // of it" instead of from a button the host no longer draws.
+        let rel = path
+            .strip_prefix(&g.root)
             .ok()
             .map(|r| r.to_string_lossy().into_owned())
-        {
-            if c.files.iter().any(|f| f.path == rel) {
-                b.item(
-                    &format!("Show Diff in {}", c.short),
-                    Command::GitCommitDiff(Some(rel)),
-                );
-                b.sep();
-            }
-        }
-    } else if let Some(root) = state.git.root.as_ref() {
-        // The working tree gets the same verb against HEAD. Gated on the file actually
-        // being one git is tracking a change to: an untracked file has nothing in HEAD to
-        // diff against, so the row would open a pane that prints nothing.
-        if let Some(rel) = path
-            .strip_prefix(root)
-            .ok()
-            .map(|r| r.to_string_lossy().into_owned())
-        {
-            if state
-                .git
-                .rows
-                .iter()
-                .any(|r| r.path == rel && r.section != crate::gitpanel::Section::Untracked)
-            {
-                b.item("Show Diff", Command::GitDiff(Some(rel)));
-                b.sep();
-            }
+            .filter(|r| !r.is_empty());
+        // Untracked files have nothing in HEAD to diff against, so the row would open a
+        // pane that prints nothing. Asked of git rather than inferred from the row: the row
+        // is a module's claim, and this one spawns a process.
+        let diffable = match (&g.rev, &rel) {
+            (Some(_), _) => true,
+            (None, None) => true,
+            (None, Some(rel)) => avada_core::git::is_tracked(&g.root, rel),
+        };
+        if diffable {
+            let label = match &g.rev {
+                Some(_) => format!("Show Diff in {}", g.short),
+                None => "Show Diff".to_string(),
+            };
+            b.item(
+                &label,
+                Command::GitDiff {
+                    root: g.root.to_string_lossy().into_owned(),
+                    rev: g.rev.clone(),
+                    path: rel,
+                },
+            );
+            b.sep();
         }
     }
 

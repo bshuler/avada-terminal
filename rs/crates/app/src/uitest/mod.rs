@@ -15,6 +15,7 @@
 mod annotations;
 mod datatree;
 mod files;
+mod git;
 mod image;
 mod links;
 mod matrix;
@@ -174,159 +175,6 @@ fn by_label(w: &crate::AppWindow, label: &str) -> Vec<ElementHandle> {
     ElementHandle::find_by_accessible_label(w, label).collect()
 }
 
-/// Put the left panel into the git mode's commit view with one file, the way clicking a
-/// hash in a pane's output does.
-fn open_commit_view(w: &crate::AppWindow) {
-    let lp = w.global::<crate::LeftPanelAdapter>();
-    lp.set_open(true);
-    lp.set_mode(crate::paneview::LEFT_MODE_GIT);
-    lp.set_git_repo(true);
-    lp.set_git_commit_open(true);
-    lp.set_git_commit_title("the subject".into());
-    lp.set_git_commit_meta("abc1234 · T · today".into());
-    lp.set_git_commit_files_title("Files · 1".into());
-    let files = std::rc::Rc::new(slint::VecModel::from(vec![crate::LeftGitRow {
-        path: "sub/a.txt".into(),
-        label: "a.txt".into(),
-        detail: "sub".into(),
-        code: "M".into(),
-        selected: false,
-    }]));
-    lp.set_git_commit_files(files.into());
-}
-
-/// Put the left panel into the git mode's working-tree view. `dirty` decides whether git
-/// reported anything — a clean tree and a dirty one draw different headers.
-fn open_working_tree(w: &crate::AppWindow, dirty: bool) {
-    let lp = w.global::<crate::LeftPanelAdapter>();
-    lp.set_open(true);
-    lp.set_mode(crate::paneview::LEFT_MODE_GIT);
-    lp.set_git_repo(true);
-    lp.set_git_commit_open(false);
-    lp.set_git_head("main".into());
-    let rows = if dirty {
-        vec![crate::LeftGitRow {
-            path: "sub/a.txt".into(),
-            label: "a.txt".into(),
-            detail: "sub".into(),
-            code: "M".into(),
-            selected: false,
-        }]
-    } else {
-        Vec::new()
-    };
-    lp.set_git_changed(std::rc::Rc::new(slint::VecModel::from(rows)).into());
-}
-
-/// THE regression this suite exists for: the commit header's diff button must be present,
-/// laid out, and hit-testable, and clicking it must reach Rust.
-#[test]
-fn the_commit_diff_button_is_clickable_and_reaches_rust() {
-    ui(|| {
-        let w = window();
-        open_commit_view(&w);
-
-        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        {
-            let fired = fired.clone();
-            w.global::<crate::LeftPanelAdapter>()
-                .on_git_commit_diff(move || fired.set(true));
-        }
-
-        let found = by_label(&w, "Open a pane with this commit's whole diff");
-        assert_eq!(
-            found.len(),
-            1,
-            "the commit header must show exactly one diff button"
-        );
-        click(&w, &found[0]);
-        assert!(
-            fired.get(),
-            "clicking the diff button must reach LeftPanelAdapter.git-commit-diff"
-        );
-    });
-}
-
-/// Its neighbour, so a failure above can be read as "the diff button specifically" rather
-/// than "the header is broken".
-#[test]
-fn the_commit_back_button_is_clickable_and_reaches_rust() {
-    ui(|| {
-        let w = window();
-        open_commit_view(&w);
-
-        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        {
-            let fired = fired.clone();
-            w.global::<crate::LeftPanelAdapter>()
-                .on_git_commit_close(move || fired.set(true));
-        }
-
-        let found = by_label(&w, "Back to the working tree");
-        assert_eq!(found.len(), 1, "the commit header must show a back button");
-        click(&w, &found[0]);
-        assert!(fired.get(), "clicking back must reach git-commit-close");
-    });
-}
-
-/// The working tree and the commit are two views of one mode, and the *commit* diff button
-/// belongs to the commit only. If it leaked into the working-tree view it would dispatch
-/// `GitCommitDiff` with no commit loaded and silently do nothing.
-#[test]
-fn the_working_tree_view_shows_no_commit_diff_button() {
-    ui(|| {
-        let w = window();
-        open_working_tree(&w, true);
-        assert!(
-            by_label(&w, "Open a pane with this commit's whole diff").is_empty(),
-            "the working-tree view must not offer a commit diff"
-        );
-    });
-}
-
-/// The bug the user reported, at the layer they hit it: they opened the git panel on a
-/// dirty tree and there was no diff to press. Before `git-diff` existed this found nothing.
-#[test]
-fn the_working_tree_diff_button_is_clickable_and_reaches_rust() {
-    ui(|| {
-        let w = window();
-        open_working_tree(&w, true);
-
-        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        {
-            let fired = fired.clone();
-            w.global::<crate::LeftPanelAdapter>()
-                .on_git_diff(move || fired.set(true));
-        }
-
-        let found = by_label(&w, "Open a pane with the working tree's whole diff");
-        assert_eq!(
-            found.len(),
-            1,
-            "a dirty working tree must show exactly one diff button"
-        );
-        click(&w, &found[0]);
-        assert!(
-            fired.get(),
-            "clicking the working-tree diff button must reach LeftPanelAdapter.git-diff"
-        );
-    });
-}
-
-/// `git diff HEAD` on a clean tree opens a pane that prints nothing, which reads as the
-/// button being broken. So the button is only there when there is something to show.
-#[test]
-fn a_clean_working_tree_shows_no_diff_button() {
-    ui(|| {
-        let w = window();
-        open_working_tree(&w, false);
-        assert!(
-            by_label(&w, "Open a pane with the working tree's whole diff").is_empty(),
-            "a clean tree must not offer a diff"
-        );
-    });
-}
-
 // ===== the mode strip =====
 //
 // Every left-panel feature is reached through this strip, so a strip that does not switch
@@ -334,115 +182,60 @@ fn a_clean_working_tree_shows_no_diff_button() {
 
 /// Publish the built-in modes the way `paneview` does on every resync.
 ///
-/// Two, not three: the explorer that used to sit between them is the `bshuler/avada-files`
-/// module now, and a module reaches the strip through `RailAdapter.entries` instead.
+/// One, not three: the explorer and the git working tree that used to follow it are the
+/// `bshuler/avada-files` and `bshuler/avada-git` modules now, and a module reaches the
+/// strip through `RailAdapter.entries` instead. The workspace is what is left, so this
+/// helper's job is now to give the strip its fixed head for the module buttons to follow.
 fn install_modes(w: &crate::AppWindow) {
-    let rows = vec![
-        crate::LeftModeRow {
-            label: "Workspace".into(),
-            icon: 0,
-            brand: slint::Color::from_rgb_u8(0, 0, 0),
-        },
-        crate::LeftModeRow {
-            label: "Git".into(),
-            icon: -2,
-            brand: slint::Color::from_rgb_u8(0, 0, 0),
-        },
-    ];
+    let rows = vec![crate::LeftModeRow {
+        label: "Workspace".into(),
+        icon: 0,
+        brand: slint::Color::from_rgb_u8(0, 0, 0),
+    }];
     let lp = w.global::<crate::LeftPanelAdapter>();
     lp.set_open(true);
     lp.set_modes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
 }
 
-/// Clicking Git in the strip must both set `mode` and tell Rust, because entering GIT is
-/// what runs `git status` — a strip that only moved the highlight would show a stale tree.
+/// The strip has to tell Rust which mode was pressed, not merely move its own highlight:
+/// `mode` is `in-out` and written in Slint, so `mode-changed` is the only thing that lets
+/// Rust learn a module entry is no longer the one on screen.
 #[test]
-fn the_mode_strip_switches_to_git_and_tells_rust() {
+fn the_mode_strip_selects_a_built_in_and_tells_rust() {
     ui(|| {
         let w = window();
         install_modes(&w);
+        // The strip draws itself only when there is somewhere else to go — one built-in
+        // and no modules is not a choice. A rail entry is on screen and selected, which is
+        // exactly the state this test is about leaving.
+        w.global::<crate::RailAdapter>().set_present(true);
         w.global::<crate::LeftPanelAdapter>()
-            .set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
+            .set_mode(crate::paneview::LEFT_MODE_RAIL);
 
-        let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
+        let saw = std::rc::Rc::new(std::cell::Cell::new(-99));
         {
             let saw = saw.clone();
             w.global::<crate::LeftPanelAdapter>()
                 .on_mode_changed(move |m| saw.set(m));
         }
 
-        let found = by_label(&w, "Git");
-        assert_eq!(found.len(), 1, "the strip must show exactly one Git button");
+        let found = by_label(&w, "Workspace");
+        assert_eq!(
+            found.len(),
+            1,
+            "the strip must show exactly one Workspace button"
+        );
         click(&w, &found[0]);
 
         assert_eq!(
             w.global::<crate::LeftPanelAdapter>().get_mode(),
-            crate::paneview::LEFT_MODE_GIT,
-            "the click must select the git mode"
+            crate::paneview::LEFT_MODE_WORKSPACE,
+            "the click must select the workspace mode"
         );
         assert_eq!(
             saw.get(),
-            crate::paneview::LEFT_MODE_GIT,
-            "the click must also reach mode-changed, which is what triggers git status"
-        );
-    });
-}
-
-// ===== the git panel's other header buttons =====
-
-/// Refresh sits beside the new diff button and is the older of the two. If adding a second
-/// button to that header ever displaced or covered it, this is what says so.
-#[test]
-fn the_refresh_button_still_works_beside_the_new_diff_button() {
-    ui(|| {
-        let w = window();
-        open_working_tree(&w, true);
-
-        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
-        {
-            let fired = fired.clone();
-            w.global::<crate::LeftPanelAdapter>()
-                .on_git_refresh(move || fired.set(true));
-        }
-
-        let found = by_label(&w, "Re-run git status");
-        assert_eq!(
-            found.len(),
-            1,
-            "the git header must show one refresh button"
-        );
-        click(&w, &found[0]);
-        assert!(fired.get(), "refresh must still reach git-refresh");
-    });
-}
-
-/// A section head is the only way to get a collapsed list back, and it is drawn as a label
-/// plus a bare chevron Path with no pressable-looking chrome.
-#[test]
-fn a_git_section_head_collapses_and_reopens_its_list() {
-    ui(|| {
-        let w = window();
-        open_working_tree(&w, true);
-
-        let open = "Collapse the working-tree changes";
-        let shut = "Show the working-tree changes";
-        assert_eq!(
-            by_label(&w, open).len(),
-            1,
-            "the Changes head starts expanded"
-        );
-
-        click(&w, &by_label(&w, open)[0]);
-        assert!(
-            by_label(&w, open).is_empty() && by_label(&w, shut).len() == 1,
-            "clicking the head must collapse the section"
-        );
-
-        click(&w, &by_label(&w, shut)[0]);
-        assert_eq!(
-            by_label(&w, open).len(),
-            1,
-            "clicking it again must reopen the section"
+            crate::paneview::LEFT_MODE_WORKSPACE,
+            "the click must also reach mode-changed, which is what drops the rail entry"
         );
     });
 }
