@@ -2165,6 +2165,7 @@ impl State {
             Box::new(SoftwareRenderer::new()),
         );
         pane.set_palette(theme::terminal_theme(self.settings.terminal_theme));
+        pane.set_project_roots(self.project_roots());
         let glow = Glow::new(crate::glow::seed_from(&uid));
         // A pane spawned WITH an accent is a project/dialog pane: by default tint it on. A
         // plain new pane is clean — it still gets a palette color VALUE by slot, but its
@@ -2486,6 +2487,7 @@ impl State {
             Box::new(SoftwareRenderer::new()),
         );
         pane.set_palette(theme::terminal_theme(self.settings.terminal_theme));
+        pane.set_project_roots(self.project_roots());
         // Replay the rolling buffer so the re-hosted pane shows recent output instantly.
         if let Some(replay) = mgr.replay(&det.uid) {
             pane.feed(&replay);
@@ -3602,7 +3604,7 @@ impl State {
             }
         }
         // Refresh the cached, newest-first project list (rail badge + flyout).
-        self.projects = sidebar::list();
+        self.reload_projects();
         self.dirty = true;
         Some(AiProjectRef {
             path: root.to_string_lossy().to_string(),
@@ -3743,7 +3745,7 @@ impl State {
 
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn open_new_goal(&mut self) {
-        self.projects = sidebar::list();
+        self.reload_projects();
         self.goal_draft_images.clear();
         self.goal_text.clear();
         self.goal_field = 0;
@@ -5242,7 +5244,7 @@ impl State {
     pub fn toggle_projects(&mut self) {
         self.sidebar_open = !self.sidebar_open;
         if self.sidebar_open {
-            self.projects = sidebar::list();
+            self.reload_projects();
             self.reminders_open = false;
             self.closed_open = false;
         }
@@ -5459,8 +5461,45 @@ impl State {
     /// mutations use; the dirty signal is driven by [`crate::control_host::ControlHost::sync`].
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn refresh_projects(&mut self) {
-        self.projects = sidebar::list();
+        self.reload_projects();
         self.dirty = true;
+    }
+
+    /// Reload the remembered projects and hand every pane the roots, so a relative path a
+    /// pane cannot place on its own can be placed inside a project the app knows. The single
+    /// seam for the list: every site that used to assign `self.projects` directly goes
+    /// through here so no pane is left with a stale set. The constructor is the one
+    /// exception (no panes exist yet), and the appearance preview pane is never given roots
+    /// (it shows canned output and linkifies nothing).
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn reload_projects(&mut self) {
+        self.projects = sidebar::list();
+        self.push_project_roots();
+    }
+
+    /// The remembered projects' roots, in list order (newest first). Order does not matter
+    /// to the pane — it answers only when exactly one root holds the file — so no sort.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn project_roots(&self) -> Vec<String> {
+        Self::roots_of(&self.projects)
+    }
+
+    /// The pure half of [`Self::project_roots`]: a project's `path` is its normalized git
+    /// root, which is exactly the base a relative token wants.
+    fn roots_of(projects: &[Project]) -> Vec<String> {
+        projects.iter().map(|p| p.path.clone()).collect()
+    }
+
+    /// Hand the current roots to every pane in every tab. Cheap when nothing changed: the
+    /// pane compares before it drops its verify cache.
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn push_project_roots(&mut self) {
+        let roots = self.project_roots();
+        for t in &mut self.tabs {
+            for p in &mut t.panes {
+                p.pane.set_project_roots(roots.clone());
+            }
+        }
     }
 
     /// The cached project rows as `(name, color)` for the flyout.
@@ -5589,7 +5628,7 @@ impl State {
         let old = parse_hex(&p.color);
         let new = parse_hex(color);
         projects::set_project_color(&p.id, color);
-        self.projects = sidebar::list();
+        self.reload_projects();
         // Propagate to open panes across ALL tabs: same matcher as the cwd tint
         // (`note_pane_cwd`): pane cwd → enclosing git root → the store's path key.
         for tab in &mut self.tabs {
@@ -5625,7 +5664,7 @@ impl State {
         }
         let id = p.id.clone();
         projects::rename_project(&id, name);
-        self.projects = sidebar::list();
+        self.reload_projects();
         self.dirty = true;
     }
 
@@ -5636,7 +5675,9 @@ impl State {
             return;
         };
         projects::remove_project(&p.id);
-        self.projects = sidebar::list();
+        // The pane side matters most here: a root that left the list must stop
+        // answering, and the smaller set is what makes the pane drop its cache.
+        self.reload_projects();
         self.dirty = true;
     }
 
@@ -5666,7 +5707,7 @@ impl State {
             return;
         }
         let _ = projects::add_project_explicit(path);
-        self.projects = sidebar::list();
+        self.reload_projects();
         self.close_overlay();
         self.dirty = true;
     }
@@ -6733,6 +6774,7 @@ impl State {
             Box::new(SoftwareRenderer::new()),
         );
         newgrid.set_palette(theme::terminal_theme(self.settings.terminal_theme));
+        newgrid.set_project_roots(self.project_roots());
         let mut stale_uid: Option<String> = None;
         let new_uid = uid.clone();
         if let Some(p) = self.tabs.get_mut(ti).and_then(|t| t.panes.get_mut(idx)) {
@@ -6818,6 +6860,7 @@ impl State {
             Box::new(SoftwareRenderer::new()),
         );
         pane.set_palette(theme::terminal_theme(self.settings.terminal_theme));
+        pane.set_project_roots(self.project_roots());
         if let Some(replay) = mgr.replay(&det.uid) {
             pane.feed(&replay);
         }
@@ -8132,6 +8175,7 @@ impl State {
             Box::new(SoftwareRenderer::new()),
         );
         pane.set_palette(theme::terminal_theme(self.settings.terminal_theme));
+        pane.set_project_roots(self.project_roots());
         if reattach {
             // Re-host the survivor: seed the fresh grid from the daemon's retained replay (the
             // same replay-into-a-fresh-grid path `adopt_into_tab` uses for a moved pane). No
@@ -12598,5 +12642,149 @@ mod hyperpane_uniqueness_tests {
             resume_startup_line(Some("/w"), "", "codex", "resume 1234"),
             "cd '/w' && codex resume 1234\r"
         );
+    }
+
+    // ---- project roots pushed into panes (track L1) ----
+
+    /// A scratch project holding `docs/x.md`, next to an `elsewhere` dir for the pane to
+    /// stand in. Not a git repo, so the repository fallback has nothing to say and the
+    /// remembered root is the only witness.
+    fn root_fixture(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "hp-state-roots-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("proj/docs")).expect("scratch project");
+        std::fs::write(dir.join("proj/docs/x.md"), "# x\n").expect("scratch file");
+        std::fs::create_dir_all(dir.join("elsewhere")).expect("scratch elsewhere");
+        dir
+    }
+
+    fn project_at(dir: &std::path::Path) -> Project {
+        Project {
+            id: "p1".into(),
+            path: dir.to_string_lossy().into_owned(),
+            name: "proj".into(),
+            color: "#3b82f6".into(),
+            last_opened_at: Some(1),
+        }
+    }
+
+    /// A view pane: no pty, no runtime, but a real `TerminalPane` behind it.
+    fn view_opts(kind: PaneKind) -> NewPaneOpts {
+        NewPaneOpts {
+            kind: Some(kind),
+            ..Default::default()
+        }
+    }
+
+    /// Feed `docs/x.md` into a pane standing in `elsewhere` and hover it: the only way
+    /// the relative token lights is through the roots the app handed the pane.
+    fn hover_docs_x(pane: &mut TerminalPane, elsewhere: &std::path::Path) -> Option<String> {
+        pane.set_cwd(Some(elsewhere.to_string_lossy().into_owned()));
+        pane.feed("see docs/x.md\r\n");
+        let (cols, rows) = pane.grid_size();
+        let at = "see ".len() as f32 + 0.5;
+        pane.link_at(at, 0.5, cols as f32, rows as f32)
+            .map(|h| h.abs_path)
+    }
+
+    #[test]
+    fn the_roots_are_the_projects_paths_in_list_order() {
+        let a = project_at(std::path::Path::new("/a"));
+        let mut b = project_at(std::path::Path::new("/b"));
+        b.id = "p2".into();
+        assert_eq!(
+            State::roots_of(&[a, b]),
+            vec!["/a".to_string(), "/b".to_string()]
+        );
+        assert!(State::roots_of(&[]).is_empty());
+    }
+
+    #[test]
+    fn pushing_projects_hands_every_pane_the_roots() {
+        let dir = root_fixture("push");
+        let proj = dir.join("proj");
+        let m = mgr();
+        let mut st = fresh();
+        // Two view panes (no pty, no runtime) across two tabs, so the sweep has to cross a
+        // tab boundary to reach the second one.
+        st.add_pane_opts(&m, view_opts(PaneKind::FileBrowser));
+        st.adopt_pane_as_tab(&m, det("second-tab"));
+        assert!(st.tabs.len() >= 2, "expected a second tab");
+
+        // Before the push: dark in every pane.
+        for t in &mut st.tabs {
+            for p in &mut t.panes {
+                assert_eq!(hover_docs_x(&mut p.pane, &dir.join("elsewhere")), None);
+            }
+        }
+
+        // The list changes (set directly: the real store must not be touched by a test)
+        // and the sweep hands the roots to every pane.
+        st.projects = vec![project_at(&proj)];
+        st.push_project_roots();
+        let mut seen = 0;
+        for t in &mut st.tabs {
+            for p in &mut t.panes {
+                let hit = hover_docs_x(&mut p.pane, &dir.join("elsewhere"))
+                    .expect("every pane should have the roots after the push");
+                assert_eq!(std::path::Path::new(&hit), proj.join("docs/x.md"));
+                seen += 1;
+            }
+        }
+        assert!(
+            seen >= 2,
+            "the sweep should have reached at least two panes"
+        );
+
+        // The project is forgotten: the pane must stop answering.
+        st.projects.clear();
+        st.push_project_roots();
+        for t in &mut st.tabs {
+            for p in &mut t.panes {
+                assert_eq!(
+                    hover_docs_x(&mut p.pane, &dir.join("elsewhere")),
+                    None,
+                    "a root that left the list must stop answering"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_pane_starts_with_the_current_roots() {
+        let dir = root_fixture("new-pane");
+        let proj = dir.join("proj");
+        let m = mgr();
+        let mut st = fresh();
+        st.projects = vec![project_at(&proj)];
+
+        // A pane added AFTER the list was loaded, with no reload in between: it has to be
+        // handed the roots at construction or it would be dark until the next `cd`.
+        let uid = st
+            .add_pane_opts(&m, view_opts(PaneKind::FileBrowser))
+            .expect("view pane added");
+        let p = st
+            .tabs
+            .iter_mut()
+            .flat_map(|t| t.panes.iter_mut())
+            .find(|p| p.uid == uid)
+            .expect("the new pane");
+        let hit = hover_docs_x(&mut p.pane, &dir.join("elsewhere"))
+            .expect("a new pane should carry the current roots");
+        assert_eq!(std::path::Path::new(&hit), proj.join("docs/x.md"));
+
+        // And one adopted from another window goes through the same door.
+        st.adopt_pane_as_tab(&m, det("adopted"));
+        let last = st.tabs.len() - 1;
+        let p = &mut st.tabs[last].panes[0];
+        let hit = hover_docs_x(&mut p.pane, &dir.join("elsewhere"))
+            .expect("an adopted pane should carry the current roots");
+        assert_eq!(std::path::Path::new(&hit), proj.join("docs/x.md"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

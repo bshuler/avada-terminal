@@ -72,6 +72,11 @@ pub struct TerminalPane {
     /// created *after* it was first mentioned staying dark until the pane's cwd changes —
     /// paid only by this fallback, never by a path the cwd can resolve on its own.
     found: HashMap<String, Option<ResolveResult>>,
+    /// The app's remembered project roots (absolute, normalized), tried as bases for a
+    /// relative token after the pane's cwd and its own repository could not place it and
+    /// before the screen is read. Pushed by the app whenever its project list changes;
+    /// the widget never reads the store itself.
+    project_roots: Vec<String>,
     /// The live drag-selection, if any (our own cell-range model — see [`crate::selection`]).
     /// `None` until a press starts one; a non-dragged selection (a plain click) is held but
     /// renders nothing, so the same press can still resolve to a link click.
@@ -250,6 +255,7 @@ impl TerminalPane {
             verified: HashMap::new(),
             commits: HashMap::new(),
             found: HashMap::new(),
+            project_roots: Vec::new(),
             selection: None,
             select_origin: None,
             clipboard: Clipboard::new(),
@@ -367,6 +373,17 @@ impl TerminalPane {
             self.verified.clear();
             self.commits.clear();
             self.found.clear();
+        }
+    }
+
+    /// Replace the project roots. A changed set drops the verify cache: a token the screen
+    /// answered earlier may now have a project answer, and the policy says the project
+    /// wins. An unchanged set (the app reloads its list on every `cd`) keeps the cache.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn set_project_roots(&mut self, roots: Vec<String>) {
+        if roots != self.project_roots {
+            self.project_roots = roots;
+            self.verified.clear();
         }
     }
 
@@ -545,6 +562,13 @@ impl TerminalPane {
                 } else if let Some(found) = self.elsewhere(&cand.path) {
                     // Not where this pane is standing, but somewhere in its repository — and
                     // only one such file, or `elsewhere` would have declined to guess.
+                    self.verified.insert(key, found.clone());
+                    found
+                } else if let Some(found) = self.relative_to_project(&cand.path) {
+                    // Inside exactly one remembered project. Tried before the screen on
+                    // purpose: a project the app knows is stronger evidence than a directory
+                    // that happened to be printed above, and it holds even after that line
+                    // scrolls away.
                     self.verified.insert(key, found.clone());
                     found
                 } else if let Some(found) = self.relative_to_screen(row, &cand.path) {
@@ -880,9 +904,38 @@ impl TerminalPane {
     /// each of its ancestors, is one candidate base; a screen full of absolute paths must not
     /// turn a hover into a disk walk.
     const CONTEXT_STATS: usize = 32;
+    /// The stat budget for the project-root step: one per root, so a pathological project
+    /// list cannot turn a hover into a disk walk.
+    const PROJECT_ROOT_STATS: usize = 64;
 
-    /// The screen-context fallback for a relative path that neither the pane's cwd nor its
-    /// repository could place.
+    /// The project-root fallback for a relative path that neither the pane's cwd nor its
+    /// repository could place: every remembered project is tried as a base, and the answer
+    /// counts only when exactly one project holds the file. `README.md` is in all of them,
+    /// and a link that opens the wrong project's copy is worse than no link, so a tie is
+    /// handed on to the screen, where a printed `cd` can settle it. Nothing is cached here:
+    /// a hit lands in `verified` by the caller, and a miss must stay a miss only until a
+    /// project holding the file is added.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn relative_to_project(&self, token: &str) -> Option<ResolveResult> {
+        let chars: Vec<char> = token.chars().collect();
+        if is_path_root(&chars) {
+            return None;
+        }
+        let mut hit: Option<ResolveResult> = None;
+        for root in self.project_roots.iter().take(Self::PROJECT_ROOT_STATS) {
+            let r = paths::resolve_path(Some(root), token);
+            if r.exists {
+                if hit.is_some() {
+                    return None; // two projects answer: not ours to guess
+                }
+                hit = Some(r);
+            }
+        }
+        hit
+    }
+
+    /// The screen-context fallback for a relative path that neither the pane's cwd, its
+    /// repository, nor a remembered project could place.
     ///
     /// A tool that `cd`s somewhere and prints paths relative to *that* directory leaves the
     /// pane's cwd untouched — an agent's shell does exactly this — so `docs/x.yaml` is dark
@@ -992,6 +1045,8 @@ impl TerminalPane {
     /// that name. That costs one subprocess the first time a given word is hovered in a given
     /// cwd, and nothing afterwards — both hits and misses are cached, because history does not
     /// un-write itself.
+    // The tuple predates this track; naming it is a refactor for another day.
+    #[allow(clippy::type_complexity)]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn commit_under(
         &mut self,
@@ -2796,6 +2851,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("proj/docs/language/sql")).unwrap();
         std::fs::write(dir.join("proj/docs/language/sql/35-gaps.yaml"), "a: 1\n").unwrap();
+        std::fs::write(dir.join("proj/README.md"), "# proj\n").unwrap();
+        // A second project holding the same relative paths: the tie the project step
+        // must refuse to break on its own.
+        std::fs::create_dir_all(dir.join("proj2/docs/language/sql")).unwrap();
+        std::fs::write(dir.join("proj2/docs/language/sql/35-gaps.yaml"), "a: 2\n").unwrap();
+        std::fs::write(dir.join("proj2/README.md"), "# proj2\n").unwrap();
         std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
         dir
     }
@@ -2906,6 +2967,213 @@ mod tests {
             .expect("an ancestor of a printed path should serve as the base");
         assert_eq!(std::path::Path::new(&hit.abs_path), inner);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- remembered project roots (the step between the repository and the screen) ----
+
+    fn str_of(p: &std::path::Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn a_remembered_project_places_a_path_the_pane_cannot() {
+        let dir = context_fixture("root_places");
+        let proj = dir.join("proj");
+
+        // Standing elsewhere, nothing printed above: only the app's memory of the project
+        // can say where `docs/...` lives.
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(str_of(&dir.join("elsewhere"))));
+        p.set_project_roots(vec![str_of(&proj)]);
+        p.feed(" M docs/language/sql/35-gaps.yaml\r\n");
+        let (w, h) = (200.0, 6.0);
+
+        let at = " M ".len() as f32 + 0.5;
+        let hit = p
+            .link_at(at, 0.5, w, h)
+            .expect("a remembered project root should place the relative path");
+        assert!(hit.exists);
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj.join("docs/language/sql/35-gaps.yaml")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_remembered_project_wins_over_a_directory_printed_above() {
+        let dir = context_fixture("root_beats_screen");
+        let proj = dir.join("proj");
+        let proj2_s = str_of(&dir.join("proj2"));
+
+        // Both hold the file. The screen names proj2; the app remembers proj. The stated
+        // policy is "prefer the project root, then screen text" — pinned here.
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(str_of(&dir.join("elsewhere"))));
+        p.set_project_roots(vec![str_of(&proj)]);
+        p.feed(&format!(
+            "cd {proj2_s}\r\n M docs/language/sql/35-gaps.yaml\r\n"
+        ));
+        let (w, h) = (200.0, 6.0);
+
+        let at = " M ".len() as f32 + 0.5;
+        let hit = p.link_at(at, 1.5, w, h).expect("the path should resolve");
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj.join("docs/language/sql/35-gaps.yaml"),
+            "the remembered project must win over the directory printed above"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_projects_holding_the_path_leave_it_to_the_screen() {
+        let dir = context_fixture("root_tie");
+        let proj = dir.join("proj");
+        let proj2 = dir.join("proj2");
+        let proj2_s = str_of(&proj2);
+        let roots = vec![str_of(&proj), str_of(&proj2)];
+
+        // `README.md` is in both projects: the project step must decline, and the `cd`
+        // printed above is what breaks the tie.
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(str_of(&dir.join("elsewhere"))));
+        p.set_project_roots(roots.clone());
+        p.feed(&format!("cd {proj2_s}\r\nsee README.md\r\n"));
+        let (w, h) = (200.0, 6.0);
+
+        let at = "see ".len() as f32 + 0.5;
+        let hit = p
+            .link_at(at, 1.5, w, h)
+            .expect("the screen should break the tie");
+        assert_eq!(std::path::Path::new(&hit.abs_path), proj2.join("README.md"));
+
+        // With nothing on screen to break it, the tie stays dark: a wrong link is worse
+        // than none.
+        let mut q = unit_pane(200, 6);
+        q.set_cwd(Some(str_of(&dir.join("elsewhere"))));
+        q.set_project_roots(roots);
+        q.feed("see README.md\r\n");
+        assert!(
+            q.link_at(at, 0.5, w, h).is_none(),
+            "two projects holding the file must not light it on their own"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_added_later_lights_a_path_that_was_dark() {
+        let dir = context_fixture("root_added_later");
+        let proj = dir.join("proj");
+
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(str_of(&dir.join("elsewhere"))));
+        p.feed(" M docs/language/sql/35-gaps.yaml\r\n");
+        let (w, h) = (200.0, 6.0);
+        let at = " M ".len() as f32 + 0.5;
+
+        // No roots, nothing above: dark.
+        assert!(p.link_at(at, 0.5, w, h).is_none());
+        // The app learns about the project; the very next hover must light — which is
+        // only true because the miss was never cached.
+        p.set_project_roots(vec![str_of(&proj)]);
+        let hit = p
+            .link_at(at, 0.5, w, h)
+            .expect("a project added after the miss should answer on the next hover");
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj.join("docs/language/sql/35-gaps.yaml")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn changing_the_project_roots_forgets_a_screen_answer() {
+        let dir = context_fixture("root_forgets");
+        let proj = dir.join("proj");
+        let proj2 = dir.join("proj2");
+        let proj2_s = str_of(&proj2);
+
+        let mut p = unit_pane(200, 6);
+        p.set_cwd(Some(str_of(&dir.join("elsewhere"))));
+        p.feed(&format!(
+            "cd {proj2_s}\r\n M docs/language/sql/35-gaps.yaml\r\n"
+        ));
+        let (w, h) = (200.0, 6.0);
+        let at = " M ".len() as f32 + 0.5;
+
+        // No roots yet: the screen answers, and the answer is cached in `verified`.
+        let hit = p
+            .link_at(at, 1.5, w, h)
+            .expect("the cd above should answer");
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj2.join("docs/language/sql/35-gaps.yaml")
+        );
+        assert!(!p.verified.is_empty(), "the screen answer should be cached");
+
+        // The roots change: the cache is dropped and the project wins on the next hover.
+        p.set_project_roots(vec![str_of(&proj)]);
+        let hit = p
+            .link_at(at, 1.5, w, h)
+            .expect("the project should now answer");
+        assert_eq!(
+            std::path::Path::new(&hit.abs_path),
+            proj.join("docs/language/sql/35-gaps.yaml"),
+            "a changed root set must forget the screen's answer"
+        );
+
+        // The same set again is not a change: the cache survives the reload.
+        p.set_project_roots(vec![str_of(&proj)]);
+        assert!(
+            !p.verified.is_empty(),
+            "an unchanged root set must keep the verify cache"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rooted_token_never_asks_the_projects() {
+        let dir = context_fixture("root_rooted");
+        let mut p = unit_pane(40, 3);
+        p.set_project_roots(vec![str_of(&dir.join("proj"))]);
+        // An absolute path is not relative to anything; the project step has no say.
+        assert_eq!(p.relative_to_project("/usr/bin/env"), None);
+        assert_eq!(p.relative_to_project("~/x"), None);
+        // While a relative one inside the single root is exactly its business.
+        let r = p
+            .relative_to_project("docs/language/sql/35-gaps.yaml")
+            .expect("the relative path should be placed");
+        assert_eq!(
+            std::path::Path::new(&r.abs_path),
+            dir.join("proj/docs/language/sql/35-gaps.yaml")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_project_root_step_stops_at_its_stat_budget() {
+        let dir = context_fixture("root_budget");
+        let proj = dir.join("proj");
+        // Sixty-four roots that hold nothing, then the one that does: past the budget, so
+        // it must never be tried.
+        let mut roots: Vec<String> = (0..TerminalPane::PROJECT_ROOT_STATS)
+            .map(|i| str_of(&dir.join(format!("nowhere{i}"))))
+            .collect();
+        roots.push(str_of(&proj));
+        let mut p = unit_pane(40, 3);
+        p.set_project_roots(roots);
+        assert_eq!(
+            p.relative_to_project("docs/language/sql/35-gaps.yaml"),
+            None,
+            "the root past the stat budget must not be consulted"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
