@@ -48,6 +48,11 @@ const ACTIVITY_TICK_MS: u64 = 500;
 /// Coarser than the activity tick — leases are seconds-to-minutes, so a 5s sweep is ample.
 const REAPER_TICK_MS: u64 = 5_000;
 
+/// How often the licence sweep runs. Very coarse on purpose: a check-in interval is measured
+/// in days, and [`license_sweep`] does nothing at all for a licence that is not yet due, so the
+/// only thing a shorter tick would buy is a faster reaction to a clock that jumped.
+const LICENSE_TICK_MS: u64 = 15 * 60 * 1_000;
+
 /// Coalescing window for structure-only `state` pings (TS `notifyState`).
 const STATE_COALESCE_MS: u64 = 100;
 
@@ -724,6 +729,49 @@ pub async fn run_reaper_ticker(shared: Arc<Shared>) {
         if !reaped.is_empty() {
             tracing::info!("reaper requeued/dead-lettered {} task(s)", reaped.len());
         }
+    }
+}
+
+/// One licence check-in sweep: ask the issuer about every installed licence that is due, and
+/// write what it says into the local check-in record.
+///
+/// This is the only thing that turns an issuer-side revocation into a closed gate on this
+/// machine. A licence carries its own `checkin_interval_days` and a grace period after it;
+/// nothing renews on its own, so an app that never sweeps drifts into grace and then refuses a
+/// module the user is still paying for — the failure looks like a bug in the gate and is
+/// actually a missing heartbeat.
+///
+/// Cheap by construction: a no-op before the app installs a service, a no-op when no licence is
+/// installed, and for an installed-but-not-due licence only a local token verify against the
+/// cached issuer keys (`checkin_all` filters on `checkin_due` before it dials).
+#[tracing::instrument(level = "debug", skip_all)]
+pub async fn license_sweep(shared: &Arc<Shared>) {
+    // Clone the handle out and drop the guard: a `std` read guard is `!Send` and everything
+    // below this line is awaited.
+    let service = shared.license.read().unwrap().clone();
+    let Some(service) = service else {
+        return;
+    };
+    for (product, outcome) in service.checkin_all().await {
+        match outcome {
+            // The overwhelmingly common case, every tick, for every licence. Not worth a line.
+            Ok(crate::license::CheckinOutcome::NotDue) => {}
+            Ok(other) => tracing::debug!(product, outcome = ?other, "licence check-in"),
+            Err(e) => tracing::warn!(product, error = %e, "licence check-in failed"),
+        }
+    }
+}
+
+/// The licence check-in sweep on its own interval — a separate task the embedder spawns
+/// alongside [`run_activity_ticker`] and aborts on stop, exactly like [`run_reaper_ticker`].
+/// The first tick fires immediately, so an app launched after a long sleep checks in at once
+/// instead of waiting out a whole interval.
+#[tracing::instrument(level = "debug", skip_all)]
+pub async fn run_license_ticker(shared: Arc<Shared>) {
+    let mut interval = tokio::time::interval(Duration::from_millis(LICENSE_TICK_MS));
+    loop {
+        interval.tick().await;
+        license_sweep(&shared).await;
     }
 }
 

@@ -26,7 +26,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -38,6 +38,10 @@ use avada_core::control::dictation_service;
 use avada_core::control::readmodel::{PaneInfo, PaneStatus, ReadModel, TabInfo, WindowInfo};
 use avada_core::control::server::{self, notify_state, Shared};
 use avada_core::control::uiops::UiOp;
+use avada_core::install::dirs::InstallPaths;
+use avada_core::license::LicenseService;
+use avada_core::marketplace::github::GitHubConfig;
+use avada_core::marketplace::Marketplace;
 use avada_core::persistence::{control_settings, paths};
 use avada_core::session_manager::{SessionEvent, SessionManager};
 use avada_core::tools::PaneKind;
@@ -70,6 +74,28 @@ struct PaneSnap {
     talk: bool,
 }
 
+/// Hand the control plane the two per-machine services its routes answer through: the
+/// marketplace (`/marketplace/...`) and the licence service (`/license/...`).
+///
+/// Until this runs both surfaces answer 503 "unavailable" rather than 404 — the routes are
+/// listed in `/schema` and the CLI shows the verbs, but nothing is reachable. That is the
+/// state the app shipped in: every `avada marketplace` and `avada license` verb existed and
+/// none of them could work.
+///
+/// Both are rooted at `modules_root` — the real one under the app-support data directory in the
+/// app, a temp dir in tests, which is why the root is a parameter rather than read in here.
+///
+/// The marketplace is best-effort: it opens an install store on disk, and a root it cannot read
+/// must leave that one surface at 503 rather than take the control server — or the GUI — down
+/// with it. The licence service has no fallible setup, so it always installs.
+fn install_module_services(shared: &Arc<Shared>, modules_root: &Path) {
+    match Marketplace::open_under(modules_root, GitHubConfig::default()) {
+        Ok(mp) => shared.install_marketplace(Arc::new(mp)),
+        Err(e) => tracing::warn!(error = %e, "marketplace unavailable; /marketplace stays 503"),
+    }
+    shared.install_license(Arc::new(LicenseService::under(modules_root)));
+}
+
 /// Hosts the embedded control server beside the GUI. UI-thread-owned (all interior mutability
 /// is single-threaded `Cell`/`RefCell`); only the `Arc<Shared>` it hands to the tokio task is
 /// shared across threads.
@@ -94,6 +120,8 @@ pub struct ControlHost {
     ticker: RefCell<Option<JoinHandle<()>>>,
     /// The work-queue reaper-ticker handle (aborted on stop, same leak reasoning as `ticker`).
     reaper: RefCell<Option<JoinHandle<()>>>,
+    /// The licence check-in ticker handle (aborted on stop, same leak reasoning as `ticker`).
+    licenses: RefCell<Option<JoinHandle<()>>>,
     // ---- sync baselines (UI thread only) ----
     /// Stable control pane-id per GUI session uid (GUI panes use the uid itself; a control-
     /// created pane keeps the uuid `dispatch` minted).
@@ -154,6 +182,7 @@ impl ControlHost {
             task: RefCell::new(None),
             ticker: RefCell::new(None),
             reaper: RefCell::new(None),
+            licenses: RefCell::new(None),
             pane_ids: RefCell::new(HashMap::new()),
             ctl: RefCell::new(HashMap::new()),
             prev: RefCell::new(HashMap::new()),
@@ -289,6 +318,7 @@ impl ControlHost {
         // Back the work queue with the durable on-disk DB and recover in-flight tasks left by
         // workers that died with the previous session.
         shared.attach_durable_work_queue();
+        install_module_services(&shared, InstallPaths::host().root());
         // Remote-access bind (mobile client): re-read the settings file so an edit takes
         // effect on the next Enabled toggle without an app restart.
         {
@@ -309,10 +339,14 @@ impl ControlHost {
         let reaper = self
             .runtime
             .spawn(server::run_reaper_ticker(Arc::clone(&shared)));
+        let licenses = self
+            .runtime
+            .spawn(server::run_license_ticker(Arc::clone(&shared)));
         *self.shared.borrow_mut() = Some(shared);
         *self.task.borrow_mut() = Some(task);
         *self.ticker.borrow_mut() = Some(ticker);
         *self.reaper.borrow_mut() = Some(reaper);
+        *self.licenses.borrow_mut() = Some(licenses);
     }
 
     /// Stop the server: abort the serve task AND the activity ticker, drop every WS client (so
@@ -327,6 +361,9 @@ impl ControlHost {
             t.abort();
         }
         if let Some(t) = self.reaper.borrow_mut().take() {
+            t.abort();
+        }
+        if let Some(t) = self.licenses.borrow_mut().take() {
             t.abort();
         }
         if let Some(s) = self.shared.borrow_mut().take() {
@@ -1613,5 +1650,104 @@ mod tests {
         assert_eq!(words(""), 0);
         assert_eq!(words("  them  "), 1);
         assert_eq!(words("the recorder writes mono audio"), 5);
+    }
+
+    /// `$TMPDIR/avada-svc-<pid>-<n>/`, removed on drop. Every path in the service tests comes
+    /// from here: `install_module_services` builds real on-disk stores, and one that ran
+    /// against the developer's app-support dir would mint keys into the machine's live
+    /// install root.
+    ///
+    /// [`modules`](TmpRoot::modules) is what the tests pass as the modules root, never the
+    /// directory itself: the marketplace's state dir is a *sibling* of the modules root, so a
+    /// root sitting directly in `$TMPDIR` would resolve to a `$TMPDIR/marketplace` shared with
+    /// every other test on the machine.
+    struct TmpRoot(PathBuf);
+
+    impl TmpRoot {
+        /// The modules root to hand to `install_module_services`, mirroring production's
+        /// `.../avada/modules` beside `.../avada/marketplace`.
+        fn modules(&self) -> PathBuf {
+            let p = self.0.join("modules");
+            std::fs::create_dir_all(&p).expect("create modules root");
+            p
+        }
+    }
+
+    impl Drop for TmpRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tmp_root() -> TmpRoot {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!("avada-svc-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).expect("create temp root");
+        TmpRoot(p)
+    }
+
+    /// A bare `Shared` on scratch paths: nothing here starts a server or a session, the tests
+    /// below only care about the two service slots.
+    fn bare_shared(root: &Path) -> Arc<Shared> {
+        Shared::new(
+            Arc::new(SessionManager::new(
+                tokio::sync::mpsc::unbounded_channel().0,
+            )),
+            false,
+            "0.0.0-test",
+            root.join("control.json"),
+            root.join("speech.json"),
+        )
+    }
+
+    /// The gap this closes: both service slots start empty, and an empty slot makes its whole
+    /// route family answer 503 — every `avada marketplace` and `avada license` verb was listed
+    /// in `/schema`, shown by the CLI, and unreachable in a running build. Nothing in core can
+    /// catch that, because core is right either way; only the app decides to install them.
+    #[test]
+    fn start_installs_the_marketplace_and_licence_services() {
+        let root = tmp_root();
+        let shared = bare_shared(root.0.as_path());
+        assert!(
+            shared.marketplace.read().unwrap().is_none()
+                && shared.license.read().unwrap().is_none(),
+            "a fresh Shared must start with both slots empty, or this test proves nothing"
+        );
+
+        install_module_services(&shared, root.modules().as_path());
+
+        assert!(
+            shared.marketplace.read().unwrap().is_some(),
+            "/marketplace/... would still answer 503"
+        );
+        assert!(
+            shared.license.read().unwrap().is_some(),
+            "/license/... would still answer 503"
+        );
+    }
+
+    /// A modules root that cannot be opened costs one surface, not the process. The GUI hosts
+    /// this control plane in-process, so a `?` here would have turned an unreadable install
+    /// directory into a failure to start the app.
+    #[test]
+    fn an_unusable_modules_root_leaves_the_marketplace_at_503_without_panicking() {
+        let root = tmp_root();
+        // A *file* where the modules root must be a directory: the install store cannot open.
+        let blocked = root.0.join("not-a-dir");
+        std::fs::write(&blocked, b"").expect("write blocker");
+        let shared = bare_shared(root.0.as_path());
+
+        install_module_services(&shared, blocked.as_path());
+
+        assert!(
+            shared.marketplace.read().unwrap().is_none(),
+            "an unopenable store must not be installed"
+        );
+        assert!(
+            shared.license.read().unwrap().is_some(),
+            "the licence service has no fallible setup; it must still install"
+        );
     }
 }

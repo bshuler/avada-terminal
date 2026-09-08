@@ -6489,6 +6489,67 @@ mod license_routes {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// The sweep the app's ticker runs. Unlike the forced check-in above, nothing here asks:
+    /// a revocation lands only once the licence's own interval falls due, and then it lands
+    /// with no user, route or CLI involved. This is the whole reason the ticker exists.
+    #[tokio::test]
+    async fn the_license_sweep_closes_the_gate_once_the_checkin_falls_due() {
+        let s = boot_with_control_tag(true, "lic-sweep").await;
+
+        // A sweep before the app has installed a service is a no-op, not a panic — the app
+        // spawns the ticker and installs the service in whichever order start-up happens to
+        // take, and the first tick fires immediately.
+        crate::control::server::license_sweep(&s.shared).await;
+
+        // A clock this test winds forward, so a one-day check-in interval is reachable
+        // without a one-day test. The licence is perpetual (`exp: 0`), so winding past the
+        // stub issuer's own wall clock cannot expire it out from under the assertion.
+        let dial = Arc::new(std::sync::atomic::AtomicU64::new((system_clock())()));
+        let hand = Arc::clone(&dial);
+        let clock: crate::license::Clock =
+            Arc::new(move || hand.load(std::sync::atomic::Ordering::SeqCst));
+        let issuer = Arc::new(StubIssuer::new("https://issuer.test"));
+        let service = Arc::new(LicenseService::new(
+            Arc::new(MemoryLicenseStore::new()),
+            Arc::clone(&issuer) as Arc<dyn crate::license::LicenseHttp>,
+            clock,
+        ));
+        s.shared.install_license(Arc::clone(&service));
+
+        // With a service installed but no licence in it, the sweep still has nothing to do.
+        crate::control::server::license_sweep(&s.shared).await;
+
+        let token = issuer
+            .issue(&Grant::for_product(PRODUCT).checking_in_every(1))
+            .expect("mint");
+        service
+            .install_token(crate::license::LicenseToken::new(token), None)
+            .await
+            .expect("install");
+        let (st, v) = get(&s, "/license/modules/acme/pro").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["gate"]["gate"], "run");
+
+        // Revoked at the issuer — but installing stamped `last_ok`, so the next check-in is a
+        // day away and the sweep must not dial. A revocation is never instantaneous on a
+        // machine that is offline or simply early; it is exactly one check-in away.
+        assert_eq!(issuer.revoke_product(PRODUCT), 1);
+        crate::control::server::license_sweep(&s.shared).await;
+        let (_, v) = get(&s, "/license/modules/acme/pro").await;
+        assert_eq!(
+            v["gate"]["gate"], "run",
+            "a sweep inside the check-in interval must leave the record alone"
+        );
+
+        // Two days on — one day past the interval — the same unforced sweep closes the gate.
+        dial.fetch_add(2 * 24 * 60 * 60, std::sync::atomic::Ordering::SeqCst);
+        crate::control::server::license_sweep(&s.shared).await;
+        let (st, v) = get(&s, "/license/modules/acme/pro").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["license"]["state"], "revoked");
+        assert_eq!(v["gate"]["gate"], "refuse");
+    }
+
     #[tokio::test]
     async fn install_wants_exactly_one_of_path_or_url() {
         let s = boot_with_control_tag(true, "lic-body").await;

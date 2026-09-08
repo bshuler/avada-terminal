@@ -497,14 +497,21 @@ impl LicenseService {
         }
     }
 
-    /// The host's service: the file store under the modules root, reqwest, the wall
-    /// clock.
-    pub fn host() -> Self {
+    /// The production wiring rooted anywhere: the file store under `modules_root`, reqwest,
+    /// the wall clock. The counterpart to [`crate::marketplace::Marketplace::open_under`], and
+    /// the seam a test uses to keep a real service out of the developer's app-support dir.
+    pub fn under(modules_root: impl AsRef<Path>) -> Self {
         Self::new(
-            Arc::new(FileLicenseStore::host()),
+            Arc::new(FileLicenseStore::under(modules_root)),
             Arc::new(ReqwestHttp::new()),
             system_clock(),
         )
+    }
+
+    /// The host's service: the file store under the modules root, reqwest, the wall
+    /// clock.
+    pub fn host() -> Self {
+        Self::under(crate::install::dirs::InstallPaths::host().root())
     }
 
     /// The current time by the service's clock.
