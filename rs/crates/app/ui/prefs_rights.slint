@@ -1,0 +1,354 @@
+// The Preferences "Modules" page (track H2, docs/modules-fanout-plan.md): every installed
+// module's rights, one row per declared capability, with the user column
+// (`never | always | workspace | ask`), the workspace override column, the manifest's
+// permission profiles, and the held-update diff.
+//
+// Pure projection of `RightsAdapter` (types.slint): the page holds no rights state of its
+// own, every click is a callback the Rust side (`prefs::rights`) turns into a
+// `RightsCommand`, and Rust refills the adapter after it has written. Every control has
+// an accessible label — the label is the contract the headless harness (`uitest/rights.rs`)
+// clicks by, and a screen reader hears the same words.
+
+import { Theme } from "theme.slint";
+import { RightsAdapter, RightsModuleRow, RightsCapRow } from "types.slint";
+export { RightsAdapter }
+
+// A small pill button, the same shape as the one in overlays.slint (which does not export
+// its own). `label` is what is drawn; `name` is what is announced — the pickers need a
+// row-unique name ("fs.read user always") while all of them draw the same word.
+component RPill inherits Rectangle {
+    in property <string> label;
+    in property <string> name: root.label;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-checked: root.active;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    height: 24px;
+    min-width: 24px;
+    border-radius: 6px;
+    opacity: root.enabled ? 1 : 0.45;
+    background: root.active ? Theme.accent : (ta.has-hover && root.enabled ? Theme.surface2 : Theme.surface);
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : Theme.border;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.label;
+            accessible-role: none; // the pill itself is the announced control
+            color: root.active ? Theme.bg : Theme.text;
+            font-size: 11px;
+            font-weight: root.active ? 700 : 400;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea { clicked => { if root.enabled { root.clicked(); } } }
+}
+
+// The ask toast: "<module> wants <cap>" with Allow once / Allow always / Deny. Exported so
+// the window can mount it beside the reminder toasts (app-wide, since a module asks
+// whether Preferences is open or not); the page also shows it at the top so an answer is
+// one click away while the user is already looking at rights.
+export component RightsAskToast inherits Rectangle {
+    border-radius: 8px;
+    background: Theme.mantle;
+    border-width: 1px;
+    border-color: Theme.warn.with-alpha(0.7);
+    drop-shadow-blur: 24px;
+    drop-shadow-color: Theme.scrim;
+    drop-shadow-offset-y: 8px;
+    accessible-role: groupbox;
+    accessible-label: "Capability request";
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        Text {
+            text: RightsAdapter.ask-module + " wants " + RightsAdapter.ask-cap;
+            color: Theme.text;
+            font-size: 13px;
+            font-weight: 600;
+            overflow: elide;
+        }
+        Text {
+            text: RightsAdapter.ask-text;
+            color: Theme.subtext;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            RPill { label: "Allow once"; clicked => { RightsAdapter.ask-allow-once(RightsAdapter.ask-id); } }
+            RPill { label: "Allow always"; clicked => { RightsAdapter.ask-allow-always(RightsAdapter.ask-id); } }
+            RPill { label: "Deny"; clicked => { RightsAdapter.ask-deny(RightsAdapter.ask-id); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
+// One capability row: name, description, effective decision, then the two pickers.
+component RightsRowView inherits Rectangle {
+    in property <RightsCapRow> entry;
+    in property <string> module;
+    in property <bool> has-workspace;
+    border-radius: 8px;
+    background: Theme.bg;
+    border-width: 1px;
+    border-color: root.entry.escape-hatch ? Theme.warn.with-alpha(0.5) : Theme.border;
+    accessible-role: groupbox;
+    accessible-label: "Capability " + root.entry.cap;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.entry.cap;
+                color: Theme.text;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            if root.entry.escape-hatch : Text {
+                text: "escape hatch";
+                color: Theme.warn;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+            if !root.entry.accepted : Text {
+                text: "declined at install";
+                color: Theme.faint;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: "effective: " + root.entry.effective;
+                accessible-role: text;
+                accessible-label: root.entry.cap + " effective " + root.entry.effective;
+                color: root.entry.effective == "allow" ? Theme.ok : (root.entry.effective == "deny" ? Theme.danger : Theme.warn);
+                font-size: 11px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: root.entry.description;
+            color: Theme.subtext;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+        // ---- user column: never | always | workspace | ask ----
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: "User"; color: Theme.faint; font-size: 11px; width: 72px; vertical-alignment: center; }
+            RPill { label: "never";     name: root.entry.cap + " user never";     active: root.entry.user == 0; enabled: root.entry.accepted; clicked => { RightsAdapter.set-user(root.module, root.entry.cap, 0); } }
+            RPill { label: "always";    name: root.entry.cap + " user always";    active: root.entry.user == 1; enabled: root.entry.accepted; clicked => { RightsAdapter.set-user(root.module, root.entry.cap, 1); } }
+            RPill { label: "workspace"; name: root.entry.cap + " user workspace"; active: root.entry.user == 2; enabled: root.entry.accepted; clicked => { RightsAdapter.set-user(root.module, root.entry.cap, 2); } }
+            RPill { label: "ask";       name: root.entry.cap + " user ask";       active: root.entry.user == 3; enabled: root.entry.accepted; clicked => { RightsAdapter.set-user(root.module, root.entry.cap, 3); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        // ---- workspace column: unset | never | always | ask (a workspace cannot say
+        // "workspace"; `resolve` treats that as unset) ----
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: "Workspace"; color: Theme.faint; font-size: 11px; width: 72px; vertical-alignment: center; }
+            RPill { label: "unset";  name: root.entry.cap + " workspace unset";  active: root.entry.workspace == -1; enabled: root.entry.accepted && root.has-workspace; clicked => { RightsAdapter.set-workspace(root.module, root.entry.cap, -1); } }
+            RPill { label: "never";  name: root.entry.cap + " workspace never";  active: root.entry.workspace == 0;  enabled: root.entry.accepted && root.has-workspace; clicked => { RightsAdapter.set-workspace(root.module, root.entry.cap, 0); } }
+            RPill { label: "always"; name: root.entry.cap + " workspace always"; active: root.entry.workspace == 1;  enabled: root.entry.accepted && root.has-workspace; clicked => { RightsAdapter.set-workspace(root.module, root.entry.cap, 1); } }
+            RPill { label: "ask";    name: root.entry.cap + " workspace ask";    active: root.entry.workspace == 3;  enabled: root.entry.accepted && root.has-workspace; clicked => { RightsAdapter.set-workspace(root.module, root.entry.cap, 3); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
+// The page itself: module list on the left, the selected module's rights on the right.
+// Sized by its host (the Preferences card's centre column).
+export component PrefsRightsPage inherits Rectangle {
+    background: Theme.mantle;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: "Modules";
+    TouchArea {} // the page is opaque: nothing beneath it should get the click
+    HorizontalLayout {
+        // ---- module list ----
+        Rectangle {
+            width: 190px;
+            background: Theme.bg;
+            Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }
+            VerticalLayout {
+                padding: 12px;
+                spacing: 2px;
+                alignment: start;
+                Text {
+                    text: "Modules";
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    height: 30px;
+                    vertical-alignment: center;
+                }
+                if RightsAdapter.modules.length == 0 : Text {
+                    text: "No modules installed";
+                    color: Theme.faint;
+                    font-size: 11px;
+                }
+                for m[i] in RightsAdapter.modules : Rectangle {
+                    height: 40px;
+                    border-radius: 6px;
+                    background: i == RightsAdapter.selected ? Theme.surface2 : (mta.has-hover ? Theme.surface : transparent);
+                    accessible-role: list-item;
+                    accessible-label: "Module " + m.name;
+                    accessible-checked: i == RightsAdapter.selected;
+                    accessible-action-default => { RightsAdapter.select-module(i); }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            horizontal-stretch: 1;
+                            Text { text: m.name; color: Theme.text; font-size: 12px; overflow: elide; }
+                            Text { text: m.id + " · " + m.version; color: Theme.faint; font-size: 10px; overflow: elide; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                height: 18px;
+                                border-radius: 9px;
+                                background: (m.level >= 4 ? Theme.warn : (m.level == 3 ? Theme.ok : (m.level == 2 ? Theme.accent : Theme.faint))).with-alpha(0.2);
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    Text {
+                                        text: m.held ? m.badge + " · update" : m.badge;
+                                        color: m.level >= 4 ? Theme.warn : (m.level == 3 ? Theme.ok : (m.level == 2 ? Theme.accent : Theme.subtext));
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    mta := TouchArea { clicked => { RightsAdapter.select-module(i); } }
+                }
+            }
+        }
+        // ---- the selected module ----
+        Rectangle {
+            horizontal-stretch: 1;
+            clip: true;
+            Flickable {
+                width: 100%;
+                height: 100%;
+                viewport-width: self.width;
+                viewport-height: body.preferred-height;
+                body := VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    alignment: start;
+
+                    if RightsAdapter.ask-present : RightsAskToast { }
+
+                    if RightsAdapter.selected < 0 : Text {
+                        text: "Select a module to review what it may do.";
+                        color: Theme.subtext;
+                        font-size: 12px;
+                    }
+
+                    if RightsAdapter.selected >= 0 : VerticalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: RightsAdapter.modules[RightsAdapter.selected].name + " " + RightsAdapter.modules[RightsAdapter.selected].version;
+                            color: Theme.text;
+                            font-size: 14px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: RightsAdapter.workspace == "" ? "No workspace is open: the workspace column is read-only." : "Workspace column: " + RightsAdapter.workspace;
+                            color: Theme.faint;
+                            font-size: 11px;
+                        }
+
+                        // ---- held update: the capability diff, Accept / Reject ----
+                        if RightsAdapter.held-present : Rectangle {
+                            border-radius: 8px;
+                            background: Theme.warn.with-alpha(0.08);
+                            border-width: 1px;
+                            border-color: Theme.warn.with-alpha(0.6);
+                            accessible-role: groupbox;
+                            accessible-label: "Held update";
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 6px;
+                                Text {
+                                    text: "Update " + RightsAdapter.held-from + " → " + RightsAdapter.held-to + " changes what this module may do";
+                                    color: Theme.text;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    wrap: word-wrap;
+                                }
+                                if RightsAdapter.held-added != "" : Text {
+                                    text: "Asks for: " + RightsAdapter.held-added;
+                                    accessible-role: text;
+                                    accessible-label: "Held update adds " + RightsAdapter.held-added;
+                                    color: Theme.warn;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                if RightsAdapter.held-removed != "" : Text {
+                                    text: "No longer needs: " + RightsAdapter.held-removed;
+                                    accessible-role: text;
+                                    accessible-label: "Held update removes " + RightsAdapter.held-removed;
+                                    color: Theme.subtext;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: "Accepting grants only what is listed here; every capability you declined stays declined.";
+                                    color: Theme.faint;
+                                    font-size: 10px;
+                                    wrap: word-wrap;
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    RPill { label: "Accept update"; active: true; clicked => { RightsAdapter.held-accept(RightsAdapter.selected-id); } }
+                                    RPill { label: "Reject update"; clicked => { RightsAdapter.held-reject(RightsAdapter.selected-id); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+
+                        // ---- permission profile ----
+                        Text { text: "Permission profile"; color: Theme.faint; font-size: 11px; }
+                        Text {
+                            text: "A profile pre-selects the rows below; any row you change afterwards keeps your choice.";
+                            color: Theme.faint;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            RPill { label: "No profile"; name: "Profile none"; active: RightsAdapter.profile < 0; clicked => { RightsAdapter.select-profile(RightsAdapter.selected-id, ""); } }
+                            for p[i] in RightsAdapter.profiles : RPill { label: p; name: "Profile " + p; active: RightsAdapter.profile == i; clicked => { RightsAdapter.select-profile(RightsAdapter.selected-id, p); } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+
+                        // ---- one row per declared capability ----
+                        Text { text: "Capabilities"; color: Theme.faint; font-size: 11px; }
+                        for r in RightsAdapter.rows : RightsRowView {
+                            entry: r;
+                            module: RightsAdapter.selected-id;
+                            has-workspace: RightsAdapter.workspace != "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

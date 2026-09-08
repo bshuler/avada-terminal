@@ -24,6 +24,7 @@ import { AskBrowserDialog } from "askbrowser.slint";
 import { ConfirmCloseDialog } from "confirmclose.slint";
 import { NewGoalDialog } from "newgoal.slint";
 import { TipArea } from "tooltip.slint";
+import { PrefsRightsPage, RightsAdapter } from "prefs_rights.slint"; // track H2
 
 // A drawn checkmark (vector, so it renders regardless of the UI font's glyph coverage),
 // used to mark the active option in the pickers. Same Path-with-commands pattern the window
@@ -1749,6 +1750,16 @@ export component OverlayLayer inherits Rectangle {
                     }
                 }
             }
+        }
+
+        // ---- track H2: the Modules rights page. Drawn over the centre column (the rail
+        // and the Done footer stay); `RightsAdapter.open` is the deep link from the
+        // held-update / ask toasts, `sel == 7` the rail entry.
+        if prefs.sel == 7 || RightsAdapter.open : PrefsRightsPage {
+            x: 168px;
+            y: 0;
+            width: parent.width - 168px;
+            height: parent.height - 56px;
         }
 
         // ---- unsaved appearance changes prompt (Esc / scrim click with edits) ----

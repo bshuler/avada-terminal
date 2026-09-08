@@ -773,9 +773,66 @@ export global ModulePlaceholderAdapter {
 
 // ---- track H2: the Preferences rights page: one row per capability per module,
 // `never|always|workspace|ask`, profiles, and the held-update diff.
+// One installed module in the page's left list. `badge` is the worst effective right
+// across its rows (see `prefs::rights::Badge`): `level` orders it for the colour,
+// `badge` is the word shown.
+export struct RightsModuleRow {
+    id: string,        // "owner/repo"
+    name: string,      // manifest display name
+    version: string,
+    badge: string,
+    level: int,        // 0 none · 1 denied · 2 asks · 3 allowed · 4 escape hatch allowed
+    held: bool,        // an update is parked awaiting the capability diff
+}
+
+// One capability row of the selected module. `user` and `workspace` are indices into
+// the picker order `never|always|workspace|ask` (workspace: -1 = unset), so the page
+// never carries the enum names and Rust owns the mapping (`prefs::rights::value_index`).
+export struct RightsCapRow {
+    cap: string,          // serde name, e.g. "fs.read"
+    description: string,  // Capability::describe
+    accepted: bool,       // in the install record; a declined cap is denied whatever the pickers say
+    escape-hatch: bool,   // one of the caps the contract marks as an escape hatch
+    user: int,
+    workspace: int,
+    effective: string,    // "allow" | "deny" | "ask"
+}
+
 export global RightsAdapter {
-    // filled in by track H2
-    in property <bool> present: false;
+    // ---- projection (Rust → page), all filled by `prefs::rights::fill` ----
+    // Force the page to show whatever the rail has selected: a deep link from the
+    // held-update/ask toasts and the way the headless harness reaches it. Rust clears
+    // it when the Preferences overlay closes.
+    in-out property <bool> open: false;
+    in property <[RightsModuleRow]> modules: [];
+    in property <int> selected: -1;          // index into `modules`
+    in property <string> selected-id: "";    // its "owner/repo" (what every callback carries back)
+    in property <[RightsCapRow]> rows: [];
+    in property <[string]> profiles: [];     // the manifest's named profiles
+    in property <int> profile: -1;           // selected profile index, -1 = none
+    in property <string> workspace: "";      // label of the workspace whose column is shown ("" = none open)
+    // held update for the selected module
+    in property <bool> held-present: false;
+    in property <string> held-from: "";
+    in property <string> held-to: "";
+    in property <string> held-added: "";     // comma-separated cap names, "" = none
+    in property <string> held-removed: "";
+    // the ask toast: the front of the ask queue
+    in property <bool> ask-present: false;
+    in property <int> ask-id: 0;
+    in property <string> ask-module: "";
+    in property <string> ask-cap: "";
+    in property <string> ask-text: "";
+    // ---- callbacks (page → Rust), each one `prefs::rights::RightsCommand` ----
+    callback select-module(int /* index */);
+    callback set-user(string /* module id */, string /* cap */, int /* value index */);
+    callback set-workspace(string /* module id */, string /* cap */, int /* value index, -1 = unset */);
+    callback select-profile(string /* module id */, string /* profile name, "" = none */);
+    callback held-accept(string /* module id */);
+    callback held-reject(string /* module id */);
+    callback ask-allow-once(int /* ask id */);
+    callback ask-allow-always(int /* ask id */);
+    callback ask-deny(int /* ask id */);
 }
 
 // ---- track H4: the left-panel rail: a list of string-id entries with a path-string
