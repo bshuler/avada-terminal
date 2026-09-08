@@ -12,6 +12,8 @@
 import { Theme } from "theme.slint";
 import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
+// ---- track V3: the image pane's row, fit rectangle and adapter.
+import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
 import { TopBar } from "topbar.slint";
 import { PaneView } from "paneview.slint";
 import { OverlayLayer } from "overlays.slint";
@@ -32,6 +34,9 @@ export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem,
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
+// ---- track V3: re-exported so `imagepane::attach` can reach the adapter and the
+// harness can call `invoke_fit`; the UI lives in imagepane.slint.
+export { ImagePaneItem, ImageFit, ImagePaneAdapter }
 
 export component AppWindow inherits Window {
     title: "avada";

@@ -192,6 +192,8 @@ impl Ui {
     #[tracing::instrument(level = "debug", ret, skip(self, app))]
     pub fn attach(&self, app: &AppWindow) {
         app.set_panes(ModelRc::from(self.panes.clone()));
+        // Track V3: the image pane's adapter (row model, checker tile, fit callback).
+        crate::imagepane::attach(app);
         app.set_tabs(ModelRc::from(self.tabs.clone()));
         app.set_dividers(ModelRc::from(self.dividers.clone()));
         app.set_layouts(ModelRc::from(self.layouts.clone()));
@@ -407,17 +409,26 @@ fn pane_item(
     // check this replaced (`kind >= 2 && kind <= 4` in the .slint) already had Browser
     // on the wrong side of it, and a fourth view kind would have joined it there.
     let is_view = kind.is_view();
-    let (view_rows, view_title): (ModelRc<PaneViewRow>, SharedString) = if is_view {
-        (
-            crate::viewpane::model_for(&ps.uid, kind, ps.cwd.as_deref(), palette),
-            crate::viewpane::view_title(kind, ps.cwd.as_deref()).into(),
-        )
-    } else {
-        (
-            ModelRc::from(Rc::new(VecModel::from(Vec::<PaneViewRow>::new()))),
-            SharedString::new(),
-        )
-    };
+    let (view_rows, view_title): (ModelRc<PaneViewRow>, SharedString) =
+        if matches!(kind, PaneKind::Image) {
+            // Track V3: the picture goes through `imagepane`'s own per-uid model (a texture,
+            // not rows), so the `ViewPane` this pane still instantiates gets nothing to list.
+            crate::imagepane::project(&ps.uid, ps.cwd.as_deref());
+            (
+                ModelRc::from(Rc::new(VecModel::from(Vec::<PaneViewRow>::new()))),
+                crate::viewpane::view_title(kind, ps.cwd.as_deref()).into(),
+            )
+        } else if is_view {
+            (
+                crate::viewpane::model_for(&ps.uid, kind, ps.cwd.as_deref(), palette),
+                crate::viewpane::view_title(kind, ps.cwd.as_deref()).into(),
+            )
+        } else {
+            (
+                ModelRc::from(Rc::new(VecModel::from(Vec::<PaneViewRow>::new()))),
+                SharedString::new(),
+            )
+        };
     // Only meaningful for a view pane; -1/-1 everywhere else says "nothing selected".
     let (view_sel_lo, view_sel_hi) = match is_view
         .then(|| crate::viewpane::selected_range(&ps.uid))
@@ -2404,5 +2415,69 @@ mod pty_resize_tests {
         });
         assert_eq!(sent, 0);
         assert_eq!(st.active_tab().panes[0].pty, (47, 18));
+    }
+}
+
+#[cfg(test)]
+mod image_arm_tests {
+    //! Track V3: the `PaneKind::Image` arm of `pane_item`. A picture is not a row list,
+    //! so the arm hands the `ViewPane` nothing and projects the texture through
+    //! `imagepane` instead — fall through to the generic view arm and the pane would
+    //! list a "not available" NOTICE and never decode the file.
+    use super::*;
+    use crate::imagepane::testpng::{encode, TempFile};
+    use crate::state::DetachedPane;
+    use avada_core::tools::PaneKind;
+
+    fn fresh() -> State {
+        State::new(crate::theme::load_font(1.0))
+    }
+
+    fn mgr() -> SessionManager {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionManager::new(tx)
+    }
+
+    fn image_pane(uid: &str, target: &str) -> DetachedPane {
+        DetachedPane {
+            uid: uid.into(),
+            title: "t".into(),
+            subtitle: None,
+            pinned_accent: None,
+            show_frame: None,
+            show_dot: None,
+            font_px: 14.0,
+            spawn_command: None,
+            spawn_args: None,
+            spawn_shell: None,
+            kind: PaneKind::Image,
+            tool_session: None,
+            cwd: Some(target.into()),
+        }
+    }
+
+    #[test]
+    fn an_image_pane_projects_a_texture_and_no_rows() {
+        let f = TempFile::write("cat.png", &encode(6, 4));
+        let mut st = fresh();
+        st.adopt_pane(&mgr(), image_pane("img-arm", f.path()));
+        let ps = &st.active_tab().panes[0];
+        let item = pane_item(ps, true, false, false, false, 14.0, &PaneKind::Image, 0, 0);
+        assert!(item.is_view, "an image pane is a Family B view");
+        assert_eq!(item.kind, PaneKind::Image.ui_kind());
+        assert_eq!(
+            item.view_rows.row_count(),
+            0,
+            "the row list must stay empty: the picture is not a row"
+        );
+        assert!(
+            item.view_title.ends_with("/cat.png"),
+            "the crumb is the view title: {}",
+            item.view_title
+        );
+        let row = crate::imagepane::row("img-arm").expect("the arm decoded the file");
+        assert!(row.ok, "{}", row.error);
+        assert_eq!((row.w, row.h), (6, 4));
+        assert!(crate::imagepane::forget("img-arm"));
     }
 }

@@ -1,0 +1,143 @@
+// The `view:image` pane body (docs/viewer-panes-plan.md, track V3): one picture on a
+// checkerboard, fitted to the stage but never upscaled past 1:1, with a caption line.
+//
+// Nothing is decided here. `src/imagepane.rs` decodes the file, computes the geometry
+// (`ImagePaneAdapter.fit`) and writes the caption; this file draws a texture at the
+// rectangle it is told and shows two strings. The pane is a sibling of `ViewPane`
+// rather than a row role because a picture is one element with its own geometry, not
+// a list — the `PaneViewRow` projection has nowhere to put a texture.
+
+import { Theme } from "theme.slint";
+import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
+
+export component ImagePane inherits Rectangle {
+    // The pane's session uid: which row of `ImagePaneAdapter.images` is ours.
+    in property <string> uid;
+    // The breadcrumb, the same `view-title` every view pane shows.
+    in property <string> title;
+    in property <color> accent;
+    // The pane's chord zoom, in the terminal's units (`PaneItem::font-px`); read the
+    // way `ViewPane` reads it, so Cmd+= means one thing whatever pane has focus.
+    in property <length> font-px: 14px;
+    property <float> zoom: root.font-px < 1px ? 1.0 : root.font-px / 14px;
+
+    background: Theme.bg;
+
+    // --- breadcrumb ---
+    crumb := Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 20px;
+        background: Theme.mantle;
+        Text {
+            x: 8px;
+            width: parent.width - 16px;
+            height: 100%;
+            vertical-alignment: center;
+            text: root.title;
+            color: Theme.subtext;
+            font-size: 10px;
+            overflow: elide;
+        }
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            width: 100%;
+            background: Theme.border;
+        }
+    }
+
+    // --- the stage: checkerboard, then the picture (or the notice) ---
+    stage := Rectangle {
+        x: 0;
+        y: crumb.height;
+        width: 100%;
+        height: max(0px, root.height - crumb.height - foot.height);
+        clip: true;
+        // The transparency backdrop. A repeat-tiled alpha mask in a theme tone, so a
+        // PNG's transparent corners read as transparent rather than as "bg".
+        checker := Image {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            source: ImagePaneAdapter.checker;
+            colorize: Theme.surface2;
+            horizontal-tiling: repeat;
+            vertical-tiling: repeat;
+            accessible-role: none;
+        }
+        for img in ImagePaneAdapter.images : Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            if img.uid == root.uid && img.ok : Image {
+                // Rust decides the rectangle: scale-down-to-fit, never past 1:1,
+                // centred, then the chord zoom. A zoomed-in picture may exceed the
+                // stage; `clip` above keeps it inside the pane.
+                property <ImageFit> fit: ImagePaneAdapter.fit(
+                    img.w, img.h, stage.width / 1px, stage.height / 1px, root.zoom);
+                x: fit.x * 1px;
+                y: fit.y * 1px;
+                width: fit.w * 1px;
+                height: fit.h * 1px;
+                source: img.image;
+                image-fit: fill;
+                image-rendering: smooth;
+                accessible-label: img.label;
+            }
+            // The degraded path: the checkerboard stays, the notice says why.
+            if img.uid == root.uid && !img.ok : Text {
+                x: 12px;
+                width: parent.width - 24px;
+                height: 100%;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                text: img.error;
+                color: Theme.faint;
+                font-italic: true;
+                font-size: 11px * root.zoom;
+                wrap: word-wrap;
+                // Named so a screen reader (and the harness) can find the notice
+                // that stands in for the picture.
+                accessible-role: text;
+                accessible-label: img.error;
+            }
+        }
+    }
+
+    // --- caption: name · W×H · size · format ---
+    foot := Rectangle {
+        x: 0;
+        y: root.height - self.height;
+        width: 100%;
+        height: 22px;
+        background: Theme.mantle;
+        Rectangle {
+            y: 0;
+            height: 1px;
+            width: 100%;
+            background: Theme.border;
+        }
+        for img in ImagePaneAdapter.images : Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            if img.uid == root.uid && img.ok : Text {
+                x: 8px;
+                width: parent.width - 16px;
+                height: 100%;
+                vertical-alignment: center;
+                text: img.caption;
+                color: Theme.subtext;
+                font-size: 10px;
+                overflow: elide;
+                accessible-role: text;
+                accessible-label: img.caption;
+            }
+        }
+    }
+}

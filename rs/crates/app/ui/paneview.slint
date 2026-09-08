@@ -8,6 +8,7 @@ import { TerminalPane, KeyMsg, ToolIcon } from "@widgets";
 import { TipArea } from "tooltip.slint";
 import { ViewPane } from "viewpanes.slint";
 import { ModulePlaceholder } from "placeholder.slint";
+import { ImagePane } from "imagepane.slint";
 
 // A draggable resize seam. Reports the cursor's offset from the seam centre each
 // move; the controller converts that to a size-fraction delta and re-tiles, which
@@ -747,6 +748,20 @@ export component PaneView inherits Rectangle {
                             root.focus-pane(idx);
                             root.pane-view-link(idx, l);
                         }
+                    }
+                    // Track V3: `view:image` (kind 9) is a sibling branch, not a row role —
+                    // a picture is one texture with its own geometry, not a list. Drawn
+                    // after (so over) the empty `ViewPane` the arm above still creates for
+                    // it; `paneview::pane_item` hands that one no rows.
+                    if pane.is-view && pane.kind == 9 : ImagePane {
+                        x: 4px;
+                        y: 2px;
+                        width: parent.width - 4px;
+                        height: parent.height - 4px;
+                        uid: pane.uid;
+                        title: pane.view-title;
+                        accent: pane.accent;
+                        font-px: pane.font-px;
                     }
                     }
                 }

@@ -887,7 +887,36 @@ export global TableAdapter {
 }
 
 // ---- track V3: the image viewer pane: fit-never-upscale, caption, checkerboard.
+// One `view:image` pane's decoded picture, keyed by the pane's session uid. Rust
+// (`imagepane::project`) decodes a file ONCE per (path, mtime, length) into `image`;
+// `ui/imagepane.slint` filters `ImagePaneAdapter.images` by `uid`, so a `PaneItem`
+// carries no texture and the pane model stays cheap to re-push every tick.
+export struct ImagePaneItem {
+    uid: string,
+    ok: bool,          // decoded; false = `error` is the caption and no image is drawn
+    image: image,
+    w: int,            // natural size in pixels, what `fit` scales from
+    h: int,
+    label: string,     // the image element's accessible name: "cat.png, 640×480"
+    caption: string,   // "cat.png · 640×480 · 12.3 KB · PNG"
+    error: string,     // "Cannot show cat.png: <why>" when !ok
+}
+
+// Where `imagepane::fit` puts the picture inside the stage, in logical px.
+export struct ImageFit {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+}
+
 export global ImagePaneAdapter {
-    // filled in by track V3
-    in property <bool> present: false;
+    in property <[ImagePaneItem]> images: [];
+    // A 16px two-quadrant alpha mask; the pane tiles it under `colorize` so the
+    // checkerboard's tones come from `theme.slint`, not from a baked bitmap.
+    in property <image> checker;
+    // (image w, image h, stage w, stage h, zoom) → geometry. Decided in Rust so the
+    // "never upscale past 1:1" clamp is a unit-tested line, not a `min()` in a binding;
+    // unbound it returns all zeros and the image is drawn 0×0.
+    pure callback fit(float, float, float, float, float) -> ImageFit;
 }

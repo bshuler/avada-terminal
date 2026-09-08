@@ -1511,6 +1511,9 @@ pub fn kind_for_file(path: &Path) -> PaneKind {
         .unwrap_or_default();
     match ext.as_str() {
         "md" | "markdown" | "mdown" | "mkd" => PaneKind::Markdown,
+        // Track V3: a bitmap this build can decode opens in the image pane. Before this
+        // arm a PNG fell to the plain viewer, whose NUL heuristic then refused it.
+        e if crate::imagepane::is_image_ext(e) => PaneKind::Image,
         // Anything the highlighter has a grammar for opens coloured; everything else
         // keeps the plain viewer, which is still the honest answer for a `.log`.
         e if crate::highlight::is_source(e) => PaneKind::Code,
