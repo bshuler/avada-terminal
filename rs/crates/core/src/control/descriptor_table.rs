@@ -2,9 +2,10 @@
 //! the control plane serves, so `avada schema` can print the API and the CLI can build
 //! its subcommand tree from it instead of a hand-written parser per route.
 //!
-//! Wave 0 keeps this a data table with a registry type; nothing mounts it yet. The test
-//! at the bottom reads `routes.rs` and refuses to pass when a route exists in one place
-//! and not the other, so the table cannot rot while it waits to be wired.
+//! Wave 1 (track H3) mounts it: `routes::router` is built *from* this table, so a route
+//! that exists in one place and not the other is a startup panic naming the route, and
+//! `GET /schema` (`control::schema`) serves the same table back. The capability each
+//! route needs lives in [`core_capability`] with the rationale per group.
 
 use std::collections::BTreeMap;
 
@@ -57,16 +58,11 @@ fn public(mut r: RouteDescriptor) -> RouteDescriptor {
     r
 }
 
-fn cap(mut r: RouteDescriptor, c: Capability) -> RouteDescriptor {
-    r.capability = Some(c);
-    r
-}
-
 /// Every core route, in the order `routes.rs` mounts them.
 pub fn core_routes() -> Vec<RouteDescriptor> {
     use ParamLocation::{Body, Query};
     use Verb::{Delete, Get, Patch, Post};
-    vec![
+    let mut routes = vec![
         public(route(
             "health",
             "/health",
@@ -147,56 +143,50 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             ),
             vec![path_id("id", "Project id")],
         ),
-        cap(
-            with(
-                route(
-                    "panes.output",
-                    "/panes/{id}/output",
-                    Get,
-                    "Read a pane's screen or raw stream",
+        with(
+            route(
+                "panes.output",
+                "/panes/{id}/output",
+                Get,
+                "Read a pane's screen or raw stream",
+            ),
+            vec![
+                path_id("id", "Pane id"),
+                p("mode", Query, "string", false, "screen | raw"),
+                p("tail", Query, "integer", false, "Trailing lines"),
+                p("strip", Query, "boolean", false, "Strip ANSI"),
+                p("since", Query, "string", false, "Cursor from the last read"),
+                p(
+                    "waitForIdle",
+                    Query,
+                    "boolean",
+                    false,
+                    "Block until output settles",
                 ),
-                vec![
-                    path_id("id", "Pane id"),
-                    p("mode", Query, "string", false, "screen | raw"),
-                    p("tail", Query, "integer", false, "Trailing lines"),
-                    p("strip", Query, "boolean", false, "Strip ANSI"),
-                    p("since", Query, "string", false, "Cursor from the last read"),
-                    p(
-                        "waitForIdle",
-                        Query,
-                        "boolean",
-                        false,
-                        "Block until output settles",
-                    ),
-                    p(
-                        "settleMs",
-                        Query,
-                        "integer",
-                        false,
-                        "Quiet period that counts as idle",
-                    ),
-                    p(
-                        "timeoutMs",
-                        Query,
-                        "integer",
-                        false,
-                        "Give up waiting after this",
-                    ),
-                ],
-            ),
-            Capability::PanesOutput,
+                p(
+                    "settleMs",
+                    Query,
+                    "integer",
+                    false,
+                    "Quiet period that counts as idle",
+                ),
+                p(
+                    "timeoutMs",
+                    Query,
+                    "integer",
+                    false,
+                    "Give up waiting after this",
+                ),
+            ],
         ),
-        cap(
-            with(
-                route("panes.input", "/panes/{id}/input", Post, "Type into a pane"),
-                vec![
-                    path_id("id", "Pane id"),
-                    p("data", Body, "string", false, "Literal bytes"),
-                    p("keys", Body, "array", false, "Named keys"),
-                    p("submit", Body, "boolean", false, "Press Enter after"),
-                ],
-            ),
-            Capability::PanesInput,
+        with(
+            route("panes.input", "/panes/{id}/input", Post, "Type into a pane"),
+            vec![
+                path_id("id", "Pane id"),
+                p("data", Body, "string", false, "Literal bytes"),
+                p("keys", Body, "array", false, "Named keys"),
+                p("submit", Body, "boolean", false, "Press Enter after"),
+            ],
         ),
         with(
             route(
@@ -298,23 +288,81 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             ),
             vec![path_id("id", "Task id")],
         ),
-        cap(
-            route("settings.get", "/settings", Get, "Read settings"),
-            Capability::SettingsRead,
-        ),
-        cap(
-            route("settings.patch", "/settings", Patch, "Change settings"),
-            Capability::SettingsWrite,
-        ),
-        master(cap(
-            with(
-                route("fs.read", "/fs/read", Get, "Read a file"),
-                vec![p("path", Query, "string", true, "Absolute path")],
-            ),
-            Capability::FsReadAny,
+        route("settings.get", "/settings", Get, "Read settings"),
+        route("settings.patch", "/settings", Patch, "Change settings"),
+        master(with(
+            route("fs.read", "/fs/read", Get, "Read a file"),
+            vec![p("path", Query, "string", true, "Absolute path")],
         )),
         route("events", "/events", Get, "WebSocket event stream"),
-    ]
+        route(
+            "schema",
+            "/schema",
+            Get,
+            "This table: every route, RPC and module the host serves",
+        ),
+    ];
+    for r in &mut routes {
+        r.capability = core_capability(&r.method);
+    }
+    routes
+}
+
+/// The capability a core route needs, by dotted method name. This is the single place
+/// the assignment lives (the table applies it), so the schema, the router's gate and the
+/// tests cannot disagree.
+///
+/// The rule (plan §5): a route gets the contract capability that covers what it does; a
+/// route only the local UI/CLI ever calls gets the *closest* one; `None` is reserved for
+/// routes that are unrestricted for every authenticated caller. Legacy tokens (master,
+/// device, scoped) hold every capability, so nothing here changes what the desktop app,
+/// the CLI or the mobile client can do — the assignment only bites for a caller whose
+/// token carries an explicit capability set (a module).
+pub fn core_capability(method: &str) -> Option<Capability> {
+    use Capability::*;
+    Some(match method {
+        // Unrestricted: liveness is unauthenticated by design, and the schema is the
+        // read-only self-description every token holder needs to drive the CLI at all —
+        // it names routes, never user data.
+        "health" | "schema" => return None,
+        // The device registry is master-only (`Scope::Master`); the scope check is the
+        // restriction, and a master token is never a capability-limited caller.
+        "devices.list" | "devices.mint" | "devices.revoke" => return None,
+        // Reading the windows/tabs/panes tree and the loop ledger is workspace metadata.
+        "state" | "loops" => WorkspaceRead,
+        // Minting a token is control-plane administration. No contract capability names
+        // it, and it must not be open to a capability-limited caller (a minted token
+        // would otherwise be an unrestricted legacy token — an escalation), so it takes
+        // the one capability that touches the control plane at all.
+        "tokens.mint" => ControlRoute,
+        // `/command` multiplexes the workspace verbs (open, close, move, rename, focus);
+        // the route-level floor is workspace.write and `dispatch::verb_capability` adds
+        // the verb's own requirement (panes.spawn, panes.output, ...) on top.
+        "command" => WorkspaceWrite,
+        // The project rail is workspace metadata.
+        "projects.list" => WorkspaceRead,
+        "projects.add" | "projects.patch" | "projects.delete" => WorkspaceWrite,
+        // Reading what a pane shows — its screen, its raw stream, or its inbox.
+        "panes.output" | "panes.messages.list" => PanesOutput,
+        // Putting bytes or messages into a pane, and the advisory lock that serializes
+        // who may do so.
+        "panes.input" | "panes.messages.post" | "panes.lock" | "panes.unlock" => PanesInput,
+        // The work queue is agent coordination inside the workspace: reads are metadata,
+        // claiming/finishing/purging changes it. Closest capability; there is no `work.*`.
+        "queues.list" | "queues.tasks.list" | "tasks.get" => WorkspaceRead,
+        "queues.tasks.enqueue"
+        | "queues.claim"
+        | "queues.purge"
+        | "tasks.ack"
+        | "tasks.nack"
+        | "tasks.extend" => WorkspaceWrite,
+        "settings.get" => SettingsRead,
+        "settings.patch" => SettingsWrite,
+        // Master-only *and* reads any path the user can.
+        "fs.read" => FsReadAny,
+        "events" => EventsSubscribe,
+        other => panic!("core route {other:?} has no capability assignment"),
+    })
 }
 
 /// The live table: core routes plus whatever modules have registered.
@@ -396,52 +444,69 @@ mod tests {
         }
     }
 
-    /// Parse `.route("<path>", <verbs>)` out of routes.rs and compare against the table.
-    fn router_source_routes() -> BTreeSet<(Verb, String)> {
-        let src = include_str!("routes.rs");
-        let body = src
-            .split("pub fn router(")
-            .nth(1)
-            .expect("router fn")
-            .split(".method_not_allowed_fallback")
-            .next()
-            .unwrap();
-        let mut out = BTreeSet::new();
-        for chunk in body.split(".route(").skip(1) {
-            let path = chunk.split('"').nth(1).expect("path literal").to_string();
-            let rest = chunk.split('"').nth(2).unwrap_or("");
-            let rest = rest.split(".route(").next().unwrap_or("");
-            for (word, verb) in [
-                ("get(", Verb::Get),
-                ("post(", Verb::Post),
-                ("patch(", Verb::Patch),
-                ("put(", Verb::Put),
-                ("delete(", Verb::Delete),
-            ] {
-                if rest.contains(word) {
-                    out.insert((verb, path.clone()));
-                }
-            }
-        }
-        out
+    /// The router is built from this table (`routes::router`), so the two cannot drift by
+    /// construction; what can drift is a handler with no descriptor or a descriptor with
+    /// no handler. `routes::handlers()` is the method → handler list the router consumes,
+    /// and both directions are checked here by name (the live round trip over a real
+    /// socket is `routes::table::every_described_route_is_mounted`).
+    #[test]
+    fn every_route_has_a_handler_and_every_handler_a_route() {
+        let described: BTreeSet<String> = core_routes().into_iter().map(|r| r.method).collect();
+        let handled: BTreeSet<String> = crate::control::routes::handlers()
+            .into_iter()
+            .map(|(method, _)| method.to_string())
+            .collect();
+        let unhandled: Vec<_> = described.difference(&handled).collect();
+        let undescribed: Vec<_> = handled.difference(&described).collect();
+        assert!(
+            unhandled.is_empty(),
+            "described but no handler: {unhandled:?}"
+        );
+        assert!(
+            undescribed.is_empty(),
+            "handler but undescribed: {undescribed:?}"
+        );
+        assert!(
+            described.len() >= 31,
+            "sanity: {} routes described",
+            described.len()
+        );
     }
 
     #[test]
-    fn table_matches_the_mounted_router_exactly() {
-        let mounted = router_source_routes();
-        let described: BTreeSet<(Verb, String)> = core_routes()
-            .into_iter()
-            .map(|r| (r.verb, r.path))
+    fn capabilities_follow_the_documented_rule() {
+        let table = core_routes();
+        let unrestricted: BTreeSet<_> = table
+            .iter()
+            .filter(|r| r.capability.is_none())
+            .map(|r| r.method.as_str())
             .collect();
-        let missing: Vec<_> = mounted.difference(&described).collect();
-        let extra: Vec<_> = described.difference(&mounted).collect();
-        assert!(missing.is_empty(), "mounted but undescribed: {missing:?}");
-        assert!(extra.is_empty(), "described but not mounted: {extra:?}");
-        assert!(
-            mounted.len() >= 30,
-            "sanity: parsed {} routes",
-            mounted.len()
+        // `None` only where the route is unrestricted for any authenticated caller or
+        // gated by scope instead (the comments on `core_capability` say why for each).
+        assert_eq!(
+            unrestricted,
+            [
+                "health",
+                "schema",
+                "devices.list",
+                "devices.mint",
+                "devices.revoke"
+            ]
+            .into_iter()
+            .collect()
         );
+        let by = |m: &str| core_capability(m);
+        assert_eq!(by("panes.output"), Some(Capability::PanesOutput));
+        assert_eq!(by("panes.input"), Some(Capability::PanesInput));
+        assert_eq!(by("settings.get"), Some(Capability::SettingsRead));
+        assert_eq!(by("settings.patch"), Some(Capability::SettingsWrite));
+        assert_eq!(by("fs.read"), Some(Capability::FsReadAny));
+        assert_eq!(by("events"), Some(Capability::EventsSubscribe));
+        assert_eq!(by("tokens.mint"), Some(Capability::ControlRoute));
+        // Every route the table carries has an entry (an unlisted method panics).
+        for r in &table {
+            let _ = core_capability(&r.method);
+        }
     }
 
     #[test]
@@ -467,7 +532,9 @@ mod tests {
     }
 
     fn module_route(method: &str, path: &str) -> RouteDescriptor {
-        route(method, path, Verb::Get, "x")
+        let mut r = route(method, path, Verb::Get, "x");
+        r.capability = Some(Capability::FsRead);
+        r
     }
 
     #[test]

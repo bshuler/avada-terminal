@@ -18,9 +18,11 @@
 //! reply)") path cannot occur — no command is dispatched to a separate renderer. The string is
 //! preserved in the routes layer for any command a future maintainer deliberately makes async.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
+use avada_module_sdk::caps::Capability;
 use serde_json::{json, Value};
 
 use crate::claude_recovery::{self, ErrorClass};
@@ -38,6 +40,122 @@ const DEFAULT_PANE_COLOR: &str = "#3b82f6";
 const NEW_PANE_SPEC_KEYS: &[&str] = &[
     "command", "args", "cwd", "label", "subtitle", "color", "shell", "env", "meta", "project",
 ];
+
+// ---- capability gate (plan track H3) --------------------------------------------------------
+//
+// Every route in the descriptor table names the capability it needs (or `None`). Before a
+// handler runs, `routes::router` asks the resolver below what the presented token holds and
+// refuses with 403 `{"error":"capability","capability":"<name>"}` when the route's capability
+// is missing. The identity of the caller is still the token store's business (401 stays the
+// handler's byte-exact answer); this layer only answers "what may this token do".
+
+/// Something that knows which capabilities a token carries.
+///
+/// * `Some(set)` — the token is one of yours and holds exactly `set` (possibly empty).
+/// * `None` — you do not know this token; the next source is asked.
+///
+/// The rights service (track H2) implements this for module tokens. The master-token path
+/// is [`LegacyTokens`], which answers "all" for every token the token store accepts, so the
+/// desktop app, the CLI and the mobile client keep their full authority byte-for-byte.
+pub trait CapabilitySource: Send + Sync {
+    fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>>;
+}
+
+/// The master-token path: every legacy token (master, paired device, scoped mint) holds
+/// every capability. Always the last source asked, so a token no installed source claims
+/// keeps the authority it has today.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LegacyTokens;
+
+impl CapabilitySource for LegacyTokens {
+    fn caps_for(&self, _token: &str) -> Option<BTreeSet<Capability>> {
+        Some(Capability::ALL.iter().copied().collect())
+    }
+}
+
+/// The ordered chain of [`CapabilitySource`]s the router consults. Sources installed by an
+/// embedder (the rights service) are asked first; [`LegacyTokens`] is the fallback and is
+/// never removed. Cheap to share: one per `Shared`.
+pub struct CapabilityResolver {
+    sources: RwLock<Vec<Arc<dyn CapabilitySource>>>,
+}
+
+impl Default for CapabilityResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for CapabilityResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.sources.read().map(|s| s.len()).unwrap_or(0);
+        f.debug_struct("CapabilityResolver")
+            .field("sources", &n)
+            .finish()
+    }
+}
+
+impl CapabilityResolver {
+    /// A resolver that knows only the legacy path (everything authenticated holds all).
+    pub fn new() -> Self {
+        CapabilityResolver {
+            sources: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Ask `source` before everything installed so far. The token itself is the only
+    /// thing handed over — never logged here, never stored.
+    pub fn install(&self, source: Arc<dyn CapabilitySource>) {
+        self.sources.write().unwrap().insert(0, source);
+    }
+
+    /// What `token` holds: the first installed source that claims it wins; otherwise the
+    /// legacy answer (all).
+    pub fn caps_for(&self, token: &str) -> BTreeSet<Capability> {
+        let sources = self.sources.read().unwrap();
+        sources
+            .iter()
+            .find_map(|s| s.caps_for(token))
+            .unwrap_or_else(|| LegacyTokens.caps_for(token).unwrap_or_default())
+    }
+
+    /// `Ok` when `token` holds `cap`; `Err(cap)` otherwise, ready for
+    /// [`capability_refusal`].
+    pub fn check(&self, token: &str, cap: Capability) -> Result<(), Capability> {
+        if self.caps_for(token).contains(&cap) {
+            Ok(())
+        } else {
+            Err(cap)
+        }
+    }
+}
+
+/// The 403 body every capability refusal answers with, on every route and RPC alike:
+/// `{"error":"capability","capability":"fs.write"}`.
+pub fn capability_refusal(cap: Capability) -> (u16, Value) {
+    (
+        403,
+        json!({ "error": "capability", "capability": cap.name() }),
+    )
+}
+
+/// The capability a `/command` verb needs on top of the route's own `workspace.write`
+/// floor (see `descriptor_table::core_capability`). `None` for a verb whose floor is
+/// enough; an unknown verb also answers `None` and is refused by `exec` as before.
+pub fn verb_capability(verb: &str) -> Option<Capability> {
+    use Capability::*;
+    Some(match verb {
+        // Opens a pane and runs a program in it.
+        "newPane" | "attach" | "restartPane" | "recoverPane" => PanesSpawn,
+        // Serializes a pane's screen.
+        "readScreen" => PanesOutput,
+        // Dictation types into the pane.
+        "startDictation" | "stopDictation" | "cancelDictation" => PanesInput,
+        // Preferences of the host itself.
+        "restartApp" => SettingsWrite,
+        _ => return None,
+    })
+}
 
 /// The HTTP outcome of a `/command` POST: a status, a JSON body, and whether the structure
 /// changed (so the caller fires the coalesced `state` ping).
@@ -1674,5 +1792,101 @@ mod tests {
         assert!(backup2.is_none());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod capability_gate_tests {
+    use super::*;
+
+    struct Claims {
+        token: &'static str,
+        caps: Option<BTreeSet<Capability>>,
+    }
+
+    impl CapabilitySource for Claims {
+        fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>> {
+            if token == self.token {
+                self.caps.clone()
+            } else {
+                None
+            }
+        }
+    }
+
+    fn set(caps: &[Capability]) -> BTreeSet<Capability> {
+        caps.iter().copied().collect()
+    }
+
+    #[test]
+    fn legacy_path_holds_every_capability() {
+        let r = CapabilityResolver::new();
+        let all: BTreeSet<Capability> = Capability::ALL.iter().copied().collect();
+        assert_eq!(r.caps_for("anything"), all);
+        for cap in Capability::ALL {
+            assert_eq!(r.check("anything", *cap), Ok(()));
+        }
+    }
+
+    #[test]
+    fn an_installed_source_restricts_only_the_tokens_it_claims() {
+        let r = CapabilityResolver::new();
+        r.install(Arc::new(Claims {
+            token: "t-limited",
+            caps: Some(set(&[Capability::FsRead])),
+        }));
+        assert_eq!(r.caps_for("t-limited"), set(&[Capability::FsRead]));
+        assert_eq!(r.check("t-limited", Capability::FsRead), Ok(()));
+        assert_eq!(
+            r.check("t-limited", Capability::FsWrite),
+            Err(Capability::FsWrite)
+        );
+        // A token the source does not claim keeps the legacy answer.
+        assert_eq!(r.check("t-other", Capability::FsWrite), Ok(()));
+        // An empty set is a claim too: the token holds nothing.
+        r.install(Arc::new(Claims {
+            token: "t-none",
+            caps: Some(BTreeSet::new()),
+        }));
+        assert!(r.caps_for("t-none").is_empty());
+        // The newest source is asked first.
+        r.install(Arc::new(Claims {
+            token: "t-limited",
+            caps: Some(set(&[Capability::FsWrite])),
+        }));
+        assert_eq!(r.caps_for("t-limited"), set(&[Capability::FsWrite]));
+        // A source answering `None` defers to the next one.
+        r.install(Arc::new(Claims {
+            token: "t-limited",
+            caps: None,
+        }));
+        assert_eq!(r.caps_for("t-limited"), set(&[Capability::FsWrite]));
+    }
+
+    #[test]
+    fn refusal_is_the_documented_403_body() {
+        let (code, body) = capability_refusal(Capability::FsWrite);
+        assert_eq!(code, 403);
+        assert_eq!(
+            body.to_string(),
+            r#"{"capability":"fs.write","error":"capability"}"#
+        );
+    }
+
+    #[test]
+    fn verb_capabilities_follow_the_contract_table() {
+        assert_eq!(verb_capability("newPane"), Some(Capability::PanesSpawn));
+        assert_eq!(verb_capability("attach"), Some(Capability::PanesSpawn));
+        assert_eq!(verb_capability("readScreen"), Some(Capability::PanesOutput));
+        assert_eq!(
+            verb_capability("startDictation"),
+            Some(Capability::PanesInput)
+        );
+        assert_eq!(
+            verb_capability("restartApp"),
+            Some(Capability::SettingsWrite)
+        );
+        assert_eq!(verb_capability("focusPane"), None);
+        assert_eq!(verb_capability("noSuchVerb"), None);
     }
 }

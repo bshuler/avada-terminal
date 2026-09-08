@@ -15,22 +15,28 @@
 //! Bearer via `Authorization: Bearer` or `?token=` (WS only). Every body shape matches the TS
 //! source (omit-when-unset; ordered structs where field order is observable).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
+use avada_module_sdk::caps::Capability;
+use avada_module_sdk::descriptor::Verb;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
+use axum::handler::Handler;
 use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{on, MethodFilter, MethodRouter};
 use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ansi_strip::strip_ansi;
+use crate::control::descriptor_table;
 use crate::control::dispatch;
+use crate::control::dispatch::{capability_refusal, verb_capability};
 use crate::control::events::ControlEvent;
 use crate::control::input::{keys_to_bytes, submit_newlines, KeysResult, SUBMIT_DELAY_MS};
 use crate::control::nudge;
@@ -48,46 +54,179 @@ use crate::control::work::{
 };
 use crate::persistence::projects;
 
-/// Build the full router with the shared state baked in.
+// ---- the router, built from the descriptor table -------------------------------------------
+//
+// `descriptor_table::core_routes()` is the one list of what this server serves: verb, path,
+// capability, scope. This file only supplies a handler per described route (`handlers()`),
+// and `router` joins the two. A described route without a handler, or a handler without a
+// descriptor, is a startup panic that names the route — so `GET /schema` can never drift
+// from what is actually mounted. The per-route capability check is a layer on the handler
+// alone (not the whole `MethodRouter`), so the 405 fallback stays byte-exact.
+
+/// A handler ready to be mounted: given the verb filter and (when the route names a
+/// capability) the gate, produce the `MethodRouter` for its path.
+pub(crate) type Mount = Box<dyn FnOnce(MethodFilter, Option<Gate>) -> MethodRouter<Arc<Shared>>>;
+
+/// Pair a dotted method name from the descriptor table with its handler.
+fn h<H, T>(method: &'static str, handler: H) -> (&'static str, Mount)
+where
+    H: Handler<T, Arc<Shared>>,
+    T: 'static,
+{
+    (
+        method,
+        Box::new(move |filter, gate| match gate {
+            Some(gate) => on(
+                filter,
+                handler.layer(from_fn_with_state(gate, capability_gate)),
+            ),
+            None => on(filter, handler),
+        }),
+    )
+}
+
+/// Every handler this file serves, keyed by the descriptor table's method name. Adding a
+/// handler here without a descriptor in `descriptor_table::core_routes()` — or the reverse —
+/// panics in [`router`] with the route's name.
+pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
+    vec![
+        h("health", health),
+        h("state", state),
+        h("loops", loops_get),
+        h("tokens.mint", tokens),
+        h("devices.list", devices_list),
+        h("devices.mint", devices_mint),
+        h("devices.revoke", devices_revoke),
+        h("command", command),
+        h("projects.list", projects_list),
+        h("projects.add", projects_add),
+        h("projects.patch", projects_patch),
+        h("projects.delete", projects_delete),
+        h("panes.output", output),
+        h("panes.input", input),
+        h("panes.messages.list", messages_get),
+        h("panes.messages.post", messages_post),
+        h("panes.lock", lock_post),
+        h("panes.unlock", lock_delete),
+        // ---- work queue (worker-pool phase-2/3) ----
+        h("queues.list", queues_list),
+        h("queues.tasks.enqueue", task_enqueue),
+        h("queues.tasks.list", tasks_list),
+        h("queues.claim", task_claim),
+        h("queues.purge", queue_purge),
+        h("tasks.get", task_get),
+        h("tasks.ack", task_ack),
+        h("tasks.nack", task_nack),
+        h("tasks.extend", task_extend),
+        h("settings.get", settings_get),
+        h("settings.patch", settings_patch),
+        h("fs.read", fs_read),
+        h("events", events_ws),
+        h("schema", schema_get),
+    ]
+}
+
+fn method_filter(verb: Verb) -> MethodFilter {
+    match verb {
+        Verb::Get => MethodFilter::GET,
+        Verb::Post => MethodFilter::POST,
+        Verb::Put => MethodFilter::PUT,
+        Verb::Patch => MethodFilter::PATCH,
+        Verb::Delete => MethodFilter::DELETE,
+    }
+}
+
+/// Build the full router with the shared state baked in, one mount per descriptor-table
+/// route. Panics (naming the route) when the table and [`handlers`] disagree.
 #[tracing::instrument(level = "debug", ret, skip(shared))]
 pub fn router(shared: Arc<Shared>) -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .route("/state", get(state))
-        .route("/loops", get(loops_get))
-        .route("/tokens", post(tokens))
-        .route(
-            "/devices",
-            get(devices_list).post(devices_mint).delete(devices_revoke),
-        )
-        .route("/command", post(command))
-        .route("/projects", get(projects_list).post(projects_add))
-        .route(
-            "/projects/{id}",
-            patch(projects_patch).delete(projects_delete),
-        )
-        .route("/panes/{id}/output", get(output))
-        .route("/panes/{id}/input", post(input))
-        .route(
-            "/panes/{id}/messages",
-            get(messages_get).post(messages_post),
-        )
-        .route("/panes/{id}/lock", post(lock_post).delete(lock_delete))
-        // ---- work queue (worker-pool phase-2/3) ----
-        .route("/queues", get(queues_list))
-        .route("/queues/{queue}/tasks", post(task_enqueue).get(tasks_list))
-        .route("/queues/{queue}/claim", post(task_claim))
-        .route("/queues/{queue}/purge", post(queue_purge))
-        .route("/tasks/{id}", get(task_get))
-        .route("/tasks/{id}/ack", post(task_ack))
-        .route("/tasks/{id}/nack", post(task_nack))
-        .route("/tasks/{id}/extend", post(task_extend))
-        .route("/settings", get(settings_get).patch(settings_patch))
-        .route("/fs/read", get(fs_read))
-        .route("/events", get(events_ws))
-        .method_not_allowed_fallback(method_not_allowed)
+    let listed = handlers();
+    let n = listed.len();
+    let mut handlers: BTreeMap<&'static str, Mount> = listed.into_iter().collect();
+    assert_eq!(
+        handlers.len(),
+        n,
+        "routes::handlers() names the same method twice"
+    );
+    // Path → the MethodRouters to merge there, in table order.
+    let mut by_path: Vec<(String, Vec<MethodRouter<Arc<Shared>>>)> = Vec::new();
+    for desc in descriptor_table::core_routes() {
+        let mount = handlers.remove(desc.method.as_str()).unwrap_or_else(|| {
+            panic!(
+                "control route {:?} ({:?} {}) is described in descriptor_table but has no \
+                 handler in routes::handlers()",
+                desc.method, desc.verb, desc.path
+            )
+        });
+        let gate = desc.capability.map(|cap| Gate {
+            shared: Arc::clone(&shared),
+            cap,
+        });
+        let method_router = mount(method_filter(desc.verb), gate);
+        let path = desc.mounted_path();
+        match by_path.iter_mut().find(|(p, _)| *p == path) {
+            Some((_, list)) => list.push(method_router),
+            None => by_path.push((path, vec![method_router])),
+        }
+    }
+    if !handlers.is_empty() {
+        let stray: Vec<&str> = handlers.keys().copied().collect();
+        panic!(
+            "routes::handlers() mounts {stray:?} without a descriptor in \
+             descriptor_table::core_routes()"
+        );
+    }
+    let mut app = Router::new();
+    for (path, routers) in by_path {
+        let merged = routers
+            .into_iter()
+            .reduce(MethodRouter::merge)
+            .expect("at least one method per path");
+        app = app.route(&path, merged);
+    }
+    app.method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .with_state(shared)
+}
+
+// ---- capability gate ----------------------------------------------------------------------
+
+/// What a gated route needs: the resolver lives in `Shared`, the capability comes from the
+/// route's descriptor.
+#[derive(Clone)]
+pub(crate) struct Gate {
+    shared: Arc<Shared>,
+    cap: Capability,
+}
+
+/// Refuse a caller whose token does not hold the route's capability with 403
+/// `{"error":"capability","capability":"<name>"}`. Runs before the handler and only for a
+/// token the token store recognises — an unknown or absent token falls through so the
+/// handler's own 401 stays byte-exact. The token is read from the Bearer header, else from
+/// `?token=` (the WebSocket route's way in); it is never logged.
+async fn capability_gate(State(gate): State<Gate>, req: Request, next: Next) -> Response {
+    let token = bearer_header(req.headers()).or_else(|| {
+        Query::<HashMap<String, String>>::try_from_uri(req.uri())
+            .ok()
+            .and_then(|Query(q)| q.get("token").cloned())
+    });
+    if let Some(token) = token {
+        let known = gate
+            .shared
+            .tokens
+            .lock()
+            .unwrap()
+            .resolve(Some(&token), now_ms())
+            .is_some();
+        if known {
+            if let Err(cap) = gate.shared.caps.check(&token, gate.cap) {
+                tracing::warn!(capability = cap.name(), "request refused: capability");
+                let (code, body) = capability_refusal(cap);
+                return jstatus(code, body);
+            }
+        }
+    }
+    next.run(req).await
 }
 
 // ---- response helpers ---------------------------------------------------------------------
@@ -1621,6 +1760,22 @@ async fn command(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: By
         Err(e) => return e,
     };
     let cmd: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    // The route's own gate checked `workspace.write`; verbs that spend more (spawn a pane,
+    // read a screen, type, restart the host) are checked here, per verb. Master-path tokens
+    // hold everything, so this only ever bites a capability-limited token.
+    if let Some(cap) = cmd
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(verb_capability)
+    {
+        if let Some(token) = bearer_header(&headers) {
+            if let Err(cap) = shared.caps.check(&token, cap) {
+                tracing::warn!(capability = cap.name(), "command refused: capability");
+                let (code, body) = capability_refusal(cap);
+                return jstatus(code, body);
+            }
+        }
+    }
     // `restartApp` is handled here, not in dispatch: it needs `Shared` (the GUI host polls
     // the flag each tick and performs the teardown on the UI thread). An optional
     // `sessionId` + `prompt` pair pre-queues a speak-first message for a conversation the
@@ -2213,6 +2368,17 @@ async fn handle_ws(shared: Arc<Shared>, mut socket: WebSocket, scope: Option<Sco
 
 // ---- fallbacks ----------------------------------------------------------------------------
 
+/// `GET /schema`: the descriptor table as a `SchemaDocument` — every route, RPC and module
+/// the host serves, sorted, so two calls on an unchanged host are byte-identical. Any
+/// authenticated token may read it (it is the API's own description, not data).
+#[tracing::instrument(level = "debug", skip_all)]
+async fn schema_get(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if let Err(e) = authorize(&shared, &headers) {
+        return e;
+    }
+    ok_json(shared.schema.document(&shared.version))
+}
+
 #[tracing::instrument(level = "debug", ret)]
 async fn method_not_allowed() -> Response {
     jstatus(405, json!({ "error": "method not allowed" }))
@@ -2289,10 +2455,10 @@ mod golden {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    struct Server {
-        shared: Arc<Shared>,
-        base: String,
-        token: String,
+    pub(super) struct Server {
+        pub(super) shared: Arc<Shared>,
+        pub(super) base: String,
+        pub(super) token: String,
     }
 
     async fn boot(allow_input: bool) -> Server {
@@ -2305,7 +2471,7 @@ mod golden {
     /// device table needs this: the tests run in parallel, and a shared table means one test
     /// revoking — or two atomic rewrites racing over the same scratch file — is another test's
     /// flake.
-    async fn boot_with_control_tag(allow_input: bool, tag: &str) -> Server {
+    pub(super) async fn boot_with_control_tag(allow_input: bool, tag: &str) -> Server {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let sessions = Arc::new(SessionManager::new(tx));
@@ -2367,7 +2533,7 @@ mod golden {
         }
     }
 
-    fn client() -> reqwest::Client {
+    pub(super) fn client() -> reqwest::Client {
         reqwest::Client::new()
     }
 
@@ -3858,5 +4024,261 @@ mod golden {
             body,
             json!({ "error": "settings unavailable (no GUI attached)" })
         );
+    }
+}
+
+/// The descriptor table IS the router (plan track H3): every described route answers on the
+/// wire, `GET /schema` lists exactly the table, and a token that holds no capability is
+/// refused with the documented 403 on a capability route while the master token is never
+/// refused. Same in-process axum stack as `golden`.
+#[cfg(test)]
+mod table {
+    use super::golden::{boot_with_control_tag, client, Server};
+    use crate::control::descriptor_table::core_routes;
+    use crate::control::dispatch::CapabilitySource;
+    use avada_module_sdk::caps::Capability;
+    use avada_module_sdk::descriptor::{SchemaDocument, Verb};
+    use serde_json::{json, Value};
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    /// A capability source that claims one token and answers a fixed set for it.
+    struct Fixed {
+        token: String,
+        caps: BTreeSet<Capability>,
+    }
+
+    impl CapabilitySource for Fixed {
+        fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>> {
+            (token == self.token).then(|| self.caps.clone())
+        }
+    }
+
+    /// Register a device token the token store accepts and pin its capabilities.
+    fn limited(s: &Server, token: &str, caps: &[Capability]) {
+        s.shared
+            .tokens
+            .lock()
+            .unwrap()
+            .add_device(token.to_string(), "limited".into(), None, None);
+        s.shared.caps.install(Arc::new(Fixed {
+            token: token.to_string(),
+            caps: caps.iter().copied().collect(),
+        }));
+    }
+
+    fn concrete(path: &str) -> String {
+        path.replace("{id}", "p1").replace("{queue}", "q1")
+    }
+
+    async fn call(s: &Server, verb: Verb, path: &str, token: &str) -> (u16, String) {
+        let url = format!("{}{}", s.base, concrete(path));
+        let c = client();
+        let req = match verb {
+            Verb::Get => c.get(&url),
+            Verb::Post => c.post(&url),
+            Verb::Put => c.put(&url),
+            Verb::Patch => c.patch(&url),
+            Verb::Delete => c.delete(&url),
+        };
+        let r = req
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap();
+        let status = r.status().as_u16();
+        (status, r.text().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn every_described_route_is_mounted_and_only_those() {
+        let s = boot_with_control_tag(true, "table-mounted").await;
+        for desc in core_routes() {
+            let (status, body) = call(&s, desc.verb, &desc.mounted_path(), &s.token).await;
+            let err = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string));
+            assert_ne!(status, 405, "{} is described but not mounted", desc.method);
+            assert_ne!(
+                (status, err.as_deref()),
+                (404, Some("not found")),
+                "{} is described but not mounted",
+                desc.method
+            );
+            assert_ne!(status, 401, "{} refused the master token", desc.method);
+            assert_ne!(status, 403, "{} refused the master token", desc.method);
+        }
+        // A verb the table does not describe for a described path is the 405 fallback, and
+        // a path the table does not describe is the 404 fallback — nothing is mounted on the
+        // side.
+        let (status, body) = call(&s, Verb::Delete, "/health", &s.token).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (405, r#"{"error":"method not allowed"}"#)
+        );
+        let (status, body) = call(&s, Verb::Get, "/m/acme/files/tree", &s.token).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (404, r#"{"error":"not found","path":"/m/acme/files/tree"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_lists_the_table_and_is_byte_identical_across_calls() {
+        let s = boot_with_control_tag(true, "table-schema").await;
+        let (status, first) = call(&s, Verb::Get, "/schema", &s.token).await;
+        assert_eq!(status, 200);
+        let (status, second) = call(&s, Verb::Get, "/schema", &s.token).await;
+        assert_eq!(status, 200);
+        assert_eq!(first, second, "two GET /schema calls differ");
+        let doc: SchemaDocument = serde_json::from_str(&first).unwrap();
+        assert_eq!(
+            doc.contract_version,
+            avada_module_sdk::contract::CONTRACT_VERSION
+        );
+        assert_eq!(doc.product, avada_module_sdk::PRODUCT_NAME);
+        assert_eq!(doc.host_version, "0.1.8");
+        let listed: BTreeSet<String> = doc.routes.iter().map(|r| r.method.clone()).collect();
+        let table: BTreeSet<String> = core_routes().into_iter().map(|r| r.method).collect();
+        assert_eq!(listed, table);
+        assert!(listed.contains("schema"), "the schema lists itself");
+        let methods: Vec<&str> = doc.routes.iter().map(|r| r.method.as_str()).collect();
+        let mut sorted = methods.clone();
+        sorted.sort_unstable();
+        assert_eq!(methods, sorted, "routes are sorted by method");
+        assert!(!doc.rpcs.is_empty());
+        assert!(doc.modules.is_empty());
+        // Any authenticated token may read it; no token is the byte-exact 401.
+        let r = client()
+            .get(format!("{}/schema", s.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 401);
+        assert_eq!(r.text().await.unwrap(), r#"{"error":"unauthorized"}"#);
+    }
+
+    #[tokio::test]
+    async fn a_token_holding_nothing_is_refused_only_on_capability_routes() {
+        let s = boot_with_control_tag(true, "table-caps-none").await;
+        limited(&s, "tok-limited-none", &[]);
+        let (status, body) = call(&s, Verb::Get, "/settings", "tok-limited-none").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (
+                403,
+                r#"{"capability":"settings.read","error":"capability"}"#
+            )
+        );
+        let (status, body) = call(&s, Verb::Get, "/state", "tok-limited-none").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (
+                403,
+                r#"{"capability":"workspace.read","error":"capability"}"#
+            )
+        );
+        // The WebSocket route takes its token from the query too; the gate sees it there.
+        let r = client()
+            .get(format!("{}/events?token=tok-limited-none", s.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 403);
+        assert_eq!(
+            r.text().await.unwrap(),
+            r#"{"capability":"events.subscribe","error":"capability"}"#
+        );
+        // Unrestricted routes answer as for any token.
+        let (status, _) = call(&s, Verb::Get, "/health", "tok-limited-none").await;
+        assert_eq!(status, 200);
+        let (status, _) = call(&s, Verb::Get, "/schema", "tok-limited-none").await;
+        assert_eq!(status, 200);
+        // Every capability route refuses this token, with its own capability named.
+        for desc in core_routes() {
+            let Some(cap) = desc.capability else { continue };
+            let (status, body) =
+                call(&s, desc.verb, &desc.mounted_path(), "tok-limited-none").await;
+            assert_eq!(
+                (status, body),
+                (
+                    403,
+                    json!({ "error": "capability", "capability": cap.name() }).to_string()
+                ),
+                "{}",
+                desc.method
+            );
+        }
+        // An unknown token is still the handler's 401, never a 403 from the gate.
+        let (status, body) = call(&s, Verb::Get, "/settings", "tok-nobody").await;
+        assert_eq!(
+            (status, body.as_str()),
+            (401, r#"{"error":"unauthorized"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn command_verbs_spend_their_own_capability_on_top_of_the_route() {
+        let s = boot_with_control_tag(true, "table-caps-verb").await;
+        limited(&s, "tok-limited-ww", &[Capability::WorkspaceWrite]);
+        let post = |body: Value, token: &str| {
+            client()
+                .post(format!("{}/command", s.base))
+                .header("authorization", format!("Bearer {token}"))
+                .json(&body)
+                .send()
+        };
+        // The route floor (workspace.write) passes; the verb's own capability is refused.
+        let r = post(
+            json!({ "type": "readScreen", "paneId": "p1" }),
+            "tok-limited-ww",
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.status().as_u16(), 403);
+        assert_eq!(
+            r.text().await.unwrap(),
+            r#"{"capability":"panes.output","error":"capability"}"#
+        );
+        let r = post(json!({ "type": "newPane" }), "tok-limited-ww")
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 403);
+        assert_eq!(
+            r.text().await.unwrap(),
+            r#"{"capability":"panes.spawn","error":"capability"}"#
+        );
+        // A verb whose floor is enough reaches dispatch (whatever it answers, not 403).
+        let r = post(
+            json!({ "type": "focusPane", "paneId": "p1" }),
+            "tok-limited-ww",
+        )
+        .await
+        .unwrap();
+        assert_ne!(r.status().as_u16(), 403);
+        // The master token is never refused for a capability: same requests, no 403.
+        let r = post(json!({ "type": "readScreen", "paneId": "p1" }), &s.token)
+            .await
+            .unwrap();
+        assert_ne!(r.status().as_u16(), 403);
+        let r = post(json!({ "type": "newPane" }), &s.token).await.unwrap();
+        assert_ne!(r.status().as_u16(), 403);
+    }
+
+    #[tokio::test]
+    async fn master_token_is_never_refused_for_a_capability() {
+        let s = boot_with_control_tag(true, "table-master").await;
+        for desc in core_routes() {
+            let (status, body) = call(&s, desc.verb, &desc.mounted_path(), &s.token).await;
+            let err = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string));
+            assert_ne!(
+                err.as_deref(),
+                Some("capability"),
+                "{} refused the master token ({status})",
+                desc.method
+            );
+        }
     }
 }

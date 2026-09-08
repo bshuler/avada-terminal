@@ -116,6 +116,12 @@ pub struct Shared {
     /// a headless embedder), which `GET /settings` reports as 503 rather than inventing
     /// defaults: a caller about to PATCH must not be handed a blob the app isn't running.
     pub settings: Mutex<Option<Value>>,
+    /// The route/RPC/module table `GET /schema` serves; the module host registers module
+    /// routes here (`control::schema`).
+    pub schema: crate::control::schema::SchemaState,
+    /// Which capabilities a token holds (`control::dispatch::CapabilityResolver`). Empty means
+    /// the legacy answer: every accepted token holds everything.
+    pub caps: crate::control::dispatch::CapabilityResolver,
 }
 
 impl Shared {
@@ -157,6 +163,8 @@ impl Shared {
             speech: SpeechService::new(speech_settings_path),
             ui_ops: Mutex::new(UiOpQueue::new()),
             settings: Mutex::new(None),
+            schema: crate::control::schema::SchemaState::new(),
+            caps: crate::control::dispatch::CapabilityResolver::new(),
         })
     }
 
