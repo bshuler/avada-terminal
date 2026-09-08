@@ -872,9 +872,52 @@ export global RightsAdapter {
 
 // ---- track H4: the left-panel rail: a list of string-id entries with a path-string
 // icon and a tier slot, registered by modules at handshake.
+//
+// One entry a module registered at handshake. `key` is what Rust wants back when the
+// entry is clicked: `<owner/repo>#<entry-id>`, unique across modules. `icon` is an SVG
+// path string (viewbox 16x16) or empty for the default module glyph. `tier` is 1 for a
+// row list rendered by the panel (`UiTier::Data`), 2 for a slot the module fills itself.
+export struct RailEntryRow {
+    key: string,
+    id: string,
+    label: string,
+    icon: string,
+    module: string,
+    tier: int,
+    order: int,
+}
+
+// One tier-1 row beneath the active module entry (`host.rows.set`).
+export struct RailRowItem {
+    id: string,
+    label: string,
+    detail: string,
+    depth: int,
+    expandable: bool,
+    expanded: bool,
+    icon: string,
+}
+
 export global RailAdapter {
-    // filled in by track H4
+    // True once at least one module entry exists; the strip draws module buttons after
+    // the built-in ones only then.
     in property <bool> present: false;
+    // Module entries, sorted by `order` then module id. Built-ins (workspace, files, git,
+    // favourited tools) stay in `LeftPanelAdapter.modes`; the strip draws both lists.
+    in property <[RailEntryRow]> entries: [];
+    // The key of the active module entry, or empty. While non-empty
+    // `LeftPanelAdapter.mode` is -1 so every built-in section is hidden at once.
+    in-out property <string> active: "";
+    // The active entry's label — the head of the row list.
+    in property <string> active-label: "";
+    // The rows the module projected under the active entry.
+    in property <[RailRowItem]> rows: [];
+    // Empty-list text: what the module says while it has projected nothing yet.
+    in property <string> empty-text: "Nothing here yet";
+    // A module entry was clicked (key). Rust activates the module and shows its rows.
+    callback activate(string /* key */);
+    // A row was clicked: entry key, row id, gesture (`open`, `toggle`, `context`).
+    callback row-activate(string /* key */, string /* row id */, string /* gesture */);
 }
 
 // ---- track V1: the data viewer pane: a JSON/YAML/TOML document as collapsible rows.

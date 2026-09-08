@@ -373,3 +373,81 @@ fn without_a_pending_ask_there_is_no_toast() {
         assert!(by_label(&w, "Allow once").is_empty());
     });
 }
+
+// ---------------------------------------------------------------------------------
+// the two mounts outside the page itself (track H4 landed these for H2, which could
+// not touch `ui/app.slint` or the window glue)
+// ---------------------------------------------------------------------------------
+
+/// The rights page is reachable the ordinary way — the Preferences rail — and not only
+/// through the `RightsAdapter.open` deep link the other tests use. A nav rail that lists
+/// every other section but has no way to Modules is exactly the bug this catches.
+#[test]
+fn the_preferences_rail_has_a_modules_entry_that_opens_the_page() {
+    ui(|| {
+        let root = TempRoot::new();
+        let w = window();
+        let mut service = RightsService::with_root(&root.0);
+        service.register(record());
+        w.set_overlay_kind(2); // Preferences, on its default section
+        show(&w, &service, None);
+
+        // The page is not up yet: only the rail entry answers to "Modules".
+        assert!(by_role(&w, "Modules", AccessibleRole::Groupbox).is_empty());
+        let tab = only(&w, "Modules", AccessibleRole::Tab);
+        click(&w, &tab);
+
+        // Now both exist — the tab (checked) and the page it selected.
+        assert_eq!(by_role(&w, "Modules", AccessibleRole::Groupbox).len(), 1);
+        assert_eq!(
+            only(&w, "Modules", AccessibleRole::Tab).accessible_checked(),
+            Some(true)
+        );
+        assert!(!by_label(&w, "Module Files").is_empty());
+    });
+}
+
+/// The ask toast is mounted at the WINDOW root, not inside Preferences: a module asks for
+/// a capability when it needs one, and the answer has to be one click away from whatever
+/// the user was doing. With no overlay up the card is on screen and its three buttons
+/// reach Rust with the ask's id.
+#[test]
+fn the_ask_toast_answers_from_the_window_with_no_overlay_open() {
+    ui(|| {
+        let root = TempRoot::new();
+        let w = window();
+        let mut service = RightsService::with_root(&root.0);
+        service.register(record());
+        let seen: Recorder = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        wire(&w, move |cmd| sink.borrow_mut().push(cmd));
+
+        // No overlay, no Preferences, nothing open — just the window.
+        w.set_overlay_kind(0);
+        show(&w, &service, None);
+        assert!(by_label(&w, "Capability request").is_empty());
+
+        let id = service.ask(&module(), Capability::WorkspaceRead, None);
+        show(&w, &service, None);
+
+        // Exactly one card: the page's copy is not mounted with the overlay down.
+        assert_eq!(by_label(&w, "Capability request").len(), 1);
+        click_label(&w, "Allow always");
+        assert_eq!(taken(&seen), vec![RightsCommand::AskAllowAlways(id)]);
+    });
+}
+
+/// …and while an overlay is up the window-level card stands down. It would sit under the
+/// scrim, unclickable, and a screen reader would find two "Capability request" groupboxes
+/// where the user can only answer one.
+#[test]
+fn the_window_toast_stands_down_while_an_overlay_covers_it() {
+    ui(|| {
+        let root = TempRoot::new();
+        let w = window();
+        let (mut service, _seen) = open(&w, &root); // sets overlay-kind 2 + the deep link
+        service.ask(&module(), Capability::WorkspaceRead, None);
+        show(&w, &service, None);
+        assert_eq!(by_label(&w, "Capability request").len(), 1);
+    });
+}

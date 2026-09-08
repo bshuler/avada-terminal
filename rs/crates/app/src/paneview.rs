@@ -272,6 +272,13 @@ fn push_ui_palette(app: &AppWindow, p: crate::theme::UiPalette) {
 /// unchanged (`set_row_data`) and only rebuilding (`set_vec`) when it differs.
 /// Reuse is essential: `set_vec` destroys + recreates the repeated Slint elements,
 /// which would drop a divider's pointer grab mid-drag and reset pane focus.
+/// A fresh `ModelRc` from a plain `Vec`, for a list that is rebuilt wholesale rather than
+/// diffed into a live `VecModel`. The `changed`-callback hazard [`sync_model`] exists to
+/// avoid does not apply to a list of pure rows with no `changed` handler on them.
+fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
+    ModelRc::new(VecModel::from(rows))
+}
+
 #[tracing::instrument(level = "debug", skip_all)]
 fn sync_model<T: Clone + 'static>(model: &VecModel<T>, items: Vec<T>) {
     // Grow/shrink at the tail and update the rest in place, rather than `set_vec`. `set_vec`
@@ -728,6 +735,66 @@ pub const LEFT_MODE_FILES: i32 = 1;
 pub const LEFT_MODE_GIT: i32 = 2;
 pub const LEFT_MODE_TOOL_BASE: i32 = 3;
 
+/// The mode a *module's* rail entry puts the panel into (track H4). Negative on purpose:
+/// the built-in modes are indices into `LeftPanelAdapter.modes` and the module entries are
+/// a second list (`RailAdapter.entries`) drawn on the same strip, so a module cannot be
+/// given an index in the first list without renumbering the built-ins every time a module
+/// starts or stops. One out-of-band value hides every built-in section at once, and
+/// `RailAdapter.active` says WHICH module entry is showing.
+pub const LEFT_MODE_RAIL: i32 = -1;
+
+/// Push the module rail onto [`RailAdapter`](crate::RailAdapter): the strip's module
+/// buttons, which one is active, and the active entry's rows.
+///
+/// Split out of [`resync`] so the UI tests can drive the same projection from a
+/// `ModuleRail` the host's own [`RailEvent`](avada_core::module::RailEvent)s built,
+/// instead of hand-filling the adapter and proving only that Slint stores properties.
+/// The active entry is written from Rust rather than read back from the strip, so the
+/// panel can never claim a module entry the model has already dropped.
+pub fn fill_rail(app: &AppWindow, rail: &crate::leftpanel::ModuleRail) {
+    use slint::ComponentHandle;
+    let ad = app.global::<crate::RailAdapter>();
+    let entries = rail.entries();
+    ad.set_present(!entries.is_empty());
+    ad.set_entries(model(
+        entries
+            .iter()
+            .map(|v| crate::RailEntryRow {
+                key: v.key.as_str().into(),
+                id: v.entry.id.as_str().into(),
+                label: v.entry.label.as_str().into(),
+                icon: crate::leftpanel::icon_commands(v.entry.icon.as_deref()).into(),
+                module: v.module.as_str().into(),
+                tier: v.entry.tier as i32,
+                order: v.entry.order,
+            })
+            .collect(),
+    ));
+    ad.set_active(rail.active.clone().unwrap_or_default().as_str().into());
+    ad.set_active_label(
+        rail.active
+            .as_deref()
+            .and_then(|k| rail.lookup(k))
+            .map(|v| v.entry.label)
+            .unwrap_or_default()
+            .into(),
+    );
+    ad.set_rows(model(
+        rail.active_rows()
+            .iter()
+            .map(|r| crate::RailRowItem {
+                id: r.id.as_str().into(),
+                label: r.label.as_str().into(),
+                detail: r.detail.as_str().into(),
+                depth: r.depth as i32,
+                expandable: r.expandable,
+                expanded: r.expanded,
+                icon: crate::leftpanel::icon_commands(r.icon.as_deref()).into(),
+            })
+            .collect(),
+    ));
+}
+
 /// The FILES and GIT rows' icon numbers. `LeftModeRow::icon` is a registry icon id when
 /// positive and 0 already means "the workspace grid", so each built-in glyph needs a value
 /// of its own — negative, because the registry will only ever grow upward. The strip tests
@@ -955,6 +1022,23 @@ pub fn resync(
         Overlay::ConfirmClose => 7,
     };
     app.set_overlay_kind(kind);
+
+    // ---- module capability rights (track H2) ----
+    // Filled on every resync, not only while Preferences is open: the ask toast is mounted
+    // app-wide because a module asks for a capability when it needs one, which has nothing
+    // to do with whether the user happens to be looking at the rights page.
+    crate::prefs::rights::fill(
+        app,
+        &state.rights,
+        state.rights_selected.as_ref(),
+        state.rights_workspace().as_deref(),
+    );
+    // `open` is the deep link INTO the rights page (a toast saying "review this"). It is a
+    // one-shot: closing Preferences must not leave the next open pinned to rights.
+    if state.overlay != Overlay::Prefs {
+        use slint::ComponentHandle as _;
+        app.global::<crate::RightsAdapter>().set_open(false);
+    }
 
     // Close confirmation: what's about to close, and whether this is the close that ends the
     // window (the card drops its reassurance and its "don't ask again" when it is — that one
@@ -1498,7 +1582,12 @@ pub fn resync(
             );
             // Un-favouriting the tool you were looking at must not leave the panel showing
             // a mode that no longer exists — fall back to the workspace tree.
-            if lp.get_mode() as usize >= mode_rows.len() {
+            // `LEFT_MODE_RAIL` is deliberately outside the list (a module entry is showing)
+            // and must survive this: `-1 as usize` is enormous, so the bound has to be
+            // checked on the SIGNED value or every module click would bounce straight back
+            // to the workspace tree on the next resync.
+            let mode_now = lp.get_mode();
+            if mode_now >= 0 && mode_now as usize >= mode_rows.len() {
                 lp.set_mode(LEFT_MODE_WORKSPACE);
             }
             let mode_row_count = mode_rows.len();
@@ -1510,9 +1599,20 @@ pub fn resync(
             // the panel into FILES itself. Taken before the session list is computed so the
             // whole frame agrees about which mode it is drawing.
             if let Some(m) = state.left_mode_request.take() {
-                if (m as usize) < mode_row_count {
+                if m == LEFT_MODE_RAIL || (m >= 0 && (m as usize) < mode_row_count) {
                     lp.set_mode(m);
                 }
+            }
+
+            // ---- the module rail (track H4) ----
+            // Entries and rows are a stored projection like the explorer's: `State` folded
+            // the host's rail events into `state.rail`, and the resync just ships them.
+            fill_rail(app, &state.rail);
+            // A module entry that has gone away must not leave the panel on a head with
+            // nothing behind it; `State` already asked for the workspace tree, this is
+            // the belt for a mode the strip wrote itself.
+            if lp.get_mode() == LEFT_MODE_RAIL && state.rail.active.is_none() {
+                lp.set_mode(LEFT_MODE_WORKSPACE);
             }
 
             // ---- mode 1: the explorer ----

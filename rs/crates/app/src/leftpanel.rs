@@ -844,6 +844,266 @@ pub fn tool_session(tool_id: &str, id: &str) -> Option<ScannedSession> {
     })
 }
 
+// ---------------------------------------------------------------------------------
+// The module rail (track H4): what each running module put on the left panel's strip.
+// ---------------------------------------------------------------------------------
+
+/// What every running module registered on the rail, plus which module entry (if any)
+/// the panel is showing. Fed by [`avada_core::module::RailEvent`]s marshalled onto the UI
+/// thread by `App::tick`; projected into `RailAdapter` by `paneview::resync`.
+///
+/// Named `ModuleRail` rather than `Rail` because `State` already has a right-edge "rail"
+/// (the pane rail) and the two must never be confused in a grep.
+///
+/// Keys: an entry is addressed everywhere outside this struct by [`entry_key`] —
+/// `<owner/repo>#<entry-id>` — so two modules that both register `files` never collide
+/// and a click can be routed back to its module without a second lookup.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ModuleRail {
+    /// Per-module rail state, in module-id order (a `BTreeMap` so the strip's order is
+    /// stable across ticks even when two entries share an `order`).
+    pub modules:
+        std::collections::BTreeMap<avada_core::rights::ModuleId, avada_core::module::RailState>,
+    /// The key of the module entry the panel is showing, if a module entry is active.
+    pub active: Option<String>,
+}
+
+/// One entry as the strip draws it: the module's [`RailEntry`](avada_core::module::RailEntry)
+/// plus the key the UI hands back on click.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RailEntryView {
+    /// `<owner/repo>#<entry-id>`.
+    pub key: String,
+    /// The owning module.
+    pub module: avada_core::rights::ModuleId,
+    /// The module's own entry.
+    pub entry: avada_core::module::RailEntry,
+}
+
+/// How a rail row was activated. A local echo of the SDK's `rail::Gesture`, which is not
+/// reachable from this crate: `avada_core::module` re-exports `RailEntry` and `Row` but
+/// not `Gesture`/`RowActivate`, and the app does not depend on `avada-module-sdk`. The
+/// wire spelling ([`RailGesture::as_str`]) is the SDK's, so whoever owns the host can
+/// build a `RowActivate` from a [`RailRequest`] without a mapping table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RailGesture {
+    /// Click / Enter.
+    Open,
+    /// Expand or collapse.
+    Toggle,
+    /// Right-click.
+    Context,
+}
+
+impl RailGesture {
+    /// The SDK's wire spelling (`open` / `toggle` / `context`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RailGesture::Open => "open",
+            RailGesture::Toggle => "toggle",
+            RailGesture::Context => "context",
+        }
+    }
+
+    /// Parse the wire spelling the Slint callback carries; `None` for anything else, so a
+    /// typo in the UI is a dropped click rather than a wrong gesture sent to a module.
+    pub fn parse(s: &str) -> Option<RailGesture> {
+        Some(match s {
+            "open" => RailGesture::Open,
+            "toggle" => RailGesture::Toggle,
+            "context" => RailGesture::Context,
+            _ => return None,
+        })
+    }
+}
+
+/// Work a rail click leaves for whoever owns the module host. Queued on
+/// `State::rail_requests` and drained by the controller after the dispatch has returned
+/// its borrow — a module callback must never re-enter `State`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RailRequest {
+    /// `Host::activate(module, entry, …)`: the user selected this entry.
+    Activate {
+        /// Which module.
+        module: avada_core::rights::ModuleId,
+        /// Its entry id (not the key).
+        entry: String,
+    },
+    /// `Host::activate_row(module, RowActivate { .. })`.
+    Row {
+        /// Which module.
+        module: avada_core::rights::ModuleId,
+        /// Its entry id (not the key).
+        entry: String,
+        /// The row id the module gave.
+        row: String,
+        /// The payload the module hung off the row, handed straight back.
+        data: serde_json::Value,
+        /// Which gesture.
+        gesture: RailGesture,
+    },
+}
+
+/// The path-string a rail entry's `icon` yields for `RailEntryRow.icon`.
+///
+/// A module's manifest icon is a *path to an SVG file* relative to its install directory,
+/// and reading that file is the host's job, not the panel's (docs/module-contract.md). A
+/// tier-1 module may instead send the path data itself, which is what Slint's `Path`
+/// wants. Telling them apart by the leading move command is enough: an SVG `d` always
+/// starts with `M`/`m`, and no relative file path does.
+pub fn icon_commands(icon: Option<&str>) -> &str {
+    match icon {
+        Some(s) if s.starts_with('M') || s.starts_with('m') => s,
+        _ => "",
+    }
+}
+
+/// The key the UI uses for a module entry: `<owner/repo>#<entry-id>`.
+pub fn entry_key(module: &avada_core::rights::ModuleId, entry: &str) -> String {
+    format!("{}#{entry}", module.as_str())
+}
+
+/// Split a key back into `(module, entry id)`; `None` if it is not a valid key.
+pub fn split_key(key: &str) -> Option<(avada_core::rights::ModuleId, &str)> {
+    let (module, entry) = key.split_once('#')?;
+    if entry.is_empty() {
+        return None;
+    }
+    let module = avada_core::rights::ModuleId::new(module).ok()?;
+    Some((module, entry))
+}
+
+impl ModuleRail {
+    /// Fold one event from the module host's rail channel into the rail. Returns whether
+    /// the active entry disappeared with it, so the caller can put the panel back on a
+    /// built-in section.
+    ///
+    /// The fold lives here rather than on `State` so the UI tests can drive the panel from
+    /// the host's own event type without standing up a whole window.
+    pub fn apply(&mut self, event: avada_core::module::RailEvent) -> bool {
+        use avada_core::module::RailEvent;
+        match event {
+            RailEvent::Registered { module, entries } => self.register(module, entries),
+            RailEvent::Rows {
+                module,
+                entry,
+                rows,
+            } => {
+                self.set_rows(&module, &entry, rows);
+                false
+            }
+            RailEvent::Gone { module } => self.gone(&module),
+        }
+    }
+
+    /// The module registered (or re-registered) its entries — replaces the earlier set.
+    /// Returns true when the active entry disappeared with it (the panel must fall back).
+    pub fn register(
+        &mut self,
+        module: avada_core::rights::ModuleId,
+        entries: Vec<avada_core::module::RailEntry>,
+    ) -> bool {
+        self.modules.entry(module).or_default().register(entries);
+        self.drop_stale_active()
+    }
+
+    /// The module replaced the rows under `entry`. Rows for an entry the module never
+    /// registered are ignored (the host already refused them; this is belt and braces).
+    pub fn set_rows(
+        &mut self,
+        module: &avada_core::rights::ModuleId,
+        entry: &str,
+        rows: Vec<avada_core::module::Row>,
+    ) {
+        if let Some(state) = self.modules.get_mut(module) {
+            let _ = state.set_rows(entry, rows);
+        }
+    }
+
+    /// The module is gone: its entries and rows leave the rail. Returns true when the
+    /// active entry was one of them.
+    pub fn gone(&mut self, module: &avada_core::rights::ModuleId) -> bool {
+        self.modules.remove(module);
+        self.drop_stale_active()
+    }
+
+    fn drop_stale_active(&mut self) -> bool {
+        match &self.active {
+            Some(key) if self.lookup(key).is_none() => {
+                self.active = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Every entry across every module, sorted by `order` then module id then
+    /// registration order — the order the strip draws them in.
+    pub fn entries(&self) -> Vec<RailEntryView> {
+        let mut out: Vec<RailEntryView> = self
+            .modules
+            .iter()
+            .flat_map(|(module, state)| {
+                state.entries.iter().map(move |e| RailEntryView {
+                    key: entry_key(module, &e.id),
+                    module: module.clone(),
+                    entry: e.clone(),
+                })
+            })
+            .collect();
+        // `sort_by_key` is stable, and the flat_map already yields module order then
+        // registration order, so ties keep exactly that.
+        out.sort_by_key(|v| v.entry.order);
+        out
+    }
+
+    /// The entry behind `key`, if a module registered it.
+    pub fn lookup(&self, key: &str) -> Option<RailEntryView> {
+        let (module, entry) = split_key(key)?;
+        let state = self.modules.get(&module)?;
+        let e = state.entries.iter().find(|e| e.id == entry)?;
+        Some(RailEntryView {
+            key: key.to_string(),
+            module,
+            entry: e.clone(),
+        })
+    }
+
+    /// The rows under `key` (empty when the module has projected nothing yet).
+    pub fn rows(&self, key: &str) -> &[avada_core::module::Row] {
+        let Some((module, entry)) = split_key(key) else {
+            return &[];
+        };
+        self.modules
+            .get(&module)
+            .and_then(|s| s.rows.get(entry))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Make `key` the active module entry. `false` (and no change) when no module
+    /// registered it — a click on a button that has just been unregistered is a no-op,
+    /// not a blank panel.
+    pub fn activate(&mut self, key: &str) -> bool {
+        if self.lookup(key).is_some() {
+            self.active = Some(key.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Leave the module entry (a built-in was clicked).
+    pub fn deactivate(&mut self) {
+        self.active = None;
+    }
+
+    /// The active entry's rows, if a module entry is active.
+    pub fn active_rows(&self) -> &[avada_core::module::Row] {
+        self.active.as_deref().map(|k| self.rows(k)).unwrap_or(&[])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1391,5 +1651,125 @@ mod tests {
         assert!(tool_session("cachetest", "one").unwrap().resumable());
         assert!(tool_session("cachetest", "nope").is_none());
         assert!(tool_session("othertool", "one").is_none());
+    }
+
+    // ===== the module rail =====
+
+    mod rail_model {
+        use super::super::*;
+        use avada_core::module::{RailEntry, Row};
+        use avada_core::rights::ModuleId;
+
+        fn id(s: &str) -> ModuleId {
+            ModuleId::new(s).unwrap()
+        }
+
+        /// Built through serde because `UiTier` is the SDK's type and the app crate
+        /// does not depend on the SDK directly — exactly what a module's own
+        /// `host.rail.register` wire payload looks like, tier 1 = rows.
+        fn entry(id: &str, order: i32) -> RailEntry {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "label": id.to_uppercase(), "tier": 1, "order": order
+            }))
+            .unwrap()
+        }
+
+        fn row(id: &str) -> Row {
+            Row {
+                id: id.into(),
+                label: id.into(),
+                detail: String::new(),
+                depth: 0,
+                expandable: false,
+                expanded: false,
+                icon: None,
+                marks: vec![],
+                data: serde_json::Value::Null,
+            }
+        }
+
+        #[test]
+        fn keys_round_trip_and_reject_garbage() {
+            let k = entry_key(&id("acme/avada-files"), "tree");
+            assert_eq!(k, "acme/avada-files#tree");
+            let (m, e) = split_key(&k).unwrap();
+            assert_eq!(m, id("acme/avada-files"));
+            assert_eq!(e, "tree");
+            assert!(split_key("acme/avada-files").is_none());
+            assert!(split_key("acme/avada-files#").is_none());
+            assert!(split_key("not a module#tree").is_none());
+        }
+
+        #[test]
+        fn entries_sort_by_order_then_module_then_registration() {
+            let mut rail = ModuleRail::default();
+            rail.register(id("zed/late"), vec![entry("b", 0), entry("a", 0)]);
+            rail.register(id("acme/early"), vec![entry("first", -5), entry("z", 0)]);
+            let keys: Vec<String> = rail.entries().into_iter().map(|v| v.key).collect();
+            assert_eq!(
+                keys,
+                vec![
+                    "acme/early#first",
+                    "acme/early#z",
+                    "zed/late#b",
+                    "zed/late#a"
+                ]
+            );
+        }
+
+        #[test]
+        fn rows_land_under_their_entry_and_leave_with_the_module() {
+            let mut rail = ModuleRail::default();
+            let m = id("acme/avada-files");
+            rail.register(m.clone(), vec![entry("tree", 0)]);
+            rail.set_rows(&m, "tree", vec![row("src"), row("Cargo.toml")]);
+            // rows for an entry the module never registered are dropped, not stored
+            rail.set_rows(&m, "ghost", vec![row("x")]);
+            assert_eq!(rail.rows("acme/avada-files#tree").len(), 2);
+            assert!(rail.rows("acme/avada-files#ghost").is_empty());
+            assert!(rail.activate("acme/avada-files#tree"));
+            assert_eq!(rail.active_rows().len(), 2);
+            assert!(rail.gone(&m), "the active entry left with the module");
+            assert!(rail.active.is_none());
+            assert!(rail.entries().is_empty());
+            assert!(rail.active_rows().is_empty());
+        }
+
+        #[test]
+        fn activating_an_unknown_key_is_a_no_op() {
+            let mut rail = ModuleRail::default();
+            rail.register(id("acme/avada-files"), vec![entry("tree", 0)]);
+            assert!(!rail.activate("acme/avada-files#nope"));
+            assert!(rail.active.is_none());
+            assert!(rail.activate("acme/avada-files#tree"));
+            rail.deactivate();
+            assert!(rail.active.is_none());
+        }
+
+        #[test]
+        fn reregistering_without_the_active_entry_drops_the_activation() {
+            let mut rail = ModuleRail::default();
+            let m = id("acme/avada-files");
+            rail.register(m.clone(), vec![entry("tree", 0), entry("git", 1)]);
+            assert!(rail.activate("acme/avada-files#git"));
+            assert!(!rail.register(m.clone(), vec![entry("git", 1)]));
+            assert_eq!(rail.active.as_deref(), Some("acme/avada-files#git"));
+            assert!(rail.register(m, vec![entry("tree", 0)]));
+            assert!(rail.active.is_none());
+        }
+
+        /// The gesture makes a round trip through the wire spelling the SDK reads. The
+        /// `.slint` sends these three words and the host expects the same three back, so
+        /// a rename on either side has to break here rather than in a module.
+        #[test]
+        fn a_gesture_survives_the_wire_spelling() {
+            for g in [RailGesture::Open, RailGesture::Toggle, RailGesture::Context] {
+                assert_eq!(RailGesture::parse(g.as_str()), Some(g));
+            }
+            assert_eq!(RailGesture::Open.as_str(), "open");
+            assert_eq!(RailGesture::Toggle.as_str(), "toggle");
+            assert_eq!(RailGesture::Context.as_str(), "context");
+            assert_eq!(RailGesture::parse("wiggle"), None);
+        }
     }
 }

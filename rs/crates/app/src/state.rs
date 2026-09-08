@@ -31,6 +31,7 @@ use slint::{Color, Image, SharedString};
 
 use crate::command::Command;
 use crate::glow::Glow;
+use crate::leftpanel::{RailGesture, RailRequest};
 use crate::palette::{self, Entry};
 use crate::prefs::{self, Settings};
 use crate::sidebar::{self, Project};
@@ -1545,6 +1546,29 @@ pub struct State {
     /// a `State` mutation), so a command that needs to change it leaves a note instead of
     /// reaching into Slint from the middle of a borrow.
     pub left_mode_request: Option<i32>,
+    /// What every running module has put on the left panel's mode strip, and which module
+    /// entry (if any) the panel is showing (track H4). Fed by
+    /// [`State::apply_rail_event`] from the module host's rail channel.
+    pub rail: crate::leftpanel::ModuleRail,
+    /// Work for the module host, queued by a rail click and drained by whoever owns the
+    /// host (see [`State::take_rail_requests`]). A queue rather than a direct call because
+    /// `State` is behind a `RefCell` borrow for the whole of a command dispatch: calling
+    /// into the host from here would let a host callback re-enter it.
+    pub rail_requests: Vec<RailRequest>,
+    /// Capability rights for every installed module — the truth the Preferences rights
+    /// page projects and the ask toast answers against (track H2). Constructed empty and
+    /// rooted at the real app-support dir; nothing is read or written until a module is
+    /// registered, so a build with no modules installed never touches the disk.
+    pub rights: avada_core::rights::RightsService,
+    /// The module the rights page is showing (`None` = its first row). Page selection, not
+    /// rights truth, so it lives here rather than in the service.
+    pub rights_selected: Option<avada_core::rights::ModuleId>,
+    /// Answered asks and accepted held updates waiting for whoever owns the module host and
+    /// the install store: an `Answered` is the decision the host relays to the module that
+    /// is blocked on it, an `Accepted` the capability set the install store must re-sign
+    /// into the record. Queued for the same reason as [`State::rail_requests`] — `State` is
+    /// borrowed for the whole dispatch.
+    pub rights_effects: Vec<crate::prefs::rights::Applied>,
     /// The recently-closed history — panes AND tabs in ONE list, newest last, sessions kept
     /// alive centrally so reopening re-docks the running shell. One list rather than two
     /// because "reopen the last thing I closed" is only answerable if both kinds share an
@@ -1769,6 +1793,11 @@ impl State {
             git_commit: None,
             git_sel: None,
             left_mode_request: None,
+            rail: Default::default(),
+            rail_requests: Vec::new(),
+            rights: avada_core::rights::RightsService::new(),
+            rights_selected: None,
+            rights_effects: Vec::new(),
             closed: Vec::new(),
             closed_open: false,
             pending_close: None,
@@ -4970,6 +4999,126 @@ impl State {
         }
     }
 
+    // ---- the module rail (track H4) ----
+
+    /// Fold one rail event from the module host into [`State::rail`]. Returns whether
+    /// anything changed, so a tick that drains an idle channel costs no resync.
+    ///
+    /// A `Gone` (or a re-`Registered` set that no longer contains it) takes the active
+    /// entry with it; the panel then falls back to the workspace tree rather than showing
+    /// a head with no module behind it.
+    pub fn apply_rail_event(&mut self, event: avada_core::module::RailEvent) -> bool {
+        if self.rail.apply(event) {
+            self.left_mode_request = Some(crate::paneview::LEFT_MODE_WORKSPACE);
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// A module entry on the strip was clicked. Activates it, puts the panel into the rail
+    /// mode and queues an `activate` for the host. A key no module registered (the entry
+    /// was unregistered between the paint and the click) is a no-op, not a blank panel.
+    pub fn rail_activate(&mut self, key: &str) {
+        if !self.rail.activate(key) {
+            return;
+        }
+        if let Some((module, entry)) = crate::leftpanel::split_key(key) {
+            self.rail_requests.push(RailRequest::Activate {
+                module,
+                entry: entry.to_string(),
+            });
+        }
+        self.left_panel_open = true;
+        self.left_mode_request = Some(crate::paneview::LEFT_MODE_RAIL);
+        self.dirty = true;
+    }
+
+    /// Leave the module entry: the panel goes back to the built-in sections.
+    ///
+    /// Deliberately does NOT ask for a mode. This is sent when a built-in button on the
+    /// strip was clicked, and the strip has already written the mode the user picked;
+    /// asking for the workspace tree here would drag them off the button they just
+    /// pressed. The resync's own belt puts a panel still sitting on `LEFT_MODE_RAIL` with
+    /// nothing active back on the workspace tree.
+    pub fn rail_deactivate(&mut self) {
+        self.rail.deactivate();
+        self.dirty = true;
+    }
+
+    /// A row under the active module entry was clicked. The row's `data` payload travels
+    /// back with the gesture — the module put it there precisely so it does not have to
+    /// keep a row table of its own — and the module answers by re-projecting its rows, so
+    /// nothing here mutates the list.
+    pub fn rail_row(&mut self, key: &str, row: &str, gesture: RailGesture) {
+        let Some((module, entry)) = crate::leftpanel::split_key(key) else {
+            return;
+        };
+        let Some(r) = self.rail.rows(key).iter().find(|r| r.id == row) else {
+            return;
+        };
+        self.rail_requests.push(RailRequest::Row {
+            module,
+            entry: entry.to_string(),
+            row: row.to_string(),
+            data: r.data.clone(),
+            gesture,
+        });
+        self.dirty = true;
+    }
+
+    /// Take everything queued for the module host since the last drain.
+    pub fn take_rail_requests(&mut self) -> Vec<RailRequest> {
+        std::mem::take(&mut self.rail_requests)
+    }
+
+    // ---- module capability rights (track H2) ----
+
+    /// The opaque key the rights store files this window's workspace column under: the
+    /// workspace file's path, or `None` when this window has never been saved to / opened
+    /// from one. An unsaved window has no workspace column — the page hides it rather
+    /// than writing overrides into a name that is about to change.
+    pub fn rights_workspace(&self) -> Option<String> {
+        self.workspace_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    /// Remember the workspace file this window is bound to and pull that workspace's
+    /// rights overrides in. The one place `workspace_path` is written, so the rights
+    /// column can never be a workspace behind the tabs on screen.
+    pub fn set_workspace_path(&mut self, path: std::path::PathBuf) {
+        self.rights.load_workspace(&path.to_string_lossy());
+        self.workspace_path = Some(path);
+    }
+
+    /// Apply one rights command from the Preferences page or the ask toast. Whatever the
+    /// service could not finish alone — a held update to re-sign, an ask whose answer a
+    /// blocked module is waiting for — is queued in [`State::rights_effects`] for the
+    /// host/install-store owner; an I/O failure is logged and dropped, since a rights file
+    /// that would not write must not take the window down with it.
+    pub fn rights_apply(&mut self, cmd: &crate::prefs::rights::RightsCommand) {
+        let ws = self.rights_workspace();
+        match crate::prefs::rights::apply(&mut self.rights, cmd, ws.as_deref()) {
+            Ok(crate::prefs::rights::Applied::Nothing) => return,
+            Ok(crate::prefs::rights::Applied::Selected(i)) => {
+                self.rights_selected = self.rights.modules().get(i).map(|r| r.module_id.clone());
+            }
+            Ok(crate::prefs::rights::Applied::Written) => {}
+            Ok(effect) => self.rights_effects.push(effect),
+            Err(e) => {
+                tracing::warn!(error = %e, "rights: could not write the decision");
+                return;
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Take everything the rights page has queued for the module host and the install
+    /// store since the last drain.
+    pub fn take_rights_effects(&mut self) -> Vec<crate::prefs::rights::Applied> {
+        std::mem::take(&mut self.rights_effects)
+    }
+
     /// Re-read the tree (or re-run the query) from disk and re-project the rows. Every
     /// method below ends here, and nothing else does — one place reads the filesystem, so
     /// "what the panel shows" and "what is on disk" can only differ for one event.
@@ -7599,7 +7748,7 @@ impl State {
             return;
         };
         if self.write_workspace_to(&path) {
-            self.workspace_path = Some(path);
+            self.set_workspace_path(path);
         }
     }
 
@@ -7635,7 +7784,7 @@ impl State {
         };
         self.load_workspace(file, mgr);
         // Remember where it came from, so plain "Save workspace" writes back here.
-        self.workspace_path = Some(path);
+        self.set_workspace_path(path);
     }
 
     // ---- workspace sets (M6: the library layer over WorkspaceFile) ----

@@ -10,7 +10,7 @@
 // dispatched against the central `State` (see ARCHITECTURE.md).
 
 import { Theme } from "theme.slint";
-import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter } from "types.slint";
+import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
@@ -20,6 +20,7 @@ import { OverlayLayer } from "overlays.slint";
 import { SidebarRail } from "sidebar.slint";
 import { LeftPanel } from "leftpanel.slint";
 import { ContextMenu, ReminderCustom } from "contextmenu.slint";
+import { RightsAskToast } from "prefs_rights.slint";   // track H2 (mounted app-wide, below)
 import { TipHost, TipArea } from "tooltip.slint";
 import { KeyMsg, HiRect } from "@widgets";
 
@@ -30,7 +31,7 @@ import { KeyMsg, HiRect } from "@widgets";
 // parser bridge; UI in contextmenu.slint).
 export { Theme }
 
-export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, KeybindingItem, MenuEntry, CtxTab, KeyMsg, HiRect, HistoryUi, ReminderItem, RemindersAdapter, ReminderCustom, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter }
+export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, KeybindingItem, MenuEntry, CtxTab, KeyMsg, HiRect, HistoryUi, ReminderItem, RemindersAdapter, ReminderCustom, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter }
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
@@ -464,6 +465,14 @@ export component AppWindow inherits Window {
         y: root.fullscreen ? 12px : 44px;      // below the 32px top bar
         spacing: 8px;
         alignment: start;
+        // A module asking for a capability rides the same stack, above the reminders: the
+        // ask arrives whenever the module needs one, not when the user happens to have the
+        // rights page open. One at a time — RightsAdapter carries the head of the queue and
+        // the next ask fills it in as soon as this one is answered. Gated on "no overlay"
+        // because the rights page shows the SAME card at its top: with the palette or
+        // Preferences up this one sits under their scrim, unclickable, and a second
+        // "Capability request" groupbox is worse than none for a screen reader.
+        if RightsAdapter.ask-present && root.overlay-kind == 0 : RightsAskToast { }
         for t in RemindersAdapter.toasts : Rectangle {
             height: tbody.preferred-height;
             border-radius: 8px;

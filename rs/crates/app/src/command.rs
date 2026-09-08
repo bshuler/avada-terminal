@@ -132,6 +132,22 @@ pub enum Command {
     /// Re-run `git status`. Nothing watches the repository, so this is how a human says "I
     /// just committed something in a pane".
     GitRefresh,
+    // ---- left panel: the module rail (H4) ----
+    /// A module entry on the mode strip was clicked. The payload is the entry KEY
+    /// (`<owner/repo>#<entry-id>`), which is what the strip has and what routes the
+    /// activation back to one module without a second lookup.
+    RailActivate(String),
+    /// Leave the active module entry and go back to the built-in sections.
+    RailBack,
+    /// A row under the active module entry was clicked. `2` is the row id and `3` the
+    /// gesture (`open` / `toggle` / `context`); an unknown gesture is dropped rather than
+    /// guessed, since the module acts on it.
+    RailRow(String, String, String),
+    // ---- module capability rights (H2) ----
+    /// A click on the Preferences rights page or on the app-wide ask toast. The payload is
+    /// already parsed (`prefs::rights::wire` drops an unreadable module id or capability
+    /// name rather than sending a command that cannot be acted on).
+    Rights(crate::prefs::rights::RightsCommand),
     /// Show one commit in the panel — sent by clicking a hash in a pane's output. `cwd` says
     /// which repository (a hash alone does not), and the panel re-roots there so the commit
     /// and the working tree behind it can never be from two different projects.
@@ -689,6 +705,17 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             state.sync_left_root(crate::paneview::LEFT_MODE_FILES);
             state.rebuild_files();
         }
+        // ---- left panel: the module rail (H4) ----
+        Command::RailActivate(key) => state.rail_activate(&key),
+        Command::RailBack => state.rail_deactivate(),
+        Command::RailRow(key, row, gesture) => {
+            let Some(g) = crate::leftpanel::RailGesture::parse(&gesture) else {
+                return Effect::None;
+            };
+            state.rail_row(&key, &row, g);
+        }
+        // ---- module capability rights (H2) ----
+        Command::Rights(cmd) => state.rights_apply(&cmd),
         // ---- left panel: Git mode (J) ----
         Command::GitRefresh => {
             state.sync_left_root(crate::paneview::LEFT_MODE_GIT);
@@ -1519,5 +1546,289 @@ mod git_commit_diff_tests {
             !menu.entries.iter().any(|e| e.label == "Show Diff"),
             "an untracked file must not offer a diff"
         );
+    }
+}
+
+#[cfg(test)]
+mod rail_command_tests {
+    //! Track H4: the three rail commands, one test per `dispatch` arm.
+    //!
+    //! Deleting any arm below makes exactly one of these fail — the arm is the only thing
+    //! standing between a click on a module's button and a panel that does nothing.
+    use super::*;
+    use crate::leftpanel::{entry_key, RailGesture, RailRequest};
+    use crate::paneview::{LEFT_MODE_RAIL, LEFT_MODE_WORKSPACE};
+    use avada_core::module::{RailEntry, RailEvent, Row};
+    use avada_core::session_manager::SessionManager;
+
+    fn mgr() -> SessionManager {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionManager::new(tx)
+    }
+
+    fn module() -> avada_core::rights::ModuleId {
+        // The first-party marketplace: a module id IS its GitHub `owner/repo`.
+        avada_core::rights::ModuleId::new("bshuler/avada-marketplace").unwrap()
+    }
+
+    /// The wire payload of `host.rail.register`; `tier` is the SDK's `UiTier`, which this
+    /// crate cannot name.
+    fn entry(id: &str) -> RailEntry {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "label": id.to_uppercase(), "tier": 1, "order": 0
+        }))
+        .unwrap()
+    }
+
+    fn row(id: &str) -> Row {
+        Row {
+            id: id.into(),
+            label: id.into(),
+            detail: String::new(),
+            depth: 0,
+            expandable: true,
+            expanded: false,
+            icon: None,
+            marks: vec![],
+            data: serde_json::json!({ "page": 2 }),
+        }
+    }
+
+    /// A window whose panel already has one module entry with one row under it.
+    fn with_a_module() -> State {
+        let mut st = State::new(theme::load_font(1.0));
+        st.apply_rail_event(RailEvent::Registered {
+            module: module(),
+            entries: vec![entry("browse")],
+        });
+        st.apply_rail_event(RailEvent::Rows {
+            module: module(),
+            entry: "browse".into(),
+            rows: vec![row("installed")],
+        });
+        st
+    }
+
+    #[test]
+    fn rail_activate_selects_the_entry_and_asks_the_host_for_it() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let key = entry_key(&module(), "browse");
+
+        dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
+        assert_eq!(st.rail.active.as_deref(), Some(key.as_str()));
+        assert!(st.left_panel_open, "activating opens the panel it draws in");
+        assert_eq!(st.left_mode_request, Some(LEFT_MODE_RAIL));
+        assert_eq!(
+            st.take_rail_requests(),
+            vec![RailRequest::Activate {
+                module: module(),
+                entry: "browse".into()
+            }]
+        );
+    }
+
+    /// A button that was unregistered between the paint and the click must be a dropped
+    /// click, not a blank panel and not a request to a module that is gone.
+    #[test]
+    fn rail_activate_on_an_unknown_key_asks_for_nothing() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        dispatch(
+            &mut st,
+            Command::RailActivate("bshuler/avada-marketplace#ghost".into()),
+            &mgr,
+        );
+        assert!(st.rail.active.is_none());
+        assert!(st.left_mode_request.is_none());
+        assert!(st.take_rail_requests().is_empty());
+    }
+
+    /// `RailBack` leaves the module WITHOUT asking for a mode: it is sent because a
+    /// built-in button was clicked, and the strip has already written the mode the user
+    /// picked.
+    #[test]
+    fn rail_back_leaves_the_module_without_choosing_a_mode() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        dispatch(
+            &mut st,
+            Command::RailActivate(entry_key(&module(), "browse")),
+            &mgr,
+        );
+        st.left_mode_request = None;
+
+        dispatch(&mut st, Command::RailBack, &mgr);
+        assert!(st.rail.active.is_none());
+        assert_eq!(
+            st.left_mode_request, None,
+            "the strip already wrote the mode; asking for one here would drag the user off it"
+        );
+    }
+
+    #[test]
+    fn rail_row_carries_the_rows_own_payload_and_gesture_to_the_host() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let key = entry_key(&module(), "browse");
+        dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
+        let _ = st.take_rail_requests();
+
+        dispatch(
+            &mut st,
+            Command::RailRow(key.clone(), "installed".into(), "toggle".into()),
+            &mgr,
+        );
+        assert_eq!(
+            st.take_rail_requests(),
+            vec![RailRequest::Row {
+                module: module(),
+                entry: "browse".into(),
+                row: "installed".into(),
+                data: serde_json::json!({ "page": 2 }),
+                gesture: RailGesture::Toggle,
+            }],
+            "the module hung `data` off the row precisely so it need keep no row table"
+        );
+    }
+
+    /// A gesture spelled wrong in the `.slint` is a dropped click, never a different
+    /// gesture sent to a module — `context` and `open` mean very different things.
+    #[test]
+    fn an_unknown_gesture_sends_nothing() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let key = entry_key(&module(), "browse");
+        dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
+        let _ = st.take_rail_requests();
+
+        dispatch(
+            &mut st,
+            Command::RailRow(key.clone(), "installed".into(), "wiggle".into()),
+            &mgr,
+        );
+        dispatch(
+            &mut st,
+            Command::RailRow(key, "no-such-row".into(), "open".into()),
+            &mgr,
+        );
+        assert!(st.take_rail_requests().is_empty());
+    }
+
+    /// The module crashed while its surface was showing: the panel must go back to a
+    /// built-in view rather than sit on a head with nothing behind it.
+    #[test]
+    fn a_module_going_away_takes_the_panel_off_its_surface() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        dispatch(
+            &mut st,
+            Command::RailActivate(entry_key(&module(), "browse")),
+            &mgr,
+        );
+        st.left_mode_request = None;
+
+        st.apply_rail_event(RailEvent::Gone { module: module() });
+        assert!(st.rail.active.is_none());
+        assert_eq!(st.left_mode_request, Some(LEFT_MODE_WORKSPACE));
+        assert!(st.rail.entries().is_empty());
+    }
+}
+
+/// Track H2: the one `dispatch` arm the rights page and the ask toast share.
+///
+/// The page's nine callbacks are decoded by `prefs::rights::wire` and tested there; what
+/// this covers is the half `State` owns — the service the decision is written against, and
+/// the queue an answered ask leaves behind for the module host that is blocked on it.
+#[cfg(test)]
+mod rights_command_tests {
+    use super::*;
+    use crate::prefs::rights::{Applied, RightsCommand};
+    use avada_core::rights::{Capability, RightValue, RightsService};
+
+    fn mgr() -> SessionManager {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionManager::new(tx)
+    }
+
+    /// A window whose rights service is rooted in a throw-away directory. Never the real
+    /// app-support root: these tests write rights files.
+    fn with_a_temp_rights_root(tag: &str) -> (State, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("avada-rights-cmd-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut st = State::new(theme::load_font(1.0));
+        st.rights = RightsService::with_root(&dir);
+        (st, dir)
+    }
+
+    fn module() -> avada_core::rights::ModuleId {
+        avada_core::rights::ModuleId::new("bshuler/avada-marketplace").unwrap()
+    }
+
+    /// Answering the toast writes the user column AND hands the decision back, because a
+    /// module is sitting blocked on the answer: writing the file alone would leave it
+    /// waiting forever.
+    #[test]
+    fn answering_an_ask_writes_the_column_and_queues_the_decision_for_the_host() {
+        let (mut st, dir) = with_a_temp_rights_root("answer");
+        let id = st.rights.ask(&module(), Capability::WorkspaceRead, None);
+
+        dispatch(
+            &mut st,
+            Command::Rights(RightsCommand::AskAllowAlways(id)),
+            &mgr(),
+        );
+
+        assert_eq!(
+            st.rights.user_value(&module(), Capability::WorkspaceRead),
+            RightValue::Always
+        );
+        let queued = st.take_rights_effects();
+        assert_eq!(queued.len(), 1, "the host never heard the answer");
+        assert!(matches!(queued[0], Applied::Answered { .. }));
+        assert!(st.take_rights_effects().is_empty(), "the drain kept a copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A picker click writes and nothing more: there is no module to tell, so the host
+    /// queue stays empty and a resync is all that is owed.
+    #[test]
+    fn a_picker_click_writes_without_queueing_anything() {
+        let (mut st, dir) = with_a_temp_rights_root("picker");
+        dispatch(
+            &mut st,
+            Command::Rights(RightsCommand::SetUser {
+                module: module(),
+                cap: Capability::WorkspaceRead,
+                value: RightValue::Never,
+            }),
+            &mgr(),
+        );
+
+        assert_eq!(
+            st.rights.user_value(&module(), Capability::WorkspaceRead),
+            RightValue::Never
+        );
+        assert!(st.take_rights_effects().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An id nobody is waiting on (already answered, or dropped when its module left)
+    /// changes nothing — it must not fall through to a write or a phantom relay.
+    #[test]
+    fn answering_an_ask_that_is_already_gone_does_nothing() {
+        let (mut st, dir) = with_a_temp_rights_root("stale");
+        dispatch(
+            &mut st,
+            Command::Rights(RightsCommand::AskDeny(4242)),
+            &mgr(),
+        );
+        assert_eq!(
+            st.rights.user_value(&module(), Capability::WorkspaceRead),
+            RightValue::Ask
+        );
+        assert!(st.take_rights_effects().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

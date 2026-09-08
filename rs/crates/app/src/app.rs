@@ -4401,6 +4401,17 @@ impl App {
             win.app
                 .global::<crate::LeftPanelAdapter>()
                 .on_mode_changed(move |mode| {
+                    let Some(w) = app.window_by_id(id) else {
+                        return;
+                    };
+                    // Track H4: a BUILT-IN button was pressed, so whatever module entry was
+                    // showing is not any more. Sent before the mode command so the panel
+                    // never spends a frame drawing a module's rows under a built-in head.
+                    // The read-only borrow is dropped before the dispatch (borrow rule #18).
+                    let leaving_rail = mode >= 0 && w.state.borrow().rail.active.is_some();
+                    if leaving_rail {
+                        app.run_command(&w, Command::RailBack);
+                    }
                     let cmd = if mode == crate::paneview::LEFT_MODE_FILES {
                         Command::FilesRefresh
                     } else if mode == crate::paneview::LEFT_MODE_GIT {
@@ -4408,10 +4419,51 @@ impl App {
                     } else {
                         return;
                     };
+                    app.run_command(&w, cmd);
+                });
+        }
+
+        // ---- the module rail (track H4): a module entry, and a row under it ----
+        // Both carry the entry KEY (`<owner/repo>#<entry-id>`) rather than an index: the
+        // strip's list is rebuilt whenever any module registers or dies, so an index taken
+        // at paint time can name a different module by the time the click lands.
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::RailAdapter>()
+                .on_activate(move |key| {
                     if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, cmd);
+                        app.run_command(&w, Command::RailActivate(key.into()));
                     }
                 });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::RailAdapter>()
+                .on_row_activate(move |key, row, gesture| {
+                    if let Some(w) = app.window_by_id(id) {
+                        app.run_command(
+                            &w,
+                            Command::RailRow(key.into(), row.into(), gesture.into()),
+                        );
+                    }
+                });
+        }
+
+        // Every rights-page control and the app-wide ask toast, through one closure: the
+        // adapter's nine callbacks are already decoded into `RightsCommand` by `wire`, so
+        // this end only has to route them through the command seam like any other click.
+        {
+            let app = app.clone();
+            let id = win.id;
+            crate::prefs::rights::wire(&win.app, move |cmd| {
+                if let Some(w) = app.window_by_id(id) {
+                    app.run_command(&w, Command::Rights(cmd));
+                }
+            });
         }
 
         // The Reminder flyout's Custom-duration parser — a PURE bridge (no state access,
