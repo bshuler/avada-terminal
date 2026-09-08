@@ -378,6 +378,38 @@ impl Host {
         }
     }
 
+    /// Which running module `presented` is the token of, if any. Every live token is
+    /// compared in constant time, so the answer's timing does not say which slot matched.
+    /// The control server uses this to put a name to a bearer on `/m/...` routes.
+    pub fn module_for_token(&self, presented: &str) -> Option<ModuleId> {
+        if presented.is_empty() {
+            return None;
+        }
+        let mut found = None;
+        for (id, slot) in lock(&self.inner.slots).iter() {
+            let hit = lock(&slot.state)
+                .live
+                .as_ref()
+                .is_some_and(|l| l.token.matches(presented));
+            if hit && found.is_none() {
+                found = Some(id.clone());
+            }
+        }
+        found
+    }
+
+    /// The live token itself, for tests that play the module's side of the wire. Never
+    /// compiled into the shipped binary.
+    #[cfg(test)]
+    pub(crate) fn test_token(&self, id: &ModuleId) -> Option<String> {
+        lock(&self.inner.slots).get(id).and_then(|slot| {
+            lock(&slot.state)
+                .live
+                .as_ref()
+                .map(|l| l.token.expose().to_string())
+        })
+    }
+
     /// `module.activate` with the host's workspace (or `workspace` if given).
     pub fn activate(
         &self,

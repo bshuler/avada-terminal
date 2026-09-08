@@ -333,7 +333,10 @@ mod host_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    const WAIT: Duration = Duration::from_secs(10);
+    // Loose on purpose: every spawn re-hashes this (large, debug) test binary, and a
+    // crash test lives three times. Under a parallel cargo load 10 s was not enough;
+    // a passing test never comes near the bound.
+    const WAIT: Duration = Duration::from_secs(60);
 
     struct Rig {
         host: Host,
@@ -615,7 +618,7 @@ mod host_tests {
         // The silent child sleeps 30 s; anything well under that proves the cut-off.
         // The bound is loose because every spawn re-hashes this (large, debug) test
         // binary, and a parallel test run makes that slow.
-        assert!(t0.elapsed() < Duration::from_secs(20), "{:?}", t0.elapsed());
+        assert!(t0.elapsed() < Duration::from_secs(25), "{:?}", t0.elapsed());
         assert!(matches!(r.host.status(&id), ModuleStatus::Disabled { .. }));
     }
 

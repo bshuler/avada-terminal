@@ -25,6 +25,7 @@
 pub mod asks;
 pub mod gate;
 pub mod held;
+pub mod source;
 pub mod store;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,6 +41,7 @@ pub use avada_module_sdk::rights::{
 pub use asks::{AskAnswer, AskQueue, PendingAsk};
 pub use gate::RightsGate;
 pub use held::HeldStore;
+pub use source::ModuleTokens;
 pub use store::{RightsStore, WorkspaceRights};
 
 /// One line of the per-module rights page: a declared capability and every column that
