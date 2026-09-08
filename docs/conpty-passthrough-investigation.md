@@ -6,10 +6,10 @@
 > and — important correction — the sideloaded 1.24 host does **NOT** repaint the scroll region
 > (1.0× inflation); what it doesn't fix is end-to-end delivery pacing. See §Addendum.
 
-**Question:** avada' `scrolling-region` (DECSTBM) terminal throughput is ~0.4 MB/s vs
+**Question:** Avada's `scrolling-region` (DECSTBM) terminal throughput is ~0.4 MB/s vs
 Windows Terminal's ~33 MB/s (~80×). Is it fixable, how, and at what cost?
 
-**Short answer:** The 80× gap is **a Windows ConHost/ConPTY limitation, not a avada bug,
+**Short answer:** The 80× gap is **a Windows ConHost/ConPTY limitation, not an Avada bug,
 and it is NOT fixable from our side by a flag, a dependency bump, or sideloading a newer ConPTY.**
 We empirically loaded the latest official redistributable ConPTY (the one that contains the big
 "passthrough" perf refactor) and the scroll-region case stayed at 0.2–0.4 MB/s. The one thing we
@@ -37,7 +37,7 @@ Track H's instrument already proved the mechanism: during a scroll-region run th
 ConHost, scraping its character grid into VT for the ConPTY master pipe, **re-renders the whole
 DECSTBM scroll region (cursor-home + ~20 lines) on every single scrolled line** instead of emitting
 an efficient scroll/index sequence. node is backpressured by conhost's *output-generation* rate, not
-by anything in avada: the app keeps up with the inflated 28 MB/s at ~38 % of one core and the
+by anything in Avada: the app keeps up with the inflated 28 MB/s at ~38 % of one core and the
 grid scroll is O(1) (alacritty ring-rotate, measured by Track A). **The bottleneck is upstream of
 our process.**
 
@@ -188,7 +188,7 @@ A fork buys nothing here. High effort, ~0 gain on the metric. **Rejected.**
    for *Windows ConPTY itself*; every ConPTY-based emulator that uses the in-box host (including older
    conhost) hits it. The honest competitive story is "we match WT/Alacritty on normal output
    (scrolling/dense within run-to-run noise) and are bounded by Windows ConPTY on the DECSTBM
-   worst-case, same as any in-box-host app." It is not a avada regression.
+   worst-case, same as any in-box-host app." It is not an Avada regression.
 
 ## Sources
 - [microsoft/terminal#7019 — pathological scroll-region redraw (closed: not planned)](https://github.com/microsoft/terminal/issues/7019)
@@ -367,7 +367,7 @@ Scanning is bounded (first 512 bytes, ≤3-byte cross-chunk carry, Windows-only)
 is never delayed and a child's own later queries still reach the widget for true-cursor answers.
 
 **Measured (child-runs-at, app launch → first child instruction):** bundled 1.24 host
-1231→**78 ms**; in-box 86 ms. Bench startup (3-run): avada **142 ms** vs WT 313 vs
+1231→**78 ms**; in-box 86 ms. Bench startup (3-run): Avada **142 ms** vs WT 313 vs
 Alacritty 517 — from 2121 ms two days of fixes ago, and now the fastest of the three. pwsh's
 `CreateProcessW` no longer stalls (same handshake gate). The window itself appears at ~540 ms
 (wgpu device init — the only remaining startup block); the shell is already live behind it.

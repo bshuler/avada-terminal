@@ -18,7 +18,7 @@
 # There is no `cwd` field: resume is directory-scoped, and workspace_roots[0] is the
 # directory cursor-agent itself considers the conversation to belong to.
 #
-# When the agent runs inside a avada pane (AVADA_PANE_ID in the pane env — the
+# When the agent runs inside an Avada pane (AVADA_PANE_ID in the pane env — the
 # hook child inherits it, verified) this writes
 #   <state dir>/tool-sessions/cursor-agent/<pane-id>.json = { "sessionId":..., "cwd":... }
 # on sessionStart and removes it on sessionEnd, so a marker exists exactly while a

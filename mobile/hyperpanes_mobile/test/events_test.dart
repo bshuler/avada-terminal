@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hyperpanes_mobile/src/api/events.dart';
+import 'package:avada_mobile/src/api/events.dart';
 
 void main() {
   group('ControlFrame.parse', () {

@@ -22,7 +22,7 @@
 # end one has ("reason"). Erring towards "start" means an unrecognised payload records a
 # live conversation rather than deleting the record of one.
 #
-# When copilot runs inside a avada pane (AVADA_PANE_ID in the pane env — the
+# When copilot runs inside an Avada pane (AVADA_PANE_ID in the pane env — the
 # hook child inherits it, verified) this writes
 #   <state dir>/tool-sessions/copilot/<pane-id>.json = { "sessionId":..., "cwd":... }
 # on sessionStart and removes it on sessionEnd, so a marker exists exactly while a

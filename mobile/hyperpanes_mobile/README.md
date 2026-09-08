@@ -1,6 +1,6 @@
-# avada mobile
+# Avada Terminal mobile
 
-iOS/Android client for a host avada: streams pane output, drives Claude/agent
+iOS/Android client for an Avada Terminal host: streams pane output, drives Claude/agent
 panes, and manages the workspace over the control API. Everything heavy (ptys, agents,
 repos) stays on the host — the phone is a remote head.
 

@@ -54,7 +54,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     final p = HostPairing.parse(url);
     if (p == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not a avada pairing code')),
+        const SnackBar(content: Text('Not an Avada pairing code')),
       );
       return;
     }
@@ -72,7 +72,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('avada')),
+      appBar: AppBar(title: const Text('Avada Terminal')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(

@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hyperpanes_mobile/src/api/control_client.dart';
-import 'package:hyperpanes_mobile/src/api/events.dart';
-import 'package:hyperpanes_mobile/src/term/pane_session.dart';
+import 'package:avada_mobile/src/api/control_client.dart';
+import 'package:avada_mobile/src/api/events.dart';
+import 'package:avada_mobile/src/term/pane_session.dart';
 
 /// Harness: a manually-driven frame stream + a gated snapshot fetch, so tests control
 /// the exact interleaving of "frames arriving" vs "snapshot resolving".

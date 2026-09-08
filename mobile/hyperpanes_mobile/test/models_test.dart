@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hyperpanes_mobile/src/api/models.dart';
+import 'package:avada_mobile/src/api/models.dart';
 
 void main() {
   test('HostState parses the /state tree with additive fields', () {

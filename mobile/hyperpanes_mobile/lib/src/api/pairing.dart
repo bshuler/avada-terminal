@@ -6,7 +6,7 @@
 /// `host:port` (token supplied separately in the connect form).
 library;
 
-/// One saved/parsed host connection: everything needed to reach a avada
+/// One saved/parsed host connection: everything needed to reach an Avada
 /// control API.
 class HostPairing {
   const HostPairing({

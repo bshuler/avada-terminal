@@ -76,8 +76,8 @@ try {
   Write-Host "==> embedding icon + version info into avada.exe (rcedit)" -ForegroundColor Cyan
   & $rcedit $ExePath `
       --set-icon $IconIco `
-      --set-version-string 'ProductName' 'Avada' `
-      --set-version-string 'FileDescription' 'Avada' `
+      --set-version-string 'ProductName' 'Avada Terminal' `
+      --set-version-string 'FileDescription' 'Avada Terminal' `
       --set-version-string 'CompanyName' 'Avada' `
       --set-file-version $Version `
       --set-product-version $Version

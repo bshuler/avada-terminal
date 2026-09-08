@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hyperpanes_mobile/src/term/path_detect.dart';
+import 'package:avada_mobile/src/term/path_detect.dart';
 
 void main() {
   test('absolute path anywhere in the token is hit', () {

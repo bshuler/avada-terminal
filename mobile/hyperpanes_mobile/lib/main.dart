@@ -13,7 +13,7 @@ class AvadaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'avada',
+      title: 'Avada Terminal',
       theme: buildTheme(),
       debugShowCheckedModeBanner: false,
       home: const ConnectScreen(),

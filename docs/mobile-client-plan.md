@@ -2,7 +2,7 @@
 
 Status: **v1 implemented** on branch `feat/mobile-client` (host additions + Flutter app).
 The mobile apps are pure *clients*: everything (ptys, agents, files, queues) runs on the
-host avada; the phone streams, observes, and drives.
+Avada host; the phone streams, observes, and drives.
 
 ## 1. Why this architecture
 

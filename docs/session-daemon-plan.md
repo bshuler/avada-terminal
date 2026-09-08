@@ -1,6 +1,6 @@
 # Session daemon — true process survival across a GUI crash (#3)
 
-**Goal.** When the avada GUI crashes (or is killed, or the user relaunches), the shells and
+**Goal.** When the Avada GUI crashes (or is killed, or the user relaunches), the shells and
 programs running in panes should **keep running** and be **re-attached** on the next launch — not
 re-spawned. Today the PTYs are children of the GUI process, so a GUI crash SIGHUPs them and they die.
 True survival requires a separate, long-lived **session daemon** that owns the PTYs; the GUI becomes a
@@ -42,7 +42,7 @@ attach a second client, assert replay. Only the final visual re-attach (M2) need
 ## Target architecture
 
 ```
-            ┌───────────────────────────── avada GUI (client) ─────────────────────────────┐
+            ┌───────────────────────────── Avada GUI (client) ─────────────────────────────┐
             │  SessionManager  ── same API ──>  DaemonClient                                      │
             │     (events)  <── UnboundedSender<SessionEvent> ── reader thread                    │
             └───────────────────────────────────┬───────────────────────────────────────────────┘

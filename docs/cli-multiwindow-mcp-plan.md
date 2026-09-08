@@ -1,6 +1,6 @@
 # Plan — expanded CLI, launch-time multi-window, and an MCP control surface
 
-Roadmap for three connected workstreams. Two live in **this repo** (avada); the
+Roadmap for three connected workstreams. Two live in **this repo** (Avada); the
 **MCP server is a separate project** that sits on top of the control surface we add here.
 
 **Locked design decisions (2026-06-05):**

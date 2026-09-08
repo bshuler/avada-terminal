@@ -1,4 +1,4 @@
-/// HTTP + WebSocket client for the avada control API.
+/// HTTP + WebSocket client for the Avada control API.
 ///
 /// HTTP surface used (see `rs/crates/core/src/control/routes.rs`):
 ///   GET  /health, GET /state, GET /projects

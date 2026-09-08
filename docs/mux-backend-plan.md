@@ -163,7 +163,7 @@ equivalent and the piece every mobile path depends on. Usable over a stock syste
 before M3 exists.
 
 ### M3 — embedded SSH server (russh) ✅ *built*
-A phone with no avada software on it — Termius, Blink, or plain `ssh` — points at the port and
+A phone with no Avada software on it — Termius, Blink, or plain `ssh` — points at the port and
 lands in a live pane. `rs/crates/app/src/ssh/` holds it: `config.rs` (settings + on-disk layout,
 portable and tested on every leg), `keys.rs` (host key, client keys), `server.rs` (the russh
 listener and auth), `bridge.rs` (channel ↔ pane). An opened channel runs the **M2 attach client**
@@ -219,7 +219,7 @@ something real.
   protocol, attaches to **every** pane on one connection, and turns `SessionEvent`s into calls on
   the state machine.
 
-**Id mapping (clients cache these — it is a contract).** One tmux **window** per avada pane,
+**Id mapping (clients cache these — it is a contract).** One tmux **window** per Avada pane,
 each holding exactly one pane, all inside a single tmux session `$0`. The window/pane ids are a
 pure function of the *sorted set of live pane uids*: FNV-1a over a domain tag plus the uid, folded
 to 31 bits (signed-`int` safe — iTerm2 parses ids as `int`). Nothing is persisted, so a reconnect
@@ -234,12 +234,12 @@ pane under `--resize`.
 because that is where iTerm2 keeps its *entire* window model — which tmux windows share one iTerm2
 window and where they sit on screen. They are client scratch space that tmux itself never reads, so
 honouring them is honest; without them every reconnect re-opens the panes as ungrouped,
-unpositioned tabs. Every *other* option still errors — there is no avada setting behind
+unpositioned tabs. Every *other* option still errors — there is no Avada setting behind
 `status` or `default-terminal` to change.
 
 **Anything not implemented returns `%error`, never a silent success** — every structure-changing
 command (`new-window`, `split-window`, `kill-*`, `break-pane`, `join-pane`, `swap-*`, …) is an
-explicit error, because avada' pane structure is owned by the desktop app.
+explicit error, because Avada's pane structure is owned by the desktop app.
 
 ### M5 — left slide-out panel
 `ui/leftpanel.slint` + `app/src/leftpanel.rs`, mounted as a **sibling** of the pane area like the
@@ -275,13 +275,13 @@ members are recorded as absolute paths, which `resolve_members` passes through v
 Launch-time discovery and re-adoption already existed — `ListSessions` / `Attach` are in the
 protocol, `App::attach_panes_from_specs` rebinds snapshot panes to surviving sessions, and the
 daemon backend is default-on. M7 added the part that makes M5's DETACHED list safe with more than
-one avada process running: **a cross-process claim registry**.
+one Avada process running: **a cross-process claim registry**.
 
 **The daemon is the registry** (`session/claims.rs`), not a file under the runtime dir. A file
 registry would force every reader to judge staleness, and the only honest judgement is pid *plus*
 process start time (bare pids are recycled) — per-OS code — with an `flock` protocol layered on top
 for mutual exclusion, and crash safety left as every future reader's problem. The daemon is
-already the single process that knows every session and that every avada process connects to,
+already the single process that knows every session and that every Avada process connects to,
 so the claim map is ordinary in-memory state behind a `Mutex`: a real compare-and-set with exactly
 one winner and no protocol to get wrong.
 
@@ -346,7 +346,7 @@ Windows (`session/windows.rs`) mirrors all of this, but could not be compiled lo
 * **No Rust mosh implementation exists**, so mobile roaming/high-latency behaviour will be worse
   than mosh until someone writes one. Future item.
 * **What we give up by dropping tmux:** literal `tmux attach`, users' own `.tmux.conf`, and tmux
-  muscle memory against avada panes. Accepted — M4 recovers the part that matters for Blink
+  muscle memory against Avada panes. Accepted — M4 recovers the part that matters for Blink
   and iTerm2.
 
 ## Fan-out

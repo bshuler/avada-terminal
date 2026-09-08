@@ -22,7 +22,7 @@
 # the directory above it is named by a first-seen-wins scheme, so the Talk tailer searches
 # ~/.gemini/tmp/*/chats and confirms the hit against the id on the file's first line.
 #
-# When gemini runs inside a avada pane (AVADA_PANE_ID in the pane env — the hook
+# When gemini runs inside an Avada pane (AVADA_PANE_ID in the pane env — the hook
 # child inherits it) this writes
 #   <state dir>/tool-sessions/gemini/<pane-id>.json = { "sessionId":..., "cwd":... }
 # on SessionStart and removes it on SessionEnd, so a marker exists exactly while a

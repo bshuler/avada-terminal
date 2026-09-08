@@ -35,7 +35,7 @@
   is %APPDATA%\avada\tool-sessions\<tool>\<pane-id>.json — claude alone predates that
   layout and keeps %APPDATA%\avada\claude-sessions\<pane-id>.json.
 
-  Outside a avada pane, or on any error at all, this exits 0 having done nothing: a
+  Outside an Avada pane, or on any error at all, this exits 0 having done nothing: a
   hook that fails must never take the agent down with it.
 #>
 param([Parameter(Mandatory = $true)][string]$Tool)

@@ -1,6 +1,6 @@
-# Agent orchestration on avada — gap analysis & design
+# Agent orchestration on Avada — gap analysis & design
 
-How to run an LLM **agent org** on top of avada: a manager driving worker panes, or a
+How to run an LLM **agent org** on top of Avada: a manager driving worker panes, or a
 recursive **CEO → manager → workers** tree. This builds on the control API (M2/M2b — see
 [`cli-multiwindow-mcp-plan.md`](cli-multiwindow-mcp-plan.md)) and the separate MCP project at
 `C:\avada-mcp`.

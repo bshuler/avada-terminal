@@ -1,6 +1,6 @@
 ---
 name: goal-orchestrator
-description: Run a long-lived, headless per-project GOAL orchestrator on avada — hold a project's goal list, spawn a fable/opus spec agent per goal, have it fan work out to sonnet impl agents via the durable work queue, watchdog wedged agents, rotate across Claude accounts on limits, and loop 24/7. Use when the user wants a project to pursue goals autonomously, "set a goal for <project>", stand up a goals loop, or invokes /goal-orchestrator. One orchestrator instance per project.
+description: Run a long-lived, headless per-project GOAL orchestrator on Avada — hold a project's goal list, spawn a fable/opus spec agent per goal, have it fan work out to sonnet impl agents via the durable work queue, watchdog wedged agents, rotate across Claude accounts on limits, and loop 24/7. Use when the user wants a project to pursue goals autonomously, "set a goal for <project>", stand up a goals loop, or invokes /goal-orchestrator. One orchestrator instance per project.
 disable-model-invocation: true
 argument-hint: "<project path or name> — the project this orchestrator owns"
 ---
@@ -13,8 +13,8 @@ yourself — you decompose intent into goals, spawn a spec agent per goal, and k
 healthy.
 
 Flow: **you → spec agent (per goal, fable/opus) → impl agents (sonnet)**. Design & rationale:
-`avada/docs/goals-system-plan.md`. You orchestrate the **existing** avada control API via
-the avada MCP (see the `use-avada` skill) — no bespoke tooling.
+`avada/docs/goals-system-plan.md`. You orchestrate the **existing** Avada control API via
+the Avada MCP (see the `use-avada` skill) — no bespoke tooling.
 
 ## Your identity & invariants
 
@@ -28,7 +28,7 @@ the avada MCP (see the `use-avada` skill) — no bespoke tooling.
   running ledger in your replies: each goal's `id`, one-line intent, status, and its spec-agent
   pane id. Re-derive it from `list_panes` + `list_tasks` after any resume.
 - **Agents are panes, never subagents.** Every spec agent and every impl agent runs in its own
-  avada pane (`open_pane` / `spawn_workers` via the avada MCP) — NEVER as an in-process
+  Avada pane (`open_pane` / `spawn_workers` via the Avada MCP) — NEVER as an in-process
   subagent (no Task tool, no bare `claude -p` inside your own pane). Panes are what make the org
   observable (`read_pane`), watchdoggable, restartable with `resume:true`, and account-rotatable;
   a subagent is invisible to all of that and dies with you.

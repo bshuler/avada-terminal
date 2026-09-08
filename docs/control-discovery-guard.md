@@ -22,13 +22,13 @@ daemon never collide there — correct for argv hand-off, blind to file ownershi
 ## The guard (`core/src/control/discovery_guard.rs`)
 
 Before `run_server` claims the file it reads it and checks the recorded pid. The file
-is refused ONLY when that pid is alive, is not ours, and **verifiably looks like a
-avada process** (comm/argv0 on Linux, `ps` comm elsewhere on unix, image path on
+is refused ONLY when that pid is alive, is not ours, and **verifiably looks like an
+Avada process** (comm/argv0 on Linux, `ps` comm elsewhere on unix, image path on
 Windows — matching `avada` or the `headless` bin). Everything else claims
 cleanly; the guard **fails open**, because a wrongly-refused legitimate launch would
 be a worse wedge than the clobber it prevents:
 
-- **live foreign avada pid → refuse startup**, before binding anything, with a
+- **live foreign Avada pid → refuse startup**, before binding anything, with a
   message naming the live owner (pid / port / version), the copy-pasteable isolation
   env line, and the pid-reuse escape hatch. The refusal is retried for ~5s first, so
   an owner that is mid-exit (restart overlap) is claimed instead of refused. The

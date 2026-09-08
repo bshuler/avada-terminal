@@ -21,6 +21,9 @@ Unicode true
 
 ; ----- Identity (mirrors electron-builder.yml) -------------------------------
 !define PRODUCT_NAME "Avada"
+; What the user sees (Start Menu, desktop shortcut, Add/Remove Programs). PRODUCT_NAME stays
+; the short form for paths and registry keys so no on-disk name carries a space.
+!define DISPLAY_NAME "Avada Terminal"
 !define APP_ID       "to.avada.terminal"
 !define PUBLISHER    "Avada"
 !define MAIN_BINARY  "avada.exe"
@@ -49,7 +52,7 @@ Unicode true
   !define RESOURCES "..\..\resources"
 !endif
 
-Name "${PRODUCT_NAME}"
+Name "${DISPLAY_NAME}"
 OutFile "${OUTFILE}"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\${PRODUCT_NAME}"
@@ -57,8 +60,8 @@ InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallLocation"
 SetCompressor /SOLID lzma
 
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey  "ProductName"   "${PRODUCT_NAME}"
-VIAddVersionKey  "FileDescription" "${PRODUCT_NAME} installer"
+VIAddVersionKey  "ProductName"   "${DISPLAY_NAME}"
+VIAddVersionKey  "FileDescription" "${DISPLAY_NAME} installer"
 VIAddVersionKey  "FileVersion"   "${VERSION}.0"
 VIAddVersionKey  "ProductVersion" "${VERSION}"
 VIAddVersionKey  "CompanyName"   "${PUBLISHER}"
@@ -128,14 +131,14 @@ Section "Install"
   File "${RESOURCES}\claude\goal-orchestrator\IMPL.md"
   SetOutPath "$INSTDIR"
 
-  CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\${MAIN_BINARY}" "" "$INSTDIR\icon.ico" 0
-  CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk"    "$INSTDIR\${MAIN_BINARY}" "" "$INSTDIR\icon.ico" 0
+  CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}.lnk" "$INSTDIR\${MAIN_BINARY}" "" "$INSTDIR\icon.ico" 0
+  CreateShortcut "$DESKTOP\${DISPLAY_NAME}.lnk"    "$INSTDIR\${MAIN_BINARY}" "" "$INSTDIR\icon.ico" 0
 
   WriteUninstaller "$INSTDIR\Uninstall ${PRODUCT_NAME}.exe"
   WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallLocation" "$INSTDIR"
 
   ; Add/Remove Programs entry (per-user -> HKCU)
-  WriteRegStr   HKCU "${UNINST_KEY}" "DisplayName"     "${PRODUCT_NAME}"
+  WriteRegStr   HKCU "${UNINST_KEY}" "DisplayName"     "${DISPLAY_NAME}"
   WriteRegStr   HKCU "${UNINST_KEY}" "DisplayVersion"  "${VERSION}"
   WriteRegStr   HKCU "${UNINST_KEY}" "Publisher"       "${PUBLISHER}"
   WriteRegStr   HKCU "${UNINST_KEY}" "DisplayIcon"     "$INSTDIR\icon.ico"
@@ -164,8 +167,8 @@ SectionEnd
 Section "Uninstall"
   Call un.RemoveFromUserPath
 
-  Delete "$SMPROGRAMS\${PRODUCT_NAME}.lnk"
-  Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
+  Delete "$SMPROGRAMS\${DISPLAY_NAME}.lnk"
+  Delete "$DESKTOP\${DISPLAY_NAME}.lnk"
 
   Delete "$INSTDIR\${MAIN_BINARY}"
   Delete "$INSTDIR\icon.ico"
@@ -206,7 +209,7 @@ SectionEnd
 ; literal `$`. `$INSTDIR` / `$PLUGINSDIR` are real NSIS variables and expand.
 
 Function AddToUserPath
-  DetailPrint "Adding ${PRODUCT_NAME} to your PATH..."
+  DetailPrint "Adding ${DISPLAY_NAME} to your PATH..."
   FileOpen $0 "$PLUGINSDIR\avada-path.ps1" w
   FileWrite $0 "param([string]$$Dir)$\r$\n"
   FileWrite $0 "$$p=[Environment]::GetEnvironmentVariable('Path','User')$\r$\n"
@@ -220,7 +223,7 @@ Function AddToUserPath
 FunctionEnd
 
 Function un.RemoveFromUserPath
-  DetailPrint "Removing ${PRODUCT_NAME} from your PATH..."
+  DetailPrint "Removing ${DISPLAY_NAME} from your PATH..."
   FileOpen $0 "$PLUGINSDIR\avada-unpath.ps1" w
   FileWrite $0 "param([string]$$Dir)$\r$\n"
   FileWrite $0 "$$p=[Environment]::GetEnvironmentVariable('Path','User')$\r$\n"

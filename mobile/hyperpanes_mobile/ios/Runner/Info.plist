@@ -11,7 +11,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing QR code shown by `avada pair` on your computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to the avada host on your local network or tailnet.</string>
+	<string>Connect to the Avada host on your local network or tailnet.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The control API is plain HTTP/WS; transport security comes from the
@@ -28,7 +28,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>hyperpanes_mobile</string>
+	<string>Avada Terminal</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

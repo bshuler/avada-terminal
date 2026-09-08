@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Avada" width="128" height="128" />
+  <img src="docs/logo.png" alt="Avada Terminal" width="128" height="128" />
 </p>
 
-<h1 align="center">Avada</h1>
+<h1 align="center">Avada Terminal</h1>
 
 > **An agent‑first tiling terminal workspace — name, color‑frame, and tear off panes into windows, then watch and drive your AI agents from one frameless app.**
 
@@ -10,7 +10,8 @@
      ![Avada](docs/screenshot.png) — a tiled, multi-pane layout shows the app off best. -->
 <p align="center"><em>📸 Screenshot coming soon — see <code>docs/screenshot.png</code>.</em></p>
 
-A desktop **terminal workspace**: tabbed windows that tile multiple live terminal panes, where each
+**Avada Terminal** — formerly Hyperpanes; upgrade notes in [docs/rename-compat.md](docs/rename-compat.md) —
+is a desktop **terminal workspace**: tabbed windows that tile multiple live terminal panes, where each
 pane is spawned with a **locked label** and its **own frame color**, arranged via **layout presets**.
 Every tab is a self-contained workspace; panes and whole tabs can be **dragged between tabs and torn
 off into separate windows**. Panes are created two ways — ad‑hoc through a **command palette** or the
@@ -309,7 +310,7 @@ windows as new ones. `--attach` overrides that. A positional `.json` launch alwa
 > precedence over a positional `.json` path. From a source build, run
 > `cargo run --manifest-path rs/crates/app/Cargo.toml -- -c "…"` (args after the `--`). On a packaged
 > install, call the `avada` executable (its
-> install folder is added to `PATH`). avada runs as a **single instance**: a second
+> install folder is added to `PATH`). Avada runs as a **single instance**: a second
 > `avada …` while it's open routes its content into the running app (attaching by default; see
 > above).
 

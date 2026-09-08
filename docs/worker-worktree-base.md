@@ -61,7 +61,7 @@ Now:
   `avada worker --queue <q> --count N --worktree --base main -- …`.
 - Dependent waves: `--base <goal-integration-branch>` instead of checking that branch out in a
   shared cwd.
-- **Version-skew gap (closes when `g7/mcp-base` merges + publishes):** a avada binary with
+- **Version-skew gap (closes when `g7/mcp-base` merges + publishes):** an Avada binary with
   this change plus a published `avada-mcp` *without* the `base` passthrough (≤ 0.1.12) means
   `spawn_workers {isolation:"worktree"}` spawns runners that exit immediately with the teaching
   error — loud, not silent. Until the implemented follow-up below lands in a published package,

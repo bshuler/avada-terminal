@@ -84,7 +84,7 @@ sandboxing = scoped tokens (`scope.rs`, `tokens.rs`).
 
 **Current disk reality (verified):** `~/.claude` (acct 1, 137 transcript dirs) and `~/.claude-alt`
 (acct 2, **own separate** `projects/`+`sessions/`, 1 dir). Only 2 dirs exist; 3rd is TODO. `claude`
-stores transcripts **under `CLAUDE_CONFIG_DIR`**, and avada sets **no** `CLAUDE_CONFIG_DIR`
+stores transcripts **under `CLAUDE_CONFIG_DIR`**, and Avada sets **no** `CLAUDE_CONFIG_DIR`
 today (grep-confirmed). So rotating accounts today **silently starts a fresh conversation** — the
 per-pane + resume-across-accounts requirement is currently unsatisfiable.
 

@@ -8,7 +8,7 @@
 #   }
 #
 # Claude pipes hook JSON (session_id, cwd, hook_event_name, ...) on stdin. When the
-# claude runs inside a avada pane (AVADA_PANE_ID in the pane env), this writes
+# claude runs inside an Avada pane (AVADA_PANE_ID in the pane env), this writes
 #   <state dir>/claude-sessions/<pane-id>.json = { "sessionId":..., "cwd":..., "configDir":... }
 # on SessionStart and removes it on SessionEnd — so a marker exists exactly while a
 # conversation is live in that pane. The GUI's relaunch snapshot embeds the id, letting a

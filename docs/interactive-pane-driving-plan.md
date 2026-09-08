@@ -106,7 +106,7 @@ forever. Pair with a launch flag / pre-trusted cwd to avoid the first-run trust 
 rendered reply delta. The whole per-turn dance in **one** call; ideal for driving TUI / "dumb"
 agents. (Built purely on A1+B1+C1; no new app surface.)
 
-**D2. Document "structured beats scraping" for MCP-capable agents.** Pane *had* the avada
+**D2. Document "structured beats scraping" for MCP-capable agents.** Pane *had* the Avada
 MCP — the clean channel was its **inbox** (`send_message`/`send_to_parent`), not scraping its
 TUI. But an interactive `claude` won't poll its inbox unprompted, so scraping was the only live
 option. Two supported patterns: (a) run pane-agents with an **inbox-poll loop** ("listening

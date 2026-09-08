@@ -5,7 +5,7 @@ you. Your job: turn the goal into a concrete **spec**, then get it built by dele
 agents, verify it against acceptance, report up, and exit. You run on opus (or fable for a lighter
 goal) with a large context — think hard about the spec; delegate the building.
 
-You drive the **existing** avada control API via the avada MCP (see `use-avada`).
+You drive the **existing** Avada control API via the Avada MCP (see `use-avada`).
 Your opening prompt carries: the goal intent, its acceptance criteria, your parent (goals-orch)
 pane id, and your goal's work-queue name (e.g. `g1`).
 
@@ -41,7 +41,7 @@ one-shot tool call. Decompose to arbitrage *real parallel work*, not out of habi
 ## 2. Fan out impl agents
 
 Enqueue the subtasks on your goal's queue and run **sonnet impl agents** (one worktree-isolated
-agent per subtask, competing-consumers). Impl agents are **avada panes** (`spawn_workers` /
+agent per subtask, competing-consumers). Impl agents are **Avada panes** (`spawn_workers` /
 worker panes) — NEVER in-process subagents (no Task tool, no bare `claude -p` inside your own
 pane): panes are observable (`read_pane`), watchdoggable, and restartable; subagents are not.
 Every `claude` you spawn carries `--dangerously-skip-permissions` (unattended org — a permission
