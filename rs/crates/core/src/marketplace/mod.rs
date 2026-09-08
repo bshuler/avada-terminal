@@ -30,6 +30,10 @@ pub mod workspace;
 #[cfg(test)]
 pub(crate) mod testing;
 
+// The live end-to-end proof. Ignored by default: it reaches github.com and builds.
+#[cfg(test)]
+mod live;
+
 use crate::install::dirs::binary_name;
 use crate::install::{
     hash_file, FileKeyStore, InstallError, InstallPaths, InstallStore, KeyStore, RecordStatus,
@@ -551,8 +555,18 @@ impl Marketplace {
     // ---- install pipeline
 
     /// The toolchain as seen on the configured `PATH`.
+    ///
+    /// `options.path` of `None` means "inherit the process `PATH`", which is what the
+    /// subprocess spawner below does with it. [`Toolchain::detect_in`] reads `None` the
+    /// other way round — as an empty path — so forwarding it straight through would
+    /// report a missing toolchain on every machine that had not injected one, and the
+    /// production wiring (`MarketplaceOptions::default()`) is exactly that case.
+    /// Detection and execution have to agree about which `PATH` they mean.
     pub fn toolchain(&self) -> Toolchain {
-        Toolchain::detect_in(self.path())
+        match self.path() {
+            Some(p) => Toolchain::detect_in(Some(p)),
+            None => Toolchain::detect(),
+        }
     }
 
     /// Start an install job. Returns the job in [`Phase::Fetch`]; poll [`Self::job`].

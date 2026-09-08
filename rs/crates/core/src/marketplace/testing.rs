@@ -935,6 +935,27 @@ async fn bad_ids_workspaces_and_a_missing_toolchain_are_refused_up_front() {
     assert!(r.mp.toolchain().ready());
 }
 
+#[test]
+fn an_uninjected_path_detects_the_process_toolchain_and_not_an_empty_one() {
+    // `MarketplaceOptions.path` of `None` means "inherit the process `PATH`" — that is
+    // what the subprocess spawner does with it, and `Marketplace::host()` ships exactly
+    // this. `Toolchain::detect_in(None)` means the opposite, an empty path. Forwarding
+    // one to the other told every user on every machine to go and install Rust, however
+    // much of it was already there, and refused the install 412 before it started.
+    let root = scratch("host-path").join("modules");
+    std::fs::create_dir_all(&root).unwrap();
+    let mp = Marketplace::open_under(&root, GitHubConfig::default()).unwrap();
+    assert!(
+        mp.options().path.is_none(),
+        "the production wiring injects no PATH"
+    );
+    assert_eq!(
+        mp.toolchain(),
+        super::toolchain::Toolchain::detect(),
+        "an uninjected marketplace has to see the same tools the process does"
+    );
+}
+
 #[tokio::test]
 async fn dependencies_are_installed_first_as_dependencies() {
     let r = rig(
