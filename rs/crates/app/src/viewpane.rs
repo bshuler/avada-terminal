@@ -1446,6 +1446,11 @@ pub fn model_for(
                                 .map(|c| PaneCell {
                                     md: markdown_text(&c.text),
                                     align: c.align,
+                                    // The words, not the markup: a grid cell arrives
+                                    // padded with NBSPs and markdown-escaped, a table
+                                    // cell with its `**` markers, and a reader wants
+                                    // neither.
+                                    text: strip_inline(&c.text).trim_matches('\u{a0}').into(),
                                 })
                                 .collect::<Vec<_>>(),
                         )))

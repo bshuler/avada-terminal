@@ -56,6 +56,9 @@ export struct PaneDiagram {
 export struct PaneCell {
     md: styled-text,
     align: int,
+    // The cell's plain text, for its accessible label: a `StyledText` announces nothing
+    // by itself, so the screen reader and the harness read this instead.
+    text: string,
 }
 
 export struct PaneViewRow {

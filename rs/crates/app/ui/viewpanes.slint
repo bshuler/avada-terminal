@@ -162,10 +162,10 @@ component ViewRowView inherits Rectangle {
     // 1 open — so only a container is expandable, and a scalar reads as a plain item.
     accessible-expandable: root.item.role == 18 && root.item.check >= 0;
     accessible-expanded: root.item.role == 18 && root.item.check == 1;
-    // The dim trailing column — a size and an age in a listing. It elaborates the name
-    // rather than being part of it, which is the whole distinction between a
-    // description and a label.
-    accessible-description: root.item.role <= 2 ? root.item.detail : "";
+    // The dim trailing column — a size and an age in a listing, a container's "2 keys"
+    // in a data tree. It elaborates the name rather than being part of it, which is
+    // the whole distinction between a description and a label.
+    accessible-description: root.item.role <= 2 || root.item.role == 18 ? root.item.detail : "";
     // Selection is a range here, not a cursor, so every row is a candidate and the
     // highlight is the only thing that says which ones are in it.
     accessible-item-selectable: true;
@@ -510,6 +510,10 @@ component ViewRowView inherits Rectangle {
                 horizontal-alignment: right;
             }
             for c in root.item.cells : cell := StyledText {
+                // A StyledText gets no automatic label (only a plain Text does), so the
+                // cell announces its verbatim text and the harness finds it by that.
+                accessible-role: text;
+                accessible-label: c.text;
                 horizontal-stretch: tbl.grid ? 0 : 1;
                 vertical-alignment: center;
                 horizontal-alignment: c.align == 1 ? center : c.align == 2 ? right : left;

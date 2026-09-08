@@ -1116,6 +1116,18 @@ component FileRowView inherits Rectangle {
     callback opened();
     callback context(length, length);
 
+    // The row is what a screen reader (and the headless harness) reaches: named by the
+    // file name, with the directory as its description; a directory row is expandable
+    // and says whether it is open; a note row (kind 2) is inert and says so.
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-description: root.item.detail;
+    accessible-enabled: root.item.kind != 2;
+    accessible-expandable: root.item.kind == 0;
+    accessible-expanded: root.item.kind == 0 && root.item.expanded;
+    accessible-item-selectable: root.item.kind != 2;
+    accessible-item-selected: root.item.selected;
+
     height: root.item.detail == "" ? 20px : 30px;
     border-radius: 4px;
     // A note row is inert: no hover, no selection, no pointer.
@@ -1197,6 +1209,15 @@ component GitRowView inherits Rectangle {
     callback clicked();
     callback opened();
     callback context(length, length);
+
+    // Named by the repo-relative path plus git's own status letter ("sub/a.txt M"), so
+    // two rows for the same file in different sections stay distinguishable; the
+    // directory is the description, as on a file row.
+    accessible-role: list-item;
+    accessible-label: root.item.code == "" ? root.item.path : root.item.path + " " + root.item.code;
+    accessible-description: root.item.detail;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.item.selected;
 
     height: root.item.detail == "" ? 20px : 30px;
     border-radius: 4px;
@@ -1288,7 +1309,12 @@ export component LeftPanel inherits Rectangle {
     clip: true;
 
     // eat stray clicks, so they never fall through to whatever is behind the panel
-    TouchArea {}
+    TouchArea {
+        // It is the panel's whole surface, so it is what a reader lands on as the
+        // sidebar landmark; without a role the raw-TouchArea walk would flag it.
+        accessible-role: complementary;
+        accessible-label: "Left panel";
+    }
 
     // hairline separating the panel from the pane area on its right
     Rectangle {
