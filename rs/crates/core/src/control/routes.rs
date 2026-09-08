@@ -132,6 +132,12 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("marketplace.job", marketplace_job),
         h("marketplace.enable", marketplace_enable),
         h("marketplace.disable", marketplace_disable),
+        h("marketplace.pin", marketplace_pin),
+        h("marketplace.unpin", marketplace_unpin),
+        h("marketplace.pins", marketplace_pins),
+        h("marketplace.defaults", marketplace_defaults),
+        h("marketplace.defaults.set", marketplace_defaults_set),
+        h("marketplace.defaults.clear", marketplace_defaults_clear),
         h("marketplace.uninstall", marketplace_uninstall),
         h("marketplace.installed", marketplace_installed),
         h("marketplace.toolchain", marketplace_toolchain),
@@ -2626,6 +2632,146 @@ async fn marketplace_disable(
     body: Bytes,
 ) -> Response {
     marketplace_set_enabled(shared, headers, owner, repo, body, false).await
+}
+
+/// `{workspace, version}` → the workspace's pins. A pin that would break something
+/// already enabled there is a 409 naming every broken demand (`resolver::check_pin`).
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_pin(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(workspace) = body_str(&body, "workspace").filter(|w| !w.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing workspace" }));
+    };
+    let Some(version) = body_str(&body, "version").filter(|v| !v.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing version" }));
+    };
+    let module = format!("{owner}/{repo}");
+    match mp.pin(&workspace, &module, &version) {
+        Ok(pins) => ok_json(json!({ "workspace": workspace, "pins": pins })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// `{workspace}` → the workspace's remaining pins. Unpinning what was never pinned is
+/// not an error: the caller asked for a state and that state holds.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_unpin(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(workspace) = body_str(&body, "workspace").filter(|w| !w.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing workspace" }));
+    };
+    let module = format!("{owner}/{repo}");
+    match mp.unpin(&workspace, &module) {
+        Ok(pins) => ok_json(json!({ "workspace": workspace, "pins": pins })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_pins(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let Some(workspace) = q.get("workspace").filter(|w| !w.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing workspace" }));
+    };
+    match mp.pins(workspace) {
+        Ok(pins) => ok_json(json!({ "workspace": workspace, "pins": pins })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_defaults(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    match mp.defaults() {
+        Ok(shapes) => ok_json(json!({ "shapes": shapes })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// `{shape, module}` → every default after the change. A module that is not installed,
+/// or that provides no such shape, is refused rather than stored.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_defaults_set(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(shape) = body_str(&body, "shape").filter(|s| !s.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing shape" }));
+    };
+    let Some(module) = body_str(&body, "module").filter(|m| !m.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing module" }));
+    };
+    match mp.set_default(&shape, &module) {
+        Ok(shapes) => ok_json(json!({ "shapes": shapes })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// `{shape}` → every remaining default.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_defaults_clear(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(shape) = body_str(&body, "shape").filter(|s| !s.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing shape" }));
+    };
+    match mp.clear_default(&shape) {
+        Ok(shapes) => ok_json(json!({ "shapes": shapes })),
+        Err(e) => marketplace_error(e),
+    }
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
@@ -5283,9 +5429,10 @@ mod marketplace_routes {
     use crate::control::dispatch::CapabilitySource;
     use crate::marketplace::job::Phase;
     use crate::marketplace::testing::{
-        files_state, manifest_for, reopen, rig, scratch, DeviceOutcome, FakeCargo,
-        FAKE_ACCESS_TOKEN, FILES,
+        files_state, manifest_for, reopen, rig, scratch, wait, DeviceOutcome, FakeCargo,
+        FAKE_ACCESS_TOKEN, FILES, GIT,
     };
+    use crate::marketplace::InstallRequest;
     use avada_module_sdk::caps::Capability;
     use avada_module_sdk::descriptor::{ParamLocation, Verb};
     use serde_json::{json, Value};
@@ -5373,7 +5520,7 @@ mod marketplace_routes {
     }
 
     #[test]
-    fn the_table_lists_twelve_gated_routes_with_their_path_params_declared() {
+    fn every_marketplace_route_is_gated_with_its_path_params_declared() {
         let routes = marketplace_routes();
         let methods: Vec<&str> = routes.iter().map(|r| r.method.as_str()).collect();
         assert_eq!(
@@ -5386,6 +5533,12 @@ mod marketplace_routes {
                 "marketplace.job",
                 "marketplace.enable",
                 "marketplace.disable",
+                "marketplace.pin",
+                "marketplace.unpin",
+                "marketplace.pins",
+                "marketplace.defaults",
+                "marketplace.defaults.set",
+                "marketplace.defaults.clear",
                 "marketplace.uninstall",
                 "marketplace.installed",
                 "marketplace.toolchain",
@@ -5427,19 +5580,21 @@ mod marketplace_routes {
                 );
             }
         }
+        // install, enable, disable, pin, unpin, defaults.set, signin.
         assert_eq!(
             routes
                 .iter()
                 .filter(|r| matches!(r.verb, Verb::Post))
                 .count(),
-            4
+            7
         );
+        // uninstall, defaults.clear.
         assert_eq!(
             routes
                 .iter()
                 .filter(|r| matches!(r.verb, Verb::Delete))
                 .count(),
-            1
+            2
         );
     }
 
@@ -5662,6 +5817,207 @@ mod marketplace_routes {
         let (st, v) = get(&s, "/marketplace/jobs/nope").await;
         assert_eq!(st, 404, "{v}");
         assert_eq!(v["error"], "no job `nope`");
+    }
+
+    /// Track G6 shipped pinning and provider defaults with no way to reach either.
+    /// These six verbs are that way in: the pin the resolver refuses because something
+    /// enabled in the workspace still needs the old version, the pin it accepts, the
+    /// unpin that is content to do nothing, and a default that must name a module which
+    /// is installed *and* actually provides the shape.
+    #[tokio::test]
+    async fn pins_and_defaults_through_the_routes() {
+        let s = boot_with_control_tag(true, "mp-pins").await;
+        let r = rig(
+            "routes-pins",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        for (tag, version) in [("v1.0.0", "1.0.0"), ("v1.2.0", "1.2.0")] {
+            // `repo` re-mirrors from the same working tree, so dropping the bare clone
+            // between rounds leaves one repository carrying both tags.
+            let _ = std::fs::remove_dir_all(r.fixtures.root.join(format!("{FILES}.git")));
+            r.fixtures.repo(
+                FILES,
+                tag,
+                &manifest_for(
+                    FILES,
+                    version,
+                    "kind = \"source\"",
+                    &format!(
+                        "[[provides]]\nshape = \"avada.files.tree\"\nversion = \"{version}\"\n"
+                    ),
+                ),
+            );
+        }
+        r.fixtures.repo(
+            GIT,
+            "v1.0.0",
+            &manifest_for(
+                GIT,
+                "1.0.0",
+                "kind = \"source\"",
+                "[[requires]]\nshape = \"avada.files.tree\"\nversion = \">=1, <1.2\"\n\
+                 provider = \"acme/avada-files\"\n",
+            ),
+        );
+        s.shared.install_marketplace(Arc::clone(&r.mp));
+
+        // Installing GIT into ws1 drags FILES 1.0.0 in as a dependency, and a
+        // dependency claims no shape; installing FILES by hand afterwards claims it.
+        let mut req = InstallRequest::new(GIT);
+        req.workspace = Some("ws1".into());
+        let done = wait(&r.mp, &r.mp.install(req).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let (st, v) = get(&s, "/marketplace/defaults").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["shapes"], json!({}));
+        let mut req = InstallRequest::new(FILES);
+        req.tag = Some("v1.2.0".into());
+        let done = wait(&r.mp, &r.mp.install(req).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let (_, v) = get(&s, "/marketplace/defaults").await;
+        assert_eq!(
+            v["shapes"],
+            json!({ "avada.files.tree": "acme/avada-files" })
+        );
+
+        // With FILES enabled in ws1 beside GIT, pinning it to 1.2.0 would break GIT's
+        // requirement: 409, naming the demand and offering the version that works.
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/enable",
+            r#"{"workspace":"ws1"}"#,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/pin",
+            r#"{"workspace":"ws1","version":"1.2.0"}"#,
+        )
+        .await;
+        assert_eq!(st, 409, "{v}");
+        let why = v["error"].as_str().unwrap();
+        assert!(why.contains(GIT), "{why}");
+        assert!(why.contains("1.0.0"), "the nearest working version: {why}");
+        let (_, v) = get(&s, "/marketplace/pins?workspace=ws1").await;
+        assert_eq!(v["pins"], json!({}), "a refused pin writes nothing");
+
+        // The version the resolver already chose pins, reads back, and unpins — twice,
+        // because asking for a state that already holds is not an error.
+        let (st, v) = post(
+            &s,
+            "/marketplace/modules/acme/avada-files/pin",
+            r#"{"workspace":"ws1","version":"1.0.0"}"#,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["workspace"], "ws1");
+        assert_eq!(v["pins"], json!({ "acme/avada-files": "1.0.0" }));
+        let (_, v) = get(&s, "/marketplace/pins?workspace=ws1").await;
+        assert_eq!(v["pins"], json!({ "acme/avada-files": "1.0.0" }));
+        let (_, v) = get(&s, "/marketplace/pins?workspace=ws2").await;
+        assert_eq!(v["pins"], json!({}), "a pin belongs to one workspace");
+        for round in 0..2 {
+            let (st, v) = post(
+                &s,
+                "/marketplace/modules/acme/avada-files/unpin",
+                r#"{"workspace":"ws1"}"#,
+            )
+            .await;
+            assert_eq!(st, 200, "round {round}: {v}");
+            assert_eq!(v["pins"], json!({}));
+        }
+
+        // A default is a promise the resolver keeps silently, so an unkeepable one is
+        // refused rather than stored: not installed is a 404, installed but providing
+        // no such shape is a 409, and a name that is not owner/repo never gets that far.
+        for (body, status, needle) in [
+            (
+                r#"{"shape":"avada.files.tree","module":"acme/avada-nope"}"#,
+                404,
+                "not installed",
+            ),
+            (
+                r#"{"shape":"avada.files.tree","module":"acme/avada-git"}"#,
+                409,
+                "does not provide",
+            ),
+            (
+                r#"{"shape":"avada.files.tree","module":"nope"}"#,
+                400,
+                "owner/repo",
+            ),
+        ] {
+            let (st, v) = post(&s, "/marketplace/defaults", body).await;
+            assert_eq!(st, status, "{body}: {v}");
+            assert!(v["error"].as_str().unwrap().contains(needle), "{v}");
+        }
+        let (_, v) = get(&s, "/marketplace/defaults").await;
+        assert_eq!(
+            v["shapes"],
+            json!({ "avada.files.tree": "acme/avada-files" }),
+            "a refused default leaves the old one standing"
+        );
+
+        // Clearing is idempotent, and the shape can be claimed again afterwards.
+        for round in 0..2 {
+            let (st, v, _) = send(
+                &s,
+                Verb::Delete,
+                "/marketplace/defaults",
+                Some(&s.token),
+                Some(r#"{"shape":"avada.files.tree"}"#),
+            )
+            .await;
+            assert_eq!(st, 200, "round {round}: {v}");
+            assert_eq!(v["shapes"], json!({}));
+        }
+        let (st, v) = post(
+            &s,
+            "/marketplace/defaults",
+            r#"{"shape":"avada.files.tree","module":"acme/avada-files"}"#,
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(
+            v["shapes"],
+            json!({ "avada.files.tree": "acme/avada-files" })
+        );
+
+        // Every field the handlers insist on, named in the refusal.
+        for (path, body, error) in [
+            (
+                "/marketplace/modules/acme/avada-files/pin",
+                "{}",
+                "missing workspace",
+            ),
+            (
+                "/marketplace/modules/acme/avada-files/pin",
+                r#"{"workspace":"ws1"}"#,
+                "missing version",
+            ),
+            (
+                "/marketplace/modules/acme/avada-files/unpin",
+                "{}",
+                "missing workspace",
+            ),
+            ("/marketplace/defaults", "{}", "missing shape"),
+            (
+                "/marketplace/defaults",
+                r#"{"shape":"avada.files.tree"}"#,
+                "missing module",
+            ),
+        ] {
+            let (st, v) = post(&s, path, body).await;
+            assert_eq!(st, 400, "{path} {body}: {v}");
+            assert_eq!(v["error"], error);
+        }
+        let (st, v) = get(&s, "/marketplace/pins").await;
+        assert_eq!(st, 400, "{v}");
+        assert_eq!(v["error"], "missing workspace");
     }
 
     #[tokio::test]

@@ -1054,6 +1054,75 @@ impl Marketplace {
         Ok(self.workspaces.pins(workspace)?)
     }
 
+    /// The user's provider defaults: shape → the module they want answering it.
+    pub fn defaults(&self) -> Result<BTreeMap<String, ModuleId>, MarketplaceError> {
+        Ok(Defaults::load(self.store.paths())?.shapes)
+    }
+
+    /// Make `module` the default provider of `shape`.
+    ///
+    /// A default is a promise the resolver will keep, so it is refused unless it can be:
+    /// the module must be installed, and some installed version of it must actually
+    /// `provide` the shape. Without those checks `defaults.json` could carry a
+    /// preference that silently never applies, and the resolver has no way to complain
+    /// about a shape nobody offers.
+    pub fn set_default(
+        &self,
+        shape: &str,
+        module: &str,
+    ) -> Result<BTreeMap<String, ModuleId>, MarketplaceError> {
+        let id = Self::parse_id(module)?;
+        if shape.trim().is_empty() {
+            return Err(MarketplaceError::Refused(
+                "a shape name cannot be empty".into(),
+            ));
+        }
+        let mut installed = false;
+        let mut provides = false;
+        for status in self.store.records()? {
+            let RecordStatus::Ok(i) = status else {
+                continue;
+            };
+            if i.id != id {
+                continue;
+            }
+            installed = true;
+            if i.rights()
+                .manifest
+                .provides
+                .iter()
+                .any(|p| p.shape == shape)
+            {
+                provides = true;
+                break;
+            }
+        }
+        if !installed {
+            return Err(MarketplaceError::NotInstalled(module.to_string()));
+        }
+        if !provides {
+            return Err(MarketplaceError::Refused(format!(
+                "{module} does not provide `{shape}`"
+            )));
+        }
+        let mut defaults = Defaults::load(self.store.paths())?;
+        defaults.set_default(shape, &id);
+        defaults.save(self.store.paths())?;
+        Ok(defaults.shapes)
+    }
+
+    /// Forget the default for `shape`. A shape that had none is not an error — the
+    /// caller asked for a state and that state now holds.
+    pub fn clear_default(
+        &self,
+        shape: &str,
+    ) -> Result<BTreeMap<String, ModuleId>, MarketplaceError> {
+        let mut defaults = Defaults::load(self.store.paths())?;
+        defaults.shapes.remove(shape);
+        defaults.save(self.store.paths())?;
+        Ok(defaults.shapes)
+    }
+
     // ---- end track G6 resolver
 
     /// Remove one installed version; the last one removed forgets workspace state too.

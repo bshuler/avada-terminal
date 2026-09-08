@@ -387,6 +387,69 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
         ),
         with(
             route(
+                "marketplace.pin",
+                "/marketplace/modules/{owner}/{repo}/pin",
+                Post,
+                "Pin a module to one version in a workspace",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p("workspace", Body, "string", true, "Workspace key"),
+                p("version", Body, "string", true, "Version to pin to"),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.unpin",
+                "/marketplace/modules/{owner}/{repo}/unpin",
+                Post,
+                "Forget a module's pin in a workspace",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p("workspace", Body, "string", true, "Workspace key"),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.pins",
+                "/marketplace/pins",
+                Get,
+                "Every pin in a workspace",
+            ),
+            vec![p("workspace", Query, "string", true, "Workspace key")],
+        ),
+        route(
+            "marketplace.defaults",
+            "/marketplace/defaults",
+            Get,
+            "Shape to the module the user prefers as its provider",
+        ),
+        with(
+            route(
+                "marketplace.defaults.set",
+                "/marketplace/defaults",
+                Post,
+                "Choose the default provider of one shape",
+            ),
+            vec![
+                p("shape", Body, "string", true, "Shape name"),
+                p("module", Body, "string", true, "owner/repo"),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.defaults.clear",
+                "/marketplace/defaults",
+                Delete,
+                "Forget the default provider of one shape",
+            ),
+            vec![p("shape", Body, "string", true, "Shape name")],
+        ),
+        with(
+            route(
                 "marketplace.uninstall",
                 "/marketplace/modules/{owner}/{repo}/{version}",
                 Delete,
