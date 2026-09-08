@@ -285,6 +285,12 @@ pub fn minimize(raw: isize) {
 /// then make it foreground. `SetForegroundWindow` can be refused by the shell's
 /// foreground lock, but it is granted for a process the human just clicked in — which is
 /// the only way this is reached.
+// Currently uncalled: the one caller was the left panel's "resume this conversation"
+// click, which left with the tool modes for `bshuler/avada-tools`. The entry stays
+// because it is part of the frozen port surface in `docs/ports-seams.md` — every
+// platform file answers the same list — and because a module asking the host to take
+// the human to a pane is the call that comes back for it.
+#[allow(dead_code)]
 #[tracing::instrument(level = "debug", ret)]
 pub fn raise(raw: isize) {
     unsafe {

@@ -23,9 +23,9 @@ use crate::state::{Overlay, PaneState, State};
 use crate::theme;
 use crate::{
     AppWindow, ClaudeSessionItem, CtxTab, DividerItem, FramePaletteOption, HiRect, KeybindingItem,
-    LayoutOption, LeftModeRow, LeftPaneRow, LeftPanelAdapter, LeftSessionItem, LeftSessionRow,
-    LeftSetRow, LeftTabRow, LeftWorkspaceRow, MenuEntry, PaletteItem, PaneItem, PaneViewRow,
-    PrefBrowserRow, PrefOption, PrefToolRow, ProjectItem, TabItem, WorktreeRow,
+    LayoutOption, LeftModeRow, LeftPaneRow, LeftPanelAdapter, LeftSessionRow, LeftSetRow,
+    LeftTabRow, LeftWorkspaceRow, MenuEntry, PaletteItem, PaneItem, PaneViewRow, PrefBrowserRow,
+    PrefOption, PrefToolRow, ProjectItem, TabItem, WorktreeRow,
 };
 
 /// Thickness (logical px) of the draggable divider hit-area.
@@ -102,10 +102,9 @@ pub struct Ui {
     pub lp_sets: Rc<VecModel<LeftSetRow>>,
     /// The detached (adoptable) session rows.
     pub lp_detached: Rc<VecModel<LeftSessionRow>>,
-    /// The panel's mode strip — WORKSPACE plus one entry per favourited tool.
+    /// The panel's built-in mode strip — WORKSPACE, and nothing else since the tool modes
+    /// became a module. The module entries beside it live in [`RailAdapter`].
     pub lp_modes: Rc<VecModel<LeftModeRow>>,
-    /// The current tool mode's resumable sessions, pre-sorted by (project, recency).
-    pub lp_sessions: Rc<VecModel<LeftSessionItem>>,
     /// Per-tab pane models for the tree, keyed by tab index and reused across ticks so each
     /// `LeftTabRow.panes` keeps a STABLE model identity — the same reason `wt_models` exists:
     /// rebuilding the inner repeater every frame would drop an in-flight click or, worse, the
@@ -166,7 +165,6 @@ impl Ui {
             lp_sets: Rc::new(VecModel::default()),
             lp_detached: Rc::new(VecModel::default()),
             lp_modes: Rc::new(VecModel::default()),
-            lp_sessions: Rc::new(VecModel::default()),
             lp_pane_models: RefCell::new(HashMap::new()),
             pref_tools: Rc::new(VecModel::default()),
             pref_browsers: Rc::new(VecModel::default()),
@@ -216,7 +214,6 @@ impl Ui {
         lp.set_sets(ModelRc::from(self.lp_sets.clone()));
         lp.set_detached(ModelRc::from(self.lp_detached.clone()));
         lp.set_modes(ModelRc::from(self.lp_modes.clone()));
-        lp.set_sessions(ModelRc::from(self.lp_sessions.clone()));
     }
 }
 
@@ -714,18 +711,17 @@ fn build_dividers(state: &State, area: (f32, f32)) -> Vec<DividerItem> {
 
 /// Rebuild every UI model + scalar from `State` (the resync step). Called when
 /// `state.dirty` is set.
-/// Left-panel mode indices. WORKSPACE is the one fixed slot no settings change can move:
-/// the favourited tools start at [`LEFT_MODE_TOOL_BASE`], so a mode index and
-/// `mode_tools[mode - LEFT_MODE_TOOL_BASE]` mean the same thing in Rust and in Slint.
+/// Left-panel mode indices. WORKSPACE is the one built-in view left, and mode 0 is its
+/// fixed slot.
 ///
-/// There used to be two more built-ins between them — the file explorer, and the git
-/// working tree after it. Both are modules now (`bshuler/avada-files`, `bshuler/avada-git`)
+/// There used to be three more built-ins: the file explorer, the git working tree after it,
+/// and then one mode per favourited CLI tool listing that tool's resumable sessions. All
+/// three are modules now (`bshuler/avada-files`, `bshuler/avada-git`, `bshuler/avada-tools`)
 /// and live on the rail ([`LEFT_MODE_RAIL`]) like any other module surface, so each removal
-/// moved every index after it down by one. That is the rule for the next one too: a built-in
-/// that leaves renumbers its successors, here AND in the `mode > 0` gates in
+/// moved every index after it down by one. That is the rule for the last one too: a built-in
+/// that leaves renumbers its successors, here AND in the `mode == 0` gates in
 /// `ui/leftpanel.slint`, which spell the same boundary as a literal.
 pub const LEFT_MODE_WORKSPACE: i32 = 0;
-pub const LEFT_MODE_TOOL_BASE: i32 = 1;
 
 /// The mode a *module's* rail entry puts the panel into (track H4). Negative on purpose:
 /// the built-in modes are indices into `LeftPanelAdapter.modes` and the module entries are
@@ -1541,38 +1537,16 @@ pub fn resync(
             sync_model(&ui.lp_detached, det_rows);
 
             // ---- the mode strip ----
-            // WORKSPACE is always mode 0; every further mode is a favourited tool, in the
-            // user's own favourite order (not the registry's), because the strip is theirs.
-            // A favourite id this build doesn't know is skipped rather than dropped from
-            // settings — a downgrade must not silently un-favourite a tool.
-            let mut mode_rows = vec![LeftModeRow {
+            // WORKSPACE is the only built-in mode left. The favourited CLI tools used to
+            // follow it, each showing that tool's resumable sessions; they are the
+            // `bshuler/avada-tools` module now and draw on the rail instead.
+            let mode_rows = vec![LeftModeRow {
                 label: "Workspace".into(),
                 // 0 means "not a tool": the strip draws its own grid glyph for this one.
                 icon: 0,
                 brand: crate::theme::accent_for(0, palette),
             }];
-            // The strip and this list are built from ONE filtered pass, so mode index n
-            // and `mode_tools[n - LEFT_MODE_TOOL_BASE]` can never disagree — filtering twice is exactly how a
-            // skipped unknown favourite would make the panel resume the wrong tool.
-            let mode_tools: Vec<&'static str> = state
-                .settings
-                .tool_favorites
-                .iter()
-                .filter_map(|id| avada_core::tools::by_id(id))
-                .map(|t| t.id)
-                .collect();
-            mode_rows.extend(
-                mode_tools
-                    .iter()
-                    .filter_map(|id| avada_core::tools::by_id(id))
-                    .map(|t| LeftModeRow {
-                        label: t.name.into(),
-                        icon: t.icon as i32,
-                        brand: slint::Color::from_rgb_u8(t.brand.0, t.brand.1, t.brand.2),
-                    }),
-            );
-            // Un-favouriting the tool you were looking at must not leave the panel showing
-            // a mode that no longer exists — fall back to the workspace tree.
+            // A mode index the strip cannot draw must not survive a resync.
             // `LEFT_MODE_RAIL` is deliberately outside the list (a module entry is showing)
             // and must survive this: `-1 as usize` is enormous, so the bound has to be
             // checked on the SIGNED value or every module click would bounce straight back
@@ -1605,63 +1579,6 @@ pub fn resync(
             if lp.get_mode() == LEFT_MODE_RAIL && state.rail.active.is_none() {
                 lp.set_mode(LEFT_MODE_WORKSPACE);
             }
-
-            // ---- the current mode's session list ----
-            // Mode 0 is the workspace tree and asks the providers nothing: a human who never
-            // opens a tool mode never pays for a transcript scan. Everything below is served
-            // from `leftpanel`'s cache — the scan itself runs on the history-scan thread.
-            let mode_tool =
-                mode_tools.get((lp.get_mode() as usize).wrapping_sub(LEFT_MODE_TOOL_BASE as usize));
-            // An empty list while the scan is still running is not "this tool has no
-            // history" — the panel says so rather than reporting a verdict early.
-            lp.set_sessions_scanning(
-                mode_tool.is_some_and(|id| crate::history_scan::tool_scan_pending(id)),
-            );
-            let sess_rows: Vec<LeftSessionItem> = match mode_tool {
-                None => Vec::new(),
-                Some(tool_id) => {
-                    crate::leftpanel::tool_sessions(tool_id, &state.settings.tool_paths, now_ms)
-                        .into_iter()
-                        .map(|r| LeftSessionItem {
-                            blocked: !r.resumable(),
-                            // Where a click will take you, decided here rather than in the
-                            // .slint: the panel draws strings, it does not know what a
-                            // desktop session id is. Empty means "nowhere yet — it will
-                            // start in a pane", and the row wears no chip at all. The order
-                            // is the click handler's order, so the chip cannot promise one
-                            // destination and the click deliver another.
-                            badge: if crate::leftpanel::session_open_in_a_pane(&r.id) {
-                                "pane"
-                            } else if r.desktop.is_some() {
-                                "desktop"
-                            } else {
-                                ""
-                            }
-                            .into(),
-                            badge_tip: if crate::leftpanel::session_open_in_a_pane(&r.id) {
-                                "Already open in a pane — click to go to it"
-                            } else if r.desktop.is_some() {
-                                "Open in Claude Desktop — click to bring it to the front"
-                            } else {
-                                ""
-                            }
-                            .into(),
-                            id: r.id.into(),
-                            // The heading is the project's own directory name, not its whole path:
-                            // the panel is ~260px wide and the tail is the part that identifies it.
-                            group: r
-                                .project
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| r.project.display().to_string())
-                                .into(),
-                            label: r.summary.into(),
-                            detail: r.detail.into(),
-                        })
-                        .collect()
-                }
-            };
-            sync_model(&ui.lp_sessions, sess_rows);
         }
     }
 

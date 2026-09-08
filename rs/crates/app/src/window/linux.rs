@@ -323,6 +323,12 @@ pub fn toggle_max(raw: isize) {
 /// Wayland compositors are free to refuse the focus half (there is no click-to-raise
 /// protocol a client can insist on); the request is still the right thing to make, and
 /// the caller's tab/pane switch has already happened either way.
+// Currently uncalled: the one caller was the left panel's "resume this conversation"
+// click, which left with the tool modes for `bshuler/avada-tools`. The entry stays
+// because it is part of the frozen port surface in `docs/ports-seams.md` — every
+// platform file answers the same list — and because a module asking the host to take
+// the human to a pane is the call that comes back for it.
+#[allow(dead_code)]
 #[tracing::instrument(level = "debug", ret)]
 pub fn raise(raw: isize) {
     with_window(raw, |w| {

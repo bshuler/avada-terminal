@@ -239,6 +239,12 @@ pub fn close(raw: isize) {
 /// All three steps are needed. `makeKeyAndOrderFront:` alone raises the window WITHIN
 /// Avada but leaves another app frontmost, and a miniaturized window ignores it
 /// entirely — so a "take me to that pane" click would silently do nothing visible.
+// Currently uncalled: the one caller was the left panel's "resume this conversation"
+// click, which left with the tool modes for `bshuler/avada-tools`. The entry stays
+// because it is part of the frozen port surface in `docs/ports-seams.md` — every
+// platform file answers the same list — and because a module asking the host to take
+// the human to a pane is the call that comes back for it.
+#[allow(dead_code)]
 #[tracing::instrument(level = "debug", ret)]
 pub fn raise(raw: isize) {
     let Some(w) = ns_window(raw) else { return };

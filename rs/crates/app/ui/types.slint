@@ -545,37 +545,15 @@ export struct LeftSessionRow {
     live: float,
 }
 
-// One entry in the panel's MODE strip. Mode 0 is always WORKSPACE (the tab/pane tree);
-// every further mode is one favourited CLI tool, showing that tool's locally resumable
-// sessions. `icon` is the registry icon kind the shared `ToolIcon` switches on (0 for the
-// workspace mode, which draws its own glyph), and `brand` tints it.
+// One entry in the panel's MODE strip. Mode 0 is WORKSPACE (the tab/pane tree) and is the
+// only built-in left — everything else on the strip is a module's rail entry, which carries
+// its own row type. `icon` is 0 for the workspace mode, which draws its own glyph; `brand`
+// is unused by it and stays only because a one-field struct would have to be unpacked again
+// the moment a second built-in ever returns.
 export struct LeftModeRow {
     label: string,
     icon: int,
     brand: color,
-}
-
-// One resumable session in a tool mode, grouped under its project. `id` is the tool's own
-// resume key (a Claude session uuid, a Codex thread id) — index-free, so a click can't race
-// a list refresh. `group` is the project the session belongs to; the view starts a new
-// heading whenever it changes, so the Rust side sorts rather than the UI grouping.
-export struct LeftSessionItem {
-    id: string,
-    group: string,
-    label: string,
-    detail: string,
-    // The row cannot be resumed (the project can't be verified, the tool isn't installed).
-    // `detail` carries the sentence saying why, so the row still teaches rather than just
-    // greying out. Decided once per scan on the background thread — never per frame.
-    blocked: bool,
-    // Where this conversation ALREADY is, as a chip to draw at the end of the row: "pane"
-    // when some window is showing it, "desktop" when only Claude Desktop holds it. Empty for
-    // a conversation that is nowhere, which is the row that starts one in a new pane.
-    badge: string,
-    // The sentence the chip's row hovers with, saying what a click will do about it. Empty
-    // exactly when `badge` is. Both are written in Rust: the panel draws strings and has no
-    // idea what a desktop session is.
-    badge-tip: string,
 }
 
 // The controller ↔ left-panel bridge. A GLOBAL (not AppWindow props) so the feature stays
@@ -638,19 +616,10 @@ export global LeftPanelAdapter {
     // Seam #2 (the mode does not survive a restart, and should not: the panel always opens
     // on the workspace tree).
     in-out property <int> mode: 0;
-    // Every available mode, mode 0 first. Projected from the favourites in `Settings`, so a
-    // tool the user has not starred never appears here.
+    // Every available mode. Only the workspace mode is left, so this is a one-element list
+    // — a list rather than a bool because the strip's `for` is what the rail buttons sit
+    // beside, and the two are drawn by the same layout.
     in property <[LeftModeRow]> modes;
-    // The current mode's sessions, already sorted by (project, recency) — the view only
-    // draws a heading when `group` changes.
-    in property <[LeftSessionItem]> sessions;
-    // Whether the scan behind `sessions` is still walking the transcripts. An empty list
-    // means two different things — "looked, found nothing" and "haven't looked yet" — and
-    // the first time a mode is opened its cache is cold, so the panel would state a verdict
-    // on a question nobody had answered yet.
-    in property <bool> sessions-scanning;
-    // A session row clicked → resume session `0` of the current mode's tool.
-    callback resume-session(string);
     // The strip was clicked. `mode` is already set (it is `in-out`); this only tells Rust,
     // which needs to know because a mode's contents are computed on entry — a tool mode's
     // session list is scanned then, and nothing in this adapter is allowed to scan.

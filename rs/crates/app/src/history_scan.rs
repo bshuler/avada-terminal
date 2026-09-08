@@ -23,7 +23,6 @@ use avada_core::claude_history::{ClaudeSession, SessionCache};
 use avada_core::tools::history::SessionProvider;
 use avada_core::tools::{InferOutcome, PaneWatch, ToolSessionMark};
 
-use crate::leftpanel::{self, ScannedSession};
 use crate::sidebar::{self, WorktreeRow};
 
 /// One scan request, sent UI → scanner thread.
@@ -32,19 +31,11 @@ enum Job {
     Sessions(String),
     /// Re-run `git worktree list --porcelain` in this repo.
     Worktrees(String),
-    /// Re-scan EVERY project for one tool's resumable sessions — the left panel's tool
-    /// modes, not the sidebar's per-project list. Carries the human's `tool id -> path`
-    /// overrides because the resumability verdict is decided here, on this thread, once
-    /// per scan rather than once per frame on the UI thread.
-    ToolSessions(String, BTreeMap<String, String>),
     /// Re-read the raw `(conversation id, project directory)` set out of one tool's history
     /// store, for [`session_infer`](avada_core::tools::session_infer).
     ///
-    /// Deliberately NOT the same job as [`Job::ToolSessions`]: that one is the left panel's
-    /// render feed — it resolves resumability, builds row labels, and sorts for the panel's
-    /// heading contract. Inference wants none of that and must not be coupled to whether the
-    /// panel happens to be showing this tool's mode. It shares the same cached provider on
-    /// the scanner thread, so the two cost one warm re-scan between them, not two.
+    /// Carries the human's `tool id -> path` overrides, because the provider that answers
+    /// it is built from them and is cached on the scanner thread under exactly that key.
     ToolStore(String, BTreeMap<String, String>),
 }
 
@@ -52,7 +43,6 @@ enum Job {
 enum ScanResult {
     Sessions(String, Vec<ClaudeSession>),
     Worktrees(String, Vec<WorktreeRow>),
-    ToolSessions(String, Vec<ScannedSession>),
     ToolStore(String, Vec<(String, String)>),
 }
 
@@ -77,8 +67,6 @@ thread_local! {
     static PENDING_SESS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Repo paths with a worktree scan in flight.
     static PENDING_WT: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
-    /// Tool ids with a whole-store session scan in flight.
-    static PENDING_TOOL: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Tool ids with an inference store read in flight.
     static PENDING_STORE: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// The latest store read per tool, stamped with the moment it was drained. The stamp is
@@ -125,25 +113,6 @@ fn spawn_scanner() -> Scanner {
                     Job::Worktrees(repo) => {
                         let rows = sidebar::enumerate_worktrees(&repo);
                         ScanResult::Worktrees(repo, rows)
-                    }
-                    Job::ToolSessions(tool_id, overrides) => {
-                        let stale = providers
-                            .get(&tool_id)
-                            .is_some_and(|(built_with, _)| *built_with != overrides);
-                        if stale {
-                            providers.remove(&tool_id);
-                        }
-                        let entry = match providers.entry(tool_id.clone()) {
-                            std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut()),
-                            std::collections::hash_map::Entry::Vacant(e) => {
-                                provider_for(&tool_id, &overrides)
-                                    .map(|p| e.insert((overrides.clone(), p)))
-                            }
-                        };
-                        let rows = entry
-                            .map(|(_, p)| leftpanel::scan_with(p.as_mut()))
-                            .unwrap_or_default();
-                        ScanResult::ToolSessions(tool_id, rows)
                     }
                     Job::ToolStore(tool_id, overrides) => {
                         let stale = providers
@@ -228,31 +197,6 @@ pub fn request_worktrees(repo_path: &str) {
     if fresh {
         SCANNER.with(|s| {
             let _ = s.tx.send(Job::Worktrees(repo_path.to_string()));
-        });
-    }
-}
-
-/// Ask for a (re-)scan of `tool_id`'s resumable sessions across every project. No-op while
-/// one is already in flight for that tool — the projection asks on every dirty tick the
-/// panel is showing that mode, and only the first ask enqueues a job.
-/// Whether a tool-session scan for `tool_id` is still in flight.
-///
-/// The panel needs this to tell "looked, found nothing" apart from "haven't looked yet": a
-/// cold cache hands back no rows, and announcing "No resumable sessions found" while the
-/// scanner is still walking the transcripts states a verdict on a question nobody has
-/// answered. `PENDING_TOOL` already holds exactly that fact — it is what keeps a second
-/// request from queueing a duplicate job — so this only reads it.
-#[tracing::instrument(level = "debug", ret)]
-pub fn tool_scan_pending(tool_id: &str) -> bool {
-    PENDING_TOOL.with(|p| p.borrow().contains(tool_id))
-}
-
-#[tracing::instrument(level = "debug", ret)]
-pub fn request_tool_sessions(tool_id: &str, overrides: BTreeMap<String, String>) {
-    let fresh = PENDING_TOOL.with(|p| p.borrow_mut().insert(tool_id.to_string()));
-    if fresh {
-        SCANNER.with(|s| {
-            let _ = s.tx.send(Job::ToolSessions(tool_id.to_string(), overrides));
         });
     }
 }
@@ -386,12 +330,6 @@ pub fn drain() -> bool {
                     });
                     sidebar::apply_worktrees(&repo, rows);
                 }
-                ScanResult::ToolSessions(tool_id, rows) => {
-                    PENDING_TOOL.with(|p| {
-                        p.borrow_mut().remove(&tool_id);
-                    });
-                    leftpanel::apply_tool_sessions(&tool_id, rows);
-                }
                 ScanResult::ToolStore(tool_id, rows) => {
                     PENDING_STORE.with(|p| {
                         p.borrow_mut().remove(&tool_id);
@@ -410,26 +348,6 @@ pub fn drain() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_unscanned_tool_reads_as_pending_until_the_result_is_drained() {
-        let id = "hp-test-no-such-tool";
-        // Nothing has been asked for yet, so nothing is in flight.
-        assert!(!tool_scan_pending(id));
-
-        request_tool_sessions(id, BTreeMap::new());
-        // Pending the moment the job is queued — this is the fact the panel reads to say
-        // "looking" instead of "none found" over a cache that has never been filled.
-        assert!(tool_scan_pending(id));
-
-        // Only `drain` clears it, so the flag cannot go false while the answer is unknown.
-        // The scanner finds no such tool and returns an empty list; draining it is what
-        // turns the panel's message into the real verdict.
-        while tool_scan_pending(id) {
-            drain();
-        }
-        assert!(!tool_scan_pending(id));
-    }
 
     fn watched(uid: &str) -> bool {
         WATCHES.with(|w| w.borrow().contains_key(uid))

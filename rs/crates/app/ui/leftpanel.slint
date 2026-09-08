@@ -33,7 +33,7 @@
 
 import { Theme } from "theme.slint";
 import { TipArea } from "tooltip.slint";
-import { LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftSessionItem, LeftPanelAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
+import { LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftPanelAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
 // The explorer alone uses a real `ListView`: its model is a whole project tree, and only a
 // ListView instantiates the visible rows. Every other section here is a short hand-rolled
 // Flickable, which is cheaper for a list you can count.
@@ -317,8 +317,8 @@ component ModeButton inherits Rectangle {
     height: 24px;
     border-radius: 5px;
     background: root.active ? Theme.surface2 : (ma.has-hover ? Theme.surface : transparent);
-    // The active mode is underlined in its own brand, so the strip reads as "which tool am
-    // I looking at" even at a glance. Mode 0 has no brand and falls back to the accent.
+    // The active mode is underlined in the accent. Only the workspace mode is left, and it
+    // carries no brand of its own, so there is nothing else the underline could be.
     Rectangle {
         x: 5px;
         y: parent.height - 3px;
@@ -326,26 +326,18 @@ component ModeButton inherits Rectangle {
         height: 2px;
         border-radius: 1px;
         visible: root.active;
-        background: root.mode-row.icon <= 0 ? Theme.accent : root.mode-row.brand;
+        background: Theme.accent;
     }
     // 0 is the workspace mode — the one built-in view left — so it draws its own glyph.
-    // Anything positive is a registry icon kind. Tested EXACTLY, never as `<= 0`: a
-    // catch-all branch would draw the workspace's grid for every built-in that is ever
-    // added after it. -1 was the explorer's folder and -2 the git branch; both moved out
-    // to modules and neither is recycled, since a stale value would then draw something
+    // Tested EXACTLY, never as `<= 0`: a catch-all branch would draw the workspace's grid
+    // for every built-in that is ever added after it. -1 was the explorer's folder, -2 the
+    // git branch and any positive value a favourited tool's logo; all three moved out to
+    // modules and none is recycled, since a stale value would then draw something
     // plausible instead of nothing.
     if root.mode-row.icon == 0 : GridGlyph {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2 - 1px;
         ink: root.active ? Theme.text : Theme.subtext;
-    }
-    if root.mode-row.icon > 0 : ToolIcon {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2 - 1px;
-        kind: root.mode-row.icon;
-        // A dimmed brand when inactive, full brand when selected: the strip stays branded
-        // without four saturated logos fighting for attention at once.
-        ink: root.active ? root.mode-row.brand : root.mode-row.brand.darker(0.35);
     }
     ma := TipArea {
         tip: root.mode-row.label;
@@ -969,102 +961,6 @@ component SessionRowView inherits Rectangle {
     }
 }
 
-// One resumable session in a TOOL mode (a Claude conversation, a Codex thread). Deliberately
-// shaped like SessionRowView above — same height, same two-line label/detail — because the
-// two mean the same thing to the user ("something you can pick back up"); only the source
-// differs, and a different shape would imply a difference that isn't there.
-component SessionItemView inherits Rectangle {
-    in property <LeftSessionItem> item;
-    // Drawn once per project, above that project's first session. Computed by the caller,
-    // which has the index; the row itself never looks at its neighbours.
-    in property <bool> heading;
-    in property <color> brand;
-    callback activate();
-
-    VerticalLayout {
-        spacing: 2px;
-        if root.heading : Text {
-            text: root.item.group;
-            color: Theme.subtext;
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            overflow: elide;
-        }
-        Rectangle {
-            height: 34px;
-            border-radius: 5px;
-            background: ia.has-hover ? Theme.surface2 : transparent;
-            ia := TipArea {
-                // A blocked row explains itself instead of pretending it will work: the
-                // reason is already on the detail line, and the tip repeats it because the
-                // detail elides in a narrow panel.
-                tip: root.item.blocked
-                    ? root.item.detail
-                    : (root.item.badge-tip == "" ? "Resume this session in a new pane" : root.item.badge-tip);
-                mouse-cursor: root.item.blocked ? default : pointer;
-                clicked => { if (!root.item.blocked) { root.activate(); } }
-            }
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                spacing: 7px;
-                VerticalLayout {
-                    alignment: center;
-                    // A brand-tinted pip rather than a second copy of the tool logo: the
-                    // mode strip already says which tool this list belongs to.
-                    Rectangle {
-                        width: 6px;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: root.item.blocked
-                            ? Theme.faint
-                            : (ia.has-hover ? root.brand : Theme.faint);
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 1;
-                    Text {
-                        text: root.item.label;
-                        color: root.item.blocked ? Theme.subtext : Theme.text;
-                        font-size: 12px;
-                        overflow: elide;
-                    }
-                    Text {
-                        text: root.item.detail;
-                        color: Theme.subtext;
-                        font-size: 10px;
-                        overflow: elide;
-                    }
-                }
-                // Where the conversation already is. Drawn only when there IS somewhere —
-                // an absent chip is the common row, and a chip on every row would say
-                // nothing. Brand-tinted so it reads as part of this tool's list.
-                if root.item.badge != "" : VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        height: 15px;
-                        border-radius: 3px;
-                        background: root.brand.with-alpha(0.16);
-                        HorizontalLayout {
-                            padding-left: 5px;
-                            padding-right: 5px;
-                            Text {
-                                text: root.item.badge;
-                                color: root.brand;
-                                font-size: 9px;
-                                font-weight: 700;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // A section heading ("WORKSPACE" / "LIBRARY" / "SETS" / "DETACHED") with its disclosure chevron and
 // an optional trailing action button (the library's save-the-current-tab button).
 component SectionHead inherits Rectangle {
@@ -1532,45 +1428,5 @@ export component LeftPanel inherits Rectangle {
             }
         }
 
-        // ===== the tool modes: one favourited tool's locally resumable sessions =====
-        // A sibling of the four workspace sections rather than a wrapper around them: this
-        // layout's stretch maths is load-bearing (b0c6637), and adding a nesting level to
-        // switch views would change it for the workspace mode too. With `mode > 0` every
-        // section above is `false` and contributes nothing, so this is the only child left.
-        if LeftPanelAdapter.mode > 0 && LeftPanelAdapter.sessions.length == 0 : Text {
-            // A cold cache is empty for the same reason a tool with no history is, so say
-            // which one it is: the scan runs off the UI thread and lands a tick later.
-            text: LeftPanelAdapter.sessions-scanning
-                ? "Looking for resumable sessions…"
-                : "No resumable sessions found for this tool yet.";
-            color: Theme.subtext;
-            font-size: 11px;
-            wrap: word-wrap;
-        }
-
-        if LeftPanelAdapter.mode > 0 && LeftPanelAdapter.sessions.length > 0 : Rectangle {
-            vertical-stretch: 1;
-            clip: true;
-            Flickable {
-                width: 100%;
-                height: 100%;
-                viewport-width: self.width;
-                viewport-height: sessbody.preferred-height;
-                sessbody := VerticalLayout {
-                    alignment: start;
-                    spacing: 2px;
-                    for it[i] in LeftPanelAdapter.sessions : SessionItemView {
-                        item: it;
-                        // The Rust side sorts by (project, recency), so a project heading is
-                        // exactly "the group changed" — no grouping logic in the UI.
-                        heading: i == 0 || LeftPanelAdapter.sessions[i - 1].group != it.group;
-                        brand: LeftPanelAdapter.modes[LeftPanelAdapter.mode].brand;
-                        // The id is the tool's OWN resume key, not an index, so a click can
-                        // never race a refresh of the list underneath it.
-                        activate => { LeftPanelAdapter.resume-session(it.id); }
-                    }
-                }
-            }
-        }
     }
 }
