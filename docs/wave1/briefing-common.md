@@ -21,9 +21,11 @@ between shell calls: always `cd` explicitly with an absolute path.
 Three Cargo workspaces: `rs` (members `crates/core` = `avada-core`, `crates/module-sdk`),
 `rs/crates/app` (its own workspace, crate `avada`, bin `avada`), `rs/crates/terminal-widget`
 (its own workspace). Toolchain 1.96. **Work offline** (`--offline` on every cargo
-command); the crates `keyring`, `pubgrub`, `serde_yaml` are NOT in the local registry —
-do not use them, and never add a dependency (every Cargo.toml is frozen; file a request in
-your report instead).
+command). `pubgrub` and `serde_yaml` ARE in the local registry now (the orchestrator
+pre-declared pubgrub 0.4, jsonwebtoken 9, ed25519-dalek 2 and base64 0.22 in
+`crates/core/Cargo.toml` for Wave 3); `keyring`, `clap_complete`, `gix`, `git2`, `minisign`
+and `globset` are NOT — do not use those. Never add a dependency yourself: every Cargo.toml
+is frozen, so file a request in your report instead.
 
 **Disk is tight (38 GB free) and builds are big. Share the main checkout's target dirs.**
 Before every cargo command in a workspace, export the matching target dir:
