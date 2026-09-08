@@ -36,7 +36,8 @@ pub enum Command {
     /// Open the "New pane" options dialog (Shift+＋ / the menus' "New pane…").
     OpenNewPane,
     /// Submit the New Pane dialog: spawn a pane from the configured options + close the dialog.
-    SubmitNewPane(NewPaneOpts),
+    /// Boxed: `NewPaneOpts` is ~288 bytes and would otherwise size the whole enum.
+    SubmitNewPane(Box<NewPaneOpts>),
     /// Open the "New goal" box (command palette → "New goal…").
     OpenNewGoal,
     /// New-goal box: set the goal text — the mirror of the box's TextInput (pushed on `edited`).
@@ -193,6 +194,9 @@ pub enum Command {
     FocusDir(Direction),
     // layout
     SetLayout(Layout),
+    /// Advance to the next layout preset. `dispatch` already services it; no input source
+    /// constructs it yet (no key binding, no menu row), so it is dead until one does.
+    #[allow(dead_code)]
     CycleLayout,
     ToggleZoom,
     ToggleFullscreen,
@@ -447,7 +451,8 @@ pub enum Effect {
     /// Re-host `det` in a new OS window; `source_alive` is `false` when detaching it
     /// emptied this window (so the controller closes it).
     MoveToNewWindow {
-        det: DetachedPane,
+        /// Boxed: a `DetachedPane` is ~313 bytes and would otherwise size the whole enum.
+        det: Box<DetachedPane>,
         source_alive: bool,
     },
     /// Re-host a whole tab (its panes, title + layout) in a new OS window. `source_alive`
@@ -517,7 +522,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::NewPane => state.add_pane(mgr),
         Command::OpenNewPane => state.open_new_pane(),
         Command::SubmitNewPane(opts) => {
-            state.add_pane_opts(mgr, opts);
+            state.add_pane_opts(mgr, *opts);
             state.close_overlay();
         }
         Command::OpenNewGoal => state.open_new_goal(),
@@ -997,7 +1002,10 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::NewWindow => return Effect::NewWindow,
         Command::MovePaneToNewWindow => {
             if let Some((det, source_alive)) = state.detach_focused(mgr) {
-                return Effect::MoveToNewWindow { det, source_alive };
+                return Effect::MoveToNewWindow {
+                    det: Box::new(det),
+                    source_alive,
+                };
             }
         }
         // ---- Wave-2 overlays ----
@@ -1813,8 +1821,15 @@ mod rail_command_tests {
             &mgr,
         );
 
-        assert_eq!(st.take_rail_requests().len(), 1, "the module still hears it");
-        assert!(st.ctx.is_none(), "and no menu opens over a row with no path");
+        assert_eq!(
+            st.take_rail_requests().len(),
+            1,
+            "the module still hears it"
+        );
+        assert!(
+            st.ctx.is_none(),
+            "and no menu opens over a row with no path"
+        );
     }
 
     /// Reveal-in-files, the one thing the deleted built-in mode did that nothing else in

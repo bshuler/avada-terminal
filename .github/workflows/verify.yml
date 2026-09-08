@@ -14,11 +14,12 @@ name: verify
 #     branch (kills the "two PRs green apart, broken together" race).
 #
 # Real toolchain (confirmed against this repo): rs/ is split into INDEPENDENT Cargo
-# workspaces. Tests live in two of them — `rs` (lean headless core, crates/core) and
-# `rs/crates/terminal-widget`. The heavy GUI/GPU crate `rs/crates/app` is its own
-# workspace, normally built at tag time (release-rust.yml); it is build-verified here
-# whenever a PR touches any Rust crate (the `changes` path filter), carries `area:app`,
-# or runs inside the merge queue.
+# workspaces. The `test` matrix covers two of them — `rs` (lean headless core,
+# crates/core) and `rs/crates/terminal-widget`. The heavy GUI/GPU crate `rs/crates/app`
+# is its own workspace, normally built at tag time (release-rust.yml); it is
+# build-verified here whenever a PR touches any Rust crate (the `changes` path filter),
+# carries `area:app`, or runs inside the merge queue — and, since it drifted to 45 clippy
+# errors under build-only verification, it is LINTED here on every PR as well.
 # There is no TypeScript/Node check to gate: bench/ is a plain Node benchmark harness
 # whose only scripts launch the app to measure it (no lint/typecheck/build/test script).
 
@@ -83,14 +84,21 @@ jobs:
       - name: Test (HARD)
         run: cd ${{ matrix.ws }} && cargo test --all --no-fail-fast
 
-  # BLOCKING lint gate (unlike the report-only legacy test.yml): fmt + clippy on every
-  # test-owning workspace. clippy compiles, so the Linux dev packages are required here too.
+  # BLOCKING lint gate (unlike the report-only legacy test.yml): fmt + clippy on EVERY
+  # workspace, including the GUI one. clippy compiles, so the Linux dev packages are
+  # required here too.
+  #
+  # `rs/crates/app` is on this matrix deliberately, even though it is the slow leg. It was
+  # left off originally because it was only ever build-verified (`build-gui`), and
+  # `cargo build` says nothing about lints — so the crate quietly accumulated 45 clippy
+  # errors while the other two workspaces stayed clean. A build gate is not a lint gate;
+  # the only way this does not drift again is for clippy to run against it here.
   lint:
     name: lint (${{ matrix.ws }})
     strategy:
       fail-fast: false
       matrix:
-        ws: [rs, rs/crates/terminal-widget]
+        ws: [rs, rs/crates/terminal-widget, rs/crates/app]
     runs-on: ubuntu-latest
     defaults:
       run:

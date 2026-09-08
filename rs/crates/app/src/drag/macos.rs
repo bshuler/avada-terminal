@@ -39,11 +39,11 @@ impl super::GlobalPointer for PlatformPointer {
     fn poll(&self) -> Option<(slint::PhysicalPosition, bool)> {
         let mtm = MainThreadMarker::new()?;
         let (height, scale) = screen_metrics(mtm)?;
-        let p = unsafe { NSEvent::mouseLocation() };
+        let p = NSEvent::mouseLocation();
         let x = (p.x * scale).round() as i32;
         let y = ((height - p.y) * scale).round() as i32;
         // Bit 0 of the global pressed-buttons mask = the primary button.
-        let down = unsafe { NSEvent::pressedMouseButtons() } & 1 != 0;
+        let down = NSEvent::pressedMouseButtons() & 1 != 0;
         // winit/Slint re-apply their own cursor on every pointer move; keep the
         // closed-hand drag cursor winning at the pump cadence (the AppKit analogue of
         // the Win32 subclass's WM_MOUSEMOVE re-assert).
@@ -145,18 +145,14 @@ impl Ghost {
         };
         let x = p.0 as f64 / scale + 14.0;
         let y_top = p.1 as f64 / scale + 16.0;
-        unsafe {
-            win.setFrameOrigin(NSPoint::new(x, height - y_top - GHOST_H));
-            win.orderFrontRegardless();
-        }
+        win.setFrameOrigin(NSPoint::new(x, height - y_top - GHOST_H));
+        win.orderFrontRegardless();
     }
 
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn hide(&self) {
         if let Some(win) = &self.win {
-            unsafe {
-                win.orderOut(None);
-            }
+            win.orderOut(None);
         }
     }
 }

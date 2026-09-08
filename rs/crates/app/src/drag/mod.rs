@@ -13,9 +13,10 @@
 //! Once the cursor leaves the source window a transparent / click-through / topmost
 //! **ghost** (a pure Win32 layered window, kept out of Slint's render path) chases the
 //! cursor. On release the drop is resolved against the window under the cursor:
-//!   * over another window's **pane area** → *stitch* the pane in at the hovered slot;
-//!   * over another window's **tab strip**  → *dock* the pane as a new tab;
-//!   * over **empty space**                → a *new window* hosting the pane.
+//! * over another window's **pane area** → *stitch* the pane in at the hovered slot;
+//! * over another window's **tab strip**  → *dock* the pane as a new tab;
+//! * over **empty space**                → a *new window* hosting the pane.
+//!
 //! A drop back inside the source window **reorders** (pane → slot, tab → strip position).
 //!
 //! `State` is never mutated mid-drag; the source pane/tab stays put and the ghost+preview

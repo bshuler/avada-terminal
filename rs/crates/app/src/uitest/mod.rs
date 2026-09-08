@@ -1381,7 +1381,6 @@ fn install_goal_menu(w: &crate::AppWindow, rows: &[(&str, &str)], sel: i32) {
                 .map(|(title, subtitle)| crate::PaletteItem {
                     title: (*title).into(),
                     subtitle: (*subtitle).into(),
-                    ..Default::default()
                 })
                 .collect::<Vec<_>>(),
         ))

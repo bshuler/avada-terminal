@@ -701,8 +701,10 @@ mod tests {
 
     #[test]
     fn try_save_refuses_an_invalid_blob_before_touching_the_disk() {
-        let mut s = Settings::default();
-        s.log_level = "loud".into();
+        let s = Settings {
+            log_level: "loud".into(),
+            ..Default::default()
+        };
         let err = try_save(&s).expect_err("an invalid blob must not be persisted");
         assert!(err.starts_with("logLevel"), "{err}");
     }

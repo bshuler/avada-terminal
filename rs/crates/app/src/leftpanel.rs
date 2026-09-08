@@ -950,6 +950,10 @@ pub enum RailGesture {
 
 impl RailGesture {
     /// The SDK's wire spelling (`open` / `toggle` / `context`).
+    ///
+    /// Unused until the app constructs a module `Host`: the gesture only reaches the wire
+    /// once there is a host to send it to. Part of the pending module-rail plumbing.
+    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             RailGesture::Open => "open",
@@ -1033,6 +1037,8 @@ impl ModuleRail {
     ///
     /// The fold lives here rather than on `State` so the UI tests can drive the panel from
     /// the host's own event type without standing up a whole window.
+    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
+    #[allow(dead_code)]
     pub fn apply(&mut self, event: avada_core::module::RailEvent) -> bool {
         use avada_core::module::RailEvent;
         match event {
@@ -1051,6 +1057,8 @@ impl ModuleRail {
 
     /// The module registered (or re-registered) its entries — replaces the earlier set.
     /// Returns true when the active entry disappeared with it (the panel must fall back).
+    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
+    #[allow(dead_code)]
     pub fn register(
         &mut self,
         module: avada_core::rights::ModuleId,
@@ -1062,6 +1070,8 @@ impl ModuleRail {
 
     /// The module replaced the rows under `entry`. Rows for an entry the module never
     /// registered are ignored (the host already refused them; this is belt and braces).
+    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
+    #[allow(dead_code)]
     pub fn set_rows(
         &mut self,
         module: &avada_core::rights::ModuleId,
@@ -1101,11 +1111,15 @@ impl ModuleRail {
 
     /// The module is gone: its entries and rows leave the rail. Returns true when the
     /// active entry was one of them.
+    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
+    #[allow(dead_code)]
     pub fn gone(&mut self, module: &avada_core::rights::ModuleId) -> bool {
         self.modules.remove(module);
         self.drop_stale_active()
     }
 
+    // Dead until the app constructs a module `Host`: nothing produces `RailEvent`s yet.
+    #[allow(dead_code)]
     fn drop_stale_active(&mut self) -> bool {
         match &self.active {
             Some(key) if self.lookup(key).is_none() => {

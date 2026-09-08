@@ -13,7 +13,11 @@ use slint::Color;
 /// created at index `i` keeps its logical hue when the active palette changes (the accent
 /// is recomputed by index against the new palette). Which one is active is the
 /// `frame_palette` appearance setting; index 0 (Muted) is the default.
-pub const FRAME_PALETTES: [(&str, [(u8, u8, u8); 8]); 4] = [
+/// One entry of [`FRAME_PALETTES`]: the palette's display name and its 8 hue slots as
+/// RGB triples, in the fixed slot order documented on that constant.
+pub type FramePalette = (&'static str, [(u8, u8, u8); 8]);
+
+pub const FRAME_PALETTES: [FramePalette; 4] = [
     // "Muted" — the original saturated set (renderer `dark`), kept as the default.
     (
         "Muted",
@@ -440,6 +444,7 @@ pub mod menu_icon {
     /// by `ToolIcon` in `ui/contextmenu.slint`. The two constants live in different crates
     /// because the registry is data in core while the drawing is app-side; the assertion in
     /// [`super::tests::tool_icons_start_where_the_registry_says`] is what keeps them equal.
+    #[allow(dead_code)] // Referenced only from `#[cfg(test)]`; it is a pinned boundary, not a use site.
     pub const TOOL_BASE: i32 = 40;
 }
 
@@ -563,7 +568,7 @@ mod tests {
     fn layout_icon_kinds_stay_inside_their_reserved_block() {
         for l in super::LAYOUT_MENU {
             let kind = super::layout_icon_kind(*l);
-            assert!(kind >= super::menu_icon::LAYOUT_BASE && kind < super::menu_icon::TOOL_BASE);
+            assert!((super::menu_icon::LAYOUT_BASE..super::menu_icon::TOOL_BASE).contains(&kind));
         }
     }
 

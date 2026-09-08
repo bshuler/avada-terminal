@@ -212,9 +212,10 @@ fn the_filter_box_is_drawn_for_a_tier_one_entry_and_typing_reaches_rust() {
         // failure mode a direct property write would hide completely.
         click(&w, &box_);
         for ch in ["m", "a"] {
-            w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-                text: slint::SharedString::from(ch),
-            });
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                    text: slint::SharedString::from(ch),
+                });
             w.window()
                 .dispatch_event(slint::platform::WindowEvent::KeyReleased {
                     text: slint::SharedString::from(ch),
@@ -304,7 +305,7 @@ fn the_row_a_module_marks_selected_is_scrolled_into_view() {
         let found = only(&w, "f60.rs", AccessibleRole::Button);
         let y = found.absolute_position().y;
         assert!(
-            y >= 0.0 && y < 800.0,
+            (0.0..800.0).contains(&y),
             "the revealed row has to be ON SCREEN, not merely instantiated: y={y}"
         );
         assert_eq!(

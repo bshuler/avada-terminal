@@ -4989,6 +4989,8 @@ impl State {
     /// A `Gone` (or a re-`Registered` set that no longer contains it) takes the active
     /// entry with it; the panel then falls back to the workspace tree rather than showing
     /// a head with no module behind it.
+    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
+    #[allow(dead_code)]
     pub fn apply_rail_event(&mut self, event: avada_core::module::RailEvent) -> bool {
         if self.rail.apply(event) {
             self.left_mode_request = Some(crate::paneview::LEFT_MODE_WORKSPACE);
@@ -5073,6 +5075,8 @@ impl State {
     }
 
     /// Take everything queued for the module host since the last drain.
+    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
+    #[allow(dead_code)]
     pub fn take_rail_requests(&mut self) -> Vec<RailRequest> {
         std::mem::take(&mut self.rail_requests)
     }
@@ -5121,10 +5125,11 @@ impl State {
 
     /// Take everything the rights page has queued for the module host and the install
     /// store since the last drain.
+    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
+    #[allow(dead_code)]
     pub fn take_rights_effects(&mut self) -> Vec<crate::prefs::rights::Applied> {
         std::mem::take(&mut self.rights_effects)
     }
-
 
     /// Point the window's project anchor at `dir`.
     ///
@@ -5183,6 +5188,8 @@ impl State {
     }
 
     /// Take everything queued for `Host::emit` since the last drain.
+    // Dead until the app constructs a module `Host` to drive it (see docs/module-contract.md).
+    #[allow(dead_code)]
     pub fn take_module_events(&mut self) -> Vec<(String, serde_json::Value)> {
         std::mem::take(&mut self.module_events)
     }
@@ -11491,7 +11498,12 @@ mod git_mode {
         assert_eq!(LEFT_MODE_TOOL_BASE, LEFT_MODE_GIT + 1);
         // A module surface never takes an index in this list: it is drawn from
         // `RailAdapter` at a mode of its own, below every built-in.
-        assert!(LEFT_MODE_RAIL < LEFT_MODE_WORKSPACE);
+        // Constant by construction — that is the point: this pins the relation so a later
+        // renumbering of the built-in modes trips the test rather than the UI.
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(LEFT_MODE_RAIL < LEFT_MODE_WORKSPACE);
+        }
     }
 
     /// The icon sentinel is matched EXACTLY in Slint, so the built-in glyph needs a value
@@ -11560,7 +11572,10 @@ mod git_mode {
 
         set_cwd(&mut st, &a);
         st.sync_left_root(LEFT_MODE_GIT);
-        let root_a = st.project_root.clone().expect("rooted on the selected pane");
+        let root_a = st
+            .project_root
+            .clone()
+            .expect("rooted on the selected pane");
         assert!(
             root_a.ends_with("a"),
             "rooted at {root_a:?}, wanted the a repo"

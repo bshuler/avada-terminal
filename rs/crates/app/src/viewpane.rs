@@ -442,7 +442,7 @@ pub fn list_dir(dir: &Path) -> Vec<ViewRow> {
 pub fn read_lines(file: &Path) -> Vec<ViewRow> {
     let text = match read_text(file) {
         Ok(t) => t,
-        Err(row) => return vec![row],
+        Err(row) => return vec![*row],
     };
     let mut rows: Vec<ViewRow> = Vec::new();
     let mut total = 0usize;
@@ -482,7 +482,7 @@ pub fn read_lines(file: &Path) -> Vec<ViewRow> {
 pub fn highlight_lines(file: &Path, palette: usize) -> Vec<ViewRow> {
     let text = match read_text(file) {
         Ok(t) => t,
-        Err(row) => return vec![row],
+        Err(row) => return vec![*row],
     };
     let ext = file
         .extension()
@@ -540,7 +540,7 @@ pub fn highlight_lines(file: &Path, palette: usize) -> Vec<ViewRow> {
 pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
     let text = match read_text(file) {
         Ok(t) => t,
-        Err(row) => return vec![row],
+        Err(row) => return vec![*row],
     };
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
@@ -821,7 +821,7 @@ fn heading(trimmed: &str) -> Option<ViewRow> {
 #[tracing::instrument(level = "debug", ret)]
 fn setext(trimmed: &str) -> Option<i32> {
     let t = trimmed.trim_end();
-    if t.len() >= 1 && t.chars().all(|c| c == '=') {
+    if !t.is_empty() && t.chars().all(|c| c == '=') {
         return Some(role::H1);
     }
     if t.len() >= 2 && t.chars().all(|c| c == '-') {
@@ -1077,25 +1077,31 @@ fn is_rule(trimmed: &str) -> bool {
 
 /// Read a file as text, refusing what a preview has no business loading. The error
 /// arm is a ready-made [`role::NOTICE`] row so every caller reports failure the
-/// same way.
+/// same way; it is boxed because a `ViewRow` dwarfs the `String` success arm.
 #[tracing::instrument(level = "debug", ret)]
-fn read_text(file: &Path) -> Result<String, ViewRow> {
+fn read_text(file: &Path) -> Result<String, Box<ViewRow>> {
     let md = fs::metadata(file)
-        .map_err(|e| ViewRow::inert(role::NOTICE, format!("Cannot read: {e}")))?;
+        .map_err(|e| Box::new(ViewRow::inert(role::NOTICE, format!("Cannot read: {e}"))))?;
     if md.is_dir() {
-        return Err(ViewRow::inert(role::NOTICE, "That is a directory"));
+        return Err(Box::new(ViewRow::inert(
+            role::NOTICE,
+            "That is a directory",
+        )));
     }
     if md.len() > MAX_FILE_BYTES {
-        return Err(ViewRow::inert(
+        return Err(Box::new(ViewRow::inert(
             role::NOTICE,
             format!("File is {} — too large to preview", size_label(md.len())),
-        ));
+        )));
     }
-    let bytes =
-        fs::read(file).map_err(|e| ViewRow::inert(role::NOTICE, format!("Cannot read: {e}")))?;
+    let bytes = fs::read(file)
+        .map_err(|e| Box::new(ViewRow::inert(role::NOTICE, format!("Cannot read: {e}"))))?;
     // A NUL in the first block is the same heuristic `grep` uses for "binary".
     if bytes.iter().take(8_000).any(|b| *b == 0) {
-        return Err(ViewRow::inert(role::NOTICE, "Binary file — not previewed"));
+        return Err(Box::new(ViewRow::inert(
+            role::NOTICE,
+            "Binary file — not previewed",
+        )));
     }
     // Lossy on purpose: a stray invalid byte should cost one replacement char, not
     // the whole preview.
@@ -1181,7 +1187,7 @@ fn now_secs() -> u64 {
 pub fn table_rows(file: &Path) -> Vec<ViewRow> {
     let text = match read_text(file) {
         Ok(t) => t,
-        Err(row) => return vec![row],
+        Err(row) => return vec![*row],
     };
     let delim = crate::csv::delimiter_for(file);
     let records = match crate::csv::parse(&text, delim) {
@@ -1638,7 +1644,7 @@ fn rows_for_pane(uid: &str, kind: &PaneKind, target: Option<&str>, palette: usiz
 fn data_rows(file: &Path, flipped: &BTreeSet<String>, palette: usize) -> Vec<ViewRow> {
     let text = match read_text(file) {
         Ok(t) => t,
-        Err(row) => return vec![row],
+        Err(row) => return vec![*row],
     };
     let jsonl = matches!(
         file.extension()

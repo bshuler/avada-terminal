@@ -51,14 +51,7 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     let mut score = 0i32;
     let mut streak = 0i32;
     for ch in q {
-        let mut found: Option<usize> = None;
-        for j in ti..t.len() {
-            if t[j] == ch {
-                found = Some(j);
-                break;
-            }
-        }
-        let found = found?;
+        let found = ti + t[ti..].iter().position(|&c| c == ch)?;
         if found == ti {
             streak += 1;
             score += 2 + streak; // consecutive run bonus
@@ -79,43 +72,41 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
 /// entries + the active-layout `current` marker stay fresh (mirrors `buildCommands`).
 #[tracing::instrument(level = "debug", skip(state))]
 pub fn build(state: &State) -> Vec<Entry> {
-    let mut cmds: Vec<Entry> = Vec::new();
-
-    // ---- tabs ----
-    cmds.push(Entry::new(
-        "New tab",
-        "Open a new workspace tab",
-        "group workspace add",
-        Command::NewTab,
-    ));
-    cmds.push(Entry::new(
-        "Close tab",
-        "Close the current tab",
-        "group workspace remove",
-        Command::CloseTab(state.active),
-    ));
-
-    // ---- panes ----
-    cmds.push(Entry::new(
-        "New pane",
-        "Spawn an interactive shell",
-        "add create terminal shell",
-        Command::NewPane,
-    ));
-    cmds.push(Entry::new(
-        "New goal",
-        "Set an autonomous goal for a project (spawns its goals orchestrator)",
-        "goal agent orchestrator autonomous objective",
-        Command::OpenNewGoal,
-    ));
-
-    // ---- windows ----
-    cmds.push(Entry::new(
-        "New window",
-        "Open a second OS window on the shared session engine",
-        "os window monitor split",
-        Command::NewWindow,
-    ));
+    let mut cmds: Vec<Entry> = vec![
+        // ---- tabs ----
+        Entry::new(
+            "New tab",
+            "Open a new workspace tab",
+            "group workspace add",
+            Command::NewTab,
+        ),
+        Entry::new(
+            "Close tab",
+            "Close the current tab",
+            "group workspace remove",
+            Command::CloseTab(state.active),
+        ),
+        // ---- panes ----
+        Entry::new(
+            "New pane",
+            "Spawn an interactive shell",
+            "add create terminal shell",
+            Command::NewPane,
+        ),
+        Entry::new(
+            "New goal",
+            "Set an autonomous goal for a project (spawns its goals orchestrator)",
+            "goal agent orchestrator autonomous objective",
+            Command::OpenNewGoal,
+        ),
+        // ---- windows ----
+        Entry::new(
+            "New window",
+            "Open a second OS window on the shared session engine",
+            "os window monitor split",
+            Command::NewWindow,
+        ),
+    ];
 
     let t = state.active_tab();
     if !t.panes.is_empty() {
@@ -269,7 +260,7 @@ pub fn filter(entries: &[Entry], query: &str) -> Vec<usize> {
         }
     }
     // Stable sort by score desc (ties keep registry order).
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|&(_, s)| std::cmp::Reverse(s));
     scored.into_iter().map(|(i, _)| i).collect()
 }
 
