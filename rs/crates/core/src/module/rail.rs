@@ -7,7 +7,7 @@
 //! (`recv_timeout`) without a runtime. A receiver that has been dropped is pruned at the
 //! next send.
 
-pub use avada_module_sdk::rail::{RailEntry, Row};
+pub use avada_module_sdk::rail::{Gesture, RailEntry, Row, RowActivate};
 use avada_module_sdk::ModuleId;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};

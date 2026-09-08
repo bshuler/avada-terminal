@@ -79,7 +79,7 @@ pub mod transport;
 
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
-pub use rail::{RailEntry, RailEvent, RailState, Row};
+pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate};
 pub use rpc::CommandSpec;
 pub use spawn::{HandshakeError, SpawnError};
 pub use supervisor::{ModuleStatus, RestartPolicy};
