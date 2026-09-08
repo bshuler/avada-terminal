@@ -84,6 +84,16 @@ hmac = "0.12"
 semver = { version = "1", features = ["serde"] }
 clap = { version = "4.6", features = ["derive"] }
 
+# --- Wave 3 (orchestrator-added; docs/modules-fanout-plan.md §5 Wave 3) ---
+# G6 resolver: identity + shape dependency resolution (install/resolver.rs).
+pubgrub = "0.4"
+# G8 licensing: EdDSA JWT verify + the in-process stub issuer (license/). jsonwebtoken
+# carries ring for Ed25519 verification; ed25519-dalek mints the stub issuer's keys and
+# verifies minisign-format signatures for G7's Linux notarization policy (policy/).
+jsonwebtoken = "9"
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+base64 = "0.22"
+
 # platform: single-instance (named mutex + named-pipe argv handoff)
 # 0.58 -> 0.62 to unify with the app + wgpu-hal 29 (avoids two `windows` crate versions).
 # Target-gated so Linux/macOS builds never pull the Win32 bindings.

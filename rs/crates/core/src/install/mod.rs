@@ -30,6 +30,7 @@ pub mod keyring;
 pub mod keyring_windows;
 pub mod lock;
 pub mod record;
+pub mod resolver;
 pub mod store;
 
 pub use artifact::{hash_file, verify_artifact};
