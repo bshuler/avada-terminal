@@ -332,8 +332,34 @@ The scope follows the human: `Host::activate` with a new `WorkspaceInfo`
 retargets it for **every** running module at once, so a module that outlives a
 workspace switch cannot keep reading the tree the user has left.
 
-`host.fs.write` remains unsupported (`MethodNotFound`) — the capability exists
-in the manifest vocabulary, but no host serves it yet.
+`host.fs.write { path, text }` replaces a file whole and answers `{}`. Text
+only and whole-file only: a ranged write would ask the host to arbitrate
+concurrent edits to a file the human may also have open, and replacing the file
+is the operation whose meaning does not depend on what happened between the read
+and the write. The body is capped at the same **8 MiB** as a read
+(`rpc::MAX_WRITE`), so a module can always read back what it wrote. Missing
+parent directories are created — the file a module most wants to write is the
+first one in a directory that does not exist yet — but only *after* the scope
+check.
+
+The scope is the same workspace root, and the capability that lifts it is
+`fs.write_any`; `fs.read_any` does not. Because the target usually has no inode
+yet, the check runs against the deepest ancestor that does exist, canonicalised
+— so a symlink out of the tree is caught exactly as it is on a read — and the
+unresolved tail may only be plain names. A `..` after the existing prefix is
+refused rather than normalised.
+
+### 10.3.1 What is still unsupported
+
+`host.panes.input`, `host.keychain.get` and `host.keychain.set` answer
+`MethodNotFound` with `data = { "unsupported": true }` — distinct from an
+unknown method name, which carries no `data`. The capabilities exist in the
+manifest vocabulary; no host serves the methods yet.
+
+`workspace.read` and `workspace.write` are in the capability vocabulary but no
+method maps to them (`contract::methods::required_capability` returns `None` for
+every name), so declaring them today grants a module nothing. A module that
+wants the workspace reads it as files under the workspace root.
 
 ### 10.4 Events: `host.events.subscribe` and `module.event`
 
