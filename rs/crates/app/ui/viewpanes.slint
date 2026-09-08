@@ -152,12 +152,16 @@ component ViewRowView inherits Rectangle {
         : root.item.role == 12 ? "Diagram"
         // Two identical lines of a file are two different rows, and the viewer already
         // prints the number that tells them apart.
-        : root.item.role == 3 || root.item.role > 16
+        : root.item.role == 3 || (root.item.role > 16 && root.item.role != 18)
             ? "Line " + root.item.detail + ": " + root.item.text
         : root.item.text;
 
     accessible-role: list-item;
     accessible-label: root.a11y;
+    // A data node (role 18) folds. Its `check` is the disclosure: -1 a scalar, 0 folded,
+    // 1 open — so only a container is expandable, and a scalar reads as a plain item.
+    accessible-expandable: root.item.role == 18 && root.item.check >= 0;
+    accessible-expanded: root.item.role == 18 && root.item.check == 1;
     // The dim trailing column — a size and an age in a listing. It elaborates the name
     // rather than being part of it, which is the whole distinction between a
     // description and a label.
@@ -568,7 +572,44 @@ component ViewRowView inherits Rectangle {
         }
     }
 
-    if root.item.role == 3 || root.item.role > 17 : HorizontalLayout {
+    // ---- V1 data tree
+    // A node of a data pane: a disclosure glyph, the key (or `key: value`) inked by
+    // type, and on a folded container the count of what it hides. Depth is `indent`,
+    // paid as left padding so the tree reads as one. Fixed height: row N is node N.
+    if root.item.role == 18 : Rectangle {
+        clip: true;
+        HorizontalLayout {
+            padding-left: (6px + 14px * root.item.indent) * root.zoom;
+            padding-right: 8px * root.zoom;
+            spacing: 6px * root.zoom;
+            // Decoration only: it is not in `text`, so a copy or a screen reader never
+            // meets it. A scalar keeps the column so its key lines up with a sibling's.
+            disclosure := Text {
+                width: 12px * root.zoom;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                text: root.item.check == 1 ? "▾" : root.item.check == 0 ? "▸" : "";
+                color: Theme.subtext;
+                font-size: 11px * root.zoom;
+            }
+            node := StyledText {
+                vertical-alignment: center;
+                text: root.item.md;
+                default-color: Theme.text;
+                default-font-family: "JetBrains Mono";
+                default-font-size: 12px * root.zoom;
+            }
+            if root.item.check == 0 : Text {
+                vertical-alignment: center;
+                text: root.item.detail;
+                color: Theme.faint;
+                font-size: 10px * root.zoom;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    if root.item.role == 3 || root.item.role > 18 : HorizontalLayout {
         padding-left: 6px * root.zoom;
         padding-right: 8px * root.zoom;
         spacing: 8px * root.zoom;

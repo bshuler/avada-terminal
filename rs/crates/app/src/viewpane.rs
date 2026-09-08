@@ -20,7 +20,7 @@
 //! through persistence, so a view pane survives a restart with no format change.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -80,6 +80,12 @@ pub mod role {
     /// [`super::ViewRow::markup`]: the text is the same verbatim line, and the row
     /// must keep the same fixed height so that row N is still line N.
     pub const SOURCE: i32 = 17;
+    /// One node of a data pane's tree (see [`crate::datatree`]): a container row that
+    /// folds, or a scalar row that does not. `indent` is the depth, `check` the
+    /// disclosure (`-1` scalar, `0` folded, `1` open), `detail` the folded child count,
+    /// `node` the path a toggle names. `text` is the key alone on a container and
+    /// `key: value` on a scalar; the glyph is decoration and never enters it.
+    pub const DATA_NODE: i32 = 18;
 }
 
 /// One cell of a markdown table.
@@ -125,6 +131,9 @@ pub struct ViewRow {
     /// replacement for `text`, because everything else about the row — copying, the
     /// accessible label, the selection — wants the raw source line.
     pub markup: String,
+    /// [`role::DATA_NODE`] only: the node's stable path (`$.deps.serde`), the thing
+    /// `Command::ViewToggleNode` names. Stable across a toggle where a row index is not.
+    pub node: String,
 }
 
 impl Default for ViewRow {
@@ -149,6 +158,7 @@ impl ViewRow {
             check: -1,
             cells: Vec::new(),
             markup: String::new(),
+            node: String::new(),
         }
     }
 
@@ -253,7 +263,7 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<Vi
         // Reserved in Wave 0 of docs/modules-fanout-plan.md; each gets its own projection
         // in the viewer-panes track (WP1 tree, WP2 grid, WP3 bitmap). Until then the file
         // is shown as text, which is honest for the first two and a NOTICE for the third.
-        PaneKind::Data => read_lines(&path),
+        PaneKind::Data => data_rows(&path, &BTreeSet::new(), palette),
         PaneKind::Table => table_rows(&path),
         PaneKind::Image => vec![ViewRow::inert(
             role::NOTICE,
@@ -1237,6 +1247,10 @@ struct Fingerprint {
     /// baked into each row's markup, so a palette change is a content change. Without
     /// this the viewer would keep the old theme's ink until the file was next touched.
     palette: usize,
+    /// A data pane's fold generation (see [`crate::datatree::generation`]): the one
+    /// input to a view that is not the file, so a toggle is a cache miss, not a stale
+    /// tree. Zero for every other kind.
+    folds: u64,
 }
 
 #[tracing::instrument(level = "debug")]
@@ -1262,6 +1276,7 @@ fn fingerprint(kind: &PaneKind, target: Option<&str>, palette: usize) -> Fingerp
         mtime,
         len,
         palette,
+        folds: 0,
     }
 }
 
@@ -1376,7 +1391,10 @@ pub fn model_for(
     target: Option<&str>,
     palette: usize,
 ) -> ModelRc<PaneViewRow> {
-    let fp = fingerprint(kind, target, palette);
+    let fp = Fingerprint {
+        folds: crate::datatree::generation(uid),
+        ..fingerprint(kind, target, palette)
+    };
     VIEW_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if let Some(have) = c.get(uid) {
@@ -1384,7 +1402,7 @@ pub fn model_for(
                 return have.model.clone();
             }
         }
-        let rows = rows_for(kind, target, palette);
+        let rows = rows_for_pane(uid, kind, target, palette);
         // Built once and cloned: a `PaneDiagram` holds two `ModelRc`s, and minting
         // a fresh empty pair for each of 5,000 plain rows is 10,000 allocations to
         // say "no diagram here".
@@ -1585,10 +1603,52 @@ pub fn kind_for_file(path: &Path) -> PaneKind {
         // Track V3: a bitmap this build can decode opens in the image pane. Before this
         // arm a PNG fell to the plain viewer, whose NUL heuristic then refused it.
         e if crate::imagepane::is_image_ext(e) => PaneKind::Image,
+        "json" | "jsonl" | "ndjson" => PaneKind::Data,
         // Anything the highlighter has a grammar for opens coloured; everything else
         // keeps the plain viewer, which is still the honest answer for a `.log`.
         e if crate::highlight::is_source(e) => PaneKind::Code,
         _ => PaneKind::FileViewer,
+    }
+}
+
+// ---- V1 data tree
+
+/// [`rows_for`] with the pane's own fold state: the one projection input that is not
+/// the file. Only a data pane has any; every other kind is [`rows_for`] unchanged.
+#[tracing::instrument(level = "debug", ret)]
+fn rows_for_pane(uid: &str, kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<ViewRow> {
+    match (kind, target.filter(|t| !t.is_empty())) {
+        (PaneKind::Data, Some(t)) => {
+            data_rows(Path::new(t), &crate::datatree::flipped(uid), palette)
+        }
+        _ => rows_for(kind, target, palette),
+    }
+}
+
+/// A data pane's rows: the file as a tree, or, when it will not parse, a NOTICE naming
+/// the line followed by the plain viewer's rows, so a broken `.json` is still readable
+/// and the error is still on screen. The read guards ("too large", "binary", a
+/// directory) are [`read_text`]'s, the same as every other viewer.
+#[tracing::instrument(level = "debug", ret)]
+fn data_rows(file: &Path, flipped: &BTreeSet<String>, palette: usize) -> Vec<ViewRow> {
+    let text = match read_text(file) {
+        Ok(t) => t,
+        Err(row) => return vec![row],
+    };
+    let jsonl = matches!(
+        file.extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .as_deref(),
+        Some("jsonl" | "ndjson")
+    );
+    match crate::datatree::tree_rows(&text, jsonl, file, flipped, &theme::ui_palette(palette)) {
+        Ok(rows) => rows,
+        Err(msg) if msg == "Empty file" => vec![ViewRow::inert(role::NOTICE, msg)],
+        Err(msg) => {
+            let mut rows = vec![ViewRow::inert(role::NOTICE, msg)];
+            rows.extend(read_lines(file));
+            rows
+        }
     }
 }
 
@@ -2545,5 +2605,151 @@ mod tests {
         assert_eq!(kind_for_file(Path::new("/a/data.tab")), PaneKind::Table);
         // A file that merely mentions the format is not one.
         assert_eq!(kind_for_file(Path::new("/a/csv.txt")), PaneKind::FileViewer);
+    }
+
+    // ---- V1 data tree
+
+    #[test]
+    fn a_json_file_opens_as_a_data_pane() {
+        for name in ["package.json", "PACKAGE.JSON", "log.jsonl", "events.ndjson"] {
+            assert_eq!(
+                kind_for_file(Path::new(name)),
+                PaneKind::Data,
+                "{name} is a data file"
+            );
+        }
+        // No YAML or TOML parser is in the tree, and a data pane that cannot parse would
+        // only ever show the "not valid JSON" notice: these keep the plain viewer.
+        assert_eq!(kind_for_file(Path::new("/a/ci.yaml")), PaneKind::FileViewer);
+        assert_eq!(
+            kind_for_file(Path::new("/a/Cargo.toml")),
+            PaneKind::FileViewer
+        );
+    }
+
+    /// The data pane end to end: a file on disk, the model the pane draws, and a toggle
+    /// through the same cache. Folding is the one input to a projection that is not the
+    /// file — if the fold generation ever leaves the fingerprint, the second `model_for`
+    /// here is a cache hit and the tree never folds.
+    #[test]
+    fn a_data_pane_projects_the_tree_and_a_toggle_reprojects_it() {
+        let d = scratch("datatree");
+        let f = write(
+            &d,
+            "pkg.json",
+            "{\"name\": \"x\", \"deps\": {\"serde\": \"1\", \"tokio\": \"1\"}, \"ok\": true}\n",
+        );
+        let target = f.display().to_string();
+        let uid = "view-datatree-model";
+        crate::datatree::forget(uid);
+        forget(uid);
+
+        let m = model_for(uid, &PaneKind::Data, Some(&target), 0);
+        assert_eq!(m.row_count(), 5, "name, deps, serde, tokio, ok");
+        for i in 0..5 {
+            assert_eq!(m.row_data(i).unwrap().role, role::DATA_NODE);
+        }
+        let g1 = generation(uid).expect("projected");
+
+        // The container row is the one that can reach the click; a scalar is inert.
+        let deps = row_at(uid, 1).unwrap();
+        assert_eq!(deps.text, "deps");
+        assert_eq!(deps.node, "$.deps");
+        assert_eq!(deps.check, 1, "depth 0 opens by default");
+        assert!(deps.activatable());
+        assert_eq!(deps.path, f);
+        assert!(m.row_data(1).unwrap().activatable);
+        let name = row_at(uid, 0).unwrap();
+        assert_eq!(name.text, "name: \"x\"");
+        assert!(!name.activatable());
+        assert!(!m.row_data(0).unwrap().activatable);
+        // Slint sees depth as `indent` and the disclosure as `check`.
+        assert_eq!(m.row_data(2).unwrap().indent, 1);
+        assert_eq!(m.row_data(1).unwrap().check, 1);
+        assert_eq!(m.row_data(0).unwrap().check, -1);
+
+        // Same file, same folds: a cache hit.
+        let again = model_for(uid, &PaneKind::Data, Some(&target), 0);
+        assert_eq!(again.row_count(), 5);
+        assert_eq!(generation(uid), Some(g1));
+
+        // Fold `deps`: its two children go, `ok` after it stays, and the row is folded.
+        crate::datatree::toggle(uid, "$.deps");
+        let folded = model_for(uid, &PaneKind::Data, Some(&target), 0);
+        assert_eq!(folded.row_count(), 3, "name, deps (folded), ok");
+        assert_ne!(generation(uid), Some(g1), "a toggle must reproject");
+        assert_eq!(row_at(uid, 1).unwrap().check, 0);
+        assert_eq!(folded.row_data(1).unwrap().check, 0);
+        assert_eq!(folded.row_data(1).unwrap().detail, "2 keys");
+        assert_eq!(row_at(uid, 2).unwrap().text, "ok: true");
+
+        // And back: the same five rows.
+        crate::datatree::toggle(uid, "$.deps");
+        let open = model_for(uid, &PaneKind::Data, Some(&target), 0);
+        assert_eq!(open.row_count(), 5);
+        assert_eq!(row_at(uid, 1).unwrap().check, 1);
+
+        crate::datatree::forget(uid);
+        forget(uid);
+    }
+
+    #[test]
+    fn a_broken_json_file_still_reads_as_text_with_the_error_first() {
+        let d = scratch("datatree-broken");
+        let f = write(&d, "bad.json", "{\n  \"a\": 1,\n  \"b\": ,\n}\n");
+        let rows = rows_for(&PaneKind::Data, f.to_str(), 0);
+        assert_eq!(rows[0].role, role::NOTICE);
+        assert!(
+            rows[0].text.starts_with("Not valid JSON: "),
+            "{}",
+            rows[0].text
+        );
+        assert!(rows[0].text.contains("line 3"), "{}", rows[0].text);
+        // Then the file, as the plain viewer shows it: the error is on screen and so is
+        // the text it is about.
+        let plain = read_lines(&f);
+        assert_eq!(rows.len(), 1 + plain.len());
+        assert_eq!(rows[1].role, role::LINE);
+        assert_eq!(rows[1].text, "{");
+        assert_eq!(rows[3].text, "  \"b\": ,");
+
+        // An empty file is the same notice every viewer gives, and only that.
+        let e = write(&d, "empty.json", "");
+        let rows = rows_for(&PaneKind::Data, e.to_str(), 0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].role, rows[0].text.as_str()),
+            (role::NOTICE, "Empty file")
+        );
+
+        // The read guards are shared with every other viewer, not reinvented here.
+        let rows = rows_for(&PaneKind::Data, d.to_str(), 0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, role::NOTICE);
+        assert!(rows[0].text.contains("directory"), "{}", rows[0].text);
+        let rows = rows_for(&PaneKind::Data, None, 0);
+        assert_eq!(rows[0].text, "No path set for this pane");
+    }
+
+    #[test]
+    fn a_data_pane_reinks_its_values_when_the_palette_changes() {
+        let d = scratch("datatree-palette");
+        let f = write(&d, "p.json", "{\"n\": 1}\n");
+        let target = f.display().to_string();
+        let uid = "view-datatree-palette";
+        forget(uid);
+        let mocha = model_for(uid, &PaneKind::Data, Some(&target), 0);
+        let m0 = row_at(uid, 0).unwrap().markup;
+        let g = generation(uid).unwrap();
+        let latte = model_for(uid, &PaneKind::Data, Some(&target), 3);
+        assert_ne!(generation(uid), Some(g), "a palette switch reprojects");
+        assert_ne!(row_at(uid, 0).unwrap().markup, m0);
+        assert_eq!(mocha.row_count(), latte.row_count());
+        assert_eq!(
+            row_at(uid, 0).unwrap().text,
+            "n: 1",
+            "the words do not move"
+        );
+        forget(uid);
     }
 }

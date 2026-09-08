@@ -413,6 +413,10 @@ pub enum Command {
     /// Relaunch the GUI from the installed bundle, leaving the session daemon (and every
     /// pane) alone. How a freshly installed build goes live without touching the panes.
     RestartApp,
+    /// A container row of a data pane was clicked: fold or unfold node `.1` (a path such
+    /// as `$.deps.serde`) of the active tab's pane `.0`. View state, not a file edit, and
+    /// not persisted across restarts.
+    ViewToggleNode(usize, String),
 }
 
 /// A side effect the controller must apply outside the state (UI/window layer). The
@@ -585,6 +589,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::ViewSelect(i, row, extend) => state.view_select(i, row, extend),
         Command::SpeechStopNow => return Effect::SpeechStopNow,
         Command::RestartApp => return Effect::RestartApp,
+        Command::ViewToggleNode(i, node) => crate::datatree::toggle_pane(state, i, &node),
         Command::SpeechToggleMuted => return Effect::SpeechToggleMuted,
         Command::SpeechToggleFocusedOnly => return Effect::SpeechToggleFocusedOnly,
         Command::ZoomPane(i) => state.zoom_pane(i),

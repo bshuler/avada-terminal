@@ -3684,6 +3684,10 @@ impl App {
                 if !r.activatable() {
                     return;
                 }
+                if let Some(cmd) = crate::datatree::activate(pane as usize, &r) {
+                    app.run_command(&w, cmd);
+                    return;
+                }
                 if r.role == crate::viewpane::role::DIR || r.role == crate::viewpane::role::PARENT {
                     app.run_command(
                         &w,
