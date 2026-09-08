@@ -93,8 +93,10 @@ contract type.
     Avada broker.
   - Core verifies the signature offline with cached keys on every launch and introspects at
     most once per interval when online; a stale revocation answer beyond the interval shows
-    a banner but keeps running until expiry. Expiry: 7-day grace with toast + prefs banner,
-    then the module refuses to spawn and its panes become placeholders.
+    a banner but keeps running until expiry. Expiry: a grace window of `avada_module_sdk::
+    license::GRACE_DAYS` (**14** days --- the SDK constant is the contract; this line once
+    said 7 and the SDK won) with toast + prefs banner, then the module refuses to spawn and
+    its panes become placeholders.
   - Three install paths: manual file install while disconnected; store purchase downloaded
     on sign-in; corporate-configured URL serving a signed license.
   - Binding is bearer plus displayed licensee name. Issuance is third-party, the verifier is
