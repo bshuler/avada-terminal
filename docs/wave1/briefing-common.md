@@ -115,3 +115,9 @@ single commit) before the final push, with a commit body that reads as a changel
 3. What you need from a frozen file (exact diff or item).
 4. What you left undone, and why.
 5. The commit hash on `main`.
+
+## Cargo hygiene (added after Batch 1)
+
+- Run every cargo command in the **foreground** (Bash `timeout: 600000`). Never background a cargo run and end your turn waiting for it: the orchestrator cannot tell a waiting agent from a finished one.
+- The shared `CARGO_TARGET_DIR` can leave a stale `avada-core` / `avada-module-sdk` rlib from another worktree (cargo does not hash a path package's location). If you see an error about a field or method that plainly exists on main, run `touch crates/core/src/lib.rs crates/module-sdk/src/lib.rs` in your worktree and rebuild.
+- Two host tests (`module::host_tests::crash_restarts…`, `…never_says_hello…`) are slow under parallel load; if one fails in a full run, rerun it alone once before treating it as a regression.
