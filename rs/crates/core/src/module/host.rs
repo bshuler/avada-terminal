@@ -517,6 +517,7 @@ impl Slot {
             methods: super::rpc::SERVED.iter().map(|s| s.to_string()).collect(),
             data_dir: self.data_dir.to_string_lossy().into_owned(),
             workspace: self.config.workspace.clone(),
+            token: None,
         }
     }
 

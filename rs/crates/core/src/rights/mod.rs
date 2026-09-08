@@ -9,8 +9,8 @@
 //!   verified install records (registered by the install store after signature
 //!   verification), the user-level [`ModuleRights`] per module (profile + per-row
 //!   overrides, persisted as JSON by [`store::RightsStore`]) and the per-workspace
-//!   override column. [`RightsService::decide`] is the whole gate; the orchestrator
-//!   wraps it in the `CapabilityGate` trait from `module/gate.rs`.
+//!   override column. [`RightsService::decide`] is the whole gate; [`gate::RightsGate`]
+//!   wraps it in the `CapabilityGate` trait from `module/gate.rs` for the host.
 //! * [`asks::AskQueue`] — a `Decision::Ask` is a toast, not a modal. The host parks
 //!   the request as a [`PendingAsk`] and the answer (`allow once | always | workspace |
 //!   never`) either just resolves that one request or writes the persisted value.
@@ -23,6 +23,7 @@
 //! can widen what the user agreed to at install time.
 
 pub mod asks;
+pub mod gate;
 pub mod held;
 pub mod store;
 
@@ -37,6 +38,7 @@ pub use avada_module_sdk::rights::{
 };
 
 pub use asks::{AskAnswer, AskQueue, PendingAsk};
+pub use gate::RightsGate;
 pub use held::HeldStore;
 pub use store::{RightsStore, WorkspaceRights};
 

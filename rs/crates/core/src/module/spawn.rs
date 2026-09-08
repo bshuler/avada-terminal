@@ -170,9 +170,7 @@ pub struct Handshake {
 }
 
 /// Read the module hello, check it against `record`, answer with `reply` carrying the
-/// per-module `token`. The token goes on the wire as a `"token"` key beside the
-/// `HostHello` fields (the SDK ignores unknown keys; see the frozen-file note in
-/// `module/mod.rs`). It is never logged.
+/// per-module `token` in `HostHello::token`. It is never logged.
 pub fn handshake(
     reader: &mut LineReader,
     writer: &mut LineWriter,
@@ -202,21 +200,14 @@ pub fn handshake(
     if !record.matches_hello(&hello.manifest) {
         return Err(HandshakeError::ManifestMismatch);
     }
-    let mut answer = HostHello {
+    let answer = HostHello {
+        kind: HelloKind::Host,
         contract_version,
+        token: Some(token.expose().to_string()),
         ..reply.clone()
     };
-    answer.kind = HelloKind::Host;
-    let mut value = serde_json::to_value(&answer).map_err(|e| HandshakeError::Io(e.into()))?;
-    if let serde_json::Value::Object(map) = &mut value {
-        map.insert(
-            "token".to_string(),
-            serde_json::Value::String(token.expose().to_string()),
-        );
-    }
-    writer
-        .write_line(&value.to_string())
-        .map_err(HandshakeError::Io)?;
+    let line = serde_json::to_string(&answer).map_err(|e| HandshakeError::Io(e.into()))?;
+    writer.write_line(&line).map_err(HandshakeError::Io)?;
     Ok(Handshake {
         hello,
         contract_version,
@@ -241,6 +232,7 @@ mod tests {
             methods: vec![],
             data_dir: "/nowhere".into(),
             workspace: None,
+            token: None,
         }
     }
 

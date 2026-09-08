@@ -47,7 +47,7 @@
 //!   `contract::methods::required_capability` names; a denial answers with the contract's
 //!   `CapabilityDenied` (-32001).
 //! * A per-run token (32 random bytes, hex) travels to the module inside the host hello
-//!   as a `"token"` key; the host keeps it only for [`Host::token_matches`] and never
+//!   (`HostHello::token`); the host keeps it only for [`Host::token_matches`] and never
 //!   logs it (`Token`'s `Debug` is redacted).
 //! * A crash restarts the module at most `RestartPolicy::max_restarts` times per rolling
 //!   window (default 3 / 60 s, backing off 250 ms, 1 s, 4 s), then disables it. Each

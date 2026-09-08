@@ -65,6 +65,11 @@ pub struct HostHello {
     /// first `module.activate`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceInfo>,
+    /// Per-run bearer token the module presents on the control server (`/m/...`
+    /// routes and `host.*` calls that leave the pipe). Minted by the host at every
+    /// spawn, never persisted, never logged. Absent from a host older than this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 /// Discriminator on the hello lines.
@@ -569,6 +574,7 @@ mod tests {
                 .collect(),
             data_dir: "/tmp/x".into(),
             workspace: None,
+            token: None,
         };
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["type"], "host.hello");

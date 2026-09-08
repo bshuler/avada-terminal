@@ -177,6 +177,7 @@ fn host_hello(granted: Vec<Capability>) -> String {
             .collect(),
         data_dir: "/tmp/avada/modules/acme__avada-files".into(),
         workspace: None,
+        token: None,
     })
     .unwrap()
 }

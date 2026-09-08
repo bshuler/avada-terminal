@@ -309,6 +309,7 @@ mod tests {
                 .collect(),
             data_dir: "/tmp/d".into(),
             workspace: None,
+            token: None,
         })
         .unwrap()
     }
