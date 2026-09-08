@@ -55,6 +55,7 @@ use crate::control::work::{
     Counts, EnqueueOpts, LeaseOutcome, ListFilter, NackOpts, QueueSummary, Task, TaskState,
 };
 use crate::persistence::projects;
+use crate::tool_sessions;
 
 // ---- the router, built from the descriptor table -------------------------------------------
 //
@@ -151,6 +152,10 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("license.device.poll", license_device_poll),
         h("license.remove", license_remove),
         // ---- end track G8 license
+        // ---- track G2 tools (mirrors the fenced block in descriptor_table)
+        h("tools.list", tools_list),
+        h("tools.sessions", tools_sessions),
+        // ---- end track G2 tools
         h("schema", schema_get),
     ]
 }
@@ -2178,6 +2183,77 @@ fn tab_command(shared: &Arc<Shared>, info: &TokenInfo, ty: &str, cmd: &Value) ->
 /// The app's live preferences. Published by the GUI each sync tick — absent (503) when no GUI
 /// is attached, rather than a defaults blob that would not describe anything real.
 #[tracing::instrument(level = "debug", skip_all)]
+// ---- track G2 tools
+//
+// The `avada-tools` module draws the tool tabs; these two routes are the facts underneath
+// them. The seam is deliberate: detection needs the settings override map and a
+// `PATHEXT`-aware probe, and history is thousands of lines of per-tool transcript parsing
+// over stores outside any workspace root — neither belongs in a module, and both already
+// exist here for the pane machinery. What the module owns is the presentation: labels,
+// relative times, grouping, and the click that spawns a resume through `POST /command`.
+
+/// The human's per-tool binary overrides, out of the settings the GUI publishes.
+///
+/// An absent or GUI-less settings map is an empty override map, not an error: detection
+/// falls back to `PATH` and the well-known directories, which is the right answer for a
+/// headless host. Only an *override* needs settings, and having none is a legitimate state.
+#[tracing::instrument(level = "debug", ret, skip(shared))]
+fn tool_overrides(shared: &Arc<Shared>) -> BTreeMap<String, String> {
+    let Some(v) = shared.settings.lock().unwrap().clone() else {
+        return BTreeMap::new();
+    };
+    v.get("toolPaths")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn tools_list(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if let Err(e) = authorize(&shared, &headers) {
+        return e;
+    }
+    let overrides = tool_overrides(&shared);
+    // Detection stats a bounded number of paths, but it is still disk work on a runtime
+    // thread that also serves the event socket.
+    match tokio::task::spawn_blocking(move || tool_sessions::catalogue(&overrides)).await {
+        Ok(tools) => ok_json(json!({ "tools": tools })),
+        Err(e) => jstatus(500, json!({ "error": format!("tool scan failed: {e}") })),
+    }
+}
+
+async fn tools_sessions(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path(tool): Path<String>,
+) -> Response {
+    if let Err(e) = authorize(&shared, &headers) {
+        return e;
+    }
+    let overrides = tool_overrides(&shared);
+    // A cold store is a whole transcript tree - seconds, not milliseconds. This must not
+    // run on the async runtime's thread.
+    let scanned =
+        tokio::task::spawn_blocking(move || tool_sessions::sessions(&tool, &overrides)).await;
+    match scanned {
+        Ok(Ok(sessions)) => ok_json(json!({ "sessions": sessions })),
+        Ok(Err(tool_sessions::SessionsError::UnknownTool)) => {
+            jstatus(404, json!({ "error": "no such tool" }))
+        }
+        // A real tool Avada cannot read the history of. 501 rather than an empty list:
+        // an empty list would tell the module the user has no sessions, which is a lie.
+        Ok(Err(tool_sessions::SessionsError::NoProvider)) => jstatus(
+            501,
+            json!({ "error": "no session history reader for this tool" }),
+        ),
+        Err(e) => jstatus(500, json!({ "error": format!("session scan failed: {e}") })),
+    }
+}
+// ---- end track G2 tools
+
 async fn settings_get(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
     if let Err(e) = authorize(&shared, &headers) {
         return e;
@@ -6624,3 +6700,173 @@ mod license_routes {
         assert_eq!(st, 404, "{v}");
     }
 }
+
+// ---- track G2 tools
+#[cfg(test)]
+mod tools_routes {
+    use super::golden::{boot_with_control_tag, client, Server};
+    use crate::control::descriptor_table::core_routes;
+    use crate::control::dispatch::CapabilitySource;
+    use avada_module_sdk::caps::Capability;
+    use avada_module_sdk::descriptor::{ParamLocation, Scope, Verb};
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    struct Fixed {
+        token: String,
+        caps: BTreeSet<Capability>,
+    }
+
+    impl CapabilitySource for Fixed {
+        fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>> {
+            (token == self.token).then(|| self.caps.clone())
+        }
+    }
+
+    /// A capability-limited caller, the way a module's token behaves.
+    fn limited(s: &Server, token: &str, caps: &[Capability]) {
+        s.shared
+            .tokens
+            .lock()
+            .unwrap()
+            .add_device(token.to_string(), "limited".into(), None, None);
+        s.shared.caps.install(Arc::new(Fixed {
+            token: token.to_string(),
+            caps: caps.iter().copied().collect(),
+        }));
+    }
+
+    async fn send(s: &Server, path: &str, token: &str) -> (u16, Value) {
+        let r = client()
+            .get(format!("{}{}", s.base, path))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap();
+        let status = r.status().as_u16();
+        let text = r.text().await.unwrap();
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    async fn get(s: &Server, path: &str) -> (u16, Value) {
+        let token = s.token.clone();
+        send(s, path, &token).await
+    }
+
+    fn tools_routes() -> Vec<avada_module_sdk::descriptor::RouteDescriptor> {
+        core_routes()
+            .into_iter()
+            .filter(|r| r.method.starts_with("tools."))
+            .collect()
+    }
+
+    #[test]
+    fn the_two_routes_are_described_with_their_capabilities_and_path_params() {
+        let routes = tools_routes();
+        let methods: Vec<&str> = routes.iter().map(|r| r.method.as_str()).collect();
+        assert_eq!(methods, ["tools.list", "tools.sessions"]);
+        for r in &routes {
+            assert_eq!(r.verb, Verb::Get, "{}", r.method);
+            // Token, not Master: a module's token is never master, and the capability gate
+            // is what protects these routes. A `Scope::Master` route is unreachable to the
+            // module that exists to draw them.
+            assert_eq!(r.scope, Scope::Token, "{}", r.method);
+            for seg in r.path.split('/').filter(|s| s.starts_with('{')) {
+                let name = seg.trim_matches(['{', '}']);
+                assert!(
+                    r.params
+                        .iter()
+                        .any(|p| p.name == name && p.location == ParamLocation::Path),
+                    "{} does not declare path param {name}",
+                    r.method
+                );
+            }
+        }
+        assert_eq!(routes[0].capability, Some(Capability::SettingsRead));
+        // Transcript content read from absolute paths under the user's home. Reading the
+        // *catalogue* must not be enough to read the *conversations*.
+        assert_eq!(routes[1].capability, Some(Capability::FsReadAny));
+    }
+
+    #[tokio::test]
+    async fn the_catalogue_names_every_registered_tool() {
+        let s = boot_with_control_tag(false, "tools-list").await;
+        let (st, v) = get(&s, "/tools").await;
+        assert_eq!(st, 200, "{v}");
+        let tools = v["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), crate::tools::registry::TOOLS.len());
+        let claude = tools
+            .iter()
+            .find(|t| t["id"] == "claude")
+            .expect("claude listed");
+        assert_eq!(claude["name"], "Claude Code");
+        assert_eq!(claude["hasHistory"], true);
+        assert_eq!(claude["brand"], "#d97757");
+        // A registry entry with no reader is listed and honest about it rather than hidden.
+        let aider = tools
+            .iter()
+            .find(|t| t["id"] == "aider")
+            .expect("aider listed");
+        assert_eq!(aider["hasHistory"], false);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tool_is_a_404_and_a_reader_less_one_is_a_501() {
+        let s = boot_with_control_tag(false, "tools-sessions").await;
+        let (st, v) = get(&s, "/tools/no-such-tool/sessions").await;
+        assert_eq!(st, 404, "{v}");
+        // Not an empty list: an empty list would say the user has no Aider sessions,
+        // when the truth is that Avada cannot read them.
+        let (st, v) = get(&s, "/tools/aider/sessions").await;
+        assert_eq!(st, 501, "{v}");
+    }
+
+    #[tokio::test]
+    async fn settings_read_alone_does_not_open_the_transcripts() {
+        let s = boot_with_control_tag(false, "tools-gate").await;
+        limited(&s, "tok-cat", &[Capability::SettingsRead]);
+        let (st, v) = send(&s, "/tools", "tok-cat").await;
+        assert_eq!(st, 200, "{v}");
+        let (st, v) = send(&s, "/tools/claude/sessions", "tok-cat").await;
+        assert_eq!(st, 403, "{v}");
+
+        limited(&s, "tok-hist", &[Capability::FsReadAny]);
+        let (st, v) = send(&s, "/tools/no-such-tool/sessions", "tok-hist").await;
+        assert_eq!(st, 404, "fs.read_any passes the gate: {v}");
+        let (st, v) = send(&s, "/tools", "tok-hist").await;
+        assert_eq!(st, 403, "and does not carry the catalogue: {v}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_settings_map_is_no_overrides_rather_than_an_error() {
+        let s = boot_with_control_tag(false, "tools-nosettings").await;
+        assert!(
+            s.shared.settings.lock().unwrap().is_none(),
+            "no GUI attached in this fixture"
+        );
+        // `settings.get` answers 503 here; detection does not need settings to work, so
+        // the catalogue must still answer.
+        let (st, v) = get(&s, "/tools").await;
+        assert_eq!(st, 200, "{v}");
+    }
+
+    #[tokio::test]
+    async fn an_override_in_settings_names_the_binary_the_catalogue_reports() {
+        let s = boot_with_control_tag(false, "tools-override").await;
+        *s.shared.settings.lock().unwrap() =
+            Some(serde_json::json!({ "toolPaths": { "goose": "/opt/custom/goose" } }));
+        let (st, v) = get(&s, "/tools").await;
+        assert_eq!(st, 200, "{v}");
+        let goose = v["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == "goose")
+            .expect("goose listed")
+            .clone();
+        assert_eq!(goose["path"], "/opt/custom/goose");
+        assert_eq!(goose["source"], "override");
+    }
+}
+// ---- end track G2 tools

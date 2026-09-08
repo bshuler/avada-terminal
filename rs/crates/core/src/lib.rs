@@ -40,5 +40,6 @@ pub mod skills;
 pub mod speech;
 pub mod stt;
 pub mod sync;
+pub mod tool_sessions;
 pub mod tools;
 pub mod workspace;
