@@ -126,6 +126,9 @@ pub fn validate(module: &ModuleId, dir_name: &str, skill: &Skill) -> Result<(), 
     if fm.kind == avada_module_sdk::skills::SkillKind::Skill && fm.description.trim().is_empty() {
         return Err("a skill needs a description; the model picks it by that".into());
     }
+    if fm.activation == avada_module_sdk::skills::Activation::Glob && fm.globs.is_empty() {
+        return Err("activation: glob needs at least one globs: entry".into());
+    }
     for t in &fm.tools {
         if !known_tool_ids().contains(&t.as_str()) {
             return Err(format!(

@@ -40,6 +40,20 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// A unit written shorter than its source because the tool caps what it reads.
+/// The written text ends with a notice saying so; nothing is dropped silently.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Truncated {
+    /// Which unit.
+    pub unit: UnitRef,
+    /// Which tool.
+    pub tool: String,
+    /// The source body's size.
+    pub bytes: usize,
+    /// The tool's cap.
+    pub cap: usize,
+}
+
 /// What [`super::Materializer::plan`] produces. Inspect it, show it, then hand it
 /// to [`apply`]. Everything is sorted; a plan for an already-materialized tree
 /// has no writes and no removals, which is what [`Plan::is_empty`] reports.
@@ -53,6 +67,8 @@ pub struct Plan {
     pub skipped: Vec<Skipped>,
     /// Units that could not be read or failed validation.
     pub errors: Vec<UnitError>,
+    /// Units cut to a tool's cap.
+    pub truncated: Vec<Truncated>,
 }
 
 impl Plan {
@@ -72,6 +88,8 @@ impl Plan {
         self.skipped.dedup();
         self.errors.sort();
         self.errors.dedup();
+        self.truncated.sort();
+        self.truncated.dedup();
     }
 
     /// Paths the plan writes, for tests and display.

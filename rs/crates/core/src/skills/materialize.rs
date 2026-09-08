@@ -1,10 +1,23 @@
 //! Turn enabled modules' skill units into a [`Plan`] for the tools present on
 //! this machine, then apply it.
 //!
-//! The materializer never edits a file it did not fence. Rules go into fenced
-//! blocks of shared files (`AGENTS.md`, `CLAUDE.md`, `CONVENTIONS.md`); skills go
-//! into directories named `<owner>-<repo>-<name>` whose `SKILL.md` carries the same
-//! fence, which is how a later run tells its own directories from the user's.
+//! The materializer never edits a file it did not fence. Every unit takes one of
+//! five forms per tool, chosen from the tool's [`Layout`] by [`resolve`]:
+//!
+//! * a fenced block in a shared rules file (`AGENTS.md`, `CLAUDE.md`,
+//!   `CONVENTIONS.md`) for always-on rules, or for glob rules where the tool
+//!   has no native glob form (the block then opens with the glob list in prose);
+//! * one native rule file per unit in the tool's rules directory
+//!   (`.claude/rules/`, `.clinerules/`, `.kiro/steering/`, `.augment/rules/`,
+//!   `.continue/rules/`), with the tool's own front matter for the activation;
+//! * a skill directory `<owner>-<repo>-<name>/SKILL.md` (+ `scripts/`,
+//!   `references/`, `assets/`), with `disable-model-invocation: true` for a
+//!   manual unit where the tool honours it;
+//! * a workflow file (Cline) for a manual unit;
+//! * a recorded skip, with a reason the user can read.
+//!
+//! Every emitted file or section sits inside the module's fence, which is how a
+//! later run tells its own output from the user's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -15,9 +28,11 @@ use avada_module_sdk::descriptor::SchemaDocument;
 use avada_module_sdk::manifest::{ModuleId, SkillsSection};
 use avada_module_sdk::skills::{fence, splice_fenced, Activation, SkillKind};
 
-use super::adapters::{rel, AdapterStatus, Layout, RulesForm, Scope, Tools, ADAPTERS, SHARED};
+use super::adapters::{
+    rel, AdapterStatus, Dialect, Layout, RulesDir, RulesForm, Scope, Tools, ADAPTERS, SHARED,
+};
 use super::index;
-use super::plan::{apply, Applied, FileWrite, Plan, Removal, Skipped};
+use super::plan::{apply, Applied, FileWrite, Plan, Removal, Skipped, Truncated};
 use super::unit::{emitted_name, load_units, sibling_files, Unit, UnitRef};
 
 /// Fence id of everything the host itself generates (the `@AGENTS.md` import line
@@ -31,6 +46,17 @@ pub const MARKER: &str = "<!-- avada:module=";
 pub const SHARED_RULES: &[&str] = &["AGENTS.md"];
 /// The shared skills directory.
 pub const SHARED_SKILLS: &[&str] = &[".agents", "skills"];
+/// Bytes held back from a tool's cap for front matter, fences and the notice.
+pub const CAP_RESERVE: usize = 2048;
+
+/// The shared layer as a layout, so it flows through the same emitter as a tool.
+/// It has no manual form (the Agent Skills spec has no manual-only flag) and no
+/// documented cap.
+const SHARED_LAYOUT: Layout = Layout {
+    skills_dir: Some(SHARED_SKILLS),
+    rules_file: Some(SHARED_RULES),
+    ..Layout::EMPTY
+};
 
 /// One installed module as the materializer sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +90,7 @@ pub struct Request<'a> {
     /// The home directory for the user scope, or `None` to leave it alone.
     /// Tests pass a scratch directory; the real one is only ever touched by the app.
     pub home: Option<&'a Path>,
-    /// Which tools to write for.
+    /// Which tools to write for (detected minus disabled; see [`Tools::has`]).
     pub tools: &'a Tools,
     /// The host's `GET /schema`, for the index skill. `None` emits no index.
     pub schema: Option<&'a SchemaDocument>,
@@ -125,20 +151,68 @@ pub fn gated(m: &ModuleInput, scope: Scope) -> bool {
 /// The text of an emitted `SKILL.md`: minimal frontmatter, then the body inside
 /// the module's fence.
 pub fn render_skill(module_id: &str, name: &str, description: &str, body: &str) -> String {
+    render_skill_with(module_id, name, description, &[], body)
+}
+
+/// [`render_skill`] with extra `key: value` front matter lines after the
+/// description (Claude Code's `disable-model-invocation: true`, for one).
+pub fn render_skill_with(
+    module_id: &str,
+    name: &str,
+    description: &str,
+    extra: &[(&str, &str)],
+    body: &str,
+) -> String {
     let (open, close) = fence(module_id);
-    let desc = description
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace(['\r', '\n'], " ");
+    let mut fm = format!("name: {name}\ndescription: {}\n", yaml_str(description));
+    for (k, v) in extra {
+        fm.push_str(&format!("{k}: {v}\n"));
+    }
     format!(
-        "---\nname: {name}\ndescription: \"{desc}\"\n---\n{open}\n{}\n{close}\n",
+        "---\n{fm}---\n{open}\n{}\n{close}\n",
         body.trim_end_matches(['\r', '\n'])
     )
 }
 
-/// Does this `SKILL.md` text carry one of our fences?
+/// Does this text carry one of our fences?
 pub fn is_ours(text: &str) -> bool {
     text.lines().any(|l| l.trim_start().starts_with(MARKER))
+}
+
+/// Cut `body` down to at most `max` bytes at the last blank line before the
+/// limit (failing that the last line break, failing that a char boundary).
+/// `None` when it already fits.
+pub fn truncate_at_paragraph(body: &str, max: usize) -> Option<String> {
+    if body.len() <= max {
+        return None;
+    }
+    let mut cut = max;
+    while !body.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let head = &body[..cut];
+    let at = head
+        .rfind("\n\n")
+        .or_else(|| head.rfind('\n'))
+        .unwrap_or(cut);
+    Some(body[..at].trim_end().to_string())
+}
+
+/// A YAML double-quoted scalar.
+fn yaml_str(s: &str) -> String {
+    let inner = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\r', '\n'], " ");
+    format!("\"{inner}\"")
+}
+
+fn yaml_list(key: &str, items: &[String]) -> String {
+    let mut out = format!("{key}:\n");
+    for i in items {
+        out.push_str(&format!("  - {}\n", yaml_str(i)));
+    }
+    out
 }
 
 struct Loaded<'a> {
@@ -152,46 +226,127 @@ struct DesiredDir {
     tool: String,
 }
 
+struct DesiredFile {
+    text: String,
+    unit: UnitRef,
+    tool: String,
+}
+
 #[derive(Default)]
 struct Desired {
     /// Fenced file → ordered (fence id, block).
     fenced: BTreeMap<PathBuf, Vec<(String, String)>>,
     /// Skill directory → its files.
     dirs: BTreeMap<PathBuf, DesiredDir>,
+    /// Native rule or workflow file → its whole text.
+    files: BTreeMap<PathBuf, DesiredFile>,
     /// Skills directories whose `<module>-<name>/` children we own.
     sweep_dirs: BTreeSet<PathBuf>,
     /// Fenced files whose stale fences we remove.
     sweep_files: BTreeSet<PathBuf>,
+    /// Rules and workflow directories whose fenced `*.md` files we own.
+    sweep_file_dirs: BTreeSet<PathBuf>,
 }
 
-enum Class {
-    Rule,
-    Skill,
-    Skip(&'static str),
+/// What one unit becomes for one tool.
+enum Form {
+    /// Fenced into the rules file.
+    Block,
+    /// Fenced into the rules file with the glob list in prose.
+    GlobBlock,
+    /// One native file in the rules directory with this activation's front matter.
+    RuleFile(Activation),
+    /// A skill directory; `manual` adds `disable-model-invocation: true`.
+    SkillDir { manual: bool },
+    /// A workflow file in the manual directory.
+    Workflow,
+    /// Not written, and why.
+    Skip(String),
 }
 
-fn classify(u: &Unit) -> Class {
+/// Can this rules directory's front matter express the activation?
+fn supports(r: RulesDir, a: Activation) -> bool {
+    if r.always_only {
+        return a == Activation::Always;
+    }
+    match r.dialect {
+        Dialect::ClaudeCode | Dialect::Cline => {
+            matches!(a, Activation::Always | Activation::Glob)
+        }
+        Dialect::Kiro | Dialect::Augment | Dialect::Continue => true,
+    }
+}
+
+/// Pick the form a unit takes in a layout. Pure: the same unit and layout
+/// always resolve the same way, which is what the fixture tests pin down.
+fn resolve(u: &Unit, layout: &Layout, tool: &str) -> Form {
     let fm = &u.skill.frontmatter;
+    let rules_dir_for = |a: Activation| layout.rules_dir.filter(|r| supports(*r, a));
+    let always_only = layout.rules_dir.is_some_and(|r| r.always_only)
+        && layout.rules_file.is_none()
+        && layout.skills_dir.is_none();
     match (fm.kind, fm.activation) {
-        (SkillKind::Rule, Activation::Always) => Class::Rule,
-        (SkillKind::Rule, Activation::Glob) => {
-            Class::Skip("glob-activated rules are not emitted yet (track G9)")
-        }
-        (SkillKind::Rule, Activation::Manual) => {
-            Class::Skip("manual rules have no home in any tool yet")
-        }
         (SkillKind::Rule, Activation::Model) => {
-            Class::Skip("a rule the model activates is a skill; set kind: skill")
+            Form::Skip("a rule the model activates is a skill; set kind: skill".into())
         }
-        (SkillKind::Skill, Activation::Model) => Class::Skill,
         (SkillKind::Skill, Activation::Always) => {
-            Class::Skip("a skill that is always on is a rule; set kind: rule")
+            Form::Skip("a skill that is always on is a rule; set kind: rule".into())
         }
-        (SkillKind::Skill, Activation::Glob) => {
-            Class::Skip("glob-activated skills are not emitted yet (track G9)")
+        (SkillKind::Rule, Activation::Always) => {
+            if layout.rules_file.is_some() {
+                Form::Block
+            } else if rules_dir_for(Activation::Always).is_some() {
+                Form::RuleFile(Activation::Always)
+            } else {
+                Form::Skip("this tool has no rules file".into())
+            }
         }
-        (SkillKind::Skill, Activation::Manual) => {
-            Class::Skip("manual skills are not emitted yet (track G9)")
+        (_, Activation::Glob) => {
+            if rules_dir_for(Activation::Glob).is_some() {
+                Form::RuleFile(Activation::Glob)
+            } else if layout.rules_file.is_some() {
+                Form::GlobBlock
+            } else if always_only {
+                Form::Skip(
+                    "user-level rules are always-on only here; front matter is ignored".into(),
+                )
+            } else {
+                Form::Skip("this tool has no glob form".into())
+            }
+        }
+        (_, Activation::Manual) => {
+            if layout.manual_dir.is_some() {
+                Form::Workflow
+            } else if layout.skills_dir.is_some() && layout.manual_skills {
+                Form::SkillDir { manual: true }
+            } else if rules_dir_for(Activation::Manual).is_some() {
+                Form::RuleFile(Activation::Manual)
+            } else if tool == SHARED {
+                Form::Skip(
+                    "the shared Agent Skills layer has no manual-only flag; manual units are \
+                     written per tool"
+                        .into(),
+                )
+            } else if always_only {
+                Form::Skip(
+                    "user-level rules are always-on only here; front matter is ignored".into(),
+                )
+            } else {
+                Form::Skip("this tool has no manual form".into())
+            }
+        }
+        (SkillKind::Skill, Activation::Model) => {
+            if layout.skills_dir.is_some() {
+                Form::SkillDir { manual: false }
+            } else if rules_dir_for(Activation::Model).is_some() {
+                Form::RuleFile(Activation::Model)
+            } else if always_only {
+                Form::Skip(
+                    "user-level rules are always-on only here; front matter is ignored".into(),
+                )
+            } else {
+                Form::Skip("this tool has no on-demand skills; only rules are written".into())
+            }
         }
     }
 }
@@ -228,17 +383,128 @@ fn skip(plan: &mut Plan, u: &Unit, tool: &str, reason: impl Into<String>) {
     });
 }
 
-fn skill_files(u: &Unit, module: &ModuleId) -> BTreeMap<PathBuf, (Vec<u8>, bool)> {
+/// The unit's body as written for a layout: trimmed, and cut to the tool's cap
+/// with a notice when it does not fit. Truncation is recorded in the plan.
+fn body_for(plan: &mut Plan, u: &Unit, tool: &str, layout: &Layout) -> String {
+    let body = u.skill.body.trim();
+    let Some(cap) = layout.cap else {
+        return body.to_string();
+    };
+    let max = cap.bytes.saturating_sub(CAP_RESERVE);
+    let Some(head) = truncate_at_paragraph(body, max) else {
+        return body.to_string();
+    };
+    plan.truncated.push(Truncated {
+        unit: u.reference.clone(),
+        tool: tool.to_string(),
+        bytes: body.len(),
+        cap: cap.bytes,
+    });
+    format!(
+        "{head}\n\n> Avada truncated this unit at a paragraph boundary: it is {} bytes and {tool} \
+         reads at most {} bytes ({}). The full text is in {}.",
+        body.len(),
+        cap.bytes,
+        cap.source,
+        u.reference.source.display()
+    )
+}
+
+fn glob_prose(globs: &[String]) -> String {
+    globs
+        .iter()
+        .map(|g| format!("`{g}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The front matter of a native rule file in a dialect, for an activation.
+fn rule_frontmatter(dialect: Dialect, a: Activation, u: &Unit, name: &str) -> String {
+    let fm = &u.skill.frontmatter;
+    let desc = fm.description.as_str();
+    let lines = match (dialect, a) {
+        (Dialect::ClaudeCode | Dialect::Cline, Activation::Glob) => yaml_list("paths", &fm.globs),
+        (Dialect::ClaudeCode | Dialect::Cline, _) => String::new(),
+        (Dialect::Kiro, Activation::Always) => "inclusion: always\n".into(),
+        (Dialect::Kiro, Activation::Glob) => {
+            format!(
+                "inclusion: fileMatch\n{}",
+                yaml_list("fileMatchPattern", &fm.globs)
+            )
+        }
+        (Dialect::Kiro, Activation::Manual) => "inclusion: manual\n".into(),
+        (Dialect::Kiro, Activation::Model) => format!(
+            "inclusion: auto\nname: {}\ndescription: {}\n",
+            yaml_str(name),
+            yaml_str(desc)
+        ),
+        (Dialect::Augment, Activation::Always) => "type: always_apply\n".into(),
+        (Dialect::Augment, Activation::Glob) => format!(
+            "type: agent_requested\ndescription: {}\n",
+            yaml_str(&format!(
+                "{desc} Applies to files matching {}.",
+                fm.globs.join(", ")
+            ))
+        ),
+        (Dialect::Augment, Activation::Manual) => "type: manual\n".into(),
+        (Dialect::Augment, Activation::Model) => {
+            format!("type: agent_requested\ndescription: {}\n", yaml_str(desc))
+        }
+        (Dialect::Continue, Activation::Always) => {
+            format!("name: {}\nalwaysApply: true\n", yaml_str(name))
+        }
+        (Dialect::Continue, Activation::Glob) => {
+            format!(
+                "name: {}\n{}",
+                yaml_str(name),
+                yaml_list("globs", &fm.globs)
+            )
+        }
+        (Dialect::Continue, Activation::Manual) => format!(
+            "name: {}\nalwaysApply: false\ndescription: {}\n",
+            yaml_str(name),
+            yaml_str(&format!("Only when the user asks for it by name: {desc}"))
+        ),
+        (Dialect::Continue, Activation::Model) => format!(
+            "name: {}\nalwaysApply: false\ndescription: {}\n",
+            yaml_str(name),
+            yaml_str(desc)
+        ),
+    };
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("---\n{lines}---\n")
+    }
+}
+
+fn fenced(module: &ModuleId, body: &str) -> String {
+    let (open, close) = fence(module.as_str());
+    format!("{open}\n{body}\n{close}\n")
+}
+
+fn skill_files(
+    u: &Unit,
+    module: &ModuleId,
+    manual: bool,
+    body: &str,
+) -> BTreeMap<PathBuf, (Vec<u8>, bool)> {
     let name = emitted_name(module, &u.reference.name);
+    let extra: &[(&str, &str)] = if manual {
+        &[("disable-model-invocation", "true")]
+    } else {
+        &[]
+    };
     let mut files = BTreeMap::new();
     files.insert(
         PathBuf::from("SKILL.md"),
         (
-            render_skill(
+            render_skill_with(
                 module.as_str(),
                 &name,
                 &u.skill.frontmatter.description,
-                &u.skill.body,
+                extra,
+                body,
             )
             .into_bytes(),
             false,
@@ -250,46 +516,82 @@ fn skill_files(u: &Unit, module: &ModuleId) -> BTreeMap<PathBuf, (Vec<u8>, bool)
     files
 }
 
-/// Emit one module's effective units for one tool into a skills dir and/or a
-/// rules block. `covered` are the units already carried by the shared layer,
-/// which an importing tool must not repeat.
+/// Emit one module's effective units for one tool under `base` with `layout`.
+/// Returns the blocks for the rules file. `covered` are the units already carried
+/// by the shared layer, which an importing tool must not repeat.
 fn emit(
     d: &mut Desired,
     plan: &mut Plan,
     m: &Loaded<'_>,
     tool: &str,
-    skills_dir: Option<&Path>,
+    base: &Path,
+    layout: &Layout,
     covered: Option<&BTreeSet<UnitRef>>,
 ) -> Vec<String> {
     let mut rules = Vec::new();
+    let module = &m.input.id;
     for u in effective(&m.units, tool) {
-        match classify(u) {
-            Class::Rule => {
-                if covered.is_some_and(|c| c.contains(&u.reference)) {
-                    continue;
-                }
-                rules.push(u.skill.body.trim().to_string());
+        let form = resolve(u, layout, tool);
+        let is_covered = covered.is_some_and(|c| c.contains(&u.reference));
+        match form {
+            Form::Block | Form::GlobBlock if is_covered => {}
+            Form::Block => rules.push(body_for(plan, u, tool, layout)),
+            Form::GlobBlock => {
+                let body = body_for(plan, u, tool, layout);
+                rules.push(format!(
+                    "Applies only when working on files matching {}:\n\n{body}",
+                    glob_prose(&u.skill.frontmatter.globs)
+                ));
             }
-            Class::Skill => match skills_dir {
-                Some(dir) => {
-                    let name = emitted_name(&m.input.id, &u.reference.name);
-                    d.dirs.insert(
-                        dir.join(&name),
-                        DesiredDir {
-                            files: skill_files(u, &m.input.id),
-                            unit: Some(u.reference.clone()),
-                            tool: tool.to_string(),
-                        },
-                    );
-                }
-                None => skip(
-                    plan,
-                    u,
-                    tool,
-                    "this tool has no on-demand skills; only rules are written",
-                ),
-            },
-            Class::Skip(reason) => skip(plan, u, tool, reason),
+            Form::RuleFile(a) => {
+                let Some(r) = layout.rules_dir else { continue };
+                let name = emitted_name(module, &u.reference.name);
+                let body = body_for(plan, u, tool, layout);
+                let text = format!(
+                    "{}{}",
+                    rule_frontmatter(r.dialect, a, u, &name),
+                    fenced(module, &body)
+                );
+                d.files.insert(
+                    rel(base, r.path).join(format!("{name}.md")),
+                    DesiredFile {
+                        text,
+                        unit: u.reference.clone(),
+                        tool: tool.to_string(),
+                    },
+                );
+            }
+            Form::SkillDir { manual } => {
+                let Some(dir) = layout.skills_dir else {
+                    continue;
+                };
+                let name = emitted_name(module, &u.reference.name);
+                let body = body_for(plan, u, tool, layout);
+                d.dirs.insert(
+                    rel(base, dir).join(&name),
+                    DesiredDir {
+                        files: skill_files(u, module, manual, &body),
+                        unit: Some(u.reference.clone()),
+                        tool: tool.to_string(),
+                    },
+                );
+            }
+            Form::Workflow => {
+                let Some(dir) = layout.manual_dir else {
+                    continue;
+                };
+                let name = emitted_name(module, &u.reference.name);
+                let body = body_for(plan, u, tool, layout);
+                d.files.insert(
+                    rel(base, dir).join(format!("{name}.md")),
+                    DesiredFile {
+                        text: fenced(module, &body),
+                        unit: u.reference.clone(),
+                        tool: tool.to_string(),
+                    },
+                );
+            }
+            Form::Skip(reason) => skip(plan, u, tool, reason),
         }
     }
     rules
@@ -302,6 +604,60 @@ fn push_block(d: &mut Desired, file: PathBuf, id: &str, block: String) {
         .push((id.to_string(), block));
 }
 
+/// One tool at one scope: sweep, then write for every active module.
+#[allow(clippy::too_many_arguments)]
+fn plan_tool(
+    d: &mut Desired,
+    plan: &mut Plan,
+    base: &Path,
+    scope: Scope,
+    active: &[&Loaded<'_>],
+    req: &Request<'_>,
+    covered: &BTreeMap<&ModuleId, BTreeSet<UnitRef>>,
+    shared_has_rules: bool,
+) {
+    for row in ADAPTERS {
+        let Some(layout) = row.layout(scope) else {
+            continue;
+        };
+        let layout = layout.resolve(base);
+        if row.status == AdapterStatus::Implemented {
+            sweep(d, base, &layout);
+        }
+        if !req.tools.has(row.id) {
+            continue;
+        }
+        if row.status == AdapterStatus::Unimplemented {
+            for m in active {
+                for u in effective(&m.units, row.id) {
+                    skip(
+                        plan,
+                        u,
+                        row.id,
+                        format!("{} adapter is not implemented yet", row.name),
+                    );
+                }
+            }
+            continue;
+        }
+        if let (RulesForm::ImportShared(line), Some(rules_file), true) =
+            (layout.rules_form, layout.rules_file, shared_has_rules)
+        {
+            push_block(d, rel(base, rules_file), HOST_ID, line.to_string());
+        }
+        for m in active {
+            let cov = match layout.rules_form {
+                RulesForm::ImportShared(_) => covered.get(&m.input.id),
+                RulesForm::Inline => None,
+            };
+            let rules = emit(d, plan, m, row.id, base, &layout, cov);
+            if let (false, Some(file)) = (rules.is_empty(), layout.rules_file) {
+                push_block(d, rel(base, file), m.input.id.as_str(), rules.join("\n\n"));
+            }
+        }
+    }
+}
+
 fn plan_project(
     d: &mut Desired,
     plan: &mut Plan,
@@ -311,8 +667,7 @@ fn plan_project(
 ) {
     let shared_rules = rel(root, SHARED_RULES);
     let shared_skills = rel(root, SHARED_SKILLS);
-    d.sweep_files.insert(shared_rules.clone());
-    d.sweep_dirs.insert(shared_skills.clone());
+    sweep(d, root, &SHARED_LAYOUT);
 
     let active: Vec<&Loaded<'_>> = loaded
         .iter()
@@ -327,11 +682,16 @@ fn plan_project(
             &m.input.id,
             effective(&m.units, SHARED)
                 .into_iter()
-                .filter(|u| matches!(classify(u), Class::Rule))
+                .filter(|u| {
+                    matches!(
+                        resolve(u, &SHARED_LAYOUT, SHARED),
+                        Form::Block | Form::GlobBlock
+                    )
+                })
                 .map(|u| u.reference.clone())
                 .collect(),
         );
-        let rules = emit(d, plan, m, SHARED, Some(&shared_skills), None);
+        let rules = emit(d, plan, m, SHARED, root, &SHARED_LAYOUT, None);
         if !rules.is_empty() {
             shared_has_rules = true;
             push_block(
@@ -343,57 +703,16 @@ fn plan_project(
         }
     }
 
-    // Then each tool.
-    for row in ADAPTERS {
-        let Some(layout) = row.layout(Scope::Project) else {
-            continue;
-        };
-        if row.status == AdapterStatus::Implemented {
-            sweep(d, root, &layout);
-        }
-        if !req.tools.has(row.id) {
-            continue;
-        }
-        if row.status == AdapterStatus::Unimplemented {
-            for m in &active {
-                for u in effective(&m.units, row.id) {
-                    skip(
-                        plan,
-                        u,
-                        row.id,
-                        format!("{} adapter is not implemented yet (track G9)", row.name),
-                    );
-                }
-            }
-            continue;
-        }
-        let skills_dir = layout.skills_dir.map(|s| rel(root, s));
-        if let (RulesForm::ImportShared(line), Some(rules_file), true) =
-            (layout.rules_form, layout.rules_file, shared_has_rules)
-        {
-            push_block(d, rel(root, rules_file), HOST_ID, line.to_string());
-        }
-        for m in &active {
-            let cov = match layout.rules_form {
-                RulesForm::ImportShared(_) => covered.get(&m.input.id),
-                RulesForm::Inline => None,
-            };
-            let rules = emit(d, plan, m, row.id, skills_dir.as_deref(), cov);
-            match (rules.is_empty(), layout.rules_file) {
-                (false, Some(file)) => {
-                    push_block(d, rel(root, file), m.input.id.as_str(), rules.join("\n\n"))
-                }
-                (false, None) => {
-                    for u in effective(&m.units, row.id) {
-                        if matches!(classify(u), Class::Rule) {
-                            skip(plan, u, row.id, "this tool has no rules file");
-                        }
-                    }
-                }
-                (true, _) => {}
-            }
-        }
-    }
+    plan_tool(
+        d,
+        plan,
+        root,
+        Scope::Project,
+        &active,
+        req,
+        &covered,
+        shared_has_rules,
+    );
 
     // The index skill.
     if let Some(schema) = req.schema {
@@ -436,49 +755,17 @@ fn plan_user(
         .iter()
         .filter(|m| gated(m.input, Scope::User))
         .collect();
-    for row in ADAPTERS {
-        let Some(layout) = row.layout(Scope::User) else {
-            continue;
-        };
-        if row.status == AdapterStatus::Implemented {
-            sweep(d, home, &layout);
-        }
-        if !req.tools.has(row.id) {
-            continue;
-        }
-        if row.status == AdapterStatus::Unimplemented {
-            for m in &active {
-                for u in effective(&m.units, row.id) {
-                    skip(
-                        plan,
-                        u,
-                        row.id,
-                        format!("{} adapter is not implemented yet (track G9)", row.name),
-                    );
-                }
-            }
-            continue;
-        }
-        let skills_dir = layout.skills_dir.map(|s| rel(home, s));
-        for m in &active {
-            // No shared layer at user scope: every rule is inlined.
-            let rules = emit(d, plan, m, row.id, skills_dir.as_deref(), None);
-            if !rules.is_empty() {
-                match layout.rules_file {
-                    Some(file) => {
-                        push_block(d, rel(home, file), m.input.id.as_str(), rules.join("\n\n"))
-                    }
-                    None => {
-                        for u in effective(&m.units, row.id) {
-                            if matches!(classify(u), Class::Rule) {
-                                skip(plan, u, row.id, "this tool has no rules file");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // No shared layer at user scope: every rule is inlined, nothing is covered.
+    plan_tool(
+        d,
+        plan,
+        home,
+        Scope::User,
+        &active,
+        req,
+        &BTreeMap::new(),
+        false,
+    );
 }
 
 fn sweep(d: &mut Desired, base: &Path, layout: &Layout) {
@@ -487,6 +774,12 @@ fn sweep(d: &mut Desired, base: &Path, layout: &Layout) {
     }
     if let Some(f) = layout.rules_file {
         d.sweep_files.insert(rel(base, f));
+    }
+    if let Some(r) = layout.rules_dir {
+        d.sweep_file_dirs.insert(rel(base, r.path));
+    }
+    if let Some(m) = layout.manual_dir {
+        d.sweep_file_dirs.insert(rel(base, m));
     }
 }
 
@@ -542,6 +835,54 @@ fn diff(d: &Desired, plan: &mut Plan) {
                 executable: false,
             });
         }
+    }
+
+    // Native rule and workflow files: a fenced `*.md` we no longer want goes; a
+    // wanted path holding a file without our fence is left alone and reported.
+    let mut file_dirs: BTreeSet<PathBuf> = d.sweep_file_dirs.clone();
+    file_dirs.extend(
+        d.files
+            .keys()
+            .filter_map(|p| p.parent().map(Path::to_path_buf)),
+    );
+    for dir in &file_dirs {
+        let Ok(rd) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in rd.filter_map(Result::ok) {
+            let p = entry.path();
+            if !p.is_file() || p.extension().is_none_or(|e| e != "md") || d.files.contains_key(&p) {
+                continue;
+            }
+            if fs::read_to_string(&p).is_ok_and(|t| is_ours(&t)) {
+                plan.removals.push(Removal {
+                    path: p,
+                    dir: false,
+                });
+            }
+        }
+    }
+    for (path, want) in &d.files {
+        match fs::read_to_string(path) {
+            Ok(existing) if existing == want.text => continue,
+            Ok(existing) if !is_ours(&existing) => {
+                plan.skipped.push(Skipped {
+                    unit: want.unit.clone(),
+                    tool: want.tool.clone(),
+                    reason: format!(
+                        "{} exists and was not written by Avada; left alone",
+                        path.display()
+                    ),
+                });
+                continue;
+            }
+            _ => {}
+        }
+        plan.writes.push(FileWrite {
+            path: path.clone(),
+            bytes: want.text.clone().into_bytes(),
+            executable: false,
+        });
     }
 
     // Skill directories: ours and unwanted go; wanted ones are brought to exactly

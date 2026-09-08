@@ -461,13 +461,13 @@ fn tools_allow_list_is_honoured() {
 }
 
 #[test]
-fn glob_and_manual_rules_are_skipped_with_a_reason() {
+fn glob_and_manual_units_are_written_in_claude_codes_native_forms() {
     let fx = fixture("glob");
     unit(
         &fx.module_dir,
         None,
         "rs",
-        "kind: rule\nactivation: glob\nglobs: [\"*.rs\"]\n",
+        "kind: rule\nactivation: glob\nglobs: [\"*.rs\", \"Cargo.toml\"]\n",
         "x\n",
     );
     unit(
@@ -475,44 +475,461 @@ fn glob_and_manual_rules_are_skipped_with_a_reason() {
         None,
         "manual",
         "kind: rule\nactivation: manual\n",
-        "x\n",
+        "m\n",
     );
     unit(&fx.module_dir, None, "ok", RULE, "fine\n");
-    let plan = fx.run(&claude(), false, None);
-    assert!(plan.errors.is_empty());
-    let skipped: BTreeSet<(String, String)> = plan
+    let plan = fx.run(&claude(), true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    assert_eq!(
+        written(&fx, &plan),
+        paths([
+            "home/.claude/CLAUDE.md",
+            "home/.claude/rules/acme-tools-rs.md",
+            "home/.claude/skills/acme-tools-manual/SKILL.md",
+            "proj/.claude/rules/acme-tools-rs.md",
+            "proj/.claude/skills/acme-tools-manual/SKILL.md",
+            "proj/AGENTS.md",
+            "proj/CLAUDE.md",
+        ])
+    );
+    // The shared file carries the glob rule in prose, for tools without a glob form.
+    assert_eq!(
+        read(&fx.root.join("AGENTS.md")),
+        "<!-- avada:module=acme/tools -->\nfine\n\nApplies only when working on files matching \
+         `*.rs`, `Cargo.toml`:\n\nx\n<!-- /avada:module=acme/tools -->\n"
+    );
+    // Claude Code gets the native, path-scoped file at both scopes.
+    let native = "---\npaths:\n  - \"*.rs\"\n  - \"Cargo.toml\"\n---\n\
+                  <!-- avada:module=acme/tools -->\nx\n<!-- /avada:module=acme/tools -->\n";
+    assert_eq!(
+        read(&seg(&fx.root, ".claude/rules/acme-tools-rs.md")),
+        native
+    );
+    assert_eq!(
+        read(&seg(&fx.home, ".claude/rules/acme-tools-rs.md")),
+        native
+    );
+    // A manual unit is a skill only the user can invoke.
+    let manual = read(&seg(&fx.root, ".claude/skills/acme-tools-manual/SKILL.md"));
+    assert!(manual.starts_with(
+        "---\nname: acme-tools-manual\ndescription: \"About manual\"\n\
+         disable-model-invocation: true\n---\n<!-- avada:module=acme/tools -->\nm\n"
+    ));
+    // The shared layer has no manual flag: skipped there, with a readable reason.
+    let shared_manual = plan
         .skipped
         .iter()
-        .map(|s| (s.unit.name.clone(), s.tool.clone()))
+        .find(|s| s.unit.name == "manual" && s.tool == SHARED)
+        .expect("shared manual skip");
+    assert!(shared_manual.reason.contains("manual"));
+    assert!(!plan.skipped.iter().any(|s| s.tool == "claude-code"));
+    assert!(fx.plan(&claude(), true, None).is_empty());
+    fx.done();
+}
+
+/// Paths a plan writes, relative to the fixture's scratch dir, `/`-joined.
+fn written(fx: &Fx, plan: &Plan) -> BTreeSet<String> {
+    plan.written_paths()
+        .iter()
+        .map(|p| {
+            p.strip_prefix(&fx.tmp)
+                .unwrap()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect()
+}
+
+fn paths<const N: usize>(list: [&str; N]) -> BTreeSet<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+/// One unit per activation: an always-on rule, a glob rule, a manual rule and a
+/// model-picked skill.
+fn four_units(fx: &Fx) {
+    unit(&fx.module_dir, None, "always", RULE, "Always run fmt.\n");
+    unit(
+        &fx.module_dir,
+        None,
+        "rs",
+        "kind: rule\nactivation: glob\nglobs: [\"*.rs\"]\n",
+        "Rust rule.\n",
+    );
+    unit(
+        &fx.module_dir,
+        None,
+        "manual",
+        "kind: rule\nactivation: manual\n",
+        "Manual steps.\n",
+    );
+    unit(&fx.module_dir, None, "deploy", SKILL, "# Deploy\n");
+}
+
+/// The shared layer's files for [`four_units`], which every per-tool run also
+/// writes, plus the tool's own.
+fn expect(tool_paths: &[&str]) -> BTreeSet<String> {
+    [
+        "proj/.agents/skills/acme-tools-deploy/SKILL.md",
+        "proj/AGENTS.md",
+    ]
+    .iter()
+    .chain(tool_paths)
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// Uninstalling the module removes exactly what was written, at both scopes.
+fn assert_uninstall(mut fx: Fx, tools: &Tools, paths: &BTreeSet<String>) {
+    fx.modules.clear();
+    let plan = fx.run(tools, true, None);
+    for p in paths {
+        assert!(!seg(&fx.tmp, p).exists(), "{p} should be gone");
+    }
+    assert!(plan.writes.is_empty(), "{:?}", plan.written_paths());
+    assert!(fx.plan(tools, true, None).is_empty());
+    fx.done();
+}
+
+#[test]
+fn cline_gets_rule_files_and_workflows_at_both_scopes() {
+    let fx = fixture("cline");
+    four_units(&fx);
+    let tools = Tools::only(["cline"]);
+    let plan = fx.run(&tools, true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    let paths = written(&fx, &plan);
+    assert_eq!(
+        paths,
+        expect(&[
+            "home/Documents/Cline/Rules/acme-tools-always.md",
+            "home/Documents/Cline/Rules/acme-tools-rs.md",
+            "home/Documents/Cline/Workflows/acme-tools-manual.md",
+            "proj/.clinerules/acme-tools-always.md",
+            "proj/.clinerules/acme-tools-rs.md",
+            "proj/.clinerules/workflows/acme-tools-manual.md",
+        ])
+    );
+    assert_eq!(
+        read(&seg(&fx.root, ".clinerules/acme-tools-always.md")),
+        "<!-- avada:module=acme/tools -->\nAlways run fmt.\n<!-- /avada:module=acme/tools -->\n"
+    );
+    assert_eq!(
+        read(&seg(&fx.root, ".clinerules/acme-tools-rs.md")),
+        "---\npaths:\n  - \"*.rs\"\n---\n<!-- avada:module=acme/tools -->\nRust rule.\n\
+         <!-- /avada:module=acme/tools -->\n"
+    );
+    assert_eq!(
+        read(&seg(
+            &fx.home,
+            "Documents/Cline/Workflows/acme-tools-manual.md"
+        )),
+        "<!-- avada:module=acme/tools -->\nManual steps.\n<!-- /avada:module=acme/tools -->\n"
+    );
+    // Cline has no on-demand skills.
+    assert!(plan.skipped.iter().any(|s| {
+        s.tool == "cline" && s.unit.name == "deploy" && s.reason.contains("no on-demand")
+    }));
+    assert!(fx.plan(&tools, true, None).is_empty());
+    assert_uninstall(fx, &tools, &paths);
+}
+
+#[test]
+fn kiro_gets_a_steering_file_per_unit_with_inclusion_front_matter() {
+    let fx = fixture("kiro");
+    four_units(&fx);
+    let tools = Tools::only(["kiro"]);
+    let plan = fx.run(&tools, true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    let paths = written(&fx, &plan);
+    assert_eq!(
+        paths,
+        expect(&[
+            "home/.kiro/steering/acme-tools-always.md",
+            "home/.kiro/steering/acme-tools-deploy.md",
+            "home/.kiro/steering/acme-tools-manual.md",
+            "home/.kiro/steering/acme-tools-rs.md",
+            "proj/.kiro/steering/acme-tools-always.md",
+            "proj/.kiro/steering/acme-tools-deploy.md",
+            "proj/.kiro/steering/acme-tools-manual.md",
+            "proj/.kiro/steering/acme-tools-rs.md",
+        ])
+    );
+    let at = |n: &str| read(&seg(&fx.root, &format!(".kiro/steering/acme-tools-{n}.md")));
+    assert!(
+        at("always").starts_with("---\ninclusion: always\n---\n<!-- avada:module=acme/tools -->\n")
+    );
+    assert!(
+        at("rs").starts_with("---\ninclusion: fileMatch\nfileMatchPattern:\n  - \"*.rs\"\n---\n")
+    );
+    assert!(at("manual").starts_with("---\ninclusion: manual\n---\n"));
+    assert!(at("deploy").starts_with(
+        "---\ninclusion: auto\nname: \"acme-tools-deploy\"\ndescription: \"About deploy\"\n---\n"
+    ));
+    assert!(!plan.skipped.iter().any(|s| s.tool == "kiro"));
+    assert!(fx.plan(&tools, true, None).is_empty());
+    assert_uninstall(fx, &tools, &paths);
+}
+
+#[test]
+fn augment_gets_typed_rules_and_only_always_on_rules_at_user_scope() {
+    let fx = fixture("augment");
+    four_units(&fx);
+    let tools = Tools::only(["augment"]);
+    let plan = fx.run(&tools, true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    let paths = written(&fx, &plan);
+    assert_eq!(
+        paths,
+        expect(&[
+            "home/.augment/rules/acme-tools-always.md",
+            "proj/.augment/rules/acme-tools-always.md",
+            "proj/.augment/rules/acme-tools-deploy.md",
+            "proj/.augment/rules/acme-tools-manual.md",
+            "proj/.augment/rules/acme-tools-rs.md",
+        ])
+    );
+    let at = |n: &str| read(&seg(&fx.root, &format!(".augment/rules/acme-tools-{n}.md")));
+    assert!(at("always").starts_with("---\ntype: always_apply\n---\n"));
+    assert!(at("rs").starts_with(
+        "---\ntype: agent_requested\ndescription: \"About rs Applies to files matching *.rs.\"\n---\n"
+    ));
+    assert!(at("manual").starts_with("---\ntype: manual\n---\n"));
+    assert!(at("deploy")
+        .starts_with("---\ntype: agent_requested\ndescription: \"About deploy\"\n---\n"));
+    // User rules are always-on whatever the front matter says: the rest is skipped.
+    let user_skips: BTreeSet<&str> = plan
+        .skipped
+        .iter()
+        .filter(|s| s.tool == "augment")
+        .map(|s| s.unit.name.as_str())
         .collect();
-    assert!(skipped.contains(&("rs".into(), SHARED.into())));
-    assert!(skipped.contains(&("rs".into(), "claude-code".into())));
-    assert!(skipped.contains(&("manual".into(), SHARED.into())));
+    assert_eq!(user_skips, BTreeSet::from(["deploy", "manual", "rs"]));
     assert!(plan
         .skipped
         .iter()
-        .any(|s| s.unit.name == "rs" && s.reason.contains("G9")));
+        .filter(|s| s.tool == "augment")
+        .all(|s| s.reason.contains("always-on only")));
+    assert!(fx.plan(&tools, true, None).is_empty());
+    assert_uninstall(fx, &tools, &paths);
+}
+
+#[test]
+fn continue_gets_rules_with_globs_and_always_apply() {
+    let fx = fixture("continue");
+    four_units(&fx);
+    let tools = Tools::only(["continue"]);
+    let plan = fx.run(&tools, true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    let paths = written(&fx, &plan);
     assert_eq!(
-        read(&fx.root.join("AGENTS.md")),
-        "<!-- avada:module=acme/tools -->\nfine\n<!-- /avada:module=acme/tools -->\n"
+        paths,
+        expect(&[
+            "home/.continue/rules/acme-tools-always.md",
+            "home/.continue/rules/acme-tools-deploy.md",
+            "home/.continue/rules/acme-tools-manual.md",
+            "home/.continue/rules/acme-tools-rs.md",
+            "proj/.continue/rules/acme-tools-always.md",
+            "proj/.continue/rules/acme-tools-deploy.md",
+            "proj/.continue/rules/acme-tools-manual.md",
+            "proj/.continue/rules/acme-tools-rs.md",
+        ])
+    );
+    let at = |n: &str| {
+        read(&seg(
+            &fx.home,
+            &format!(".continue/rules/acme-tools-{n}.md"),
+        ))
+    };
+    assert!(at("always").starts_with("---\nname: \"acme-tools-always\"\nalwaysApply: true\n---\n"));
+    assert!(at("rs").starts_with("---\nname: \"acme-tools-rs\"\nglobs:\n  - \"*.rs\"\n---\n"));
+    assert!(at("manual").starts_with(
+        "---\nname: \"acme-tools-manual\"\nalwaysApply: false\n\
+         description: \"Only when the user asks for it by name: About manual\"\n---\n"
+    ));
+    assert!(at("deploy").starts_with(
+        "---\nname: \"acme-tools-deploy\"\nalwaysApply: false\ndescription: \"About deploy\"\n---\n"
+    ));
+    assert!(!plan.skipped.iter().any(|s| s.tool == "continue"));
+    assert!(fx.plan(&tools, true, None).is_empty());
+    assert_uninstall(fx, &tools, &paths);
+}
+
+#[test]
+fn aider_puts_glob_rules_in_prose_and_skips_manual_units() {
+    let fx = fixture("aider");
+    four_units(&fx);
+    let plan = fx.run(&Tools::only(["aider"]), false, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    assert_eq!(written(&fx, &plan), expect(&["proj/CONVENTIONS.md"]));
+    let conv = read(&fx.root.join("CONVENTIONS.md"));
+    assert!(conv.contains(
+        "Always run fmt.\n\nApplies only when working on files matching `*.rs`:\n\nRust rule."
+    ));
+    let reasons: BTreeSet<(&str, &str)> = plan
+        .skipped
+        .iter()
+        .filter(|s| s.tool == "aider")
+        .map(|s| (s.unit.name.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        reasons,
+        BTreeSet::from([
+            (
+                "deploy",
+                "this tool has no on-demand skills; only rules are written"
+            ),
+            ("manual", "this tool has no manual form"),
+        ])
     );
     fx.done();
 }
 
 #[test]
-fn unimplemented_adapters_skip_every_unit() {
-    let fx = fixture("stub");
-    unit(&fx.module_dir, None, "deploy", SKILL, "x\n");
-    let plan = fx.run(&Tools::only(["cline", "kiro"]), false, None);
-    let tools: BTreeSet<&str> = plan.skipped.iter().map(|s| s.tool.as_str()).collect();
-    assert_eq!(tools, BTreeSet::from(["cline", "kiro"]));
+fn a_legacy_single_file_clinerules_is_used_inline() {
+    let mut fx = fixture("clinefile");
+    write(&fx.root.join(".clinerules"), "Team rules.\n");
+    four_units(&fx);
+    let tools = Tools::only(["cline"]);
+    let plan = fx.run(&tools, false, None);
+    assert_eq!(written(&fx, &plan), expect(&["proj/.clinerules"]));
+    let text = read(&fx.root.join(".clinerules"));
+    assert!(text.starts_with("Team rules.\n<!-- avada:module=acme/tools -->\nAlways run fmt.\n"));
+    assert!(text.contains("files matching `*.rs`"));
+    assert!(plan.skipped.iter().any(|s| {
+        s.tool == "cline" && s.unit.name == "manual" && s.reason.contains("no manual form")
+    }));
+    assert!(fx.plan(&tools, false, None).is_empty());
+    fx.modules.clear();
+    fx.run(&tools, false, None);
+    assert_eq!(read(&fx.root.join(".clinerules")), "Team rules.\n");
+    fx.done();
+}
+
+#[test]
+fn rule_files_sweep_ours_and_leave_foreign_files_alone() {
+    let fx = fixture("sweep");
+    unit(&fx.module_dir, None, "always", RULE, "x\n");
+    // A foreign file at the path we want, a foreign file beside it, and a stale
+    // file of ours from an earlier run.
+    write(
+        &seg(&fx.root, ".kiro/steering/acme-tools-always.md"),
+        "mine\n",
+    );
+    write(&seg(&fx.root, ".kiro/steering/team.md"), "team\n");
+    write(
+        &seg(&fx.root, ".kiro/steering/acme-tools-old.md"),
+        "<!-- avada:module=acme/tools -->\nold\n<!-- /avada:module=acme/tools -->\n",
+    );
+    let tools = Tools::only(["kiro"]);
+    let plan = fx.run(&tools, false, None);
+    assert_eq!(
+        read(&seg(&fx.root, ".kiro/steering/acme-tools-always.md")),
+        "mine\n"
+    );
+    assert_eq!(read(&seg(&fx.root, ".kiro/steering/team.md")), "team\n");
+    assert!(!seg(&fx.root, ".kiro/steering/acme-tools-old.md").exists());
     assert!(plan
         .skipped
         .iter()
-        .all(|s| s.reason.contains("not implemented")));
-    assert!(!fx.root.join(".clinerules").exists());
-    // The shared layer is written regardless of which tools are present.
-    assert!(seg(&fx.root, ".agents/skills/acme-tools-deploy/SKILL.md").is_file());
+        .any(|s| s.tool == "kiro" && s.reason.contains("not written by Avada")));
+    assert!(fx.plan(&tools, false, None).is_empty());
+    fx.done();
+}
+
+#[test]
+fn a_disabled_tool_is_swept_but_not_written() {
+    let fx = fixture("disabled");
+    unit(&fx.module_dir, None, "always", RULE, "x\n");
+    let on = Tools::only(["kiro"]);
+    fx.run(&on, true, None);
+    assert!(seg(&fx.root, ".kiro/steering/acme-tools-always.md").is_file());
+    assert!(seg(&fx.home, ".kiro/steering/acme-tools-always.md").is_file());
+    let off = on.clone().disable("kiro");
+    assert!(off.detected("kiro") && !off.has("kiro"));
+    let plan = fx.run(&off, true, None);
+    assert!(plan
+        .writes
+        .iter()
+        .all(|w| !w.path.to_string_lossy().contains(".kiro")));
+    assert!(!seg(&fx.root, ".kiro/steering/acme-tools-always.md").exists());
+    assert!(!seg(&fx.home, ".kiro/steering/acme-tools-always.md").exists());
+    assert!(fx.plan(&off, true, None).is_empty());
+    // Re-enabling writes it back.
+    fx.run(&off.enable("kiro"), true, None);
+    assert!(seg(&fx.root, ".kiro/steering/acme-tools-always.md").is_file());
+    fx.done();
+}
+
+#[test]
+fn a_glob_unit_without_globs_is_an_error() {
+    let fx = fixture("noglobs");
+    unit(
+        &fx.module_dir,
+        None,
+        "rs",
+        "kind: rule\nactivation: glob\n",
+        "x\n",
+    );
+    let plan = fx.plan(&claude(), false, None);
+    assert_eq!(plan.errors.len(), 1);
+    assert!(plan.errors[0].error.contains("globs"));
+    assert!(plan.writes.is_empty());
+    fx.done();
+}
+
+// ---- size caps ------------------------------------------------------------------
+
+#[test]
+fn truncate_at_paragraph_prefers_blank_lines_then_line_breaks() {
+    assert_eq!(truncate_at_paragraph("short", 10), None);
+    assert_eq!(
+        truncate_at_paragraph("aaa\n\nbbb\n\nccc", 9).as_deref(),
+        Some("aaa")
+    );
+    assert_eq!(
+        truncate_at_paragraph("aaa\n\nbbb\n\nccc", 12).as_deref(),
+        Some("aaa\n\nbbb")
+    );
+    assert_eq!(
+        truncate_at_paragraph("aaa\nbbb\nccc", 6).as_deref(),
+        Some("aaa")
+    );
+    assert_eq!(truncate_at_paragraph("abcdef", 3).as_deref(), Some("abc"));
+    assert_eq!(truncate_at_paragraph("ééé", 3).as_deref(), Some("é"));
+}
+
+#[test]
+fn an_over_cap_unit_is_cut_with_a_notice_and_reported() {
+    let fx = fixture("cap");
+    let paragraph = "lorem ipsum ".repeat(90);
+    let body: String = (0..4400)
+        .map(|i| format!("Paragraph {i}. {paragraph}\n\n"))
+        .collect();
+    let cap = adapter("claude-code").unwrap().user.unwrap().cap.unwrap();
+    assert!(body.len() > cap.bytes);
+    unit(&fx.module_dir, None, "big", RULE, &body);
+    let plan = fx.run(&claude(), true, None);
+    assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+    assert_eq!(plan.truncated.len(), 1);
+    let t = &plan.truncated[0];
+    assert_eq!(
+        (t.tool.as_str(), t.unit.name.as_str(), t.cap),
+        ("claude-code", "big", cap.bytes)
+    );
+    assert_eq!(t.bytes, body.trim().len());
+    let user = read(&seg(&fx.home, ".claude/CLAUDE.md"));
+    assert!(user.len() <= cap.bytes);
+    assert!(user.contains("> Avada truncated this unit at a paragraph boundary"));
+    assert!(user.contains("Paragraph 0. "));
+    assert!(!user.contains("Paragraph 4399. "));
+    assert!(user.ends_with("<!-- /avada:module=acme/tools -->\n"));
+    // The shared file has no documented cap: the full text is there.
+    let shared = read(&fx.root.join("AGENTS.md"));
+    assert!(shared.contains("Paragraph 4399. "));
+    assert!(!shared.contains("Avada truncated"));
+    assert!(fx.plan(&claude(), true, None).is_empty());
     fx.done();
 }
 
@@ -717,14 +1134,54 @@ fn detection_is_data_driven_and_never_probes_the_real_machine() {
     let home = tmp.join("home");
     let bin = tmp.join("bin");
     fs::create_dir_all(home.join(".aider")).unwrap();
+    fs::create_dir_all(seg(&home, "Documents/Cline")).unwrap();
     write(&bin.join("kiro"), "#!/bin/sh\n");
+    write(&bin.join("cn.exe"), "MZ");
     let t = Tools::detect(&home, std::slice::from_ref(&bin));
-    assert_eq!(t.ids().collect::<Vec<_>>(), vec!["aider", "kiro"]);
+    assert_eq!(
+        t.ids().collect::<Vec<_>>(),
+        vec!["aider", "cline", "continue", "kiro"]
+    );
     assert!(Tools::detect(&tmp.join("nowhere"), &[])
         .ids()
         .next()
         .is_none());
-    assert!(t.clone().without("aider").ids().eq(["kiro"]));
+    assert!(t
+        .clone()
+        .without("aider")
+        .ids()
+        .eq(["cline", "continue", "kiro"]));
+    // Every row is probed: a home path or a binary each flips one id.
+    for row in ADAPTERS {
+        let h = tmp.join(format!("home-{}", row.id));
+        write(&rel(&h, row.detect.home_paths[0]).join(".keep"), "");
+        assert!(Tools::detect(&h, &[]).ids().eq([row.id]), "{}", row.id);
+        let b = tmp.join(format!("bin-{}", row.id));
+        write(&b.join(row.detect.binaries[0]), "");
+        assert!(
+            Tools::detect(&tmp.join("nowhere"), &[b]).ids().eq([row.id]),
+            "{}",
+            row.id
+        );
+    }
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn a_disabled_tool_stays_detected_but_is_not_written_for() {
+    let tmp = scratch("toggle");
+    let home = tmp.join("home");
+    fs::create_dir_all(home.join(".kiro")).unwrap();
+    fs::create_dir_all(home.join(".augment")).unwrap();
+    let t = Tools::detect_with(&home, &[], ["kiro", "cline"]);
+    assert!(t.ids().eq(["augment"]));
+    assert!(t.detected_ids().eq(["augment", "kiro"]));
+    assert!(t.disabled_ids().eq(["cline", "kiro"]));
+    assert!(t.detected("kiro") && !t.has("kiro"));
+    assert!(!t.detected("cline") && !t.has("cline"));
+    assert!(t.clone().enable("kiro").has("kiro"));
+    assert!(!Tools::only(["kiro"]).disable("kiro").has("kiro"));
+    assert!(Tools::only(["kiro"]).disable("kiro").ids().next().is_none());
     let _ = fs::remove_dir_all(&tmp);
 }
 
@@ -735,33 +1192,53 @@ fn adapter_table_is_well_formed() {
     assert!(!ids.contains(SHARED));
     for a in ADAPTERS {
         assert!(is_kebab(a.id), "{}", a.id);
+        assert_eq!(a.status, AdapterStatus::Implemented, "{}", a.id);
         assert!(
             a.project.is_some() || a.user.is_some(),
             "{} has nowhere to write",
             a.id
         );
+        assert!(
+            !a.detect.home_paths.is_empty() && !a.detect.binaries.is_empty(),
+            "{} is undetectable",
+            a.id
+        );
         for l in [a.project, a.user].into_iter().flatten() {
-            assert!(l.skills_dir.is_some() || l.rules_file.is_some());
-            for segs in l.skills_dir.into_iter().chain(l.rules_file) {
+            assert!(
+                l.skills_dir.is_some() || l.rules_file.is_some() || l.rules_dir.is_some(),
+                "{} has an empty layout",
+                a.id
+            );
+            for segs in l
+                .paths()
+                .into_iter()
+                .chain(a.detect.home_paths.iter().copied())
+            {
+                assert!(!segs.is_empty());
                 assert!(
                     segs.iter().all(|s| !s.contains('/') && !s.contains('\\')),
                     "segments, not paths"
                 );
             }
+            if let Some(cap) = l.cap {
+                assert!(cap.bytes > CAP_RESERVE && !cap.source.is_empty());
+            }
+            assert!(!l.manual_skills || l.skills_dir.is_some());
         }
     }
     assert_eq!(
-        adapter("claude-code").unwrap().status,
-        AdapterStatus::Implemented
+        adapter("cline").unwrap().project.unwrap().manual_dir,
+        Some(&[".clinerules", "workflows"][..])
     );
-    assert_eq!(adapter("aider").unwrap().status, AdapterStatus::Implemented);
-    for stub in ["cline", "kiro", "augment", "continue"] {
-        assert_eq!(
-            adapter(stub).unwrap().status,
-            AdapterStatus::Unimplemented,
-            "{stub}"
-        );
-    }
+    assert!(
+        adapter("augment")
+            .unwrap()
+            .user
+            .unwrap()
+            .rules_dir
+            .unwrap()
+            .always_only
+    );
     assert!(known_tool_ids().contains(&"agents"));
 }
 
