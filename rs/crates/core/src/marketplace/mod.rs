@@ -789,7 +789,9 @@ impl Marketplace {
             installed_at: cache::now_secs(),
             kind: req.kind,
         };
-        let installed = self.store.install(record, &binary)?;
+        // The checkout, not just the artifact: a module that ships skills needs its
+        // `[skills] paths` staged into the version directory before the tree is swept.
+        let installed = self.store.install(record, &binary, Some(&scratch))?;
         // ---- track G7 policy
         // Remembered next to the installed artifact so the spawn path can refuse a
         // binary installed under a refusal. Not fatal if it cannot be written: the

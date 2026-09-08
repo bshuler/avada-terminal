@@ -105,12 +105,6 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={}", hyperpane.join(f).display());
     }
-    // The skill units live in a tree (skills/<name>/SKILL.md plus siblings); a directory
-    // path makes cargo walk it, so a new or edited unit re-stages the resources.
-    println!(
-        "cargo:rerun-if-changed={}",
-        hyperpane.join("skills").display()
-    );
     for (dir, script) in hooks {
         println!(
             "cargo:rerun-if-changed={}",

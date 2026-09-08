@@ -3,7 +3,9 @@
 //! lockfile; nothing under the root is trusted because it is there.
 
 use super::artifact::{hash_file, verify_artifact};
-use super::dirs::{ensure_private_dir, make_executable, InstallPaths, KEYS_DIR, RECORD_FILE};
+use super::dirs::{
+    ensure_private_dir, make_executable, InstallPaths, BIN_DIR, DATA_DIR, KEYS_DIR, RECORD_FILE,
+};
 use super::keyring::{KeyStore, DEFAULT_KEY_ID};
 use super::lock;
 use super::record::{read_record, sign_record, verify_record, write_record};
@@ -107,14 +109,23 @@ impl InstallStore {
 
     /// Install `artifact` as the version `record` describes: copy it into the version
     /// directory, hash it (the record's `artifact_sha256` is filled in, or checked when
-    /// already set), sign, write `record.json`, create `data/`, and pin the lockfile
-    /// to this version unless a newer one is already active. An existing directory for
-    /// the same version is replaced.
+    /// already set), stage the manifest's skill sources, sign, write `record.json`,
+    /// create `data/`, and pin the lockfile to this version unless a newer one is
+    /// already active. An existing directory for the same version is replaced.
+    ///
+    /// `source` is the module's checked-out repo root, which the build job still has in
+    /// hand. It exists because `[skills] paths` are relative to that root while
+    /// [`crate::skills::materialize`] resolves them against the *version* directory: the
+    /// artifact alone is not the whole install for a module that ships skills, and
+    /// copying only the binary left those paths resolving into an empty directory. Pass
+    /// `None` only when there is genuinely no tree (a binary distribution); a record that
+    /// declares skills with no source is refused rather than installed half-formed.
     #[tracing::instrument(level = "info", skip_all, fields(id = %record.module_id.as_str(), version = %record.version))]
     pub fn install(
         &self,
         mut record: InstallRecord,
         artifact: &Path,
+        source: Option<&Path>,
     ) -> Result<Installed, InstallError> {
         if record.manifest.id() != &record.module_id {
             return Err(InstallError::Inconsistent(format!(
@@ -144,6 +155,12 @@ impl InstallStore {
         ensure_private_dir(&bin_dir)?;
         std::fs::copy(artifact, &binary).map_err(|e| io_at(artifact, e))?;
         make_executable(&binary)?;
+        if let Err(e) = stage_skills(&record, &version_dir, source) {
+            // A half-staged version directory is worse than none: `records()` would find
+            // a directory with no record in it and call the module broken.
+            let _ = std::fs::remove_dir_all(&version_dir);
+            return Err(e);
+        }
 
         let actual = hash_file(&binary)?;
         if record.artifact_sha256.is_empty() {
@@ -412,6 +429,87 @@ fn read_dir_sorted(dir: &Path) -> Result<Vec<std::fs::DirEntry>, InstallError> {
     Ok(entries)
 }
 
+/// Copy the manifest's `[skills] paths` out of the checkout and into the version
+/// directory, so [`crate::skills::unit::load_units`] — which resolves them against the
+/// version directory — finds the units the module shipped.
+///
+/// The acceptance rule deliberately mirrors `load_units`: relative, no `..`. A path that
+/// breaks it is refused *here* rather than reported later, because at this point we are
+/// about to write it to disk and "the module asked to be copied out of its own tree" is
+/// an install-time refusal, not a rendering note.
+///
+/// A declared path that simply does not exist is **not** an error here. `load_units`
+/// already reports that, and duplicating the judgement would give one condition two
+/// messages that can drift apart.
+fn stage_skills(
+    record: &InstallRecord,
+    version_dir: &Path,
+    source: Option<&Path>,
+) -> Result<(), InstallError> {
+    let paths = &record.manifest.skills.paths;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let Some(source) = source else {
+        return Err(InstallError::Inconsistent(format!(
+            "{} declares skills but was installed with no source tree",
+            record.module_id.as_str()
+        )));
+    };
+    for p in paths {
+        let rel = Path::new(p);
+        if rel.is_absolute()
+            || rel
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(InstallError::Inconsistent(format!(
+                "skills path {p:?} must be relative and inside the module"
+            )));
+        }
+        // The version directory is the host's layout, not the module's: letting a
+        // manifest name `bin`, `data` or `record.json` would let it overwrite the
+        // artifact or the record that vouches for it.
+        let first = rel
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .unwrap_or_default();
+        if matches!(first, BIN_DIR | DATA_DIR | RECORD_FILE) {
+            return Err(InstallError::Inconsistent(format!(
+                "skills path {p:?} collides with the install layout"
+            )));
+        }
+        let from = source.join(rel);
+        if !from.is_dir() {
+            continue;
+        }
+        copy_tree(&from, &version_dir.join(rel))?;
+    }
+    Ok(())
+}
+
+/// Recursively copy `from` to `to`, following no symlinks.
+///
+/// `std::fs::copy` follows them, so a checkout containing `skills/x -> /etc/passwd` would
+/// otherwise pull that file into the install and hand it to an agent as a skill. Anything
+/// that is neither a regular file nor a directory is skipped: the module gets what it can
+/// legitimately ship, and nothing else.
+fn copy_tree(from: &Path, to: &Path) -> Result<(), InstallError> {
+    ensure_private_dir(to)?;
+    for entry in read_dir_sorted(from)? {
+        let src = entry.path();
+        let meta = std::fs::symlink_metadata(&src).map_err(|e| io_at(&src, e))?;
+        let dst = to.join(entry.file_name());
+        if meta.is_dir() {
+            copy_tree(&src, &dst)?;
+        } else if meta.is_file() {
+            std::fs::copy(&src, &dst).map_err(|e| io_at(&src, e))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,24 +526,48 @@ mod tests {
     /// to start with `root`, so the real app-support dir is never touched.
     struct Scratch {
         root: PathBuf,
+        /// A sibling of `root` for things an install reads *from* — checkouts, above all.
+        /// Inside the root they would read back as stray module directories, and every
+        /// count in this module would be measuring the fixture instead of the store.
+        work: PathBuf,
         store: InstallStore,
         keys: Arc<MemoryKeyStore>,
     }
 
     impl Scratch {
         fn new(tag: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
+            let base = std::env::temp_dir().join(format!(
                 "avada-store-{tag}-{}-{}",
                 std::process::id(),
                 uuid::Uuid::new_v4()
             ));
+            let root = base.join("modules");
+            let work = base.join("work");
+            std::fs::create_dir_all(&work).unwrap();
             let keys = Arc::new(MemoryKeyStore::new());
             let store = InstallStore::open(
                 InstallPaths::under(&root),
                 keys.clone() as Arc<dyn KeyStore>,
             )
             .unwrap();
-            Scratch { root, store, keys }
+            Scratch {
+                root,
+                work,
+                store,
+                keys,
+            }
+        }
+
+        /// A checkout to install *from*: the reference manifest declares
+        /// `[skills] paths = ["skills"]`, so every install in this module now goes
+        /// through the staging path rather than leaving it to one bespoke test.
+        fn source(&self) -> PathBuf {
+            let dir = self.work.join(format!("checkout-{}", uuid::Uuid::new_v4()));
+            let unit = dir.join("skills").join("greet");
+            std::fs::create_dir_all(&unit).unwrap();
+            std::fs::write(unit.join("SKILL.md"), GREET).unwrap();
+            std::fs::write(unit.join("REFERENCE.md"), "detail\n").unwrap();
+            dir
         }
 
         /// A fake artifact with `body` as its bytes, written beside the store root.
@@ -459,7 +581,10 @@ mod tests {
 
         fn install(&self, version: Version, accepted: &[Capability], body: &[u8]) -> Installed {
             let rec = record(manifest_at(version), accepted);
-            let installed = self.store.install(rec, &self.artifact(body)).unwrap();
+            let installed = self
+                .store
+                .install(rec, &self.artifact(body), Some(&self.source()))
+                .unwrap();
             self.assert_inside(&installed.binary);
             self.assert_inside(&installed.data_dir);
             self.assert_inside(&installed.version_dir);
@@ -498,7 +623,7 @@ mod tests {
 
     impl Drop for Scratch {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
+            let _ = std::fs::remove_dir_all(self.root.parent().unwrap_or(&self.root));
         }
     }
 
@@ -607,7 +732,10 @@ mod tests {
         let s = Scratch::new("prehash");
         let mut rec = record(manifest(), &[]);
         rec.artifact_sha256 = "0".repeat(64);
-        let err = s.store.install(rec, &s.artifact(b"binary")).unwrap_err();
+        let err = s
+            .store
+            .install(rec, &s.artifact(b"binary"), Some(&s.source()))
+            .unwrap_err();
         assert!(matches!(err, InstallError::HashMismatch { .. }), "{err}");
         assert!(!s.store.paths().version_dir(&id(), &v("1.2.0")).exists());
         assert!(s.store.record(&id()).unwrap().is_none());
@@ -619,13 +747,17 @@ mod tests {
         let mut rec = record(manifest(), &[]);
         rec.version = v("9.9.9");
         assert!(matches!(
-            s.store.install(rec, &s.artifact(b"x")).unwrap_err(),
+            s.store
+                .install(rec, &s.artifact(b"x"), Some(&s.source()))
+                .unwrap_err(),
             InstallError::Inconsistent(_)
         ));
         let mut rec = record(manifest(), &[]);
         rec.module_id = ModuleId::new("acme/other").unwrap();
         assert!(matches!(
-            s.store.install(rec, &s.artifact(b"x")).unwrap_err(),
+            s.store
+                .install(rec, &s.artifact(b"x"), Some(&s.source()))
+                .unwrap_err(),
             InstallError::Inconsistent(_)
         ));
     }
@@ -873,5 +1005,170 @@ mod tests {
             InstallError::NotInstalled { .. }
         ));
         assert!(format!("{:?}", s.store).contains("InstallStore"));
+    }
+    /// A minimal valid skill unit. The frontmatter is not decoration: `load_units`
+    /// refuses a `SKILL.md` without it, and the happy-path test below reads the staged
+    /// tree back *through the loader*, so a body-only file would fail there for a reason
+    /// that has nothing to do with staging.
+    const GREET: &str = "---\nname: greet\ndescription: \"Say hello\"\n---\n# Greet\n";
+
+    /// The reference manifest with a different `[skills] paths`, so one test can name
+    /// exactly the shape it is arguing about.
+    fn with_skills(
+        mut m: avada_module_sdk::Manifest,
+        paths: &[&str],
+    ) -> avada_module_sdk::Manifest {
+        m.skills.paths = paths.iter().map(|s| (*s).to_string()).collect();
+        m
+    }
+
+    /// A checkout whose `skills/` holds nothing but the entries `build` puts there.
+    fn checkout(root: &Path, build: impl FnOnce(&Path)) -> PathBuf {
+        let dir = root.join(format!("checkout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        build(&dir);
+        dir
+    }
+
+    #[test]
+    fn an_install_carries_the_declared_skills_into_the_version_directory() {
+        let s = Scratch::new("skills-staged");
+        let installed = s.install(
+            Version::new(1, 2, 0),
+            &[Capability::SkillsMaterialize],
+            b"x",
+        );
+
+        let unit = installed.version_dir.join("skills").join("greet");
+        assert_eq!(
+            std::fs::read_to_string(unit.join("SKILL.md")).unwrap(),
+            GREET
+        );
+        // The whole directory, not just the entry file: a unit's references travel with it.
+        assert_eq!(
+            std::fs::read_to_string(unit.join("REFERENCE.md")).unwrap(),
+            "detail\n"
+        );
+
+        // And the loader that resolves those paths against the *version* directory — the
+        // coordinate system the manifest does not use — now finds the unit.
+        let (units, errs) = crate::skills::unit::load_units(
+            &installed.id,
+            &installed.version_dir,
+            &installed.record.record.manifest.skills.paths,
+        );
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(units.len(), 1, "{units:?}");
+    }
+
+    #[test]
+    fn a_module_that_declares_skills_is_refused_without_its_tree() {
+        let s = Scratch::new("skills-no-source");
+        let rec = record(manifest_at(Version::new(1, 2, 0)), &[]);
+        let err = s.store.install(rec, &s.artifact(b"x"), None).unwrap_err();
+        assert!(
+            matches!(&err, InstallError::Inconsistent(m) if m.contains("no source tree")),
+            "{err}"
+        );
+        // Half an install is worse than none: nothing is left behind to be read back.
+        assert!(s.store.records().unwrap().is_empty());
+    }
+
+    /// A module with no skills at all is still installable from a bare artifact — the
+    /// refusal above is about a *declared* tree, not about tightening every install.
+    #[test]
+    fn a_module_without_skills_still_installs_from_a_bare_artifact() {
+        let s = Scratch::new("skills-none");
+        let m = with_skills(manifest_at(Version::new(1, 2, 0)), &[]);
+        let installed = s
+            .store
+            .install(record(m, &[]), &s.artifact(b"x"), None)
+            .unwrap();
+        assert!(!installed.version_dir.join("skills").exists());
+    }
+
+    #[test]
+    fn a_skills_path_that_leaves_the_module_is_refused() {
+        for bad in ["../evil", "/etc", "skills/../../evil"] {
+            let s = Scratch::new("skills-escape");
+            let m = with_skills(manifest_at(Version::new(1, 2, 0)), &[bad]);
+            let err = s
+                .store
+                .install(record(m, &[]), &s.artifact(b"x"), Some(&s.source()))
+                .unwrap_err();
+            assert!(
+                matches!(&err, InstallError::Inconsistent(msg) if msg.contains("relative and inside")),
+                "{bad}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_skills_path_that_collides_with_the_install_layout_is_refused() {
+        for bad in [BIN_DIR, DATA_DIR, RECORD_FILE] {
+            let s = Scratch::new("skills-collide");
+            let m = with_skills(manifest_at(Version::new(1, 2, 0)), &[bad]);
+            let err = s
+                .store
+                .install(record(m, &[]), &s.artifact(b"x"), Some(&s.source()))
+                .unwrap_err();
+            assert!(
+                matches!(&err, InstallError::Inconsistent(msg) if msg.contains("collides")),
+                "{bad}: {err}"
+            );
+        }
+    }
+
+    /// A declared directory that simply is not in the checkout is *not* an install-time
+    /// error: `load_units` is the one authority on that, and two authorities for one
+    /// condition drift apart.
+    #[test]
+    fn a_declared_skills_path_that_is_missing_is_left_to_the_loader() {
+        let s = Scratch::new("skills-missing");
+        let src = checkout(&s.work, |_| {});
+        let installed = s
+            .store
+            .install(
+                record(manifest_at(Version::new(1, 2, 0)), &[]),
+                &s.artifact(b"x"),
+                Some(&src),
+            )
+            .unwrap();
+        assert!(!installed.version_dir.join("skills").exists());
+        let (units, errs) = crate::skills::unit::load_units(
+            &installed.id,
+            &installed.version_dir,
+            &installed.record.record.manifest.skills.paths,
+        );
+        assert!(units.is_empty());
+        assert_eq!(errs.len(), 1, "{errs:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_in_the_skills_tree_is_not_followed() {
+        let s = Scratch::new("skills-symlink");
+        let secret = s.work.join("secret.txt");
+        std::fs::write(&secret, "sshh\n").unwrap();
+        let src = checkout(&s.work, |dir| {
+            let unit = dir.join("skills").join("greet");
+            std::fs::create_dir_all(&unit).unwrap();
+            std::fs::write(unit.join("SKILL.md"), GREET).unwrap();
+            std::os::unix::fs::symlink(&secret, unit.join("stolen.md")).unwrap();
+        });
+        let installed = s
+            .store
+            .install(
+                record(manifest_at(Version::new(1, 2, 0)), &[]),
+                &s.artifact(b"x"),
+                Some(&src),
+            )
+            .unwrap();
+        let unit = installed.version_dir.join("skills").join("greet");
+        assert!(unit.join("SKILL.md").is_file());
+        assert!(
+            !unit.join("stolen.md").exists(),
+            "a symlink was followed out of the module"
+        );
     }
 }

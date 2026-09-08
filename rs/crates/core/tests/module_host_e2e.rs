@@ -265,7 +265,7 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
     )
     .expect("open the store");
     let installed = store
-        .install(record(manifest.clone(), sha256.clone()), &built)
+        .install(record(manifest.clone(), sha256.clone()), &built, None)
         .expect("install the hello example");
     assert!(installed.active, "the lockfile pins the only version");
     assert_eq!(installed.rights().artifact_sha256, sha256);
@@ -521,7 +521,7 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
         Arc::new(MemoryKeyStore::new()),
     )
     .unwrap();
-    match store2.install(second.clone(), &tampered) {
+    match store2.install(second.clone(), &tampered, None) {
         Err(InstallError::HashMismatch {
             expected, actual, ..
         }) => {
@@ -531,7 +531,7 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
         other => panic!("install of a tampered artifact: {other:?}"),
     }
     // …and `verify_binary` catches a binary swapped after a good install.
-    let good = store2.install(second.clone(), &built).unwrap();
+    let good = store2.install(second.clone(), &built, None).unwrap();
     std::fs::write(&good.binary, &bytes).unwrap();
     match store2.verify_binary(&id, &version) {
         Err(InstallError::HashMismatch { expected, .. }) => assert_eq!(expected, sha256),
