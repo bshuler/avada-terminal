@@ -20,7 +20,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The `host.*` methods this host serves; advertised in the host hello.
@@ -34,6 +34,7 @@ pub const SERVED: &[&str] = &[
     methods::HOST_ROUTES_REGISTER,
     methods::HOST_FS_LIST,
     methods::HOST_FS_READ,
+    methods::HOST_FS_WRITE,
     methods::HOST_PANES_SPAWN,
     methods::HOST_PANES_INPUT,
     methods::HOST_EVENTS_SUBSCRIBE,
@@ -43,6 +44,11 @@ pub const SERVED: &[&str] = &[
 /// video does not want it as one JSON string, and the host would buffer all of it twice
 /// (bytes, then base64) before the writer ever saw a line.
 pub const MAX_READ: u64 = 8 * 1024 * 1024;
+
+/// The largest body `host.fs.write` will accept, deliberately the same number as
+/// [`MAX_READ`]. A module that can read a file it wrote is the least surprising rule, and
+/// an asymmetric pair would mean a module could produce a file it can never open again.
+pub const MAX_WRITE: usize = MAX_READ as usize;
 
 /// One command a module registered (`host.command.register`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +170,13 @@ struct PathParams {
     path: String,
 }
 
+/// `host.fs.write` params.
+#[derive(Deserialize)]
+struct WriteParams {
+    path: String,
+    text: String,
+}
+
 /// `host.panes.spawn` params.
 #[derive(Deserialize)]
 struct SpawnPane {
@@ -185,6 +198,14 @@ struct PaneInput {
 #[derive(Deserialize)]
 struct Subscribe {
     kinds: Vec<String>,
+}
+
+/// What a scope check concluded before any path resolution happened.
+enum Scoped {
+    /// The module holds the `_any` capability: no boundary applies.
+    Anywhere,
+    /// The canonicalised workspace root every resolved path must sit inside.
+    Within(PathBuf),
 }
 
 fn invalid_params(e: impl std::fmt::Display) -> RpcError {
@@ -255,12 +276,11 @@ impl Dispatcher {
             methods::HOST_ROUTES_REGISTER => self.routes_register(params),
             methods::HOST_FS_LIST => self.fs_list(params),
             methods::HOST_FS_READ => self.fs_read(params),
+            methods::HOST_FS_WRITE => self.fs_write(params),
             methods::HOST_PANES_SPAWN => self.panes_spawn(params),
             methods::HOST_PANES_INPUT => self.panes_input(params),
             methods::HOST_EVENTS_SUBSCRIBE => self.events_subscribe(params),
-            methods::HOST_FS_WRITE | methods::HOST_KEYCHAIN_GET | methods::HOST_KEYCHAIN_SET => {
-                Err(unsupported(method))
-            }
+            methods::HOST_KEYCHAIN_GET | methods::HOST_KEYCHAIN_SET => Err(unsupported(method)),
             other => Err(RpcError::new(
                 ErrorCode::MethodNotFound,
                 format!("unknown method `{other}`"),
@@ -415,15 +435,79 @@ impl Dispatcher {
     /// `fs.read_any` lifts the scope entirely; that is what the capability *is*, and the
     /// human granted it at install time.
     fn scoped(&self, path: &str) -> Result<PathBuf, RpcError> {
+        let root = match self.scope_root(path, Capability::FsReadAny, "read")? {
+            Scoped::Anywhere => return Ok(PathBuf::from(path)),
+            Scoped::Within(root) => root,
+        };
+        let real = PathBuf::from(path)
+            .canonicalize()
+            .map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
+        if !real.starts_with(&root) {
+            return Err(RpcError::new(
+                ErrorCode::CapabilityDenied,
+                format!("`{path}` is outside the workspace root; `fs.read_any` reads outside it"),
+            ));
+        }
+        Ok(real)
+    }
+
+    /// Resolve a `host.fs.write` path, which — unlike a read — is usually a file that does
+    /// not exist yet.
+    ///
+    /// `canonicalize` cannot answer for a path with no inode, so the scope check runs
+    /// against the **deepest ancestor that does exist** and the tail is rejoined
+    /// afterwards. That is not a weaker check: every symlink on the way to the leaf is
+    /// resolved by canonicalising that ancestor, so a link out of the tree is caught
+    /// exactly as it is on a read, and the unresolved tail may only be plain names — a
+    /// `..` after the existing prefix is refused rather than normalised, because
+    /// normalising it here is how a scope check gets talked out of its own answer.
+    fn scoped_write(&self, path: &str) -> Result<PathBuf, RpcError> {
+        let root = match self.scope_root(path, Capability::FsWriteAny, "write")? {
+            Scoped::Anywhere => return Ok(PathBuf::from(path)),
+            Scoped::Within(root) => root,
+        };
+        let raw = PathBuf::from(path);
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        let mut probe = raw.as_path();
+        let real = loop {
+            match probe.canonicalize() {
+                Ok(real) => break real,
+                Err(e) => {
+                    let (Some(parent), Some(name)) = (probe.parent(), probe.file_name()) else {
+                        return Err(invalid_params(format!("`{path}`: {e}")));
+                    };
+                    if !matches!(probe.components().next_back(), Some(Component::Normal(_))) {
+                        return Err(invalid_params(format!(
+                            "`{path}` names no file the host can create"
+                        )));
+                    }
+                    tail.push(name.to_os_string());
+                    probe = parent;
+                }
+            }
+        };
+        if !real.starts_with(&root) {
+            return Err(RpcError::new(
+                ErrorCode::CapabilityDenied,
+                format!("`{path}` is outside the workspace root; `fs.write_any` writes outside it"),
+            ));
+        }
+        let mut out = real;
+        for name in tail.into_iter().rev() {
+            out.push(name);
+        }
+        Ok(out)
+    }
+
+    /// The shared first half of both scope checks: the "any" capability short-circuits it,
+    /// otherwise the active workspace root is the boundary. `verb` only shapes the message
+    /// a human reads when there is no workspace open at all.
+    fn scope_root(&self, path: &str, any: Capability, verb: &str) -> Result<Scoped, RpcError> {
         if path.trim().is_empty() {
             return Err(invalid_params("path must not be empty"));
         }
-        let raw = PathBuf::from(path);
-        if matches!(
-            self.shared.gate.check(&self.module, Capability::FsReadAny),
-            Decision::Allow
-        ) {
-            return Ok(raw);
+        if matches!(self.shared.gate.check(&self.module, any), Decision::Allow) {
+            return Ok(Scoped::Anywhere);
         }
         let root = self
             .shared
@@ -434,25 +518,18 @@ impl Dispatcher {
         let Some(root) = root else {
             return Err(RpcError::new(
                 ErrorCode::CapabilityDenied,
-                "no workspace root to read within; `fs.read_any` is needed to read outside one",
+                format!(
+                    "no workspace root to {verb} within; `{}` is needed to {verb} outside one",
+                    any.name()
+                ),
             ));
         };
-        let root = root.canonicalize().map_err(|e| {
+        root.canonicalize().map(Scoped::Within).map_err(|e| {
             RpcError::new(
                 ErrorCode::CapabilityDenied,
                 format!("the workspace root cannot be resolved: {e}"),
             )
-        })?;
-        let real = raw
-            .canonicalize()
-            .map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
-        if !real.starts_with(&root) {
-            return Err(RpcError::new(
-                ErrorCode::CapabilityDenied,
-                format!("`{path}` is outside the workspace root; `fs.read_any` reads outside it"),
-            ));
-        }
-        Ok(real)
+        })
     }
 
     /// `host.fs.list { path } -> { entries: [{ name, kind }] }`, sorted by name.
@@ -507,6 +584,36 @@ impl Dispatcher {
                 "bytes_b64": base64::engine::general_purpose::STANDARD.encode(e.as_bytes()),
             })),
         }
+    }
+
+    /// `host.fs.write { path, text } -> {}`.
+    ///
+    /// Text only, and whole-file only. A module that has to say where in a file its bytes
+    /// go would need the host to arbitrate concurrent edits to a file the human may also
+    /// have open; replacing the file is the operation whose meaning does not depend on
+    /// what happened between the read and the write.
+    ///
+    /// Missing parent directories are created, because the file a module most wants to
+    /// write is the first one in a directory that does not exist yet (`.avada/` in a fresh
+    /// checkout) and refusing that would only push a `mkdir` method onto the contract. They
+    /// are created *after* the scope check, never before it.
+    fn fs_write(&self, params: &Value) -> Result<Value, RpcError> {
+        let WriteParams { path, text } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if text.len() > MAX_WRITE {
+            return Err(invalid_params(format!(
+                "`{path}` is {} bytes; `host.fs.write` stops at {MAX_WRITE}",
+                text.len()
+            )));
+        }
+        let file = self.scoped_write(&path)?;
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
+        }
+        std::fs::write(&file, text.as_bytes())
+            .map_err(|e| invalid_params(format!("`{path}`: {e}")))?;
+        Ok(json!({}))
     }
 
     /// `host.panes.spawn { kind, path?, surface? } -> { pane_id }`.
@@ -698,11 +805,7 @@ pub(crate) mod tests {
     #[test]
     fn unsupported_methods_say_so_after_the_gate() {
         let rig = rig(&all_caps());
-        for m in [
-            methods::HOST_FS_WRITE,
-            methods::HOST_KEYCHAIN_GET,
-            methods::HOST_KEYCHAIN_SET,
-        ] {
+        for m in [methods::HOST_KEYCHAIN_GET, methods::HOST_KEYCHAIN_SET] {
             let e = rig.d.call(m, &Value::Null).unwrap_err();
             assert_eq!(e.kind(), ErrorCode::MethodNotFound, "{m}");
             assert_eq!(e.data, Some(json!({ "unsupported": true })), "{m}");
@@ -711,7 +814,7 @@ pub(crate) mod tests {
         let bare = super::tests::rig(&[]);
         let e = bare
             .d
-            .call(methods::HOST_FS_WRITE, &Value::Null)
+            .call(methods::HOST_PANES_INPUT, &Value::Null)
             .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
     }
@@ -1065,6 +1168,147 @@ pub(crate) mod tests {
         )
         .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+    }
+
+    #[test]
+    fn fs_write_creates_the_file_and_the_directories_above_it() {
+        let dir = tempdir::Dir::new("fs-write");
+        let root = &dir.0;
+        let rig = fs_rig(&[Capability::FsWrite, Capability::FsRead], root);
+        let target = root.join(".avada").join("project.json");
+        assert_eq!(
+            rig.d
+                .call(
+                    methods::HOST_FS_WRITE,
+                    &json!({ "path": target.to_string_lossy(), "text": "{}\n" }),
+                )
+                .unwrap(),
+            json!({}),
+            "a write answers with an empty object, not a byte count"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{}\n");
+        // The module can read back exactly what it wrote — the point of MAX_WRITE == MAX_READ.
+        assert_eq!(
+            rig.d
+                .call(
+                    methods::HOST_FS_READ,
+                    &json!({ "path": target.to_string_lossy() }),
+                )
+                .unwrap(),
+            json!({ "text": "{}\n" })
+        );
+        // A second write replaces rather than appends.
+        rig.d
+            .call(
+                methods::HOST_FS_WRITE,
+                &json!({ "path": target.to_string_lossy(), "text": "second" }),
+            )
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "second");
+    }
+
+    #[test]
+    fn fs_write_is_scoped_and_write_any_is_what_lifts_it() {
+        let dir = tempdir::Dir::new("fs-write-scope");
+        let outside = tempdir::Dir::new("fs-write-out");
+        let root = &dir.0;
+        let target = outside.0.join("new.txt");
+        let params = json!({ "path": target.to_string_lossy(), "text": "x" });
+
+        let rig = fs_rig(&[Capability::FsWrite], root);
+        let e = rig.d.call(methods::HOST_FS_WRITE, &params).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+        assert!(
+            e.message.contains("fs.write_any"),
+            "the refusal names the WRITE escape hatch, not the read one: {}",
+            e.message
+        );
+        assert!(!target.exists(), "nothing was written");
+
+        // `fs.read_any` must NOT lift a write scope.
+        let reader = fs_rig(&[Capability::FsWrite, Capability::FsReadAny], root);
+        assert_eq!(
+            reader
+                .d
+                .call(methods::HOST_FS_WRITE, &params)
+                .unwrap_err()
+                .kind(),
+            ErrorCode::CapabilityDenied
+        );
+
+        let any = fs_rig(&[Capability::FsWrite, Capability::FsWriteAny], root);
+        any.d.call(methods::HOST_FS_WRITE, &params).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
+    }
+
+    #[test]
+    fn fs_write_refuses_a_tail_that_climbs_out_and_a_body_over_the_cap() {
+        let dir = tempdir::Dir::new("fs-write-tail");
+        let root = &dir.0;
+        let rig = fs_rig(&[Capability::FsWrite], root);
+        // `<root>/nope/../../escape`: the existing prefix is the root, and the unresolved
+        // tail is refused rather than normalised.
+        let sneaky = root.join("nope").join("..").join("..").join("escape");
+        let e = rig
+            .d
+            .call(
+                methods::HOST_FS_WRITE,
+                &json!({ "path": sneaky.to_string_lossy(), "text": "x" }),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                e.kind(),
+                ErrorCode::InvalidParams | ErrorCode::CapabilityDenied
+            ),
+            "{e:?}"
+        );
+        assert!(
+            !root.parent().unwrap().join("escape").exists(),
+            "nothing landed above the root"
+        );
+
+        let e = rig
+            .d
+            .call(
+                methods::HOST_FS_WRITE,
+                &json!({
+                    "path": root.join("big").to_string_lossy(),
+                    "text": "a".repeat(MAX_WRITE + 1),
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("stops at"), "{}", e.message);
+        assert!(
+            !root.join("big").exists(),
+            "the cap is checked before the write"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_write_will_not_follow_a_symlink_out_of_the_workspace() {
+        let dir = tempdir::Dir::new("fs-write-link");
+        let outside = tempdir::Dir::new("fs-write-link-out");
+        std::os::unix::fs::symlink(&outside.0, dir.0.join("escape")).unwrap();
+        let rig = fs_rig(&[Capability::FsWrite], &dir.0);
+        let e = rig
+            .d
+            .call(
+                methods::HOST_FS_WRITE,
+                &json!({
+                    "path": dir.0.join("escape").join("stolen").to_string_lossy(),
+                    "text": "x",
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(
+            e.kind(),
+            ErrorCode::CapabilityDenied,
+            "the existing prefix canonicalises through the link, so it lands outside"
+        );
+        assert!(!outside.0.join("stolen").exists());
     }
 
     #[cfg(unix)]
