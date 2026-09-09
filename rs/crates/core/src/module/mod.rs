@@ -468,6 +468,34 @@ mod host_tests {
         }
     }
 
+    /// Collect from a channel until `done` says everything under test has arrived, or
+    /// [`WAIT`] expires.
+    ///
+    /// The obvious spelling — wait for a status, then drain with `try_recv` — is a race. A
+    /// status is published from the host's own thread and the toast and rail teardown that
+    /// accompany it are published just after, so a non-blocking drain starting the instant the
+    /// status flips is counting events that are still in flight. Nothing bounds how far behind
+    /// they may be; the drain simply tends to win, and an assertion that holds because the
+    /// machine was fast enough is not an assertion about the host. Blocking until the count is
+    /// actually reached turns "fast enough" back into a condition.
+    ///
+    /// This was written to close the race by construction rather than in response to an
+    /// observed failure: six concurrent runs of the previous spelling did not reproduce one.
+    fn collect_until<T>(rx: &Receiver<T>, done: impl Fn(&[T]) -> bool) -> Vec<T> {
+        let deadline = Instant::now() + WAIT;
+        let mut got = Vec::new();
+        while !done(&got) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || rx.recv_timeout(left).map(|e| got.push(e)).is_err() {
+                break;
+            }
+        }
+        // Whatever is already queued behind the last one still counts: a test asserting
+        // "exactly three" has to be able to see a fourth.
+        got.extend(std::iter::from_fn(|| rx.try_recv().ok()));
+        got
+    }
+
     #[test]
     fn handshake_succeeds_and_the_rail_sees_entries_then_rows() {
         let r = rig(&all_ui(), |_| {});
@@ -692,7 +720,13 @@ mod host_tests {
         }
         let mut toasts = 0;
         let mut crashed = Vec::new();
-        while let Ok(ev) = r.events.try_recv() {
+        let published = collect_until(&r.events, |got| {
+            got.iter()
+                .filter(|e| matches!(e, HostEvent::Toast { .. }))
+                .count()
+                >= 3
+        });
+        for ev in published {
             match ev {
                 HostEvent::Toast { level, .. } => {
                     assert!(level == "warn" || level == "error");
@@ -708,13 +742,9 @@ mod host_tests {
         assert_eq!(crashed, vec![1, 2]);
         assert_eq!(toasts, 3, "one per restart plus one for the disable");
         // Every life registered the rail and every death took it down again.
-        let mut gone = 0;
-        while let Ok(ev) = r.rail.try_recv() {
-            if matches!(ev, RailEvent::Gone { .. }) {
-                gone += 1;
-            }
-        }
-        assert_eq!(gone, 3);
+        let is_gone = |e: &&RailEvent| matches!(e, RailEvent::Gone { .. });
+        let torn_down = collect_until(&r.rail, |got| got.iter().filter(is_gone).count() >= 3);
+        assert_eq!(torn_down.iter().filter(is_gone).count(), 3);
         assert!(r.host.rail_state(&id).entries.is_empty());
     }
 
@@ -740,20 +770,42 @@ mod host_tests {
 
     #[test]
     fn a_module_that_never_says_hello_is_cut_off_at_the_timeout() {
+        // The error alone does not prove much: a child that sleeps 30 s and then exits
+        // without a hello could produce something that looks like this too, half a minute
+        // late. What is actually under test is that the *configured* timeout is what ends
+        // the wait, and the only way to say that is with a clock.
+        //
+        // The clock is also what made the old bound unsound. Every spawn first re-hashes
+        // this large debug binary, so an absolute bound is really a bound on how loaded the
+        // machine is: the number that passes on an idle Mac has no defensible relationship
+        // to the timeout it claims to be measuring.
+        // So the fixed cost is measured instead of guessed: a normal module spawned from
+        // the same binary pays exactly the same hashing toll and then handshakes at once,
+        // while the silent one pays it and then waits the timeout out. The *difference* is
+        // the wait, and the difference is what gets a bound.
+        let control = rig(&all_ui(), |_| {});
+        let t0 = Instant::now();
+        spawn(&control, "normal").unwrap();
+        let overhead = t0.elapsed();
+        control.host.shutdown(&control.record.module_id).unwrap();
+
         let r = rig(&all_ui(), |c| {
             c.handshake_timeout = Duration::from_millis(300)
         });
         let id = r.record.module_id.clone();
         let t0 = Instant::now();
         let outcome = spawn(&r, "silent");
+        let waited = t0.elapsed();
         assert!(
             matches!(outcome, Err(HostError::HandshakeTimeout)),
             "{outcome:?}"
         );
-        // The silent child sleeps 30 s; anything well under that proves the cut-off.
-        // The bound is loose because every spawn re-hashes this (large, debug) test
-        // binary, and a parallel test run makes that slow.
-        assert!(t0.elapsed() < Duration::from_secs(25), "{:?}", t0.elapsed());
+        // Five seconds of slack over the control absorbs scheduler noise and still leaves
+        // the silent child's 30 s sleep nowhere near mistakable for the timeout.
+        assert!(
+            waited < overhead + Duration::from_secs(5),
+            "the silent spawn took {waited:?}; a normal spawn of the same binary took {overhead:?}"
+        );
         assert!(matches!(r.host.status(&id), ModuleStatus::Disabled { .. }));
     }
 
