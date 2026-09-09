@@ -270,6 +270,22 @@ fn the_feature_matrix_still_describes_this_app() {
         }
     }
 
+    // The ratchet. Everything above only checks that the *doc* agrees with the *code*, which
+    // a lazy regeneration satisfies by writing "unproven" into a new row. As of this commit
+    // every callback Rust binds is also driven by a test, and that is a property worth
+    // keeping rather than a number worth reporting: a new callback wired to Rust with no
+    // test now fails here, at the moment it is added, instead of being recorded as a debt
+    // that nothing ever comes back for. The fix is to write the test, or — if a production
+    // `wire()` helper already drives it — to add the `//! e2e:` line above.
+    let unproven: Vec<&String> = declared
+        .keys()
+        .filter(|n| is_bound(&rust, n) && !uitest.contains(n.as_str()))
+        .collect();
+    assert!(
+        unproven.is_empty(),
+        "these callbacks are wired to Rust but no test under src/uitest/ drives them: {unproven:?}"
+    );
+
     let variants = command_variants();
     let bindings = crate::keybindings::default_bindings();
     let keyed: BTreeSet<String> = bindings
