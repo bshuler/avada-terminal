@@ -36,12 +36,16 @@
 //! reads that decision synchronously from a cache. [`decide_license`] fills the cache on
 //! the worker thread just before each start; see its note for why the issuer binding
 //! matters as much as the refresh does.
+//! A decision made at start is only true at start, so the worker also wakes on a timer to
+//! re-decide the modules that are already running ([`sweep_licenses`]) --- a licence revoked
+//! this morning must not survive until the next launch.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -717,6 +721,87 @@ fn wire_gesture(g: RailGesture) -> Gesture {
 }
 
 /// The worker loop: every blocking host→module call in the app happens here.
+/// The slice of the module host a licence sweep touches.
+///
+/// A licence decision only means anything for a module that is *running*, and running means
+/// a live child process --- which the host will only make from a real module binary, and
+/// this crate has none. The trait is the seam that lets the sweep be proven here anyway:
+/// `core` proves that [`Host::disable`] really stops a live module and that the reason
+/// reaches the user, and the fake in this file's tests proves the sweep reaches for it at
+/// exactly the moments it should and at no others.
+trait SweepHost {
+    /// Every module currently starting or running, with the record it was started from.
+    fn live(&self) -> Vec<(ModuleId, InstallRecord)>;
+    /// Tell the user something about a module that is still running.
+    fn warn(&self, id: &ModuleId, text: &str);
+    /// Stop a module, saying why.
+    fn stop(&self, id: &ModuleId, reason: &str);
+}
+
+impl SweepHost for Host {
+    fn live(&self) -> Vec<(ModuleId, InstallRecord)> {
+        self.statuses()
+            .into_iter()
+            .filter(|(_, status)| status.is_live())
+            .filter_map(|(id, _)| self.record(&id).map(|record| (id, record)))
+            .collect()
+    }
+
+    fn warn(&self, id: &ModuleId, text: &str) {
+        // A module that stopped between the sweep listing it and the sweep reaching it is
+        // not an error; it is the answer to the question, arriving early.
+        let _ = Host::toast(self, id, text, "warn");
+    }
+
+    fn stop(&self, id: &ModuleId, reason: &str) {
+        let _ = Host::disable(self, id, reason);
+    }
+}
+
+/// How often the worker re-decides the licences of the modules that are already running.
+///
+/// A licence is measured in days --- a check-in interval of thirty, a stale-check-in grace
+/// window of fourteen --- so hourly is already far finer than the thing it watches. What the
+/// interval really buys is the worst case for a revoked module in a session nobody restarts;
+/// what a shorter one costs is a check-in per licensed module per tick, forever, on every
+/// install in the world.
+const LICENSE_SWEEP: Duration = Duration::from_secs(60 * 60);
+
+/// Re-decide every *running* commercial module's licence, and stop the ones that lost it.
+///
+/// [`decide_license`] answers from what is on disk; this is what puts something new there.
+/// `checkin_all` asks the issuer about each installed licence, but only for the ones whose
+/// check-in has come due, so most sweeps do no network at all. When the issuer cannot be
+/// reached it leaves the record exactly as it was --- an outage has to *spend* the grace
+/// window, not end it, or a licence server having a bad afternoon would disable paying
+/// customers' modules.
+///
+/// Only live modules are considered. A refusal for a module that is not running is not
+/// news: the next start will consult the same gate and get the same answer.
+async fn sweep_licenses(host: &impl SweepHost, licenses: &Licenses) {
+    licenses.service.checkin_all().await;
+    for (id, record) in host.live() {
+        let before = licenses.gate.decided(&id.to_string(), record.version.major);
+        let Some(after) = decide_license(licenses, &record).await else {
+            continue;
+        };
+        match after {
+            Gate::Run => {}
+            // Only on the way in. A fourteen-day grace window swept hourly is 336 ticks,
+            // and a warning repeated 336 times is not a warning.
+            Gate::RunWithBanner(reason) => {
+                if !matches!(before, Some(Gate::RunWithBanner(_))) {
+                    host.warn(&id, &reason);
+                }
+            }
+            Gate::Refuse(reason) => {
+                tracing::warn!(module = %id.as_str(), "license lost; stopping: {reason}");
+                host.stop(&id, &reason);
+            }
+        }
+    }
+}
+
 fn run_worker(host: Host, licenses: Arc<Licenses>, rx: Receiver<Job>) {
     // One runtime for the worker's whole life. The only async work here is
     // `decide_license`, which for an installed licence is a signature check against keys
@@ -729,7 +814,19 @@ fn run_worker(host: Host, licenses: Arc<Licenses>, rx: Receiver<Job>) {
         .build()
         .inspect_err(|e| tracing::warn!(error = %e, "no runtime for license checks; commercial modules will not start"))
         .ok();
-    while let Ok(job) = rx.recv() {
+    loop {
+        let job = match rx.recv_timeout(LICENSE_SWEEP) {
+            Ok(job) => job,
+            // Nothing to do is the normal case, and it is the only moment a long-running
+            // session ever revisits a licence it decided at startup.
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(rt) = rt.as_ref() {
+                    rt.block_on(sweep_licenses(&host, &licenses));
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
         match job {
             Job::Start { record, binary } => {
                 let id = record.module_id.clone();
@@ -775,11 +872,11 @@ mod tests {
     use super::*;
     use avada_core::install::keyring::MemoryKeyStore;
     use avada_core::license::stub_issuer::{Grant, StubIssuer};
-    use avada_core::license::{LicenseHttp, LicenseToken, MemoryLicenseStore};
+    use avada_core::license::{LicenseError, LicenseHttp, LicenseToken, MemoryLicenseStore};
     use avada_core::module::RailEvent;
     use avada_core::rights::{Capability, DistributionKind, InstallKind, Manifest};
     use std::collections::{BTreeSet, HashMap};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     /// A manifest with no `[skills]` section, so an install needs no checkout to stage
     /// from and every test here is a pure store round trip.
@@ -1210,10 +1307,19 @@ label = "Tree"
     /// A service and gate over an in-process issuer and a store that never touches disk —
     /// the same pair `under` builds, with the network and the filesystem taken out.
     fn licenses(http: Arc<dyn LicenseHttp>) -> Licenses {
+        licenses_at(http, Arc::new(AtomicU64::new(NOW)))
+    }
+
+    /// The same pair over a clock the test can wind forward.
+    ///
+    /// Everything a licence does after it is installed happens on a scale of days --- the
+    /// check-in falls due after thirty of them, the grace window closes fourteen after that
+    /// --- so a test that could not move the clock could only ever prove the first hour.
+    fn licenses_at(http: Arc<dyn LicenseHttp>, clock: Arc<AtomicU64>) -> Licenses {
         let service = Arc::new(LicenseService::new(
             Arc::new(MemoryLicenseStore::new()),
             http,
-            Arc::new(|| NOW),
+            Arc::new(move || clock.load(Ordering::Relaxed)),
         ));
         Licenses {
             gate: CachedGate::new(service.clone()),
@@ -1335,5 +1441,237 @@ label = "Tree"
             }
             other => panic!("a token from an unbound issuer must not run: {other:?}"),
         }
+    }
+
+    // --- the sweep ---------------------------------------------------------------------
+    //
+    // Everything above decides a licence at the moment a module starts. These decide it
+    // again while the module runs, which is the only way a licence revoked on Monday stops
+    // a session that has been open since Sunday.
+
+    const DAY: u64 = 86_400;
+
+    /// A [`SweepHost`] that runs nothing and remembers everything asked of it.
+    #[derive(Default)]
+    struct FakeHost {
+        live: Vec<(ModuleId, InstallRecord)>,
+        warned: RefCell<Vec<(String, String)>>,
+        stopped: RefCell<Vec<(String, String)>>,
+    }
+
+    impl FakeHost {
+        fn running(record: InstallRecord) -> FakeHost {
+            FakeHost {
+                live: vec![(record.module_id.clone(), record)],
+                ..FakeHost::default()
+            }
+        }
+    }
+
+    impl SweepHost for FakeHost {
+        fn live(&self) -> Vec<(ModuleId, InstallRecord)> {
+            self.live.clone()
+        }
+        fn warn(&self, id: &ModuleId, text: &str) {
+            self.warned
+                .borrow_mut()
+                .push((id.to_string(), text.to_string()));
+        }
+        fn stop(&self, id: &ModuleId, reason: &str) {
+            self.stopped
+                .borrow_mut()
+                .push((id.to_string(), reason.to_string()));
+        }
+    }
+
+    /// A transport that answers from a real issuer until the test switches it off.
+    ///
+    /// An issuer that cannot be reached is not the same thing as an issuer that says no,
+    /// and the difference is the whole design of the grace window: a licence server having
+    /// a bad afternoon must not disable a paying customer's module.
+    struct Flaky {
+        inner: Arc<StubIssuer>,
+        up: AtomicBool,
+    }
+
+    impl Flaky {
+        fn new(issuer: Arc<StubIssuer>) -> Arc<Flaky> {
+            Arc::new(Flaky {
+                inner: issuer,
+                up: AtomicBool::new(true),
+            })
+        }
+    }
+
+    impl LicenseHttp for Flaky {
+        fn get(&self, url: String) -> avada_core::license::HttpFuture<'_> {
+            if !self.up.load(Ordering::Relaxed) {
+                return Box::pin(async { Err(LicenseError::Network("network is down".into())) });
+            }
+            self.inner.get(url)
+        }
+        fn post_form(
+            &self,
+            url: String,
+            bearer: Option<LicenseToken>,
+            form: Vec<(String, String)>,
+            accept: String,
+        ) -> avada_core::license::HttpFuture<'_> {
+            if !self.up.load(Ordering::Relaxed) {
+                return Box::pin(async { Err(LicenseError::Network("network is down".into())) });
+            }
+            self.inner.post_form(url, bearer, form, accept)
+        }
+    }
+
+    /// An issuer, a clock, a licensed-and-running module, and a sweep that has already run
+    /// once so the gate holds the `Run` every later assertion is measured against.
+    async fn running_and_licensed(
+        http: Arc<dyn LicenseHttp>,
+        issuer: &StubIssuer,
+        clock: Arc<AtomicU64>,
+    ) -> (Licenses, FakeHost) {
+        let lic = licenses_at(http, clock);
+        install(issuer, &lic.service, "acme/avada-pro").await;
+        let host = FakeHost::running(commercial_record("acme/avada-pro", "https://issuer.test"));
+        sweep_licenses(&host, &lic).await;
+        assert_eq!(lic.gate.decided("acme/avada-pro", 1), Some(Gate::Run));
+        assert!(host.stopped.borrow().is_empty() && host.warned.borrow().is_empty());
+        (lic, host)
+    }
+
+    /// Wave 3's exit clause, the second half: a revoked licence stops the module.
+    ///
+    /// Nothing about the module changed --- same binary, same hash, same signed record, and
+    /// a token still perfectly valid on its own terms. What changed is the answer the issuer
+    /// gives when asked, and the only thing that ever asks is the sweep.
+    #[tokio::test]
+    async fn a_revoked_license_stops_a_module_that_is_already_running() {
+        let clock = Arc::new(AtomicU64::new(NOW));
+        let ticking = clock.clone();
+        let issuer = Arc::new(StubIssuer::with_clock(
+            "https://issuer.test",
+            Arc::new(move || ticking.load(Ordering::Relaxed)),
+        ));
+        let (lic, host) = running_and_licensed(issuer.clone(), &issuer, clock.clone()).await;
+
+        assert_eq!(issuer.revoke_product("acme/avada-pro"), 1);
+        // A sweep before the check-in comes due asks nobody anything: that is what keeps an
+        // hourly sweep from being an hourly request per module, and it is also why
+        // revocation is not instant.
+        sweep_licenses(&host, &lic).await;
+        assert!(
+            host.stopped.borrow().is_empty(),
+            "the check-in is not due yet; nothing has asked the issuer"
+        );
+
+        clock.fetch_add(31 * DAY, Ordering::Relaxed);
+        sweep_licenses(&host, &lic).await;
+        let stopped = host.stopped.borrow();
+        assert_eq!(stopped.len(), 1, "{stopped:?}");
+        assert_eq!(stopped[0].0, "acme/avada-pro");
+        assert!(
+            stopped[0].1.to_lowercase().contains("revoked"),
+            "the user has to be told which of the many reasons this was: {}",
+            stopped[0].1
+        );
+    }
+
+    /// An outage has to *spend* the grace window, not end it --- and it gets exactly one
+    /// warning on the way in, not one per sweep.
+    #[tokio::test]
+    async fn an_unreachable_issuer_buys_grace_and_warns_once() {
+        let clock = Arc::new(AtomicU64::new(NOW));
+        let ticking = clock.clone();
+        let issuer = Arc::new(StubIssuer::with_clock(
+            "https://issuer.test",
+            Arc::new(move || ticking.load(Ordering::Relaxed)),
+        ));
+        let http = Flaky::new(issuer.clone());
+        let (lic, host) = running_and_licensed(http.clone(), &issuer, clock.clone()).await;
+
+        http.up.store(false, Ordering::Relaxed);
+        clock.fetch_add(31 * DAY, Ordering::Relaxed);
+        sweep_licenses(&host, &lic).await;
+        assert!(
+            host.stopped.borrow().is_empty(),
+            "a licence server that is merely down must not disable anybody"
+        );
+        assert_eq!(host.warned.borrow().len(), 1, "{:?}", host.warned.borrow());
+
+        // Nine more hourly sweeps inside the same window. A warning repeated every hour for
+        // a fortnight is not a warning.
+        for _ in 0..9 {
+            sweep_licenses(&host, &lic).await;
+        }
+        assert_eq!(host.warned.borrow().len(), 1);
+        assert!(host.stopped.borrow().is_empty());
+
+        // Past the fourteen days the grace is spent, and the module goes.
+        clock.fetch_add(15 * DAY, Ordering::Relaxed);
+        sweep_licenses(&host, &lic).await;
+        assert_eq!(host.stopped.borrow().len(), 1);
+    }
+
+    /// The fake above answers `live` from a list; this is the real one, which has to derive
+    /// it from the host's own statuses.
+    ///
+    /// Only the negative half can be shown here --- making a module *live* needs a real
+    /// module binary, which this crate has none of --- but the negative half is the one that
+    /// bites: a `live` that forgot to filter would hand the sweep every module ever
+    /// installed, and the sweep would dutifully stop the ones whose licences had lapsed
+    /// while they sat there not running.
+    #[test]
+    fn the_hosts_live_list_is_only_what_is_actually_running() {
+        let root = scratch("sweep-live");
+        let host = Host::new(
+            HostConfig::new(root.join("data")),
+            Arc::new(DeclaredOnly::new()),
+        );
+        assert!(SweepHost::live(&host).is_empty());
+
+        // A record the host knows about and could not start: present in `statuses`, and
+        // exactly the thing `live` must not return.
+        let record = commercial_record("acme/avada-pro", "https://issuer.test");
+        assert!(host.spawn(&record, &root.join("nothing-is-here")).is_err());
+        assert_eq!(host.statuses().len(), 1);
+        assert!(
+            SweepHost::live(&host).is_empty(),
+            "a module that never started is not running"
+        );
+    }
+
+    /// The sweep only ever looks at what is running, and only at what is commercial.
+    ///
+    /// A refusal for a module nobody is running is not news --- the next start consults the
+    /// same gate and gets the same answer --- and a free module has no licence to lose. The
+    /// cost of getting either wrong is the same: an unlicensed decision cached under a
+    /// product the host will never ask about, making the gate look refreshed when it is not.
+    #[tokio::test]
+    async fn the_sweep_leaves_alone_what_is_not_running_and_what_is_not_commercial() {
+        let issuer = Arc::new(StubIssuer::with_clock(
+            "https://issuer.test",
+            Arc::new(|| NOW),
+        ));
+        let lic = licenses(issuer.clone());
+
+        let nothing_live = FakeHost::default();
+        sweep_licenses(&nothing_live, &lic).await;
+        assert!(nothing_live.stopped.borrow().is_empty());
+
+        let free = FakeHost::running(record("acme/avada-free"));
+        sweep_licenses(&free, &lic).await;
+        assert!(free.stopped.borrow().is_empty() && free.warned.borrow().is_empty());
+        assert_eq!(
+            lic.gate.decided("acme/avada-free", 1),
+            None,
+            "a free module has no licence, so the gate must hold no opinion about one"
+        );
+
+        // And an unlicensed commercial module that somehow got running is stopped.
+        let unlicensed =
+            FakeHost::running(commercial_record("acme/avada-pro", "https://issuer.test"));
+        sweep_licenses(&unlicensed, &lic).await;
+        assert_eq!(unlicensed.stopped.borrow().len(), 1);
     }
 }

@@ -691,6 +691,27 @@ impl Host {
         Ok(())
     }
 
+    /// [`shutdown`](Self::shutdown) with the reason the user should be told.
+    ///
+    /// `shutdown` says only "shut down", which is honest for a user who asked for it and
+    /// useless for a module the host stopped on its own: the licence sweep pulls a module
+    /// out from under someone who did not touch it, and `Disabled { reason }` is the only
+    /// place that explanation can live where the placeholder and the toast will find it.
+    pub fn disable(&self, id: &ModuleId, reason: &str) -> Result<(), HostError> {
+        self.slot(id)?.shutdown(reason);
+        Ok(())
+    }
+
+    /// Raise a toast against a module from outside the host.
+    ///
+    /// Everything else the user sees about a module is a consequence of the module doing
+    /// something. A licence entering its grace window is the exception --- nothing happened,
+    /// which is exactly why it needs saying before the day it stops being nothing.
+    pub fn toast(&self, id: &ModuleId, text: &str, level: &str) -> Result<(), HostError> {
+        self.slot(id)?.toast(text.to_string(), level);
+        Ok(())
+    }
+
     /// Start a stopped, crashed, disabled or broken module again from a clean restart
     /// budget. The binary is re-hashed, so a `Broken` module stays broken unless it was
     /// reinstalled in place.

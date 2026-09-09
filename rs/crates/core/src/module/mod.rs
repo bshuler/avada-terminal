@@ -769,6 +769,59 @@ mod host_tests {
         r.host.shutdown(&id).unwrap();
     }
 
+    /// The two things the host does *to* a running module on somebody else's behalf.
+    ///
+    /// `shutdown` hardcodes "shut down", which is honest for a user who asked and useless
+    /// for the licence sweep, which stops a module nobody touched; and until now there was
+    /// no way at all to say something about a module from outside the host. Both matter for
+    /// the same reason: a module that vanishes without a sentence attached is a bug report.
+    #[test]
+    fn disable_and_toast_carry_a_reason_out_to_the_user() {
+        let r = rig(&all_ui(), |_| {});
+        spawn(&r, "normal").unwrap();
+        let id = r.record.module_id.clone();
+
+        r.host
+            .toast(&id, "license expires in 3 days", "warn")
+            .unwrap();
+        let toast = collect_until(&r.events, |got| {
+            got.iter().any(|e| matches!(e, HostEvent::Toast { .. }))
+        });
+        let said = toast
+            .iter()
+            .find_map(|e| match e {
+                HostEvent::Toast {
+                    module,
+                    text,
+                    level,
+                } => Some((module, text, level)),
+                _ => None,
+            })
+            .expect("a toast raised from outside the host still reaches the user");
+        assert_eq!(said.0, &id);
+        assert_eq!(said.1, "license expires in 3 days");
+        assert_eq!(said.2, "warn");
+
+        r.host.disable(&id, "license revoked").unwrap();
+        assert_eq!(
+            r.host.status(&id),
+            ModuleStatus::Disabled {
+                reason: "license revoked".into()
+            },
+            "the reason the host stopped it is the only place the user can read it"
+        );
+        // And a module the host has no record of cannot be disabled into existence.
+        let ghost = ModuleId::new("acme/not-installed").unwrap();
+        assert!(matches!(
+            r.host.disable(&ghost, "whatever"),
+            Err(HostError::NotInstalled(_))
+        ));
+        assert!(matches!(
+            r.host.toast(&ghost, "hello", "info"),
+            Err(HostError::NotInstalled(_))
+        ));
+    }
+
     #[test]
     fn a_module_that_never_says_hello_is_cut_off_at_the_timeout() {
         // The error alone does not prove much: a child that sleeps 30 s and then exits
