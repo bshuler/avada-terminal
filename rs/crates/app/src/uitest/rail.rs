@@ -10,7 +10,7 @@
 use super::*;
 
 use crate::leftpanel::{entry_key, ModuleRail};
-use crate::paneview::{fill_rail, LEFT_MODE_RAIL, LEFT_MODE_WORKSPACE};
+use crate::paneview::fill_rail;
 use avada_core::module::{RailEntry, RailEvent, Row};
 use avada_core::rights::ModuleId;
 
@@ -56,18 +56,18 @@ fn marketplace() -> (ModuleId, RailEvent) {
     )
 }
 
-/// Put the panel in the state a module's registration leaves it in: the built-in modes on
-/// the strip, plus whatever `rail` holds.
+/// Put the panel in the state a module's registration leaves it in: open, showing whatever
+/// `rail` holds. There is nothing on the strip but modules now, so `rail` is all of it.
 fn install_rail(w: &crate::AppWindow, rail: &ModuleRail) {
     install_modes(w);
     fill_rail(w, rail);
 }
 
-/// The strip has to keep drawing the built-ins in their fixed order and hang the module
-/// buttons off the end of them — a module that reorders the panel's own views would be a
-/// module rearranging the user's furniture.
+/// The strip is now module entries and nothing else, drawn left-to-right in the `order`
+/// each module asked for. Order is the one thing a module can say about its own placement,
+/// so a strip that ignored it would silently overrule every module at once.
 #[test]
-fn module_entries_follow_the_built_in_modes_on_one_strip() {
+fn module_entries_sit_on_one_strip_in_their_declared_order() {
     ui(|| {
         let w = window();
         let mut rail = ModuleRail::default();
@@ -91,35 +91,26 @@ fn module_entries_follow_the_built_in_modes_on_one_strip() {
             );
             found.absolute_position().x
         };
-        let workspace = x("Workspace");
         let (market, tree) = (x("Marketplace"), x("Files (acme)"));
         assert!(
-            workspace < market && market < tree,
-            "module entries follow the built-in, in `order`: {workspace} {market} {tree}"
+            market < tree,
+            "entries sit in `order`, lowest first: {market} {tree}"
         );
     });
 }
 
-/// The strip used to be hidden unless a tool was favourited. A module that registers an
-/// entry has to bring it back, or its button exists and is invisible.
+/// The strip exists only for modules now, so a user with none installed must see the
+/// panel's own frame and no strip at all — an empty strip is a band of dead pixels above
+/// the tree, and the panel is narrow enough that it would be noticed.
 #[test]
-fn a_module_entry_shows_the_strip_even_with_no_favourite_tools() {
+fn the_strip_appears_only_once_a_module_registers_an_entry() {
     ui(|| {
         let w = window();
         let lp = w.global::<crate::LeftPanelAdapter>();
         lp.set_open(true);
-        // Only the workspace mode — the strip's own "nothing to switch between" case.
-        lp.set_modes(
-            std::rc::Rc::new(slint::VecModel::from(vec![crate::LeftModeRow {
-                label: "Workspace".into(),
-                icon: 0,
-                brand: slint::Color::from_rgb_u8(0, 0, 0),
-            }]))
-            .into(),
-        );
         assert!(
-            by_role(&w, "Workspace", AccessibleRole::Button).is_empty(),
-            "one built-in mode alone must not draw a strip"
+            !w.global::<crate::RailAdapter>().get_present(),
+            "no entries, no strip"
         );
 
         let mut rail = ModuleRail::default();
@@ -130,16 +121,15 @@ fn a_module_entry_shows_the_strip_even_with_no_favourite_tools() {
             1,
             "a registered entry brings the strip back"
         );
-        assert_eq!(
-            by_role(&w, "Workspace", AccessibleRole::Button).len(),
-            1,
-            "and the built-in comes with it"
+        assert!(
+            w.global::<crate::RailAdapter>().get_present(),
+            "and the strip says so"
         );
     });
 }
 
 /// THE regression this file exists for: the click has to reach Rust carrying the entry's
-/// key, and it has to leave the panel in the rail mode.
+/// key, and it has to leave the entry active — `RailAdapter.active` IS the panel's view.
 #[test]
 fn clicking_a_module_entry_reaches_rust_with_its_key() {
     ui(|| {
@@ -165,13 +155,9 @@ fn clicking_a_module_entry_reaches_rust_with_its_key() {
             "the click must carry `<owner/repo>#<entry-id>`, not a display label"
         );
         assert_eq!(
-            w.global::<crate::LeftPanelAdapter>().get_mode(),
-            LEFT_MODE_RAIL,
-            "and it must put the panel into the module mode"
-        );
-        assert_eq!(
             w.global::<crate::RailAdapter>().get_active(),
-            entry_key(&module, "browse").as_str()
+            entry_key(&module, "browse").as_str(),
+            "and it must leave that entry active, which is what draws its rows"
         );
     });
 }
@@ -195,8 +181,6 @@ fn the_active_entrys_rows_render_and_a_click_carries_the_gesture() {
         });
         assert!(rail.activate(&entry_key(&module, "browse")));
         install_rail(&w, &rail);
-        w.global::<crate::LeftPanelAdapter>()
-            .set_mode(LEFT_MODE_RAIL);
 
         let got = std::rc::Rc::new(std::cell::RefCell::new(
             Vec::<(String, String, String)>::new(),
@@ -244,8 +228,6 @@ fn an_entry_with_no_rows_yet_shows_its_empty_text() {
         install_rail(&w, &rail);
         w.global::<crate::RailAdapter>()
             .set_empty_text("No modules installed".into());
-        w.global::<crate::LeftPanelAdapter>()
-            .set_mode(LEFT_MODE_RAIL);
 
         assert!(
             !by_label(&w, "No modules installed").is_empty(),
@@ -281,8 +263,6 @@ fn an_entry_leaves_when_its_module_does_and_the_panel_falls_back() {
         rail.apply(registered);
         assert!(rail.activate(&entry_key(&module, "browse")));
         install_rail(&w, &rail);
-        let lp = w.global::<crate::LeftPanelAdapter>();
-        lp.set_mode(LEFT_MODE_RAIL);
         assert_eq!(by_role(&w, "Marketplace", AccessibleRole::Button).len(), 1);
 
         assert!(
@@ -292,9 +272,6 @@ fn an_entry_leaves_when_its_module_does_and_the_panel_falls_back() {
             "the host said the module is gone and it took the active entry with it"
         );
         fill_rail(&w, &rail);
-        if lp.get_mode() == LEFT_MODE_RAIL && rail.active.is_none() {
-            lp.set_mode(LEFT_MODE_WORKSPACE);
-        }
 
         assert!(
             by_label(&w, "Marketplace").is_empty(),
@@ -305,9 +282,9 @@ fn an_entry_leaves_when_its_module_does_and_the_panel_falls_back() {
             "and the strip stops claiming a rail"
         );
         assert_eq!(
-            lp.get_mode(),
-            LEFT_MODE_WORKSPACE,
-            "the panel falls back to the workspace tree"
+            w.global::<crate::RailAdapter>().get_active(),
+            "",
+            "and the panel falls back to its own frame rather than a head with no module"
         );
     });
 }
@@ -336,8 +313,6 @@ fn every_rail_control_announces_itself() {
         });
         assert!(rail.activate(&entry_key(&module, "browse")));
         install_rail(&w, &rail);
-        w.global::<crate::LeftPanelAdapter>()
-            .set_mode(LEFT_MODE_RAIL);
 
         assert_eq!(
             by_role(&w, "Marketplace", AccessibleRole::Button).len(),

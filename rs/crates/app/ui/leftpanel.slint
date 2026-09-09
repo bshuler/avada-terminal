@@ -33,7 +33,7 @@
 
 import { Theme } from "theme.slint";
 import { TipArea } from "tooltip.slint";
-import { LeftPaneRow, LeftTabRow, LeftWorkspaceRow, LeftSetRow, LeftSessionRow, LeftModeRow, LeftPanelAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
+import { LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RailEntryRow, RailRowItem, RailAdapter } from "types.slint";
 // The explorer alone uses a real `ListView`: its model is a whole project tree, and only a
 // ListView instantiates the visible rows. Every other section here is a short hand-rolled
 // Flickable, which is cheaper for a list you can count.
@@ -70,18 +70,6 @@ component CloseGlyph inherits Path {
     stroke-width: 1.5px;
     fill: transparent;
     commands: "M 2 2 L 10 10 M 10 2 L 2 10";
-}
-
-// The WORKSPACE mode's own mark: a 2x2 pane grid, standing for the tab/pane tree. Drawn
-// rather than borrowed from ToolIcon because mode 0 is not a tool and has no brand.
-component GridGlyph inherits Rectangle {
-    in property <color> ink;
-    width: 14px;
-    height: 14px;
-    Rectangle { x: 1px;   y: 1px;   width: 5px; height: 5px; border-radius: 1px; background: root.ink; }
-    Rectangle { x: 8px;   y: 1px;   width: 5px; height: 5px; border-radius: 1px; background: root.ink; }
-    Rectangle { x: 1px;   y: 8px;   width: 5px; height: 5px; border-radius: 1px; background: root.ink; }
-    Rectangle { x: 8px;   y: 8px;   width: 5px; height: 5px; border-radius: 1px; background: root.ink; }
 }
 
 // A folder outline. Drawn here for the same reason GridGlyph is — the built-in modes are
@@ -303,49 +291,6 @@ component SearchGlyph inherits Rectangle {
         viewbox-width: 12; viewbox-height: 12;
         stroke: root.ink; stroke-width: 1.3px; fill: transparent;
         commands: "M 5 1.4 A 3.6 3.6 0 1 1 4.99 1.4 M 7.6 7.6 L 10.6 10.6";
-    }
-}
-
-// One button in the mode strip. Fixed 26x24 so the strip's height never depends on what is
-// inside it — the panel's layout has been broken twice by a child whose height came back
-// through a reactive read (b0c6637, 5c2eef5), and a constant is the cheap way to not care.
-component ModeButton inherits Rectangle {
-    in property <LeftModeRow> mode-row;
-    in property <bool> active;
-    callback clicked();
-    width: 26px;
-    height: 24px;
-    border-radius: 5px;
-    background: root.active ? Theme.surface2 : (ma.has-hover ? Theme.surface : transparent);
-    // The active mode is underlined in the accent. Only the workspace mode is left, and it
-    // carries no brand of its own, so there is nothing else the underline could be.
-    Rectangle {
-        x: 5px;
-        y: parent.height - 3px;
-        width: 16px;
-        height: 2px;
-        border-radius: 1px;
-        visible: root.active;
-        background: Theme.accent;
-    }
-    // 0 is the workspace mode — the one built-in view left — so it draws its own glyph.
-    // Tested EXACTLY, never as `<= 0`: a catch-all branch would draw the workspace's grid
-    // for every built-in that is ever added after it. -1 was the explorer's folder, -2 the
-    // git branch and any positive value a favourited tool's logo; all three moved out to
-    // modules and none is recycled, since a stale value would then draw something
-    // plausible instead of nothing.
-    if root.mode-row.icon == 0 : GridGlyph {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2 - 1px;
-        ink: root.active ? Theme.text : Theme.subtext;
-    }
-    ma := TipArea {
-        tip: root.mode-row.label;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        // The strip is glyphs only; `TipArea` turns the tooltip into the accessible name.
-        // `checked` is what says which of the several views is the selected one.
-        accessible-checked: root.active;
     }
 }
 
@@ -819,97 +764,6 @@ component TabRowView inherits Rectangle {
     }
 }
 
-// One saved workspace in the library section.
-component WorkspaceRowView inherits Rectangle {
-    in property <LeftWorkspaceRow> ws;
-    callback activate();
-    height: 36px;
-    border-radius: 5px;
-    background: wa.has-hover ? Theme.surface2 : transparent;
-
-    wa := TipArea {
-        tip: "Open this saved workspace";
-        mouse-cursor: pointer;
-        clicked => { root.activate(); }
-    }
-
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        VerticalLayout {
-            alignment: center;
-            Text {
-                text: root.ws.name;
-                color: Theme.text;
-                font-size: 12px;
-                overflow: elide;
-            }
-            Text {
-                text: root.ws.detail;
-                color: Theme.subtext;
-                font-size: 10px;
-                overflow: elide;
-            }
-        }
-    }
-}
-
-// Two stacked sheets — marks a SETS row as a *group of* workspaces at a glance, so the
-// two library sections don't read as one long undifferentiated list.
-component StackGlyph inherits Path {
-    in property <color> ink;
-    width: 12px;
-    height: 12px;
-    viewbox-width: 16;
-    viewbox-height: 16;
-    stroke: ink;
-    stroke-width: 1.3px;
-    fill: transparent;
-    commands: "M 5.5 2.5 L 13.5 2.5 L 13.5 10.5 M 2.5 5.5 L 10.5 5.5 L 10.5 13.5 L 2.5 13.5 Z";
-}
-
-// One saved workspace set in the sets section. One click opens every member.
-component SetRowView inherits Rectangle {
-    in property <LeftSetRow> set;
-    callback activate();
-    height: 36px;
-    border-radius: 5px;
-    background: sta.has-hover ? Theme.surface2 : transparent;
-
-    sta := TipArea {
-        tip: "Open this set — every workspace in it opens as its own tab";
-        mouse-cursor: pointer;
-        clicked => { root.activate(); }
-    }
-
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 6px;
-        VerticalLayout {
-            alignment: center;
-            StackGlyph {
-                ink: sta.has-hover ? Theme.text : Theme.subtext;
-            }
-        }
-        VerticalLayout {
-            alignment: center;
-            Text {
-                text: root.set.name;
-                color: Theme.text;
-                font-size: 12px;
-                overflow: elide;
-            }
-            Text {
-                text: root.set.detail;
-                color: Theme.subtext;
-                font-size: 10px;
-                overflow: elide;
-            }
-        }
-    }
-}
-
 // One adoptable session in the detached section (click anywhere on the row to adopt it).
 component SessionRowView inherits Rectangle {
     in property <LeftSessionRow> sess;
@@ -1111,34 +965,26 @@ export component LeftPanel inherits Rectangle {
             }
         }
 
-        // ---- mode strip: which view the panel is showing ----
-        // WORKSPACE first, then one entry per favourited CLI tool. Hidden entirely when
-        // nothing is favourited, so a user who has starred no tools sees exactly the panel
-        // they saw before modes existed. The height is a CONSTANT, not derived from the
-        // buttons: this layout has been broken twice by a child whose size came back
-        // through a reactive read (b0c6637, 5c2eef5).
-        // Track H4: a module's rail entries follow the built-ins on the same strip, so the
-        // strip is also shown when a module registered one even if nothing is favourited.
-        if LeftPanelAdapter.modes.length > 1 || RailAdapter.present : HorizontalLayout {
+        // ---- rail strip: one button per module entry ----
+        // Hidden entirely when no module registered an entry, so a user with no modules
+        // installed sees the panel's own frame and nothing else. The height is a CONSTANT,
+        // not derived from the buttons: this layout has been broken twice by a child whose
+        // size came back through a reactive read (b0c6637, 5c2eef5).
+        //
+        // There is no button for the panel's own frame. `RailAdapter.active == ""` IS the
+        // frame — the built-in sections below show exactly when nothing is active — so a
+        // "workspace" button would be a second way to say what clearing `active` says, and
+        // the two would drift.
+        if RailAdapter.present : HorizontalLayout {
             height: 26px;
             spacing: 2px;
             alignment: start;
-            for m[i] in LeftPanelAdapter.modes : ModeButton {
-                mode-row: m;
-                active: LeftPanelAdapter.mode == i;
-                // Pure UI state — switching views is not a `State` mutation, so it does
-                // not travel Seam #2. See `mode` in types.slint.
-                // Rust is told anyway: a mode carries a root (GIT wants the repo, a tool
-                // wants its transcripts), and that scan is Rust's to start.
-                clicked => { LeftPanelAdapter.mode = i; LeftPanelAdapter.mode-changed(i); }
-            }
             for e in RailAdapter.entries : RailButton {
                 entry: e;
-                active: LeftPanelAdapter.mode == -1 && RailAdapter.active == e.key;
+                active: RailAdapter.active == e.key;
                 // A module entry IS a State mutation (the module is activated, rows are
-                // fetched), so this one travels Seam #2 and Rust sets the mode on resync.
+                // fetched), so this one travels Seam #2 and Rust confirms it on resync.
                 clicked => {
-                    LeftPanelAdapter.mode = -1;
                     RailAdapter.active = e.key;
                     RailAdapter.activate(e.key);
                 }
@@ -1149,19 +995,19 @@ export component LeftPanel inherits Rectangle {
         // Shown instead of every built-in section while a module entry is active. The
         // head names the entry; the list is whatever the module last projected with
         // `host.rows.set`, and the empty text is shown until it projects anything.
-        if LeftPanelAdapter.mode == -1 : SectionHead {
+        if RailAdapter.active != "" : SectionHead {
             label: RailAdapter.active-label;
             open: true;
             tip: "Rows from " + RailAdapter.active-label;
             has-action: true;
             action-tip: "Back to the workspace";
             toggled => { }
-            acted => { LeftPanelAdapter.mode = 0; LeftPanelAdapter.mode-changed(0); }
+            acted => { RailAdapter.active = ""; RailAdapter.deactivate(); }
         }
         // The filter box, shown only for an entry that asked for one. Typing here does not
         // filter the list in place — it notifies the module (`rail.query`), and what comes
         // back is whatever that module decided a query means. The panel never guesses.
-        if LeftPanelAdapter.mode == -1 && RailAdapter.filterable : Rectangle {
+        if RailAdapter.active != "" && RailAdapter.filterable : Rectangle {
             height: 26px;
             border-radius: 6px;
             background: Theme.bg;
@@ -1204,7 +1050,7 @@ export component LeftPanel inherits Rectangle {
             }
         }
 
-        if LeftPanelAdapter.mode == -1 : Rectangle {
+        if RailAdapter.active != "" : Rectangle {
             vertical-stretch: 2;
             clip: true;
             if RailAdapter.rows.length == 0 : Text {
@@ -1242,14 +1088,14 @@ export component LeftPanel inherits Rectangle {
         }
 
         // ===== section 1: the workspace tree (tabs → panes) =====
-        if LeftPanelAdapter.mode == 0 : SectionHead {
+        if RailAdapter.active == "" : SectionHead {
             label: "WORKSPACE";
             open: root.tree-open;
             tip: root.tree-open ? "Collapse the tab and pane tree" : "Show the tab and pane tree";
             toggled => { root.tree-open = !root.tree-open; }
         }
 
-        if LeftPanelAdapter.mode == 0 && root.tree-open : Rectangle {
+        if RailAdapter.active == "" && root.tree-open : Rectangle {
             // The tree is the panel's primary view, so it carries twice the weight of a
             // drawer and a floor of one whole tab group. Without the floor, four sections
             // sharing the leftover space squeeze it under a single row's height, and
@@ -1317,98 +1163,22 @@ export component LeftPanel inherits Rectangle {
             }
         }
 
-        // ===== section 2: the saved-workspace library =====
-        if LeftPanelAdapter.mode == 0 : SectionHead {
-            label: "LIBRARY";
-            open: root.lib-open;
-            has-action: true;
-            tip: root.lib-open ? "Collapse the saved workspaces" : "Show the saved workspaces";
-            action-tip: "Save the current tabs and panes as a workspace";
-            toggled => { root.lib-open = !root.lib-open; }
-            acted => { LeftPanelAdapter.save-workspace(); }
-        }
-
-        if LeftPanelAdapter.mode == 0 && root.lib-open && LeftPanelAdapter.workspaces.length == 0 : Text {
-            text: "No saved workspaces yet — save this tab with the button above.";
-            color: Theme.subtext;
-            font-size: 11px;
-            wrap: word-wrap;
-        }
-
-        if LeftPanelAdapter.mode == 0 && root.lib-open && LeftPanelAdapter.workspaces.length > 0 : Rectangle {
-            vertical-stretch: 1;
-            min-height: 44px;
-            clip: true;
-            Flickable {
-                width: 100%;
-                height: 100%;
-                viewport-width: self.width;
-                viewport-height: libbody.preferred-height;
-                libbody := VerticalLayout {
-                    alignment: start;
-                    spacing: 2px;
-                    for w[i] in LeftPanelAdapter.workspaces : WorkspaceRowView {
-                        ws: w;
-                        activate => { LeftPanelAdapter.open-workspace(i); }
-                    }
-                }
-            }
-        }
-
-        // ===== section 3: the saved workspace sets =====
-        if LeftPanelAdapter.mode == 0 : SectionHead {
-            label: "SETS";
-            open: root.sets-open;
-            has-action: true;
-            tip: root.sets-open ? "Collapse the saved sets" : "Show the saved sets";
-            action-tip: "Save every tab in this window as a new named set";
-            toggled => { root.sets-open = !root.sets-open; }
-            acted => { LeftPanelAdapter.save-set(); }
-        }
-
-        if LeftPanelAdapter.mode == 0 && root.sets-open && LeftPanelAdapter.sets.length == 0 : Text {
-            text: "No saved sets yet — save every tab in this window as one group.";
-            color: Theme.subtext;
-            font-size: 11px;
-            wrap: word-wrap;
-        }
-
-        if LeftPanelAdapter.mode == 0 && root.sets-open && LeftPanelAdapter.sets.length > 0 : Rectangle {
-            vertical-stretch: 1;
-            min-height: 44px;
-            clip: true;
-            Flickable {
-                width: 100%;
-                height: 100%;
-                viewport-width: self.width;
-                viewport-height: setbody.preferred-height;
-                setbody := VerticalLayout {
-                    alignment: start;
-                    spacing: 2px;
-                    for st[i] in LeftPanelAdapter.sets : SetRowView {
-                        set: st;
-                        activate => { LeftPanelAdapter.open-set(i); }
-                    }
-                }
-            }
-        }
-
-        // ===== section 4: detached (adoptable) sessions =====
-        if LeftPanelAdapter.mode == 0 : SectionHead {
+        // ===== section 2: detached (adoptable) sessions =====
+        if RailAdapter.active == "" : SectionHead {
             label: "DETACHED";
             open: root.det-open;
             tip: root.det-open ? "Collapse the orphaned sessions" : "Show sessions still running with no window";
             toggled => { root.det-open = !root.det-open; }
         }
 
-        if LeftPanelAdapter.mode == 0 && root.det-open && LeftPanelAdapter.detached.length == 0 : Text {
+        if RailAdapter.active == "" && root.det-open && LeftPanelAdapter.detached.length == 0 : Text {
             text: "No orphaned sessions. A session that outlives its window lands here.";
             color: Theme.subtext;
             font-size: 11px;
             wrap: word-wrap;
         }
 
-        if LeftPanelAdapter.mode == 0 && root.det-open && LeftPanelAdapter.detached.length > 0 : Rectangle {
+        if RailAdapter.active == "" && root.det-open && LeftPanelAdapter.detached.length > 0 : Rectangle {
             vertical-stretch: 1;
             min-height: 44px;
             clip: true;

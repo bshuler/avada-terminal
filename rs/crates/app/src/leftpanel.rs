@@ -25,12 +25,11 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use avada_core::persistence::paths::{self as paths, data_dir};
+use avada_core::persistence::paths;
 use avada_core::session_manager::SessionManager;
 use avada_core::tools::PaneKind;
-use avada_core::workspace::sets;
 
 /// How long after a session's last output its liveness dot stays fully lit before fading
 /// to the floor. 30s matches the "is this thing doing something right now?" question the
@@ -175,169 +174,23 @@ pub fn heartbeat_due(last: &mut Option<std::time::Instant>, now: std::time::Inst
 }
 
 // ===================== the saved-workspace library =====================
+//
+// Listing the library is `avada_core::workspace::library`'s job now — the panel no longer
+// draws a LIBRARY drawer, and the module that does reaches the directory over
+// `host.workspace.list`, which cannot see it any other way (`fs.read` is scoped to the
+// workspace root and these files live outside it). What stays here is the *write* half,
+// because saving is still a host action on the palette.
 
-/// Where the panel's workspace library lives: `<data dir>/workspaces`. Distinct from the
-/// "Save workspace…" file dialog (which writes wherever the user points it) — the library
-/// is the zero-friction drawer the panel lists, and it is app-owned on purpose so this
-/// milestone doesn't reach into `core::persistence`.
-#[tracing::instrument(level = "debug", ret)]
-pub fn library_dir() -> PathBuf {
-    data_dir().join("workspaces")
-}
-
-/// One row of the LIBRARY section.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LibraryEntry {
-    /// The file on disk (what a click reads back).
-    pub path: PathBuf,
-    /// The display name — the workspace's own `name` if it has one, else the file stem.
-    pub name: String,
-    /// The second line: pane/tab counts plus how long ago the file was written.
-    pub detail: String,
-}
-
-thread_local! {
-    /// The last scan of [`library_dir`], so the projection can hand the model rows every
-    /// tick without touching the filesystem. Refreshed on the panel's closed→open edge and
-    /// after the panel itself writes a workspace. Process-wide on purpose: the library is
-    /// one directory on disk, so every window shows the same rows.
-    static LIB_CACHE: RefCell<Vec<LibraryEntry>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Note the panel's current open state; on the closed→open transition rescan the library
-/// (files may have been added by another window — or by hand — while it was shut). Called
-/// from the projection each tick, exactly like `sidebar::note_flyout_open`.
-///
-/// `seen` is the caller's PER-WINDOW memory of the last state (`State::left_panel_seen_open`).
-/// A module-global flag would be wrong here: `resync` runs once per window, so two windows
-/// disagreeing about the panel (one open, one shut) would flip a shared flag every tick and
-/// rescan the directory on every single frame — the exact per-tick disk hit the cache exists
-/// to avoid.
-#[tracing::instrument(level = "debug", ret)]
-pub fn note_panel_open(seen: &mut bool, open: bool) {
-    if rescan_due(seen, open) {
-        refresh_library();
-        refresh_sets();
-    }
-}
-
-/// The edge test behind [`note_panel_open`], split from the disk scan so it can be tested
-/// without reaching for the user's real data directory: true exactly on closed→open.
-#[tracing::instrument(level = "debug", ret)]
-fn rescan_due(seen: &mut bool, open: bool) -> bool {
-    let edge = open && !*seen;
-    *seen = open;
-    edge
-}
-
-/// Rescan [`library_dir`] into the cache. Cheap (one `read_dir` over a directory that
-/// holds a handful of small files) and only ever called on an edge, never per tick.
-#[tracing::instrument(level = "debug", ret)]
-pub fn refresh_library() {
-    let rows = scan_library(&library_dir());
-    LIB_CACHE.with(|c| *c.borrow_mut() = rows);
-}
-
-/// The cached library rows, in display order (newest first).
-#[tracing::instrument(level = "debug", ret)]
-pub fn library() -> Vec<LibraryEntry> {
-    LIB_CACHE.with(|c| c.borrow().clone())
-}
-
-/// Scan `dir` for `*.avada` / `*.json` workspaces, newest first. Unreadable or
-/// malformed files are skipped rather than shown as broken rows. Split out from
-/// [`refresh_library`] so it can be tested against a temp directory.
-#[tracing::instrument(level = "debug", ret)]
-pub fn scan_library(dir: &Path) -> Vec<LibraryEntry> {
-    let now = crate::glow::now_epoch_ms();
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    // (modified epoch-ms, entry) so the list can be sorted newest-first.
-    let mut rows: Vec<(u64, LibraryEntry)> = Vec::new();
-    for ent in rd.flatten() {
-        let path = ent.path();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if ext != "avada" && ext != "json" {
-            continue;
-        }
-        let Some(file) = avada_core::workspace::io::read_workspace(&path) else {
-            continue;
-        };
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("workspace")
-            .to_string();
-        let name = match &file.name {
-            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
-            _ => stem,
-        };
-        let mtime = ent
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        rows.push((
-            mtime,
-            LibraryEntry {
-                name,
-                detail: describe_workspace(&file, mtime, now),
-                path,
-            },
-        ));
-    }
-    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-    rows.into_iter().map(|(_, e)| e).collect()
-}
-
-/// The library row's second line: "3 panes · 2 tabs · 5m ago" (the time part is dropped
-/// when the file's mtime is unknown). Reuses the sidebar's relative-time buckets rather
-/// than growing a second wording of the same idea.
-#[tracing::instrument(level = "debug", skip_all)]
-fn describe_workspace(
-    file: &avada_core::workspace::model::WorkspaceFile,
-    mtime: u64,
-    now: u64,
-) -> String {
-    let groups = avada_core::workspace::io::windows_of(Some(file))
-        .into_iter()
-        .next()
-        .map(|w| w.groups)
-        .unwrap_or_default();
-    let tabs = groups.len();
-    let panes: usize = groups.iter().map(|g| g.panes.len()).sum();
-    let mut out = format!(
-        "{panes} pane{} · {tabs} tab{}",
-        if panes == 1 { "" } else { "s" },
-        if tabs == 1 { "" } else { "s" }
-    );
-    if mtime > 0 {
-        let rel = crate::sidebar::relative_time(Some(mtime), now);
-        if !rel.is_empty() {
-            out.push_str(" · ");
-            out.push_str(&rel);
-        }
-    }
-    out
-}
-
-/// Write `file` into the library under `name` (sanitised, `.avada` appended), creating
-/// the directory if needed, and refresh the cache. Returns the path written, or `None` if
-/// the directory or the file could not be written. A name that collides gets `-2`, `-3`, …
-/// appended, so saving twice never silently overwrites the earlier snapshot.
+/// Write `file` into the library under `name` (sanitised, `.avada` appended), creating the
+/// directory if needed. Returns the path written, or `None` if the directory or the file
+/// could not be written. A name that collides gets `-2`, `-3`, … appended, so saving twice
+/// never silently overwrites the earlier snapshot.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn save_to_library(
     name: &str,
     file: &avada_core::workspace::model::WorkspaceFile,
 ) -> Option<PathBuf> {
-    let dir = library_dir();
+    let dir = paths::workspaces_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
     }
@@ -354,7 +207,6 @@ pub fn save_to_library(
     if !avada_core::workspace::io::write_workspace(&path, file) {
         return None;
     }
-    refresh_library();
     Some(path)
 }
 
@@ -384,92 +236,6 @@ fn sanitize_name(name: &str) -> String {
     } else {
         out.chars().take(64).collect()
     }
-}
-
-// ===================== the saved-workspace sets =====================
-
-/// One row of the SETS section: a saved [`sets::WorkspaceSet`] on disk.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SetEntry {
-    /// The `sets/*.json` index file (what a click reads back).
-    pub path: PathBuf,
-    /// The display name — the set's own `name`, falling back to the file stem.
-    pub name: String,
-    /// The second line: member count plus how long ago the index was written.
-    pub detail: String,
-}
-
-thread_local! {
-    /// The last scan of [`sets::path_for`]'s directory. Same contract as [`LIB_CACHE`]:
-    /// process-wide, refreshed only on the panel's open edge and after this process writes
-    /// a set, never per tick.
-    static SET_CACHE: RefCell<Vec<SetEntry>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Rescan the canonical sets directory into the cache.
-#[tracing::instrument(level = "debug", ret)]
-pub fn refresh_sets() {
-    let rows = scan_sets(&paths::sets_dir());
-    SET_CACHE.with(|c| *c.borrow_mut() = rows);
-}
-
-/// The cached set rows, in display order (newest first).
-#[tracing::instrument(level = "debug", ret)]
-pub fn sets_rows() -> Vec<SetEntry> {
-    SET_CACHE.with(|c| c.borrow().clone())
-}
-
-/// Scan `dir` for readable sets, newest first. Split out from [`refresh_sets`] so it can be
-/// tested against a temp directory.
-///
-/// Ordering differs from [`sets::list_sets_in`] on purpose: that returns file-name order (a
-/// stable index for programmatic use), while this panel section is a *recency* drawer, like
-/// [`scan_library`] beside it — the set you just saved belongs at the top.
-#[tracing::instrument(level = "debug", ret)]
-pub fn scan_sets(dir: &Path) -> Vec<SetEntry> {
-    let now = crate::glow::now_epoch_ms();
-    let mut rows: Vec<(u64, SetEntry)> = Vec::new();
-    for (path, set) in sets::list_sets_in(dir) {
-        let mtime = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let name = if set.name.trim().is_empty() {
-            path.file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "set".to_string())
-        } else {
-            set.name.clone()
-        };
-        rows.push((
-            mtime,
-            SetEntry {
-                detail: describe_set(set.members.len(), mtime, now),
-                name,
-                path,
-            },
-        ));
-    }
-    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-    rows.into_iter().map(|(_, e)| e).collect()
-}
-
-/// The set row's second line: "4 workspaces · 5m ago". Counts the set's OWN member list
-/// rather than reading each member file — a set is an index of references, and a stale
-/// reference should not change the count the user saved.
-#[tracing::instrument(level = "debug", ret)]
-fn describe_set(members: usize, mtime: u64, now: u64) -> String {
-    let mut out = format!("{members} workspace{}", if members == 1 { "" } else { "s" });
-    if mtime > 0 {
-        let rel = crate::sidebar::relative_time(Some(mtime), now);
-        if !rel.is_empty() {
-            out.push_str(" · ");
-            out.push_str(&rel);
-        }
-    }
-    out
 }
 
 // ===================== detached (adoptable) sessions =====================
@@ -968,7 +734,6 @@ impl ModuleRail {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avada_core::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
 
     /// A module's row list, with `which` marked `selected` and every `n`th row given a
     /// detail line (which makes it taller — the whole reason the offset is measured rather
@@ -1216,22 +981,6 @@ mod tests {
     }
 
     #[test]
-    fn library_rescans_only_on_the_closed_to_open_edge() {
-        let mut seen = false;
-        assert!(rescan_due(&mut seen, true), "closed → open rescans");
-        assert!(!rescan_due(&mut seen, true), "still open → no rescan");
-        assert!(!rescan_due(&mut seen, false), "open → closed → no rescan");
-        assert!(rescan_due(&mut seen, true), "and again on the next edge");
-        // Per-window memory: another window's panel state can't cancel this one's edge.
-        let mut other = false;
-        assert!(rescan_due(&mut other, true));
-        assert!(
-            !rescan_due(&mut seen, true),
-            "unaffected by the other window"
-        );
-    }
-
-    #[test]
     fn adoptable_subtracts_this_window_and_the_others() {
         let all = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
@@ -1283,34 +1032,6 @@ mod tests {
         assert!(sanitize_name(&"x".repeat(200)).chars().count() <= 64);
     }
 
-    fn wf(name: Option<&str>, groups: Vec<usize>) -> WorkspaceFile {
-        WorkspaceFile {
-            name: name.map(|s| s.to_string()),
-            windows: Some(vec![WindowSpec {
-                groups: groups
-                    .into_iter()
-                    .map(|n| GroupSpec {
-                        panes: (0..n).map(|_| PaneSpec::default()).collect(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn describe_workspace_counts_panes_and_tabs() {
-        let now = 1_000_000u64;
-        let d = describe_workspace(&wf(Some("api"), vec![2, 1]), now - 60_000, now);
-        assert!(d.starts_with("3 panes · 2 tabs"), "{d}");
-        assert!(d.ends_with("1m ago"), "{d}");
-        // singulars, and no time part when the mtime is unknown
-        let d1 = describe_workspace(&wf(None, vec![1]), 0, now);
-        assert_eq!(d1, "1 pane · 1 tab");
-    }
-
     #[test]
     fn describe_session_formats_size_and_age() {
         let now = 1_000_000u64;
@@ -1326,88 +1047,6 @@ mod tests {
     fn short_uid_is_stable_and_short() {
         assert_eq!(short_uid("abcdefghijklmnopqrst"), "session abcdefghijkl");
         assert_eq!(short_uid("abc"), "session abc");
-    }
-
-    #[test]
-    fn library_scan_reads_workspaces_newest_first() {
-        let dir = std::env::temp_dir().join(format!("hp-lib-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        // a valid workspace, a valid one with no name, a non-workspace extension, and junk
-        assert!(avada_core::workspace::io::write_workspace(
-            dir.join("one.avada"),
-            &wf(Some("alpha"), vec![2])
-        ));
-        assert!(avada_core::workspace::io::write_workspace(
-            dir.join("two.json"),
-            &wf(None, vec![1, 1])
-        ));
-        std::fs::write(dir.join("notes.txt"), b"not a workspace").unwrap();
-        std::fs::write(dir.join("broken.avada"), b"{{{").unwrap();
-
-        let rows = scan_library(&dir);
-        assert_eq!(rows.len(), 2, "only the two readable workspaces: {rows:?}");
-        let names: HashSet<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        // the named file uses its `name`; the unnamed one falls back to the file stem
-        assert!(names.contains("alpha"), "{names:?}");
-        assert!(names.contains("two"), "{names:?}");
-
-        // a directory that doesn't exist is empty, not a panic
-        assert!(scan_library(&dir.join("nope")).is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn set_scan_reads_sets_and_skips_junk() {
-        let dir = std::env::temp_dir().join(format!("hp-sets-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let member = |p: &str| sets::SetMember {
-            path: p.to_string(),
-            name: None,
-        };
-        assert!(sets::write_set(
-            dir.join("morning.json"),
-            &sets::WorkspaceSet {
-                name: "Morning".to_string(),
-                members: vec![member("a.avada"), member("b.avada")],
-            }
-        ));
-        // A set whose stored name is blank falls back to the file stem, like the library.
-        assert!(sets::write_set(
-            dir.join("unnamed.json"),
-            &sets::WorkspaceSet {
-                name: String::new(),
-                members: vec![member("c.avada")],
-            }
-        ));
-        std::fs::write(dir.join("broken.json"), b"{{{").unwrap();
-
-        let rows = scan_sets(&dir);
-        assert_eq!(rows.len(), 2, "only the two readable sets: {rows:?}");
-        let by_name: HashSet<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        assert!(by_name.contains("Morning"), "{by_name:?}");
-        assert!(by_name.contains("unnamed"), "{by_name:?}");
-
-        // The detail line counts the set's own members, and singular/plural agree.
-        let morning = rows.iter().find(|r| r.name == "Morning").unwrap();
-        assert!(
-            morning.detail.starts_with("2 workspaces"),
-            "{:?}",
-            morning.detail
-        );
-        let one = rows.iter().find(|r| r.name == "unnamed").unwrap();
-        assert!(
-            one.detail.starts_with("1 workspace ·") || one.detail == "1 workspace",
-            "{:?}",
-            one.detail
-        );
-
-        // a directory that doesn't exist is empty, not a panic
-        assert!(scan_sets(&dir.join("nope")).is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ===== the module rail =====

@@ -518,23 +518,6 @@ export struct LeftTabRow {
     panes: [LeftPaneRow],
 }
 
-// One saved workspace in the library section. `path` is the file on disk (the row's real
-// identity — the click still travels by index, resolved against the same cached list the
-// projection built); `detail` is a dim one-liner ("4 panes · 2h ago").
-export struct LeftWorkspaceRow {
-    name: string,
-    path: string,
-    detail: string,
-}
-
-// One saved workspace SET in the panel's sets section (mux plan M6). `path` is the
-// `sets/*.json` index file; `detail` is a dim one-liner ("4 workspaces · 5m ago").
-export struct LeftSetRow {
-    name: string,
-    path: string,
-    detail: string,
-}
-
 // One live session that no window in this process is showing — adoptable with one click.
 // `uid` is the session uid (the adopt key: index-free, so a row click can't race a list
 // change); `detail` is a dim one-liner ("pane-1a2b… · 5m ago").
@@ -543,17 +526,6 @@ export struct LeftSessionRow {
     label: string,
     detail: string,
     live: float,
-}
-
-// One entry in the panel's MODE strip. Mode 0 is WORKSPACE (the tab/pane tree) and is the
-// only built-in left — everything else on the strip is a module's rail entry, which carries
-// its own row type. `icon` is 0 for the workspace mode, which draws its own glyph; `brand`
-// is unused by it and stays only because a one-field struct would have to be unpacked again
-// the moment a second built-in ever returns.
-export struct LeftModeRow {
-    label: string,
-    icon: int,
-    brand: color,
 }
 
 // The controller ↔ left-panel bridge. A GLOBAL (not AppWindow props) so the feature stays
@@ -567,11 +539,12 @@ export global LeftPanelAdapter {
     in property <bool> open;
     // Section 1: this window's tabs, in tab-strip order, each carrying its panes.
     in property <[LeftTabRow]> tabs;
-    // Section 2: the saved-workspace library (newest-first).
-    in property <[LeftWorkspaceRow]> workspaces;
-    // Section 3: the saved workspace sets (newest-first).
-    in property <[LeftSetRow]> sets;
-    // Section 4: live sessions no window is showing (newest-first).
+    // Section 2: live sessions no window is showing (newest-first).
+    //
+    // The saved-workspace library and the sets drawer used to sit between these two. They
+    // are `bshuler/avada-workspace`'s now, reached over `host.workspace.list`; what stays
+    // here is what a module cannot own — this window's own grid, and the live PTYs this
+    // process is the parent of.
     in property <[LeftSessionRow]> detached;
     // Panel header ×  → close the panel.
     callback toggle();
@@ -593,37 +566,9 @@ export global LeftPanelAdapter {
     in property <length> ext-drag-y;
     in-out property <int> ext-drop-tab: -1;
     in-out property <int> ext-drop-slot: -1;
-    // A library row clicked → load saved workspace `0` (index into `workspaces`).
-    callback open-workspace(int);
-    // The library header's ＋ → save the active tab into the library.
-    callback save-workspace();
-    // A set row clicked → open every member workspace of set `0` (index into `sets`).
-    callback open-set(int);
-    // The sets header's ＋ → save every non-empty tab as a new named set.
-    callback save-set();
     // A detached row clicked → adopt session `0` into the active tab.
     callback adopt-session(string);
 
-    // ---- panel modes ----
-    // Which view the panel is showing: 0 = WORKSPACE (the tree above), 1 = GIT (the
-    // working tree), n >= 2 = `modes[n]`, a favourited tool's resumable-session list, and
-    // -1 = a module rail entry (`RailAdapter.active` says which). Git sits at a fixed index
-    // rather than after the favourites because it is not a tool and cannot be un-starred
-    // away; the file explorer used to sit beside it at 1 and no longer does — it is the
-    // `bshuler/avada-files` module now, so it arrives on the rail at -1 like any other
-    // module and shifts everything after it down one. `in-out` because the strip sets it directly
-    // — switching views is pure UI state, not a `State` mutation, so it does not go through
-    // Seam #2 (the mode does not survive a restart, and should not: the panel always opens
-    // on the workspace tree).
-    in-out property <int> mode: 0;
-    // Every available mode. Only the workspace mode is left, so this is a one-element list
-    // — a list rather than a bool because the strip's `for` is what the rail buttons sit
-    // beside, and the two are drawn by the same layout.
-    in property <[LeftModeRow]> modes;
-    // The strip was clicked. `mode` is already set (it is `in-out`); this only tells Rust,
-    // which needs to know because a mode's contents are computed on entry — a tool mode's
-    // session list is scanned then, and nothing in this adapter is allowed to scan.
-    callback mode-changed(int);
 }
 
 // ============================================================================
@@ -775,14 +720,14 @@ export struct RailRowItem {
 }
 
 export global RailAdapter {
-    // True once at least one module entry exists; the strip draws module buttons after
-    // the built-in ones only then.
+    // True once at least one module entry exists. The strip is the panel's ONLY strip now
+    // — the built-in modes are gone — so this is also what decides whether it is drawn.
     in property <bool> present: false;
-    // Module entries, sorted by `order` then module id. Built-ins (the workspace tree and
-    // the favourited tools) stay in `LeftPanelAdapter.modes`; the strip draws both lists.
+    // Module entries, sorted by `order` then module id.
     in property <[RailEntryRow]> entries: [];
-    // The key of the active module entry, or empty. While non-empty
-    // `LeftPanelAdapter.mode` is -1 so every built-in section is hidden at once.
+    // The key of the active module entry, or empty. Empty is the panel's resting state:
+    // the tree and the detached list, which no module owns. While non-empty those two are
+    // hidden and the active module's rows take the panel.
     in-out property <string> active: "";
     // The active entry's label — the head of the row list.
     in property <string> active-label: "";
@@ -792,6 +737,11 @@ export global RailAdapter {
     in property <string> empty-text: "Nothing here yet";
     // A module entry was clicked (key). Rust activates the module and shows its rows.
     callback activate(string /* key */);
+    // The panel was sent back to its own frame — the tree and the detached list. Separate
+    // from `activate("")` because an empty key is not an entry: `activate` looks the key up
+    // and a lookup that fails is a no-op, which would leave Rust still holding the module
+    // active while the panel had already stopped drawing its rows.
+    callback deactivate();
     // A row was clicked: entry key, row id, gesture (`open`, `toggle`, `context`).
     callback row-activate(string /* key */, string /* row id */, string /* gesture */);
     // A row was RIGHT-clicked, with the pointer's window position. Separate from

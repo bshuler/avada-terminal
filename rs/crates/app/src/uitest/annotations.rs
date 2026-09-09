@@ -188,7 +188,6 @@ fn states() -> Vec<(&'static str, Setup)> {
         ("left panel: workspace", |w| {
             install_modes(w);
             let lp = w.global::<crate::LeftPanelAdapter>();
-            lp.set_mode(crate::paneview::LEFT_MODE_WORKSPACE);
             let pane = |uid: &str, title: &str| crate::LeftPaneRow {
                 uid: uid.into(),
                 title: title.into(),
@@ -204,22 +203,6 @@ fn states() -> Vec<(&'static str, Setup)> {
                     ]))
                     .into(),
                     ..Default::default()
-                }]))
-                .into(),
-            );
-            lp.set_workspaces(
-                std::rc::Rc::new(slint::VecModel::from(vec![crate::LeftWorkspaceRow {
-                    name: "daily".into(),
-                    path: "/ws/daily.json".into(),
-                    detail: "2 tabs".into(),
-                }]))
-                .into(),
-            );
-            lp.set_sets(
-                std::rc::Rc::new(slint::VecModel::from(vec![crate::LeftSetRow {
-                    name: "release".into(),
-                    path: "/ws/release.set".into(),
-                    detail: "3 workspaces".into(),
                 }]))
                 .into(),
             );
@@ -373,8 +356,6 @@ fn install_files(w: &crate::AppWindow) {
     // *activated* draws nothing: activation is `RailAdapter` state, and the mode is what
     // decides whether the panel is showing the module's list or a built-in section. Without
     // this the whole block is absent from the tree and every lookup below finds zero.
-    w.global::<crate::LeftPanelAdapter>()
-        .set_mode(crate::paneview::LEFT_MODE_RAIL);
 }
 
 /// One node row as `viewpane::model_for` projects a data file: `check` is 1 open, 0

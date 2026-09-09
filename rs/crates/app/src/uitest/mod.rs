@@ -175,67 +175,57 @@ fn by_label(w: &crate::AppWindow, label: &str) -> Vec<ElementHandle> {
     ElementHandle::find_by_accessible_label(w, label).collect()
 }
 
-// ===== the mode strip =====
+// ===== the rail strip =====
 //
-// Every left-panel feature is reached through this strip, so a strip that does not switch
-// makes every mode below it unreachable. It is drawn as glyph buttons with no text.
+// Every module surface in the left panel is reached through this strip, so a strip that
+// does not switch makes every one of them unreachable. It is drawn as glyph buttons with
+// no text.
 
-/// Publish the built-in modes the way `paneview` does on every resync.
-///
-/// One, not three: the explorer and the git working tree that used to follow it are the
-/// `bshuler/avada-files` and `bshuler/avada-git` modules now, and a module reaches the
-/// strip through `RailAdapter.entries` instead. The workspace is what is left, so this
-/// helper's job is now to give the strip its fixed head for the module buttons to follow.
+/// Open the left panel. There are no built-in modes left to publish: the explorer, the git
+/// working tree and the per-tool session lists are all modules now, and the strip is drawn
+/// from `RailAdapter.entries` alone. The panel's own frame — the tree and the detached
+/// list — is what an empty `RailAdapter.active` draws, so there is nothing to select.
 fn install_modes(w: &crate::AppWindow) {
-    let rows = vec![crate::LeftModeRow {
-        label: "Workspace".into(),
-        icon: 0,
-        brand: slint::Color::from_rgb_u8(0, 0, 0),
-    }];
-    let lp = w.global::<crate::LeftPanelAdapter>();
-    lp.set_open(true);
-    lp.set_modes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+    w.global::<crate::LeftPanelAdapter>().set_open(true);
 }
 
-/// The strip has to tell Rust which mode was pressed, not merely move its own highlight:
-/// `mode` is `in-out` and written in Slint, so `mode-changed` is the only thing that lets
-/// Rust learn a module entry is no longer the one on screen.
+/// Leaving a module entry has to tell Rust, not merely clear the strip's own highlight:
+/// `active` is `in-out` and written in Slint, so `deactivate` is the only thing that lets
+/// Rust learn the module's rows are no longer on screen — and a module still believing it
+/// is showing keeps projecting rows nobody draws.
 #[test]
-fn the_mode_strip_selects_a_built_in_and_tells_rust() {
+fn leaving_a_module_entry_tells_rust() {
     ui(|| {
         let w = window();
         install_modes(&w);
-        // The strip draws itself only when there is somewhere else to go — one built-in
-        // and no modules is not a choice. A rail entry is on screen and selected, which is
-        // exactly the state this test is about leaving.
-        w.global::<crate::RailAdapter>().set_present(true);
-        w.global::<crate::LeftPanelAdapter>()
-            .set_mode(crate::paneview::LEFT_MODE_RAIL);
+        let ra = w.global::<crate::RailAdapter>();
+        ra.set_present(true);
+        ra.set_active("bshuler/avada-files#browse".into());
+        ra.set_active_label("Files".into());
 
-        let saw = std::rc::Rc::new(std::cell::Cell::new(-99));
+        let saw = std::rc::Rc::new(std::cell::Cell::new(false));
         {
             let saw = saw.clone();
-            w.global::<crate::LeftPanelAdapter>()
-                .on_mode_changed(move |m| saw.set(m));
+            w.global::<crate::RailAdapter>()
+                .on_deactivate(move || saw.set(true));
         }
 
-        let found = by_label(&w, "Workspace");
+        let found = by_label(&w, "Back to the workspace");
         assert_eq!(
             found.len(),
             1,
-            "the strip must show exactly one Workspace button"
+            "the active entry's head must offer exactly one way back"
         );
         click(&w, &found[0]);
 
         assert_eq!(
-            w.global::<crate::LeftPanelAdapter>().get_mode(),
-            crate::paneview::LEFT_MODE_WORKSPACE,
-            "the click must select the workspace mode"
+            w.global::<crate::RailAdapter>().get_active(),
+            "",
+            "the click must clear the active entry"
         );
-        assert_eq!(
+        assert!(
             saw.get(),
-            crate::paneview::LEFT_MODE_WORKSPACE,
-            "the click must also reach mode-changed, which is what drops the rail entry"
+            "the click must also reach deactivate, which is what tells the module it is gone"
         );
     });
 }

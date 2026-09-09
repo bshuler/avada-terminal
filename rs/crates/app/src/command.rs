@@ -409,15 +409,14 @@ pub enum Command {
     /// Workspace tree: drag pane `1` of tab `0` to insertion index `2` within its OWN tab —
     /// the same gesture as a cross-group drop, resolved as a reorder because it never left.
     LeftReorderPane(usize, usize, usize),
-    /// Library: load saved workspace row `0` as new tabs.
-    LeftOpenWorkspace(usize),
-    /// Library: save the active tab into the workspace library (no file dialog).
+    /// Save the active tab into the workspace library (no file dialog).
+    ///
+    /// The LIBRARY and SETS drawers are gone from the panel — they are the `avada-workspace`
+    /// module's surface now — but this one stayed: it is on the command palette, and a
+    /// palette entry is not a panel view. Opening still has a home too, as
+    /// [`crate::state::State::open_workspace_path`], which is the shape the module contract
+    /// hands out; the row-index forms went with the drawers that produced the indices.
     LeftSaveWorkspace,
-    /// A SETS row clicked: open every member workspace of set `0` (index into the panel's
-    /// set list) as its own tab.
-    LeftOpenSet(usize),
-    /// The SETS header's save button: store every non-empty tab as a new named set.
-    LeftSaveSet,
     /// Detached: adopt live session uid `0` into the active tab (re-attach + replay).
     LeftAdoptSession(String),
     /// Relaunch the GUI from the installed bundle, leaving the session daemon (and every
@@ -999,10 +998,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             state.move_pane_between_tabs_at(from, i, to, at, mgr)
         }
         Command::LeftReorderPane(ti, from, to) => state.reorder_pane_in(ti, from, to),
-        Command::LeftOpenWorkspace(i) => state.open_workspace_from_library(i, mgr),
         Command::LeftSaveWorkspace => state.save_workspace_to_library(),
-        Command::LeftOpenSet(i) => state.open_set_from_library(i, mgr),
-        Command::LeftSaveSet => state.save_set_to_library(),
         Command::LeftAdoptSession(uid) => state.adopt_detached_session(&uid, mgr),
     }
     Effect::None
@@ -1562,7 +1558,6 @@ mod rail_command_tests {
     //! standing between a click on a module's button and a panel that does nothing.
     use super::*;
     use crate::leftpanel::{entry_key, RailGesture, RailRequest};
-    use crate::paneview::{LEFT_MODE_RAIL, LEFT_MODE_WORKSPACE};
     use avada_core::module::{RailEntry, RailEvent, Row};
     use avada_core::session_manager::SessionManager;
 
@@ -1623,7 +1618,6 @@ mod rail_command_tests {
         dispatch(&mut st, Command::RailActivate(key.clone()), &mgr);
         assert_eq!(st.rail.active.as_deref(), Some(key.as_str()));
         assert!(st.left_panel_open, "activating opens the panel it draws in");
-        assert_eq!(st.left_mode_request, Some(LEFT_MODE_RAIL));
         assert_eq!(
             st.take_rail_requests(),
             vec![RailRequest::Activate {
@@ -1645,15 +1639,14 @@ mod rail_command_tests {
             &mgr,
         );
         assert!(st.rail.active.is_none());
-        assert!(st.left_mode_request.is_none());
         assert!(st.take_rail_requests().is_empty());
     }
 
-    /// `RailBack` leaves the module WITHOUT asking for a mode: it is sent because a
-    /// built-in button was clicked, and the strip has already written the mode the user
-    /// picked.
+    /// `RailBack` clears the active entry and nothing else. That IS the panel going back
+    /// to its own frame now: the frame is what an empty `rail.active` draws, so there is no
+    /// second piece of view state that could disagree with it.
     #[test]
-    fn rail_back_leaves_the_module_without_choosing_a_mode() {
+    fn rail_back_leaves_the_module_and_that_is_the_whole_of_it() {
         let mgr = mgr();
         let mut st = with_a_module();
         dispatch(
@@ -1661,13 +1654,12 @@ mod rail_command_tests {
             Command::RailActivate(entry_key(&module(), "browse")),
             &mgr,
         );
-        st.left_mode_request = None;
 
         dispatch(&mut st, Command::RailBack, &mgr);
         assert!(st.rail.active.is_none());
-        assert_eq!(
-            st.left_mode_request, None,
-            "the strip already wrote the mode; asking for one here would drag the user off it"
+        assert!(
+            st.left_panel_open,
+            "leaving an entry must not also close the panel"
         );
     }
 
@@ -1870,7 +1862,6 @@ mod rail_command_tests {
             "a reveal has to bring the explorer to the front, not just message it"
         );
         assert!(st.left_panel_open);
-        assert_eq!(st.left_mode_request, Some(LEFT_MODE_RAIL));
 
         let events = st.take_module_events();
         let (kind, payload) = events
@@ -1912,11 +1903,9 @@ mod rail_command_tests {
             Command::RailActivate(entry_key(&module(), "browse")),
             &mgr,
         );
-        st.left_mode_request = None;
 
         st.apply_rail_event(RailEvent::Gone { module: module() });
         assert!(st.rail.active.is_none());
-        assert_eq!(st.left_mode_request, Some(LEFT_MODE_WORKSPACE));
         assert!(st.rail.entries().is_empty());
     }
 }

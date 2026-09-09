@@ -17,7 +17,7 @@
 use super::*;
 
 use crate::leftpanel::{entry_key, ModuleRail};
-use crate::paneview::{fill_rail, LEFT_MODE_RAIL, LEFT_MODE_WORKSPACE};
+use crate::paneview::fill_rail;
 use avada_core::module::{RailEntry, RailEvent, Row};
 use avada_core::rights::ModuleId;
 
@@ -84,8 +84,6 @@ fn install(w: &crate::AppWindow, rows: Vec<Row>) -> String {
     assert!(rail.activate(&key), "the entry the module just registered");
     install_modes(w);
     fill_rail(w, &rail);
-    w.global::<crate::LeftPanelAdapter>()
-        .set_mode(LEFT_MODE_RAIL);
     key
 }
 
@@ -254,8 +252,6 @@ fn a_tier_two_entry_gets_no_filter_box() {
         assert!(rail.activate(&entry_key(&module, "graph")));
         install_modes(&w);
         fill_rail(&w, &rail);
-        w.global::<crate::LeftPanelAdapter>()
-            .set_mode(LEFT_MODE_RAIL);
 
         assert!(
             !w.global::<crate::RailAdapter>().get_filterable(),

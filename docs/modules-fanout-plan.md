@@ -217,7 +217,7 @@ marketplace path a third-party module uses. Developing them in-tree would hide t
 | **G1** git | git service on `gix`, `avada-git` module | core+module | F1 |
 | **G2** tools | `avada-tools` (Claude/Cursor/Copilot tabs) | module | F1 |
 | **G3** editor | `avada-editor` on `helix-core`, keymap presets + overrides | module+app | F1 |
-| **G4** workspace | `avada-workspace` (tree/library/sets/detached) | module | F1 |
+| **G4** workspace | `avada-workspace` (library/sets); tree + detached stay host-side, see below | module | F1 |
 | **G5** hyperpane | `avada-hyperpane` shell-tier module | module | F1 |
 | **G6** resolver | pubgrub, shape resolution, provider defaults, pin conflicts | core | H5 |
 | **G7** notarization | three OS verifiers behind a policy trait | core | H5 |
@@ -366,6 +366,28 @@ and the pane becomes the placeholder. Tag a release.
   contract), C11 G11 marketplace UI (needs resolver + rights + profiles).
 - **3c, after 3b:** C10 G10 commercial skeleton in the private repo, precompiled loader,
   feature flag wiring in `Cargo.toml` (orchestrator).
+
+**G4 deviation — the panel keeps a frame, and the frame is not a mode.** G4 was written
+as "tree/library/sets/detached", all four sections leaving for `avada-workspace`. Two of
+them cannot go, for reasons that are about ownership rather than effort:
+
+- **DETACHED** lists live PTYs this process owns, and "adopt" re-parents a *running*
+  child. Handing that to a module would mean handing over process ownership across an
+  RPC boundary, which is the one thing the module contract is built not to do.
+- **TREE** is the window's own pane grid, and it is the drop target for cross-window
+  tear-out drags (`ext-drag`, `ext-drag-y`, `ext-drop-tab`, `ext-drop-slot`). The v1 row
+  contract has no drag protocol, and inventing one to move a section that is drawing this
+  window's own state would be a contract grown to serve a refactor.
+
+**LIBRARY** and **SETS** genuinely did leave: they are inert JSON files that merely happen
+to sit outside the workspace root, and `host.workspace.list` / `.open` / `.save` (added in
+`f4f73fa` without a `CONTRACT_VERSION` bump) is how a module reaches them.
+
+So the exit criterion is met by deleting the **mode strip** itself rather than by emptying
+the panel: with LIBRARY and SETS gone there is nothing left to switch *between*, and tree
+plus detached become the panel's permanent frame above whatever rail a module contributes.
+`core/src/workspace/**` stays host-side permanently — a saved workspace is the host's own
+file format.
 
 **Exit:** the left panel in this repo has no built-in modes; `core/src/git.rs`,
 `claude_*.rs`, `hyperpane.rs`, `filetree.rs`, `gitpanel.rs` are gone or reduced to the git

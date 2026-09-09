@@ -1515,16 +1515,12 @@ pub struct State {
     /// Whether the projects flyout (behind the 📁 icon) is currently expanded. The rail
     /// itself is gated by `settings.show_sidebar`; this is just the flyout panel state.
     pub sidebar_open: bool,
-    /// Whether the LEFT slide-out panel (workspace tree / library / detached sessions) is
+    /// Whether the LEFT slide-out panel (workspace tree / detached sessions / a module's
+    /// rows) is
     /// open. Like `sidebar_open` this is pure window UI state — not persisted — and the
     /// panel is a sibling of the pane area, so opening it shrinks the panes rather than
     /// covering them. See `crate::leftpanel` + `ui/leftpanel.slint`.
     pub left_panel_open: bool,
-    /// This window's last-seen `left_panel_open`, so the projection can spot the closed→open
-    /// edge and rescan the workspace library exactly once. Per WINDOW (not a module global):
-    /// `resync` runs per window, and two windows disagreeing about the panel would otherwise
-    /// flip a shared flag every tick and rescan the directory every frame.
-    pub left_panel_seen_open: bool,
     /// When this window last aged the panel's liveness dots. Also per window, for the same
     /// reason — a shared stamp is consumed by whichever window is pumped first, freezing
     /// every other window's dots. See `leftpanel::heartbeat_due`.
@@ -1566,11 +1562,6 @@ pub struct State {
     /// while it still matches the focused pane, an explicitly chosen root is the human's and
     /// is left alone.
     pub project_root_from: Option<String>,
-    /// A one-shot request to switch the left panel to a given mode, consumed by the resync.
-    /// The strip's selection lives in the UI as an `in-out` property (switching views is not
-    /// a `State` mutation), so a command that needs to change it leaves a note instead of
-    /// reaching into Slint from the middle of a borrow.
-    pub left_mode_request: Option<i32>,
     /// What every running module has put on the left panel's mode strip, and which module
     /// entry (if any) the panel is showing (track H4). Fed by
     /// [`State::apply_rail_event`] from the module host's rail channel.
@@ -1801,7 +1792,6 @@ impl State {
             goal_account_cursor: 0,
             sidebar_open: false,
             left_panel_open: false,
-            left_panel_seen_open: false,
             left_panel_beat: None,
             workspace_path: None,
             palette_entries: Vec::new(),
@@ -1815,7 +1805,6 @@ impl State {
             ctx: None,
             project_root: None,
             project_root_from: None,
-            left_mode_request: None,
             rail: Default::default(),
             rail_requests: Vec::new(),
             rail_scroll_hold: None,
@@ -5007,19 +4996,17 @@ impl State {
     /// anything changed, so a tick that drains an idle channel costs no resync.
     ///
     /// A `Gone` (or a re-`Registered` set that no longer contains it) takes the active
-    /// entry with it; the panel then falls back to the workspace tree rather than showing
-    /// a head with no module behind it.
+    /// entry with it, and the resync ships `rail.active` verbatim, so the panel falls back
+    /// to its own frame rather than showing a head with no module behind it.
     pub fn apply_rail_event(&mut self, event: avada_core::module::RailEvent) -> bool {
-        if self.rail.apply(event) {
-            self.left_mode_request = Some(crate::paneview::LEFT_MODE_WORKSPACE);
-        }
+        self.rail.apply(event);
         self.dirty = true;
         true
     }
 
-    /// A module entry on the strip was clicked. Activates it, puts the panel into the rail
-    /// mode and queues an `activate` for the host. A key no module registered (the entry
-    /// was unregistered between the paint and the click) is a no-op, not a blank panel.
+    /// A module entry on the strip was clicked. Activates it and queues an `activate` for
+    /// the host. A key no module registered (the entry was unregistered between the paint
+    /// and the click) is a no-op, not a blank panel.
     pub fn rail_activate(&mut self, key: &str) {
         if !self.rail.activate(key) {
             return;
@@ -5031,17 +5018,15 @@ impl State {
             });
         }
         self.left_panel_open = true;
-        self.left_mode_request = Some(crate::paneview::LEFT_MODE_RAIL);
         self.dirty = true;
     }
 
-    /// Leave the module entry: the panel goes back to the built-in sections.
+    /// Leave the module entry: the panel goes back to its own frame — the tab/pane tree
+    /// and the detached list.
     ///
-    /// Deliberately does NOT ask for a mode. This is sent when a built-in button on the
-    /// strip was clicked, and the strip has already written the mode the user picked;
-    /// asking for the workspace tree here would drag them off the button they just
-    /// pressed. The resync's own belt puts a panel still sitting on `LEFT_MODE_RAIL` with
-    /// nothing active back on the workspace tree.
+    /// Clearing `rail.active` is the whole of it. The panel's view is no longer a mode
+    /// index anyone has to keep in step: `RailAdapter.active` IS the view, the resync
+    /// writes it from here every frame, and an empty key draws the frame.
     pub fn rail_deactivate(&mut self) {
         self.rail.deactivate();
         self.dirty = true;
@@ -5395,9 +5380,6 @@ impl State {
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn toggle_left_panel(&mut self) {
         self.left_panel_open = !self.left_panel_open;
-        if self.left_panel_open {
-            crate::leftpanel::refresh_library();
-        }
         self.dirty = true;
     }
 
@@ -5458,16 +5440,6 @@ impl State {
         self.dirty = true;
     }
 
-    /// Load library row `i` (the panel's LIBRARY list order): read the file and append its
-    /// groups as new tabs, exactly as the "Open workspace…" dialog path does.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn open_workspace_from_library(&mut self, i: usize, mgr: &SessionManager) {
-        let Some(entry) = crate::leftpanel::library().into_iter().nth(i) else {
-            return;
-        };
-        self.open_workspace_path(&entry.path, mgr);
-    }
-
     /// Open a saved workspace by path.
     ///
     /// The path form is the one a module gets: `host.workspace.list` hands out paths, not
@@ -5477,31 +5449,23 @@ impl State {
     pub fn open_workspace_path(&mut self, path: &std::path::Path, mgr: &SessionManager) {
         let Some(file) = read_workspace(path) else {
             tracing::warn!("{} is not a valid workspace", path.display());
-            // The row is stale (deleted or corrupted since the scan) — rescan so it goes.
-            crate::leftpanel::refresh_library();
             self.dirty = true;
             return;
         };
         self.load_workspace(file, mgr);
     }
 
-    /// Save every non-empty tab in this window as a new set in the panel's SETS section
-    /// (no file dialog — that's what the drawer is for). The member workspaces go to
-    /// [`paths::set_members_dir`], NOT the library: a set of N tabs generates N files, and
-    /// the LIBRARY drawer is for the workspaces the user saved by hand.
+    /// Save every non-empty tab in this window as a new set, named `name` or, failing that,
+    /// after the active tab. The set-drawer twin of [`Self::save_workspace_to_library_as`].
     ///
-    /// Named after the active tab, with a numeric suffix on collision rather than an
-    /// overwrite — the same contract as [`Self::save_workspace_to_library`]. The suffix goes
-    /// on the *display* name, not the slug, so the unique name flows through to the member
-    /// filenames too (`save_set_to` stems those from it) and a second save of the same tab
-    /// title cannot clobber the first set's members.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn save_set_to_library(&mut self) {
-        self.save_set_to_library_as(None);
-    }
-
-    /// [`Self::save_set_to_library`], with the name supplied rather than taken from the
-    /// active tab — the set-drawer twin of [`Self::save_workspace_to_library_as`].
+    /// The member workspaces go to [`paths::set_members_dir`], NOT the library: a set of N
+    /// tabs generates N files, and the library is for the workspaces the user saved by hand.
+    ///
+    /// A numeric suffix on collision rather than an overwrite — the same contract as
+    /// [`Self::save_workspace_to_library_as`]. The suffix goes on the *display* name, not
+    /// the slug, so the unique name flows through to the member filenames too (`save_set_to`
+    /// stems those from it) and a second save of the same tab title cannot clobber the first
+    /// set's members.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn save_set_to_library_as(&mut self, name: Option<&str>) {
         let dir = paths::sets_dir();
@@ -5531,34 +5495,22 @@ impl State {
         let path = dir.join(format!("{}.json", sets::slug(&name)));
         if self
             .save_set_to(&path, &paths::set_members_dir(), &name)
-            .is_some()
+            .is_none()
         {
-            // Only the SETS drawer: the members went to `sets/members`, which the LIBRARY
-            // scan does not look at.
-            crate::leftpanel::refresh_sets();
+            tracing::warn!("failed to save the set into the sets drawer");
         }
         self.dirty = true;
     }
 
-    /// Open set row `i` (the panel's SETS list order): load every member workspace, each as
-    /// its own tab, exactly as the "Open set…" dialog path does.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn open_set_from_library(&mut self, i: usize, mgr: &SessionManager) {
-        let Some(entry) = crate::leftpanel::sets_rows().into_iter().nth(i) else {
-            return;
-        };
-        self.open_set_path(&entry.path, mgr);
-    }
-
     /// Open a saved set by path — the path-shaped sibling of
-    /// [`Self::open_set_from_library`], for the same reason.
+    /// [`Self::open_workspace_path`], for the same reason.
     #[tracing::instrument(level = "debug", skip(self, mgr))]
     pub fn open_set_path(&mut self, path: &std::path::Path, mgr: &SessionManager) {
         if self.open_set_from(path, mgr) == 0 {
-            // Nothing loaded: the row is stale (deleted or corrupted since the scan), or
-            // every member reference is dead. Rescan so a vanished row goes.
-            crate::leftpanel::refresh_sets();
-            self.dirty = true;
+            // Nothing loaded: the set is stale (deleted or corrupted since it was listed),
+            // or every member reference is dead. Whoever listed it — the workspace module —
+            // rescans on its own tick, so there is no host-side cache left to invalidate.
+            tracing::warn!("{} loaded no member workspaces", path.display());
         }
     }
 
@@ -11423,26 +11375,6 @@ mod git_links {
             "id": id, "label": "Git", "tier": 1, "order": 0
         }))
         .unwrap()
-    }
-
-    /// The strip indexes `mode_rows[mode]`, so the built-in modes have to occupy exactly
-    /// `0..len` and nothing else may claim an index in that range. There is one built-in
-    /// left — the explorer, the git view and then the per-tool session lists all became
-    /// modules, and each departure renumbered whatever followed it — so WORKSPACE is 0 and
-    /// the list is one long.
-    #[test]
-    fn the_only_built_in_mode_is_the_first_slot() {
-        use crate::paneview::*;
-        assert_eq!(LEFT_MODE_WORKSPACE, 0);
-        // A module surface never takes an index in this list: it is drawn from
-        // `RailAdapter` at a mode of its own, BELOW every built-in, which is what keeps
-        // the strip's bound check from mistaking it for an out-of-range built-in.
-        // Constant by construction — that is the point: this pins the relation so a later
-        // renumbering of the built-in modes trips the test rather than the UI.
-        #[allow(clippy::assertions_on_constants)]
-        {
-            assert!(LEFT_MODE_RAIL < LEFT_MODE_WORKSPACE);
-        }
     }
 
     /// The project anchor follows the SELECTED pane (K): it is derived from the focused

@@ -4239,54 +4239,6 @@ impl App {
             let id = win.id;
             win.app
                 .global::<crate::LeftPanelAdapter>()
-                .on_open_workspace(move |i| {
-                    if let Some(w) = app.window_by_id(id) {
-                        if i >= 0 {
-                            app.run_command(&w, Command::LeftOpenWorkspace(i as usize));
-                        }
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_save_workspace(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::LeftSaveWorkspace);
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_open_set(move |i| {
-                    if let Some(w) = app.window_by_id(id) {
-                        if i >= 0 {
-                            app.run_command(&w, Command::LeftOpenSet(i as usize));
-                        }
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_save_set(move || {
-                    if let Some(w) = app.window_by_id(id) {
-                        app.run_command(&w, Command::LeftSaveSet);
-                    }
-                });
-        }
-        {
-            let app = app.clone();
-            let id = win.id;
-            win.app
-                .global::<crate::LeftPanelAdapter>()
                 .on_adopt_session(move |uid| {
                     if let Some(w) = app.window_by_id(id) {
                         app.run_command(&w, Command::LeftAdoptSession(uid.to_string()));
@@ -4294,27 +4246,23 @@ impl App {
                 });
         }
 
-        // `mode` is `in-out` and the strip writes it in Slint, so Rust would otherwise never
-        // learn the panel had been switched, and a module entry would stay on screen under
-        // a built-in's head. Nothing here runs a subprocess: every built-in mode left is a
-        // projection of state the host already holds.
+        // The strip's "back" action writes `RailAdapter.active` in Slint, so Rust would
+        // otherwise never learn the module entry had been left, and would keep projecting
+        // its rows under a head the panel had already stopped drawing. Nothing here runs a
+        // subprocess: leaving an entry only stops showing what the host already holds.
         {
             let app = app.clone();
             let id = win.id;
             win.app
-                .global::<crate::LeftPanelAdapter>()
-                .on_mode_changed(move |mode| {
+                .global::<crate::RailAdapter>()
+                .on_deactivate(move || {
                     let Some(w) = app.window_by_id(id) else {
                         return;
                     };
-                    // Track H4: a BUILT-IN button was pressed, so whatever module entry was
-                    // showing is not any more. Sent before the mode command so the panel
-                    // never spends a frame drawing a module's rows under a built-in head.
-                    // The read-only borrow is dropped before the dispatch (borrow rule #18).
-                    let leaving_rail = mode >= 0 && w.state.borrow().rail.active.is_some();
-                    if leaving_rail {
-                        app.run_command(&w, Command::RailBack);
-                    }
+                    // Sent unconditionally rather than only when something is active: the
+                    // command is idempotent, and reading `rail.active` here to decide would
+                    // take a borrow across the dispatch (borrow rule #18).
+                    app.run_command(&w, Command::RailBack);
                 });
         }
 

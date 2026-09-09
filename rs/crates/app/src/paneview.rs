@@ -23,9 +23,9 @@ use crate::state::{Overlay, PaneState, State};
 use crate::theme;
 use crate::{
     AppWindow, ClaudeSessionItem, CtxTab, DividerItem, FramePaletteOption, HiRect, KeybindingItem,
-    LayoutOption, LeftModeRow, LeftPaneRow, LeftPanelAdapter, LeftSessionRow, LeftSetRow,
-    LeftTabRow, LeftWorkspaceRow, MenuEntry, PaletteItem, PaneItem, PaneViewRow, PrefBrowserRow,
-    PrefOption, PrefToolRow, ProjectItem, TabItem, WorktreeRow,
+    LayoutOption, LeftPaneRow, LeftPanelAdapter, LeftSessionRow, LeftTabRow, MenuEntry,
+    PaletteItem, PaneItem, PaneViewRow, PrefBrowserRow, PrefOption, PrefToolRow, ProjectItem,
+    TabItem, WorktreeRow,
 };
 
 /// Thickness (logical px) of the draggable divider hit-area.
@@ -97,14 +97,8 @@ pub struct Ui {
     // ---- the left slide-out panel's three sections (mux plan M5) ----
     /// The workspace tree's tab rows (each carrying its own pane rows).
     pub lp_tabs: Rc<VecModel<LeftTabRow>>,
-    /// The saved-workspace library rows.
-    pub lp_workspaces: Rc<VecModel<LeftWorkspaceRow>>,
-    pub lp_sets: Rc<VecModel<LeftSetRow>>,
     /// The detached (adoptable) session rows.
     pub lp_detached: Rc<VecModel<LeftSessionRow>>,
-    /// The panel's built-in mode strip — WORKSPACE, and nothing else since the tool modes
-    /// became a module. The module entries beside it live in [`RailAdapter`].
-    pub lp_modes: Rc<VecModel<LeftModeRow>>,
     /// Per-tab pane models for the tree, keyed by tab index and reused across ticks so each
     /// `LeftTabRow.panes` keeps a STABLE model identity — the same reason `wt_models` exists:
     /// rebuilding the inner repeater every frame would drop an in-flight click or, worse, the
@@ -161,10 +155,7 @@ impl Ui {
             wt_models: RefCell::new(HashMap::new()),
             claude_models: RefCell::new(HashMap::new()),
             lp_tabs: Rc::new(VecModel::default()),
-            lp_workspaces: Rc::new(VecModel::default()),
-            lp_sets: Rc::new(VecModel::default()),
             lp_detached: Rc::new(VecModel::default()),
-            lp_modes: Rc::new(VecModel::default()),
             lp_pane_models: RefCell::new(HashMap::new()),
             pref_tools: Rc::new(VecModel::default()),
             pref_browsers: Rc::new(VecModel::default()),
@@ -210,10 +201,7 @@ impl Ui {
         use slint::ComponentHandle as _;
         let lp = app.global::<LeftPanelAdapter>();
         lp.set_tabs(ModelRc::from(self.lp_tabs.clone()));
-        lp.set_workspaces(ModelRc::from(self.lp_workspaces.clone()));
-        lp.set_sets(ModelRc::from(self.lp_sets.clone()));
         lp.set_detached(ModelRc::from(self.lp_detached.clone()));
-        lp.set_modes(ModelRc::from(self.lp_modes.clone()));
     }
 }
 
@@ -711,26 +699,6 @@ fn build_dividers(state: &State, area: (f32, f32)) -> Vec<DividerItem> {
 
 /// Rebuild every UI model + scalar from `State` (the resync step). Called when
 /// `state.dirty` is set.
-/// Left-panel mode indices. WORKSPACE is the one built-in view left, and mode 0 is its
-/// fixed slot.
-///
-/// There used to be three more built-ins: the file explorer, the git working tree after it,
-/// and then one mode per favourited CLI tool listing that tool's resumable sessions. All
-/// three are modules now (`bshuler/avada-files`, `bshuler/avada-git`, `bshuler/avada-tools`)
-/// and live on the rail ([`LEFT_MODE_RAIL`]) like any other module surface, so each removal
-/// moved every index after it down by one. That is the rule for the last one too: a built-in
-/// that leaves renumbers its successors, here AND in the `mode == 0` gates in
-/// `ui/leftpanel.slint`, which spell the same boundary as a literal.
-pub const LEFT_MODE_WORKSPACE: i32 = 0;
-
-/// The mode a *module's* rail entry puts the panel into (track H4). Negative on purpose:
-/// the built-in modes are indices into `LeftPanelAdapter.modes` and the module entries are
-/// a second list (`RailAdapter.entries`) drawn on the same strip, so a module cannot be
-/// given an index in the first list without renumbering the built-ins every time a module
-/// starts or stops. One out-of-band value hides every built-in section at once, and
-/// `RailAdapter.active` says WHICH module entry is showing.
-pub const LEFT_MODE_RAIL: i32 = -1;
-
 /// Push the module rail onto [`RailAdapter`](crate::RailAdapter): the strip's module
 /// buttons, which one is active, and the active entry's rows.
 ///
@@ -1434,7 +1402,6 @@ pub fn resync(
         let lp = app.global::<LeftPanelAdapter>();
         let open = state.left_panel_open;
         lp.set_open(open);
-        crate::leftpanel::note_panel_open(&mut state.left_panel_seen_open, open);
         if open {
             let now_ms = crate::glow::now_epoch_ms();
             let idle_on = state.settings.idle_alert;
@@ -1504,26 +1471,6 @@ pub fn resync(
             ui.lp_pane_models.borrow_mut().retain(|k, _| *k < live_tabs);
             sync_model(&ui.lp_tabs, tab_rows);
 
-            let ws_rows: Vec<LeftWorkspaceRow> = crate::leftpanel::library()
-                .into_iter()
-                .map(|e| LeftWorkspaceRow {
-                    name: e.name.into(),
-                    path: e.path.display().to_string().into(),
-                    detail: e.detail.into(),
-                })
-                .collect();
-            sync_model(&ui.lp_workspaces, ws_rows);
-
-            let set_rows: Vec<LeftSetRow> = crate::leftpanel::sets_rows()
-                .into_iter()
-                .map(|e| LeftSetRow {
-                    name: e.name.into(),
-                    path: e.path.display().to_string().into(),
-                    detail: e.detail.into(),
-                })
-                .collect();
-            sync_model(&ui.lp_sets, set_rows);
-
             let claimed = state.claimed_uids();
             let det_rows: Vec<LeftSessionRow> = crate::leftpanel::detached(mgr, &claimed)
                 .into_iter()
@@ -1536,49 +1483,10 @@ pub fn resync(
                 .collect();
             sync_model(&ui.lp_detached, det_rows);
 
-            // ---- the mode strip ----
-            // WORKSPACE is the only built-in mode left. The favourited CLI tools used to
-            // follow it, each showing that tool's resumable sessions; they are the
-            // `bshuler/avada-tools` module now and draw on the rail instead.
-            let mode_rows = vec![LeftModeRow {
-                label: "Workspace".into(),
-                // 0 means "not a tool": the strip draws its own grid glyph for this one.
-                icon: 0,
-                brand: crate::theme::accent_for(0, palette),
-            }];
-            // A mode index the strip cannot draw must not survive a resync.
-            // `LEFT_MODE_RAIL` is deliberately outside the list (a module entry is showing)
-            // and must survive this: `-1 as usize` is enormous, so the bound has to be
-            // checked on the SIGNED value or every module click would bounce straight back
-            // to the workspace tree on the next resync.
-            let mode_now = lp.get_mode();
-            if mode_now >= 0 && mode_now as usize >= mode_rows.len() {
-                lp.set_mode(LEFT_MODE_WORKSPACE);
-            }
-            let mode_row_count = mode_rows.len();
-            sync_model(&ui.lp_modes, mode_rows);
-
-            // ---- the mode the Rust side asked for ----
-            // `mode` is `in-out` and the strip writes it directly, so Rust normally has no
-            // say. A reveal (clicking a filename in a pane) is the exception: it has to put
-            // the panel on the files module's rail entry itself. Taken before the session
-            // list is computed so the whole frame agrees about which mode it is drawing.
-            if let Some(m) = state.left_mode_request.take() {
-                if m == LEFT_MODE_RAIL || (m >= 0 && (m as usize) < mode_row_count) {
-                    lp.set_mode(m);
-                }
-            }
-
             // ---- the module rail (track H4) ----
             // Entries and rows are a stored projection like the explorer's: `State` folded
             // the host's rail events into `state.rail`, and the resync just ships them.
             fill_rail(app, &state.rail);
-            // A module entry that has gone away must not leave the panel on a head with
-            // nothing behind it; `State` already asked for the workspace tree, this is
-            // the belt for a mode the strip wrote itself.
-            if lp.get_mode() == LEFT_MODE_RAIL && state.rail.active.is_none() {
-                lp.set_mode(LEFT_MODE_WORKSPACE);
-            }
         }
     }
 
