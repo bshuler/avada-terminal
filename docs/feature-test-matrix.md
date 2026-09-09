@@ -32,7 +32,9 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 | keybindings in default_bindings() | 19 |
 
 End-to-end coverage of the Rust-reaching UI surface is **100%** (106 of 106). "Named by a test" is an *upper* bound on proven:
-a test may mention a callback while asserting something else about it.
+a test may mention a callback while asserting something else about it, and a proven
+callback can still front a feature whose real work happens past a boundary the harness
+cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
 
 ## Callbacks
 
@@ -370,6 +372,29 @@ a menu, or the control plane — not being on a key is not a gap.
 | `ViewSelect` | — |
 | `ViewToggleNode` | — |
 | `ZoomPane` | — |
+
+## Known gaps
+
+What the three machine sources above cannot see. A callback can be `e2e` and the
+feature behind it still be unproven, because the harness drives the *component tree*
+and stops at the process boundary: an OS voice, a microphone, a socket to a daemon
+that has since died. These are recorded here rather than omitted, because a matrix
+that reports 100% while a known-faked feature sits outside its frame is worse than
+no matrix. `src/uitest/matrix.rs` fails if a row loses its verdict or the section
+disappears; it does not check the prose, which is a judgement.
+
+| Gap | Verdict | Where |
+|---|---|---|
+| Talk — speaking a reply aloud | `faked` | `scripts/talk-demo.sh` drives a file-backed TTS backend; no audio is ever produced, so the OS/hardware seam has never run. |
+| Talk — recognising a pane's transcript | `partial` | `core/src/speech/tailer.rs` understands `ClaudeJsonl` and `CursorJsonl` only. A pane running anything else is silently mute. |
+| Dictation — the microphone itself | `partial` | The whisper path is proven against a real 120s WAV (`core/src/stt/dictation.rs`, `#[ignore]`d). The cpal capture seam is not. |
+| Live typing of a transcript | `unproven` | `df6e148` types the transcript into the pane as you speak. Unit-tested; never run against a real microphone. |
+| A write to a dead session daemon | `defect` | Returns `{"ok": true}`. Both `ctl send` and the GUI keypress path swallow the broken pipe, so a backend crash looks like dead keys. |
+| `ctl panes` / `ctl state` liveness | `defect` | Reports `running` from shadow state without probing, which is why the defect above is invisible to remote inspection. |
+| `editorCommand` setting | `dead` | Validates, persists and round-trips, but nothing calls `paths::plan_open`. A clicked path always goes to `RevealInFiles`. |
+| `keepAlive` setting | `partial` | Its only effect is inline in the quit path at `app/src/main.rs`. Covered at the route layer; no seam to drive. |
+| Windows keyboard behaviour | `unproven` | `keybindings.rs` puts Windows on the Linux branch. Coverage by construction only — no live Windows run has happened. |
+| macOS Finder drag-and-drop | `unproven` | The Linux/Xvfb harness proves XDND. The macOS equivalent has never been exercised. |
 
 ## Keybindings
 

@@ -326,6 +326,42 @@ fn the_feature_matrix_still_describes_this_app() {
         );
     }
 
+    // The honest half of the matrix. Everything else here is derived from the sources, so it
+    // can be regenerated; this section is a judgement about features whose real work happens
+    // past a boundary the headless harness cannot cross — an OS voice, a microphone, a socket
+    // to a daemon that has since died. Nothing can recompute it, which is exactly why it is
+    // the part most likely to be quietly deleted the first time someone wants a clean sheet.
+    // So: the section must exist, it must have rows, and every row must carry one of a fixed
+    // set of verdicts. Retiring a gap means deleting its row on purpose, with a commit
+    // message; it does not mean the section evaporating.
+    let gaps: Vec<Vec<String>> = section(&doc, "Known gaps")
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.starts_with("|---") && !l.starts_with("| Gap"))
+        .map(cells)
+        .collect();
+    assert!(
+        !gaps.is_empty(),
+        "the matrix has no Known-gaps rows; a 100% callback count is not the whole answer"
+    );
+    for row in &gaps {
+        assert_eq!(
+            row.len(),
+            3,
+            "a known-gap row is gap, verdict, where: {row:?}"
+        );
+        assert!(
+            ["faked", "partial", "unproven", "defect", "dead"].contains(&row[1].as_str()),
+            "`{}` is not a known-gap verdict (row {:?})",
+            row[1],
+            row[0]
+        );
+        assert!(
+            !row[2].trim().is_empty(),
+            "the gap `{}` says nothing about where",
+            row[0]
+        );
+    }
+
     let listed_ids: Vec<String> = section(&doc, "Keybindings")
         .lines()
         .filter(|l| l.starts_with("| `"))
