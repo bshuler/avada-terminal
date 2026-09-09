@@ -2672,6 +2672,14 @@ mod tests {
                 .args(args)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                // Both dates pinned, so the commit — and therefore its object name — is the
+                // same on every run. Without this the fixture mints a *random* hash, and
+                // `extract_commit_candidates` deliberately declines an all-digit token as a
+                // count or a timestamp rather than an object name. A 7-character
+                // abbreviation is all digits (10/16)^7 of the time, so the hash test failed
+                // roughly one run in twenty-seven, on nothing the product did.
+                .env("GIT_AUTHOR_DATE", FIXTURE_DATE)
+                .env("GIT_COMMITTER_DATE", FIXTURE_DATE)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -2695,8 +2703,19 @@ mod tests {
             .output()
             .ok()?;
         let short = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        // The property the pinned dates buy, stated where it is relied on: if git ever
+        // hands back an all-digit abbreviation this fails the same way on every machine and
+        // every run, instead of one run in twenty-seven on one of them.
+        assert!(
+            short.bytes().any(|b| b.is_ascii_lowercase()),
+            "fixture hash {short} is all digits, which the extractor declines by design"
+        );
         Some((dir, short))
     }
+
+    /// The commit date the fixture pins, in both roles. Any fixed instant does; this one is
+    /// recognisable in a failure message as a value nobody's clock produced.
+    const FIXTURE_DATE: &str = "2020-01-01T00:00:00Z";
 
     #[test]
     fn a_hash_this_repository_knows_becomes_a_link_to_the_commit() {

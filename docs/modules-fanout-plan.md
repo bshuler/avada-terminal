@@ -403,6 +403,26 @@ plus detached become the panel's permanent frame above whatever rail a module co
 `core/src/workspace/**` stays host-side permanently — a saved workspace is the host's own
 file format.
 
+**Second deviation — `claude_*.rs` and `hyperpane.rs` are services, not modes.** The Exit
+clause below lists them beside `filetree.rs` and `gitpanel.rs`, which reads as "all five
+go, except `git.rs` which is reduced". Two of the five did go and are gone. The other
+seven files were mis-grouped: they were never panel code. `claude_history.rs` is the JSONL
+and path-encoding engine underneath all three of G2's tool history readers — Claude,
+Cursor and Copilot — so deleting it would delete a module's backing service rather than a
+mode. `claude_panes.rs` and `claude_hook.rs` are pane identity: the hook writes a marker
+keyed by `AVADA_PANE_ID` and the workspace snapshot reads it, which is the same process
+ownership G4 refused to hand across the RPC boundary. `claude_accounts.rs` decides the
+`CLAUDE_CONFIG_DIR` a spawned PTY gets, and `claude_recovery.rs` reads a live pane's tail
+text — both host-owned for that same reason. `hyperpane.rs` materializes the always-on
+tab's working directory, which is a resource the binary ships, not a panel view.
+
+So they stay, in the position `git.rs` is in and for the same reason: reachable from a
+pane, a control route, or a module over RPC, and not from the panel. That last clause is
+the part worth holding, and `leftpanel::tests::the_panel_draws_no_host_service_of_its_own`
+holds it — the deleted modes may not return, and neither this file, the tree projection,
+nor the rail registry may name one of these services. Absence is what regresses, and it
+is the one thing a behavioural suite cannot notice.
+
 **Exit:** the left panel in this repo has no built-in modes; `core/src/git.rs`,
 `claude_*.rs`, `hyperpane.rs`, `filetree.rs`, `gitpanel.rs` are gone or reduced to the git
 service; two versions of one module install side by side and a workspace pins the older;

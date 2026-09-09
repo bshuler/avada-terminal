@@ -1178,4 +1178,96 @@ mod tests {
             assert_eq!(RailGesture::parse("wiggle"), None);
         }
     }
+
+    /// Wave 3's structural exit criterion, held by a check rather than by memory.
+    ///
+    /// "The left panel in this repo has no built-in modes" is the one clause of that
+    /// criterion (docs/modules-fanout-plan.md §5, Wave 3 **Exit**) with nothing standing
+    /// behind it. The behavioural clauses each have a suite; *absence* has no natural
+    /// test, and absence is precisely what regresses. The panel grew its modes one at a
+    /// time, and every one of them arrived as a reasonable-looking `use` of a host
+    /// service that already had the data to hand — a files tree over the filetree
+    /// service, a git section over the git service. Nothing in the tree would notice
+    /// the next one.
+    ///
+    /// What the panel keeps is a frame, not a mode. The frame draws this window's own
+    /// state — the pane grid, the PTYs this process owns — and the saved-workspace files
+    /// beside it; everything else it shows arrives over the rail, from a module. So the
+    /// rule this holds is not "the panel is small" but "the panel reads nothing the host
+    /// happens to know": a service is reachable from a pane, from a control route, or
+    /// from a module over RPC, and not from the projection that fills this panel.
+    #[test]
+    fn the_panel_draws_no_host_service_of_its_own() {
+        let app = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let core = app.join("../core/src");
+
+        // Two left-panel modes were deleted outright rather than moved behind the rail.
+        // A file can come back, and so can a `mod` line pointing at one written
+        // somewhere else — the cheaper way to regress, and the one a directory listing
+        // would miss.
+        for gone in ["filetree", "gitpanel"] {
+            assert!(
+                !core.join(format!("{gone}.rs")).exists(),
+                "core/src/{gone}.rs is a deleted left-panel mode, not a file to restore"
+            );
+        }
+
+        // The host services the criterion named alongside them. Unlike the two above,
+        // these are allowed to exist: they back `host.git.*`, the tools history readers,
+        // pane identity and the always-on tab's working directory, none of which is
+        // panel code. They are not allowed to reach the panel.
+        //
+        // Spelled in halves so the list does not match itself when this very file is
+        // scanned below — the trap `uitest::matrix` documents, where a guard that names
+        // what it forbids makes every name look present by its own existence.
+        let mut forbidden: Vec<String> = ["accounts", "history", "hook", "panes", "recovery"]
+            .iter()
+            .map(|tail| format!("claude_{tail}"))
+            .collect();
+        forbidden.push(format!("hyper{}", "pane::"));
+        // `git` alone is a substring of half the identifiers in a terminal app, so the
+        // git service is named by the two ways the panel could actually reach it.
+        forbidden.push(format!("avada_core::{}::", "git"));
+        forbidden.push(format!("crate::{}::", "git"));
+
+        // The panel's whole data side: this file, the tree projection it delegates to,
+        // and the rail registry that decides what a module may contribute.
+        let panel = [
+            app.join("src/leftpanel.rs"),
+            app.join("src/paneview.rs"),
+            core.join("module/rail.rs"),
+        ];
+        for file in &panel {
+            let text = std::fs::read_to_string(file).unwrap_or_else(|e| {
+                panic!(
+                    "{}: {e} — the panel's data side must stay in the repo",
+                    file.display()
+                )
+            });
+            for name in &forbidden {
+                assert!(
+                    !text.contains(name.as_str()),
+                    "{} reaches `{name}`: a host service the left panel must not read. \
+                     If the panel needs it, it belongs behind a rail entry a module owns.",
+                    file.display()
+                );
+            }
+        }
+
+        // …and the scan was not vacuous: every name above is a module core really
+        // declares, so this is a rule about live code rather than about phantoms.
+        let lib = std::fs::read_to_string(core.join("lib.rs")).expect("core/src/lib.rs");
+        for name in &forbidden {
+            let module = name
+                .trim_end_matches(':')
+                .rsplit(':')
+                .next()
+                .expect("a module name");
+            assert!(
+                lib.contains(&format!("pub mod {module};")),
+                "core no longer declares `{module}` — drop it from this list, or the \
+                 assertion above passes for the wrong reason"
+            );
+        }
+    }
 }
