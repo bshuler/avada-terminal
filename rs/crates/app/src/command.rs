@@ -227,6 +227,11 @@ pub enum Command {
     RecolorPane(usize, usize),
     /// Set pane `0`'s per-pane frame override to `1`.
     SetPaneFrame(usize, bool),
+    /// Choose the keymap preset a tier-5 module surface uses: `(module id, surface,
+    /// preset)`, where `None` restores the module's own default. Carries the identity
+    /// rather than a pane index because the choice outlives the pane — reopen the surface
+    /// tomorrow and it is still in Helix mode.
+    SetModulePreset(String, String, Option<String>),
     /// Set pane `0`'s per-pane dot override to `1`.
     SetPaneDot(usize, bool),
     /// Toggle whether pane `0`'s ambient-AI summary line is muted.
@@ -589,6 +594,9 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::RecolorPane(i, swatch) => state.recolor_pane(i, swatch),
         Command::SetPaneFrame(i, on) => state.set_pane_frame(i, on),
         Command::SetPaneDot(i, on) => state.set_pane_dot(i, on),
+        Command::SetModulePreset(module, surface, preset) => {
+            state.set_module_preset(&module, &surface, preset.as_deref())
+        }
         Command::ToggleMuteAi(i) => state.toggle_mute_ai(i),
         Command::ToggleTalk(i) => state.toggle_talk(i),
         Command::ToggleDictation(i) => {

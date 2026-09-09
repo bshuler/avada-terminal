@@ -82,6 +82,11 @@ pub mod transport;
 /// in the crate that defines them.
 pub use avada_module_sdk::contract::methods;
 
+/// The tier-5 cell-grid vocabulary, re-exported for the same reason as [`methods`]: the app
+/// paints these frames and routes these keystrokes, and it reaches the SDK only through
+/// this crate.
+pub use avada_module_sdk::grid;
+
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
 pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate, RowTarget};
@@ -343,6 +348,27 @@ pub(crate) mod testkit {
                     )
                     .unwrap();
                 }
+                Message::Notification(n)
+                    if n.method == methods::MODULE_GRID_KEY
+                        || n.method == methods::MODULE_GRID_RESIZE =>
+                {
+                    // The tier-5 notifications, echoed through the rail like the rest:
+                    // a notification has no reply, so the only way to prove one arrived
+                    // is to watch the module act on it.
+                    let label = if n.method == methods::MODULE_GRID_KEY {
+                        format!("key {} {}", n.params["key"], n.params["action"])
+                    } else {
+                        format!("resize {}x{}", n.params["cols"], n.params["rows"])
+                    };
+                    conn.call(
+                        methods::HOST_RAIL_REGISTER,
+                        serde_json::to_value(RegisterRail {
+                            entries: vec![entry(&label)],
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+                }
                 Message::Notification(n) if n.method == methods::MODULE_PREFS_CHANGED => {
                     // Echo the new values back through the rail so the test can see them.
                     let label = format!("prefs {}", n.params["values"]["theme"]);
@@ -370,6 +396,7 @@ mod host_tests {
     use avada_module_sdk::caps::Capability;
     use avada_module_sdk::contract::methods::events as contract_events;
     use avada_module_sdk::contract::ErrorCode;
+    use avada_module_sdk::grid::{GridKey, GridResize};
     use avada_module_sdk::rail::{Gesture, RowActivate, RowTarget};
     use avada_module_sdk::rights::InstallRecord;
     use avada_module_sdk::ModuleId;
@@ -528,6 +555,68 @@ mod host_tests {
             std::fs::read_to_string(r.host.data_dir(&id).unwrap().join("prefs.json")).unwrap();
         assert!(on_disk.contains("dark"));
         r.host.shutdown(&id).unwrap();
+    }
+
+    /// The host→module half of tier 5. Both are notifications, so the only proof they
+    /// landed is the module acting on them — here, echoing them back through the rail.
+    /// A keystroke arrives already resolved to an action id: the host owns the chord →
+    /// action lookup, so the module never has to know which preset the human chose.
+    #[test]
+    fn grid_keys_and_resizes_reach_the_module_as_notifications() {
+        let r = rig(&all_ui(), |_| {});
+        spawn(&r, "normal").unwrap();
+        let id = r.record.module_id.clone();
+        r.rail.recv_timeout(WAIT).unwrap();
+        r.rail.recv_timeout(WAIT).unwrap();
+
+        r.host
+            .grid_key(
+                &id,
+                &GridKey {
+                    surface: "editor".into(),
+                    key: "h".into(),
+                    action: Some("move.left".into()),
+                    text: None,
+                },
+            )
+            .unwrap();
+        match r.rail.recv_timeout(WAIT).unwrap() {
+            RailEvent::Registered { entries, .. } => {
+                assert_eq!(entries[0].label, "key \"h\" \"move.left\"");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        r.host
+            .grid_resize(
+                &id,
+                &GridResize {
+                    surface: "editor".into(),
+                    cols: 100,
+                    rows: 40,
+                },
+            )
+            .unwrap();
+        match r.rail.recv_timeout(WAIT).unwrap() {
+            RailEvent::Registered { entries, .. } => assert_eq!(entries[0].label, "resize 100x40"),
+            other => panic!("{other:?}"),
+        }
+
+        r.host.shutdown(&id).unwrap();
+        // A pane can outlive the module behind it, so a keystroke typed into one after
+        // the module is gone must be reported rather than dropped on the floor.
+        assert!(matches!(
+            r.host.grid_key(
+                &id,
+                &GridKey {
+                    surface: "editor".into(),
+                    key: "h".into(),
+                    action: None,
+                    text: Some("h".into()),
+                },
+            ),
+            Err(HostError::NotRunning(_))
+        ));
     }
 
     #[test]

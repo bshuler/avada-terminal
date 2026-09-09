@@ -11,6 +11,8 @@
 
 use slint::SharedString;
 
+use avada_core::tools::PaneKind;
+
 use crate::command::Command;
 use crate::state::State;
 
@@ -382,6 +384,41 @@ pub fn pane_menu(state: &State, idx: usize, x: f32, y: f32, in_taskbar: bool) ->
     b.item("Select All", Command::SelectAllPane(idx));
     if pty {
         b.item("Clear", Command::ClearPane(idx));
+    }
+    // ---- Keymap presets — a tier-5 module surface's choice of dialect (Helix, VS Code, …).
+    //
+    // Flat checkable rows rather than a submenu: a module declares a handful of presets, and
+    // a new `sub::` kind would mean new flyout markup for a list that fits inline. The row
+    // for the module's *own* default sends `None`, not its name — so a module that later
+    // renames or re-points its default is followed rather than frozen at today's spelling.
+    if let Some(PaneKind::Module(m)) = t.panes.get(idx).map(|p| &p.kind) {
+        let rows = crate::module_ui::grid::preset_rows(&m.id, &m.surface);
+        if !rows.is_empty() {
+            b.sep();
+            let default = crate::module_ui::grid::default_preset_name(&m.id, &m.surface);
+            for (name, label, active) in rows {
+                let arg = if default.as_deref() == Some(name.as_str()) {
+                    None
+                } else {
+                    Some(name)
+                };
+                b.row(
+                    &label,
+                    "",
+                    0,
+                    active,
+                    true,
+                    false,
+                    false,
+                    sub::NONE,
+                    Some(Command::SetModulePreset(
+                        m.id.as_str().to_string(),
+                        m.surface.clone(),
+                        arg,
+                    )),
+                );
+            }
+        }
     }
     b.sep();
     // ---- "Reminder ▸" — park the pane (session alive) until the chosen time. A single
@@ -1209,5 +1246,159 @@ mod tests {
             "no extension, but the OS says it is a program"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod module_preset_menu_tests {
+    //! A tier-5 surface's choice of keymap dialect is offered in the pane menu it belongs
+    //! to, as flat checkable rows.
+    use super::*;
+    use crate::state::DetachedPane;
+    use avada_core::module::grid::{DeclareKeymap, GridAction, KeymapPreset};
+    use avada_core::rights::ModuleId;
+    use avada_core::session_manager::SessionManager;
+    use avada_core::tools::kind::ModulePaneRef;
+    use avada_core::tools::PaneKind;
+
+    const MODULE: &str = "bshuler/avada-editor";
+
+    fn id() -> ModuleId {
+        ModuleId::new(MODULE).unwrap()
+    }
+
+    fn with_kind(kind: PaneKind) -> State {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mgr = SessionManager::new(tx);
+        let mut st = State::new(crate::theme::load_font(1.0));
+        st.adopt_pane(
+            &mgr,
+            DetachedPane {
+                uid: "p".into(),
+                title: "p".into(),
+                subtitle: None,
+                pinned_accent: None,
+                show_frame: None,
+                show_dot: None,
+                font_px: 14.0,
+                spawn_command: None,
+                spawn_args: None,
+                spawn_shell: None,
+                kind,
+                tool_session: None,
+                cwd: None,
+            },
+        );
+        st
+    }
+
+    fn module_pane(surface: &str) -> PaneKind {
+        PaneKind::Module(ModulePaneRef::new(MODULE, surface, None).expect("a valid pane ref"))
+    }
+
+    fn keymap(surface: &str) -> DeclareKeymap {
+        DeclareKeymap {
+            surface: surface.into(),
+            actions: vec![GridAction {
+                id: "move.left".into(),
+                label: "Move left".into(),
+            }],
+            presets: vec![
+                KeymapPreset {
+                    name: "helix".into(),
+                    label: "Helix".into(),
+                    bindings: [("h".to_string(), "move.left".to_string())]
+                        .into_iter()
+                        .collect(),
+                },
+                KeymapPreset {
+                    name: "vscode".into(),
+                    label: "VS Code".into(),
+                    bindings: [("arrowleft".to_string(), "move.left".to_string())]
+                        .into_iter()
+                        .collect(),
+                },
+            ],
+            default_preset: Some("helix".into()),
+        }
+    }
+
+    /// What a preset row carries, flattened so it can be compared: its label, whether it
+    /// is ticked, and the choice its command would make. `Command` is not `PartialEq`, so
+    /// the payload is unwrapped here rather than the enum compared whole.
+    type Row = (String, bool, Option<String>);
+
+    fn preset_rows(st: &State) -> Vec<Row> {
+        let menu = pane_menu(st, 0, 0.0, 0.0, false);
+        menu.entries
+            .iter()
+            .zip(menu.commands.iter())
+            .filter_map(|(e, c)| match c {
+                Some(Command::SetModulePreset(m, s, preset)) => {
+                    assert_eq!((m.as_str(), s.as_str()), (MODULE, "editor"));
+                    Some((e.label.to_string(), e.checked, preset.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The rows exist, exactly one is ticked, and the row for the module's *own* default
+    /// clears the choice rather than pinning today's spelling of it.
+    #[test]
+    fn the_default_row_clears_the_choice_and_the_others_name_themselves() {
+        crate::module_ui::grid::set_keymap(&id(), keymap("editor"));
+        let st = with_kind(module_pane("editor"));
+
+        assert_eq!(
+            preset_rows(&st),
+            vec![
+                ("Helix".to_string(), true, None),
+                ("VS Code".to_string(), false, Some("vscode".to_string())),
+            ]
+        );
+
+        // Choosing the other dialect moves the tick and nothing else.
+        crate::module_ui::grid::set_preset(&id(), "editor", Some("vscode"));
+        let ticked: Vec<(String, bool)> = preset_rows(&st)
+            .into_iter()
+            .map(|(l, c, _)| (l, c))
+            .collect();
+        assert_eq!(
+            ticked,
+            vec![("Helix".to_string(), false), ("VS Code".to_string(), true)]
+        );
+        crate::module_ui::grid::forget(&id());
+    }
+
+    /// A surface that has declared no keymap — and any pane that is not a module at all —
+    /// gets no rows and no stray separator.
+    #[test]
+    fn a_pane_with_no_declared_presets_grows_no_rows() {
+        crate::module_ui::grid::forget(&id());
+        let bare = with_kind(module_pane("editor"));
+        assert!(
+            preset_rows(&bare).is_empty(),
+            "nothing declared, nothing offered"
+        );
+        let before = pane_menu(&bare, 0, 0.0, 0.0, false).entries.len();
+
+        // The declaration is per surface: a keymap for `diff` says nothing about `editor`.
+        crate::module_ui::grid::set_keymap(&id(), keymap("diff"));
+        assert!(
+            preset_rows(&bare).is_empty(),
+            "a sibling surface's dialect is not this one's"
+        );
+        assert_eq!(
+            pane_menu(&bare, 0, 0.0, 0.0, false).entries.len(),
+            before,
+            "no rows means no separator either"
+        );
+
+        // And a terminal pane is never asked about dialects, keymap or no keymap.
+        crate::module_ui::grid::set_keymap(&id(), keymap("editor"));
+        assert!(preset_rows(&with_kind(PaneKind::Terminal)).is_empty());
+        assert!(preset_rows(&with_kind(PaneKind::Markdown)).is_empty());
+        crate::module_ui::grid::forget(&id());
     }
 }

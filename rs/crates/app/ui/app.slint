@@ -14,6 +14,7 @@ import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem,
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
+import { GridRun, GridPaneItem, GridPaneAdapter } from "types.slint";
 import { TopBar } from "topbar.slint";
 import { PaneView } from "paneview.slint";
 import { OverlayLayer } from "overlays.slint";
@@ -38,6 +39,9 @@ export { ModulePlaceholderAdapter }
 // ---- track V3: re-exported so `imagepane::attach` can reach the adapter and the
 // harness can call `invoke_fit`; the UI lives in imagepane.slint.
 export { ImagePaneItem, ImageFit, ImagePaneAdapter }
+// ---- track H4: re-exported so `gridpane::attach` can bind the two models; the UI
+// lives in gridpane.slint.
+export { GridRun, GridPaneItem, GridPaneAdapter }
 
 export component AppWindow inherits Window {
     title: "avada";

@@ -88,7 +88,7 @@ impl KeyTok {
     /// renderer's `keyLabel`: arrows show glyphs, named keys are spelled out, a single
     /// character is upper-cased.
     #[tracing::instrument(level = "debug", ret)]
-    fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         match self {
             KeyTok::Char(c) => c.to_ascii_uppercase().to_string(),
             KeyTok::Left => "←".into(),

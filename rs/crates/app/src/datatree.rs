@@ -374,10 +374,9 @@ pub fn generation(uid: &str) -> u64 {
     FOLDS.with(|f| f.borrow().get(uid).map_or(0, |x| x.gen))
 }
 
-/// Drop pane `uid`'s folds so a test starts clean. Production never calls it: the
-/// projection cache in `viewpane` keeps a closed pane's entry the same way, and a set of
-/// a few strings per pane is not worth a hook in the (hot) pane-close path this wave.
-#[cfg(test)]
+/// Drop pane `uid`'s folds. Called from `State::forget_pane_runtime`, the one path every
+/// closed, detached or retired pane passes through — a deeply expanded tree holds a node
+/// path per open branch, and a pane that is gone will never read them again.
 pub fn forget(uid: &str) {
     FOLDS.with(|f| {
         f.borrow_mut().remove(uid);

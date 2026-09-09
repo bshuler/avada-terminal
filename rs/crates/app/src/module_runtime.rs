@@ -48,6 +48,7 @@ use avada_core::install::{FileKeyStore, KeyStore};
 use avada_core::license::{CachedGate, LicenseService};
 use avada_core::marketplace::state_dir_beside;
 use avada_core::marketplace::workspace::WorkspaceStates;
+use avada_core::module::grid::{GridKey, GridResize};
 use avada_core::module::{
     DeclaredOnly, Gesture, Host, HostConfig, HostEvent, RailEvent, RowActivate,
 };
@@ -143,6 +144,10 @@ pub struct ModuleTick {
     pub rail: Vec<RailEvent>,
     /// Text a module asked to be shown to the human.
     pub toasts: Vec<String>,
+    /// Whether a tier-5 surface repainted or redeclared its keymap this tick. The frame
+    /// itself went straight into [`crate::module_ui::grid`] — this is only the "something
+    /// moved" flag, because a repaint is a redraw and not a change to [`State`].
+    pub grid: bool,
 }
 
 /// The module host, its worker thread, and the two event streams the GUI folds into
@@ -170,6 +175,13 @@ pub struct ModuleRuntime {
     /// waited for it would block its own request loop. So the id a module types into is
     /// never the app's own session uid, and this is the only place the two meet.
     pane_uids: RefCell<std::collections::HashMap<String, String>>,
+    /// `<owner/repo>#<surface>` → the cell size that surface was last told about.
+    ///
+    /// The layout pass offers a size every tick once a pane has settled, because it has no
+    /// memory of its own; this is the memory. Without it a module would be woken by a
+    /// `module.grid.resize` at the pump's cadence and spend its life repainting the same
+    /// picture.
+    grid_sizes: RefCell<std::collections::HashMap<String, (u16, u16)>>,
 }
 
 impl ModuleRuntime {
@@ -208,6 +220,7 @@ impl ModuleRuntime {
                     panes: RefCell::new(Vec::new()),
                     workspaces: RefCell::new(Vec::new()),
                     pane_uids: RefCell::new(std::collections::HashMap::new()),
+                    grid_sizes: RefCell::new(std::collections::HashMap::new()),
                 };
             }
         };
@@ -251,6 +264,7 @@ impl ModuleRuntime {
             panes: RefCell::new(Vec::new()),
             workspaces: RefCell::new(Vec::new()),
             pane_uids: RefCell::new(std::collections::HashMap::new()),
+            grid_sizes: RefCell::new(std::collections::HashMap::new()),
         };
         rt.start_installed(modules_root, workspace);
         rt
@@ -320,6 +334,10 @@ impl ModuleRuntime {
             st.toast_active(text);
             dirty = true;
         }
+        // A repaint changes nothing in `State` — the frame lives in the grid store — but
+        // the window still has to be told to draw again, or an editor would only move when
+        // something else happened to move too.
+        dirty |= tick.grid;
         dirty
     }
 
@@ -359,6 +377,48 @@ impl ModuleRuntime {
     /// what the contract promises a module: an unknown id is a race, not an error.
     pub fn forget_pane(&self, pane_id: &str) {
         self.pane_uids.borrow_mut().remove(pane_id);
+    }
+
+    /// Hand a resolved keystroke to a tier-5 module (`module.grid.key`).
+    ///
+    /// A notification, not a call: it is one framed write to the child's stdin and never
+    /// waits for an answer, which is the only reason this may run on the UI thread at all.
+    /// A module that has stopped simply does not receive it — a keystroke into a dead
+    /// editor is a missed keystroke, not an error the human should see.
+    pub fn grid_key(&self, module: &ModuleId, key: &GridKey) {
+        if let Some(host) = self.host.as_ref() {
+            if let Err(e) = host.grid_key(module, key) {
+                tracing::debug!(module = %module.as_str(), "grid key dropped: {e}");
+            }
+        }
+    }
+
+    /// Tell a tier-5 module its surface is a different size now (`module.grid.resize`).
+    ///
+    /// Same one-way shape as [`Self::grid_key`], and sent only when the cell count actually
+    /// changed — the app relayouts on every window resize, and a module that got a
+    /// notification per frame would spend its life repainting the same picture.
+    pub fn grid_resize(&self, module: &ModuleId, resize: &GridResize) {
+        let key = crate::leftpanel::entry_key(module, &resize.surface);
+        if self.grid_sizes.borrow().get(&key) == Some(&(resize.cols, resize.rows)) {
+            return;
+        }
+        if let Some(host) = self.host.as_ref() {
+            if let Err(e) = host.grid_resize(module, resize) {
+                tracing::debug!(module = %module.as_str(), "grid resize dropped: {e}");
+                return;
+            }
+        }
+        self.grid_sizes
+            .borrow_mut()
+            .insert(key, (resize.cols, resize.rows));
+    }
+
+    /// The cell size a surface was last told about, for the layout pass's own tests.
+    #[cfg(test)]
+    pub(crate) fn grid_size(&self, module: &ModuleId, surface: &str) -> Option<(u16, u16)> {
+        let key = crate::leftpanel::entry_key(module, surface);
+        self.grid_sizes.borrow().get(&key).copied()
     }
 
     fn fold_event(&self, event: HostEvent, tick: &mut ModuleTick) {
@@ -401,6 +461,17 @@ impl ModuleRuntime {
             // left for the panel to do.
             HostEvent::Status { module, status } => {
                 tracing::debug!(module = %module.as_str(), ?status, "module status")
+            }
+            // A frame belongs to the pane that shows it, not to the panel, so it goes
+            // straight into the grid store — the same shape as the row store, and safe
+            // here because `poll` runs on the window thread.
+            HostEvent::Grid { module, frame } => {
+                crate::module_ui::grid::set_frame(&module, frame);
+                tick.grid = true;
+            }
+            HostEvent::Keymap { module, keymap } => {
+                crate::module_ui::grid::set_keymap(&module, keymap);
+                tick.grid = true;
             }
             // Commands, prefs pages and routes have their own consumers (the palette, the
             // Preferences page, `attach_host`) and none of them is the left panel.
@@ -735,6 +806,7 @@ label = "Tree"
             panes: RefCell::new(Vec::new()),
             workspaces: RefCell::new(Vec::new()),
             pane_uids: RefCell::new(HashMap::new()),
+            grid_sizes: RefCell::new(HashMap::new()),
         }
     }
 
@@ -950,6 +1022,7 @@ label = "Tree"
                 entries: vec![entry],
             }],
             toasts: vec![],
+            grid: false,
         };
 
         let mut first = State::new(crate::theme::load_font(1.0));
@@ -980,5 +1053,45 @@ label = "Tree"
         assert_eq!(wire_gesture(RailGesture::Open), Gesture::Open);
         assert_eq!(wire_gesture(RailGesture::Toggle), Gesture::Toggle);
         assert_eq!(wire_gesture(RailGesture::Context), Gesture::Context);
+    }
+
+    /// The layout pass re-offers a settled size on every tick, so the memory that turns that
+    /// stream back into one notification per real change has to live here.
+    ///
+    /// It is keyed per surface, not per module: an editor and a diff in two panes of
+    /// different widths must each be told their own, and neither may silence the other.
+    #[test]
+    fn a_surface_remembers_its_size_per_surface_and_only_a_change_is_worth_sending() {
+        let rt = hostless();
+        let m = id("bshuler/avada-editor");
+        let resize = |surface: &str, cols: u16, rows: u16| GridResize {
+            surface: surface.into(),
+            cols,
+            rows,
+        };
+
+        assert_eq!(
+            rt.grid_size(&m, "editor"),
+            None,
+            "nothing told, nothing known"
+        );
+        rt.grid_resize(&m, &resize("editor", 80, 24));
+        assert_eq!(rt.grid_size(&m, "editor"), Some((80, 24)));
+
+        // The tick that repeats it changes nothing; the tick that moves it does.
+        rt.grid_resize(&m, &resize("editor", 80, 24));
+        assert_eq!(rt.grid_size(&m, "editor"), Some((80, 24)));
+        rt.grid_resize(&m, &resize("editor", 100, 24));
+        assert_eq!(rt.grid_size(&m, "editor"), Some((100, 24)));
+
+        // A second surface of the same module keeps its own.
+        assert_eq!(rt.grid_size(&m, "diff"), None);
+        rt.grid_resize(&m, &resize("diff", 40, 24));
+        assert_eq!(rt.grid_size(&m, "diff"), Some((40, 24)));
+        assert_eq!(rt.grid_size(&m, "editor"), Some((100, 24)));
+
+        // And so does the same surface name under a different module.
+        let other = id("bshuler/avada-files");
+        assert_eq!(rt.grid_size(&other, "editor"), None);
     }
 }

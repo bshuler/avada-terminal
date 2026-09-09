@@ -1732,6 +1732,10 @@ impl State {
     /// Fresh state with a single empty tab; the caller seeds pane 0 via [`Self::add_pane`].
     #[tracing::instrument(level = "debug", skip(font))]
     pub fn new(font: avada_terminal_widget::Font) -> Self {
+        // Module keymap overrides live in their own file and their own store, so they are
+        // loaded here rather than inside `Keymap::load` — a module surface can be rebound
+        // long before (or long after) the module that owns it is ever spawned.
+        crate::module_ui::grid::load_prefs();
         let mut s = State {
             font,
             last_scale: 1.0,
@@ -3042,6 +3046,13 @@ impl State {
         // released on the same path — otherwise every browser pane ever opened stays
         // resident for the life of the window.
         crate::viewpane::forget(uid);
+        // The other three per-uid side stores live outside `State` for the same reason and
+        // have to be released on the same path: a decoded image is megabytes, a data tree
+        // holds the whole parsed document, and a tier-5 module grid holds a frame's worth
+        // of runs. All three are no-ops for a pane that never had one.
+        crate::imagepane::forget(uid);
+        crate::datatree::forget(uid);
+        crate::gridpane::forget(uid);
     }
 
     /// The identity a pane is **drawn** with: its own `kind` when it has one, else
@@ -4775,6 +4786,24 @@ impl State {
             shift,
             key,
         };
+        // A module's action lives in a different keymap and a different file, so it is
+        // rebound through the module store rather than `self.keymap`. No chord stealing:
+        // a module's chords are scoped to its own surface, so two modules — or a module and
+        // the app — binding the same chord is not a conflict to resolve.
+        //
+        // On macOS the captured `ctrl` is Control **or** Command (the editor cannot tell
+        // them apart), while a module chord's `ctrl` is always the physical Control key
+        // (see `crate::pty_ctrl`) — Command stays the app's. A Command capture therefore
+        // lands on Control, which is the only one of the two a module can ever receive.
+        if let Some((module, _surface, action)) = crate::module_ui::grid::parse_row_id(&id) {
+            let spelled = crate::module_ui::grid::chord_of(ctrl, alt, shift, &key.token());
+            crate::module_ui::grid::set_binding(&module, &action, Some(&spelled));
+            crate::module_ui::grid::save_prefs();
+            self.capturing_binding = None;
+            self.capture_conflict = None;
+            self.dirty = true;
+            return;
+        }
         // Steal the chord from its current owner (if any) — that binding becomes unbound.
         if let Some(other) = self.keymap.owner_of(chord, &id) {
             self.keymap.unbind(other);
@@ -4789,7 +4818,14 @@ impl State {
     /// row then shows "Unbound" until rebound or reset to default.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn unbind_binding(&mut self, id: &str) {
-        self.keymap.unbind(id);
+        if let Some((module, _surface, action)) = crate::module_ui::grid::parse_row_id(id) {
+            // An explicit unbind is stored, not dropped: it has to survive a restart, and
+            // it has to out-rank whatever the preset says. Clearing it is `reset_binding`.
+            crate::module_ui::grid::set_binding(&module, &action, None);
+            crate::module_ui::grid::save_prefs();
+        } else {
+            self.keymap.unbind(id);
+        }
         if self.capturing_binding.as_deref() == Some(id) {
             self.capturing_binding = None;
             self.capture_conflict = None;
@@ -4800,7 +4836,12 @@ impl State {
     /// Reset binding `id` to its default chord (drop the override/unbind).
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn reset_binding(&mut self, id: &str) {
-        self.keymap.reset(id);
+        if let Some((module, _surface, action)) = crate::module_ui::grid::parse_row_id(id) {
+            crate::module_ui::grid::clear_binding(&module, &action);
+            crate::module_ui::grid::save_prefs();
+        } else {
+            self.keymap.reset(id);
+        }
         if self.capturing_binding.as_deref() == Some(id) {
             self.capturing_binding = None;
             self.capture_conflict = None;
@@ -4812,6 +4853,8 @@ impl State {
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn reset_all_bindings(&mut self) {
         self.keymap.reset_all();
+        crate::module_ui::grid::clear_all_bindings();
+        crate::module_ui::grid::save_prefs();
         self.capturing_binding = None;
         self.capture_conflict = None;
         self.dirty = true;
@@ -5012,7 +5055,8 @@ impl State {
                 rows,
             } => crate::module_ui::rows::set(module, entry, rows.clone()),
             avada_core::module::RailEvent::Gone { module } => {
-                crate::module_ui::rows::forget(module)
+                crate::module_ui::rows::forget(module);
+                crate::module_ui::grid::forget(module);
             }
             _ => {}
         }
@@ -6348,6 +6392,20 @@ impl State {
 
     /// Set pane `idx`'s per-pane dot override.
     #[tracing::instrument(level = "debug", ret, skip(self))]
+    /// Put a tier-5 module surface on keymap preset `preset` (`None` restores the module's
+    /// own default) and persist the choice. Nothing is validated against the module's
+    /// declaration here — [`crate::module_ui::grid`] falls back to the default for a preset
+    /// name it cannot find, which is also what happens when a module drops one in an update.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn set_module_preset(&mut self, module: &str, surface: &str, preset: Option<&str>) {
+        let Ok(module) = avada_core::rights::ModuleId::new(module) else {
+            return;
+        };
+        crate::module_ui::grid::set_preset(&module, surface, preset);
+        crate::module_ui::grid::save_prefs();
+        self.dirty = true;
+    }
+
     pub fn set_pane_dot(&mut self, idx: usize, on: bool) {
         if let Some(p) = self.active_tab_mut().panes.get_mut(idx) {
             p.show_dot = Some(on);
@@ -12874,5 +12932,161 @@ mod hyperpane_uniqueness_tests {
             .expect("an adopted pane should carry the current roots");
         assert_eq!(std::path::Path::new(&hit), proj.join("docs/x.md"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod module_keymap_routing_tests {
+    //! One Preferences editor, two stores. A row id carrying a `module:` prefix belongs to
+    //! a module's own keymap and its own file; a bare one is the app's. Every entry point
+    //! the editor calls has to route on that, or a user rebinding an editor's arrow keys
+    //! would silently rewrite the app's.
+    use super::*;
+    use crate::module_ui::grid;
+    use avada_core::module::grid::{DeclareKeymap, GridAction, KeymapPreset};
+    use avada_core::rights::ModuleId;
+
+    const MODULE: &str = "bshuler/avada-editor";
+    /// An app binding that must never move when a module row is edited.
+    const APP_ROW: &str = "pane.toggleZoom";
+
+    fn id() -> ModuleId {
+        ModuleId::new(MODULE).unwrap()
+    }
+
+    /// A fresh state whose module prefs file is a scratch file on this thread.
+    fn fresh(tag: &str) -> State {
+        let dir = std::env::temp_dir().join(format!("avada-route-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch dir");
+        let path = dir.join("module-keymaps.json");
+        let _ = std::fs::remove_file(&path); // last run's choices are not this run's
+        grid::set_prefs_path(path);
+        grid::set_keymap(
+            &id(),
+            DeclareKeymap {
+                surface: "editor".into(),
+                actions: vec![
+                    GridAction {
+                        id: "move.left".into(),
+                        label: "Move left".into(),
+                    },
+                    GridAction {
+                        id: "file.save".into(),
+                        label: "Save".into(),
+                    },
+                ],
+                presets: vec![
+                    KeymapPreset {
+                        name: "helix".into(),
+                        label: "Helix".into(),
+                        bindings: [("h".to_string(), "move.left".to_string())]
+                            .into_iter()
+                            .collect(),
+                    },
+                    KeymapPreset {
+                        name: "vscode".into(),
+                        label: "VS Code".into(),
+                        bindings: [("arrowleft".to_string(), "move.left".to_string())]
+                            .into_iter()
+                            .collect(),
+                    },
+                ],
+                default_preset: Some("helix".into()),
+            },
+        );
+        State::new(crate::theme::load_font(1.0))
+    }
+
+    /// The chord that currently fires `action` on the editor surface.
+    fn chord(action: &str) -> String {
+        grid::binding_rows(&id(), "editor")
+            .into_iter()
+            .find(|(a, _, _)| a == action)
+            .map(|(_, _, c)| c)
+            .unwrap_or_else(|| panic!("{action} is a declared action"))
+    }
+
+    /// A capture on a module row writes the module store and leaves the app's keymap alone.
+    #[test]
+    fn a_captured_chord_lands_in_the_store_the_row_id_names() {
+        let mut st = fresh("capture");
+        assert_eq!(chord("move.left"), "h", "helix is the module's own default");
+
+        st.begin_rebind(&grid::row_id(&id(), "editor", "move.left"));
+        st.capture_chord(true, false, false, "b");
+        assert_eq!(chord("move.left"), "ctrl+b");
+        assert!(grid::overridden(&id(), "move.left"));
+        assert!(
+            !st.keymap.is_overridden(APP_ROW),
+            "a module rebind must not touch an app binding"
+        );
+        assert_eq!(st.capturing_binding, None, "the capture closed");
+
+        // The app's own rows still route to the app's keymap.
+        st.begin_rebind(APP_ROW);
+        st.capture_chord(true, true, false, "b");
+        assert!(st.keymap.is_overridden(APP_ROW));
+    }
+
+    /// Unbind stores the choice; reset removes it. The difference is the whole point — an
+    /// unbind that were merely dropped would come straight back as the preset's chord.
+    #[test]
+    fn an_unbind_is_stored_and_only_a_reset_puts_the_preset_back() {
+        let mut st = fresh("unbind");
+        let row = grid::row_id(&id(), "editor", "move.left");
+
+        st.unbind_binding(&row);
+        assert_eq!(chord("move.left"), "", "nothing fires it now");
+        assert!(grid::overridden(&id(), "move.left"), "and that is a choice");
+
+        st.reset_binding(&row);
+        assert!(!grid::overridden(&id(), "move.left"));
+        assert_eq!(chord("move.left"), "h", "back to what the module shipped");
+    }
+
+    /// "Reset all" clears both stores' rebinds — and neither store's preset, because a
+    /// preset is a choice of dialect, not an override of one.
+    #[test]
+    fn reset_all_clears_every_rebind_and_no_dialect() {
+        let mut st = fresh("resetall");
+        st.begin_rebind(APP_ROW);
+        st.capture_chord(true, true, false, "b");
+        st.unbind_binding(&grid::row_id(&id(), "editor", "file.save"));
+        st.set_module_preset(MODULE, "editor", Some("vscode"));
+        assert!(st.keymap.is_overridden(APP_ROW) && grid::any_overridden());
+
+        st.reset_all_bindings();
+        assert!(
+            !st.keymap.is_overridden(APP_ROW),
+            "the app's rebinds are gone"
+        );
+        assert!(!grid::any_overridden(), "and so are every module's");
+        assert_eq!(
+            grid::preset_of(&id(), "editor").as_deref(),
+            Some("vscode"),
+            "the dialect the user chose is not a rebind and survives"
+        );
+    }
+
+    /// A preset is set by identity, not by pane, so it outlives the pane it was chosen in —
+    /// and an id that is not a module id is a no-op rather than a panic.
+    #[test]
+    fn a_preset_is_chosen_by_module_identity_and_a_bad_id_does_nothing() {
+        let mut st = fresh("preset");
+        assert_eq!(chord("move.left"), "h");
+
+        st.set_module_preset(MODULE, "editor", Some("vscode"));
+        assert_eq!(chord("move.left"), "arrowleft");
+        st.set_module_preset(MODULE, "editor", None);
+        assert_eq!(
+            chord("move.left"),
+            "h",
+            "None restores the module's own default"
+        );
+
+        st.dirty = false;
+        st.set_module_preset("not a module id", "editor", Some("vscode"));
+        assert!(!st.dirty, "a malformed id changes nothing at all");
+        assert_eq!(grid::preset_of(&id(), "editor"), None);
     }
 }

@@ -16,6 +16,7 @@ mod annotations;
 mod datatree;
 mod files;
 mod git;
+mod gridpane;
 mod image;
 mod links;
 mod matrix;

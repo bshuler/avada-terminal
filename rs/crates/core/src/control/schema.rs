@@ -171,6 +171,7 @@ pub fn rpc_descriptors() -> Vec<RpcDescriptor> {
         .iter()
         .chain(methods::HOST_OPTIONAL.iter())
         .chain(methods::MODULE_REQUIRED_V1.iter())
+        .chain(methods::MODULE_OPTIONAL.iter())
         .map(|m| RpcDescriptor {
             method: m.to_string(),
             summary: rpc_summary(m).to_string(),
@@ -215,6 +216,10 @@ fn rpc_summary(method: &str) -> &'static str {
         methods::MODULE_ROUTE_INVOKE => "A registered control-plane route was hit",
         methods::MODULE_EVENT => "An event the module subscribed to",
         methods::MODULE_PREFS_CHANGED => "Preferences changed",
+        methods::HOST_GRID_SET => "Replace a grid surface's frame",
+        methods::HOST_KEYMAP_DECLARE => "Declare a grid surface's actions and keymap presets",
+        methods::MODULE_GRID_KEY => "A keystroke landed in a focused grid surface",
+        methods::MODULE_GRID_RESIZE => "A grid surface's pane changed size",
         methods::MODULE_SHUTDOWN => "Shut down within 5 s",
         _ => "",
     }
@@ -317,6 +322,7 @@ mod tests {
             methods::HOST_REQUIRED_V1.len()
                 + methods::HOST_OPTIONAL.len()
                 + methods::MODULE_REQUIRED_V1.len()
+                + methods::MODULE_OPTIONAL.len()
         );
         let spawn = doc
             .rpcs

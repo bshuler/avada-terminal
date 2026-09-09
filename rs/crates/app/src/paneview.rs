@@ -9,6 +9,7 @@ use avada_core::layout::presets::{
     compute_tiles, effective_layout, DividerKind, Layout, Orientation,
 };
 use avada_core::session_manager::SessionManager;
+use avada_core::tools::kind::ModulePaneRef;
 use avada_core::tools::PaneKind;
 use avada_terminal_widget::{cells_for_px, RenderOpts};
 
@@ -171,6 +172,8 @@ impl Ui {
         app.set_panes(ModelRc::from(self.panes.clone()));
         // Track V3: the image pane's adapter (row model, checker tile, fit callback).
         crate::imagepane::attach(app);
+        // Track H4: the tier-5 module grid pane's frame + run models.
+        crate::gridpane::attach(app);
         app.set_tabs(ModelRc::from(self.tabs.clone()));
         app.set_dividers(ModelRc::from(self.dividers.clone()));
         app.set_layouts(ModelRc::from(self.layouts.clone()));
@@ -318,6 +321,26 @@ fn replay_cursor_pos(_app: &AppWindow, _link_active: bool) {}
 // one line up. Kept flat until the projection itself grows a type.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", ret, skip(ps))]
+/// The pane's cell size in *logical* px, recovered from the layout pass's own two answers
+/// rather than re-derived from the font and the scale factor.
+///
+/// `surf` is `applied` multiplied by the device cell size and divided by the scale, so
+/// dividing it back is the one arithmetic that cannot disagree with what `fit_grid` used —
+/// and disagreeing by a fraction of a pixel is what makes a grid drift a column off its
+/// cursor at the right-hand edge.
+#[tracing::instrument(level = "debug", ret, skip(ps))]
+fn cell_px(ps: &PaneState) -> (f32, f32) {
+    let (w, h) = ps.surf;
+    let (cols, rows) = ps.applied;
+    match (cols, rows) {
+        (0, _) | (_, 0) => (0.0, 0.0),
+        (c, r) => (w / c as f32, h / r as f32),
+    }
+}
+
+// Every argument is one axis of how a pane is drawn; bundling them into a struct would
+// only move the same list one call site up.
+#[allow(clippy::too_many_arguments)]
 fn pane_item(
     ps: &PaneState,
     focused: bool,
@@ -388,6 +411,14 @@ fn pane_item(
     // check this replaced (`kind >= 2 && kind <= 4` in the .slint) already had Browser
     // on the wrong side of it, and a fourth view kind would have joined it there.
     let is_view = kind.is_view();
+    // Track H4: a tier-5 module surface paints cells, not rows, so it goes through
+    // `gridpane`'s own models. Done *beside* the row projection below rather than instead of
+    // it, because a module pane's tier is not knowable from its kind — the same pane is a
+    // rows pane until the module sends its first frame.
+    if let PaneKind::Module(m) = kind {
+        let (cw, ch) = cell_px(ps);
+        crate::gridpane::project(&ps.uid, m, cw, ch, font_px);
+    }
     let (view_rows, view_title): (ModelRc<PaneViewRow>, SharedString) =
         if matches!(kind, PaneKind::Image) {
             // Track V3: the picture goes through `imagepane`'s own per-uid model (a texture,
@@ -827,6 +858,37 @@ fn flush_pty_resizes_to(
                 {
                     p.pty = p.applied;
                 }
+            }
+        }
+    }
+}
+
+/// Offer every on-screen tier-5 surface its cell size, once its pane has stopped moving.
+///
+/// Deliberately stateless: it re-offers the same size every tick, and
+/// [`crate::module_runtime::ModuleRuntime::grid_resize`] is what remembers and drops the
+/// repeats. Keeping the memory there rather than here means the size a module was told is
+/// answered by the thing that told it, and survives a pane being closed and reopened at the
+/// same size — which is the case where a fresh notification would be pure noise.
+///
+/// Shares the pty path's debounce clock (`p.pty_since`) and its degenerate-size floor for
+/// the same reasons: a size still being dragged is not a size, and a pane that has not been
+/// laid out yet sits at (0, 0), which would be a lie rather than a resize.
+pub(crate) fn flush_grid_resizes(
+    state: &State,
+    now: Instant,
+    mut deliver: impl FnMut(&ModulePaneRef, u16, u16),
+) {
+    for tab in &state.tabs {
+        for p in &tab.panes {
+            let PaneKind::Module(m) = &p.kind else {
+                continue;
+            };
+            if p.applied.0 >= 2
+                && p.applied.1 >= 1
+                && now.duration_since(p.pty_since) >= PTY_RESIZE_SETTLE
+            {
+                deliver(m, p.applied.0 as u16, p.applied.1 as u16);
             }
         }
     }
@@ -1280,8 +1342,37 @@ pub fn resync(
             },
         );
     }
+    // Every tier-5 module surface that declared a keymap gets its own category, appended
+    // after the app's own. One editor, two stores: a module row's id carries `module:` and
+    // routes to the module keymap store (see `module_ui::grid::parse_row_id`), so capture,
+    // unbind, reset and reset-all all work on a module action without a second UI.
+    for (module, surface) in crate::module_ui::grid::declared() {
+        let category = format!("{} · {surface}", module.as_str());
+        let mut first = true;
+        for (action, label, chord) in crate::module_ui::grid::binding_rows(&module, &surface) {
+            let id = crate::module_ui::grid::row_id(&module, &surface, &action);
+            let parts: Vec<SharedString> = crate::module_ui::grid::chord_parts(&chord)
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            let unbound = parts.is_empty();
+            keybindings.push(KeybindingItem {
+                capturing: capturing.as_deref() == Some(id.as_str()),
+                id: id.into(),
+                label: label.into(),
+                parts: ModelRc::from(Rc::new(VecModel::from(parts))),
+                category: category.clone().into(),
+                group_first: std::mem::take(&mut first),
+                overridden: crate::module_ui::grid::overridden(&module, &action),
+                unbound,
+                static_row: false,
+            });
+        }
+    }
     sync_model(&ui.keybindings, keybindings);
-    app.set_pref_keybinds_overridden(state.keymap.any_overridden());
+    app.set_pref_keybinds_overridden(
+        state.keymap.any_overridden() || crate::module_ui::grid::any_overridden(),
+    );
     app.set_pref_kb_conflict(state.capture_conflict.clone().unwrap_or_default().into());
 
     // Dialog appearance scalars come from the draft view; the actual panes keep the
@@ -2269,5 +2360,137 @@ mod image_arm_tests {
         assert!(row.ok, "{}", row.error);
         assert_eq!((row.w, row.h), (6, 4));
         assert!(crate::imagepane::forget("img-arm"));
+    }
+}
+
+#[cfg(test)]
+mod grid_resize_tests {
+    //! A tier-5 surface is told its cell size on the same clock the pty gets, and by a
+    //! function that deliberately remembers nothing.
+    use super::*;
+    use crate::state::DetachedPane;
+    use avada_core::tools::PaneKind;
+
+    fn fresh() -> State {
+        State::new(crate::theme::load_font(1.0))
+    }
+
+    fn mgr() -> SessionManager {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionManager::new(tx)
+    }
+
+    fn det(uid: &str, kind: PaneKind) -> DetachedPane {
+        DetachedPane {
+            uid: uid.into(),
+            title: "t".into(),
+            subtitle: None,
+            pinned_accent: None,
+            show_frame: None,
+            show_dot: None,
+            font_px: 14.0,
+            spawn_command: None,
+            spawn_args: None,
+            spawn_shell: None,
+            kind,
+            tool_session: None,
+            cwd: None,
+        }
+    }
+
+    fn module_pane(surface: &str) -> PaneKind {
+        PaneKind::Module(
+            ModulePaneRef::new("bshuler/avada-editor", surface, None).expect("a valid pane ref"),
+        )
+    }
+
+    /// Sets pane 0's layout size and restarts its settle clock.
+    fn lay_out(st: &mut State, cols: usize, rows: usize, at: Instant) {
+        let p = &mut st.active_tab_mut().panes[0];
+        p.applied = (cols, rows);
+        p.pty_since = at;
+    }
+
+    fn flush(st: &State, now: Instant) -> Vec<(String, u16, u16)> {
+        let mut sent = Vec::new();
+        flush_grid_resizes(st, now, |m, c, r| sent.push((m.surface.clone(), c, r)));
+        sent
+    }
+
+    /// The size a surface is still growing into is not a size, and (0, 0) is not one either.
+    #[test]
+    fn a_surface_hears_only_a_settled_size_and_never_a_degenerate_one() {
+        let mut st = fresh();
+        st.adopt_pane(&mgr(), det("a", module_pane("editor")));
+        let start = Instant::now();
+        lay_out(&mut st, 100, 30, start);
+
+        assert!(
+            flush(&st, start + PTY_RESIZE_SETTLE - Duration::from_millis(1)).is_empty(),
+            "a size still moving is withheld for the same reason the pty withholds it"
+        );
+        assert_eq!(
+            flush(&st, start + PTY_RESIZE_SETTLE),
+            vec![("editor".to_string(), 100, 30)],
+            "the instant it settles it goes out"
+        );
+
+        for degenerate in [(0, 0), (1, 30), (100, 0)] {
+            lay_out(&mut st, degenerate.0, degenerate.1, start);
+            assert!(
+                flush(&st, start + Duration::from_secs(10)).is_empty(),
+                "{degenerate:?} is 'not laid out yet', not a grid"
+            );
+        }
+    }
+
+    /// It re-offers rather than deduplicating, because the memory lives in the runtime.
+    ///
+    /// If this ever starts firing once, `ModuleRuntime::grid_resize`'s repeat-dropping is
+    /// being duplicated here — and the two copies would disagree the moment a pane is closed
+    /// and reopened at the same size, where the runtime deliberately stays quiet.
+    #[test]
+    fn the_same_settled_size_is_offered_again_on_every_tick() {
+        let mut st = fresh();
+        st.adopt_pane(&mgr(), det("a", module_pane("editor")));
+        let start = Instant::now();
+        lay_out(&mut st, 80, 24, start);
+        let settled = start + PTY_RESIZE_SETTLE;
+
+        assert_eq!(flush(&st, settled), vec![("editor".to_string(), 80, 24)]);
+        assert_eq!(
+            flush(&st, settled + Duration::from_secs(1)),
+            vec![("editor".to_string(), 80, 24)],
+            "stateless by design — the runtime is what remembers"
+        );
+    }
+
+    /// Only tier-5 panes are offered anything; a terminal beside one is not a surface.
+    #[test]
+    fn every_module_pane_is_offered_its_own_size_and_no_other_pane_is() {
+        let mut st = fresh();
+        let start = Instant::now();
+        for (uid, kind) in [
+            ("a", module_pane("editor")),
+            ("b", PaneKind::default()),
+            ("c", module_pane("diff")),
+            ("d", PaneKind::Markdown),
+        ] {
+            st.adopt_pane(&mgr(), det(uid, kind));
+        }
+        for (i, size) in [(90, 40), (91, 41), (92, 42), (93, 43)]
+            .into_iter()
+            .enumerate()
+        {
+            let p = &mut st.active_tab_mut().panes[i];
+            p.applied = size;
+            p.pty_since = start;
+        }
+
+        assert_eq!(
+            flush(&st, start + Duration::from_secs(1)),
+            vec![("editor".to_string(), 90, 40), ("diff".to_string(), 92, 42)],
+            "the terminal and the markdown pane between them contribute nothing"
+        );
     }
 }

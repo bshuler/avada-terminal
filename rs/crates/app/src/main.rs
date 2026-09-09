@@ -35,6 +35,7 @@ mod devices;
 mod drag;
 mod filedrop;
 mod glow;
+mod gridpane;
 mod highlight;
 mod history_scan;
 mod imagepane;
@@ -889,6 +890,65 @@ pub(crate) fn route_chord(keymap: &keybindings::Keymap, msg: &KeyMsg) -> Option<
     keymap.match_chord(msg.control, msg.alt, msg.shift, tok)
 }
 
+/// Translate a key event into the chord + typed text a tier-5 module surface expects.
+///
+/// Three things separate this from [`route_chord`], and each is a decision about who owns
+/// the keyboard:
+///
+/// * **The control modifier is the physical one** ([`pty_ctrl`]). A module's presets are
+///   written in editor vocabulary (`C-s`, `C-w`), which everywhere but a Mac's Slint
+///   remapping means the Control key. Cmd stays the app's modifier, so Cmd+Shift+P still
+///   opens the palette while an editor pane has focus.
+/// * **More keys count.** `key_tok` only knows the keys a *binding* can name; an editor
+///   also needs Backspace, Delete, Home, End and the page keys, which the pty path
+///   otherwise encodes to escape sequences no module would see.
+/// * **Shift is only spelled out when it is not already in the character.** Shift+A is
+///   `shift+a` (so a preset can write `A`), but Shift+1 is `!` — the character carries it,
+///   and `shift+!` would match nothing anyone would write.
+///
+/// The second half of the pair is the text the key would type, `None` for anything that
+/// types nothing. A module gets it whether or not the chord is bound, because the most
+/// common key in a text editor is the one with no binding at all.
+#[tracing::instrument(level = "debug", ret)]
+pub(crate) fn grid_chord(msg: &KeyMsg) -> Option<(String, Option<String>)> {
+    // Named keys an editor needs that no app binding can name, checked before `key_tok`
+    // so they never fall through to its printable-character branch.
+    const EXTRA: [(Key, &str); 6] = [
+        (Key::Backspace, "backspace"),
+        (Key::Delete, "delete"),
+        (Key::Home, "home"),
+        (Key::End, "end"),
+        (Key::PageUp, "pageup"),
+        (Key::PageDown, "pagedown"),
+    ];
+    let named = EXTRA
+        .iter()
+        .find(|(k, _)| is_key(&msg.text, *k))
+        .map(|(_, n)| (*n).to_string());
+    let letter = named.is_none()
+        && msg.text.chars().count() == 1
+        && msg.text.chars().all(|c| c.is_ascii_alphabetic());
+    let key = match named {
+        Some(n) => n,
+        None => key_tok(msg)?.token(),
+    };
+    // A one-character key that is not a letter already differs when Shift is held, so
+    // saying "shift" as well would name a chord no preset spells.
+    let spell_shift = msg.shift && (key.chars().count() > 1 || letter);
+    let ctrl = pty_ctrl(msg);
+    let mut chord = String::new();
+    for (on, name) in [(ctrl, "ctrl"), (msg.alt, "alt"), (spell_shift, "shift")] {
+        if on {
+            chord.push_str(name);
+            chord.push('+');
+        }
+    }
+    chord.push_str(&key);
+    let text = avada_terminal_widget::keys::is_printable(&msg.text, ctrl, msg.alt)
+        .then(|| msg.text.to_string());
+    Some((chord, text))
+}
+
 /// Translate a key event into a palette command while the palette overlay is open
 /// (`query` is the current `state.palette_query`; the key router calls this before any
 /// pty forwarding). The palette's query is **controller-owned**, not a focused Slint
@@ -1466,5 +1526,97 @@ mod tests {
         assert!(goal_key(0, false, &msg("x", false, false, false)).is_none());
         let bs: slint::SharedString = Key::Backspace.into();
         assert!(goal_key(0, false, &msg(bs.as_str(), false, false, false)).is_none());
+    }
+
+    // ---- grid_chord: a keystroke in the module keymap dialect ----
+
+    fn named(key: Key) -> KeyMsg {
+        let s: slint::SharedString = key.into();
+        msg(s.as_str(), false, false, false)
+    }
+
+    /// The spelling has to match what a module author writes in a preset, because the two
+    /// are compared as strings after normalization and nothing else reconciles them.
+    #[test]
+    fn a_keystroke_spells_the_chord_a_preset_would_have_written() {
+        assert_eq!(grid_chord(&msg("h", false, false, false)).unwrap().0, "h");
+        assert_eq!(
+            grid_chord(&msg("H", false, false, true)).unwrap().0,
+            "shift+h"
+        );
+        assert_eq!(
+            grid_chord(&msg("j", false, true, false)).unwrap().0,
+            "alt+j"
+        );
+        assert_eq!(
+            grid_chord(&named(Key::Escape)).unwrap().0,
+            "escape",
+            "a named key is spelled by its token, not by the character it carries"
+        );
+
+        // Modifier order is fixed so `ctrl+alt+shift+x` has exactly one spelling.
+        let all = KeyMsg {
+            text: "X".into(),
+            control: !cfg!(target_os = "macos"),
+            meta: cfg!(target_os = "macos"),
+            alt: true,
+            shift: true,
+        };
+        assert_eq!(grid_chord(&all).unwrap().0, "ctrl+alt+shift+x");
+    }
+
+    /// The six keys a module needs that the app's own binding vocabulary never had to name.
+    /// They are checked before `key_tok` so they cannot fall through to its printable branch.
+    #[test]
+    fn the_six_editor_keys_the_app_never_needed_to_name_are_named_here() {
+        for (key, token) in [
+            (Key::Backspace, "backspace"),
+            (Key::Delete, "delete"),
+            (Key::Home, "home"),
+            (Key::End, "end"),
+            (Key::PageUp, "pageup"),
+            (Key::PageDown, "pagedown"),
+        ] {
+            assert_eq!(grid_chord(&named(key)).unwrap().0, token, "{token}");
+        }
+    }
+
+    /// Shift is only spelled when it is not already visible in the key itself — otherwise
+    /// `shift+!` would name a chord no preset writes and `!` would never fire.
+    #[test]
+    fn shift_is_spelled_only_when_the_key_does_not_already_say_it() {
+        assert_eq!(grid_chord(&msg("!", false, false, true)).unwrap().0, "!");
+        assert_eq!(
+            grid_chord(&msg("A", false, false, true)).unwrap().0,
+            "shift+a"
+        );
+        let s: slint::SharedString = Key::Tab.into();
+        assert_eq!(
+            grid_chord(&msg(s.as_str(), false, false, true)).unwrap().0,
+            "shift+tab",
+            "a multi-character key name cannot carry the shift itself"
+        );
+    }
+
+    /// An unbound chord still has to type. The text rides along so the host does not have to
+    /// ask a second time, and a control chord types nothing at all.
+    #[test]
+    fn a_printable_chord_carries_its_text_and_a_control_chord_carries_none() {
+        assert_eq!(
+            grid_chord(&msg("q", false, false, false))
+                .unwrap()
+                .1
+                .as_deref(),
+            Some("q")
+        );
+        let ctrl_s = if cfg!(target_os = "macos") {
+            msg_meta("s")
+        } else {
+            msg("s", true, false, false)
+        };
+        let (chord, text) = grid_chord(&ctrl_s).unwrap();
+        assert_eq!(chord, "ctrl+s");
+        assert!(text.is_none(), "Ctrl+S types nothing, it does something");
+        assert!(grid_chord(&named(Key::Escape)).unwrap().1.is_none());
     }
 }

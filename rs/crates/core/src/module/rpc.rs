@@ -14,12 +14,13 @@ use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::{self, required_capability};
 use avada_module_sdk::contract::{ErrorCode, Notification, Request, Response, RpcError};
 use avada_module_sdk::descriptor::{validate_table, RouteDescriptor, Scope};
+use avada_module_sdk::grid::{DeclareKeymap, GridFrame};
 use avada_module_sdk::rail::{validate_entry, RegisterRail, RowTarget, SetRows};
 use avada_module_sdk::ModuleId;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -41,6 +42,8 @@ pub const SERVED: &[&str] = &[
     methods::HOST_WORKSPACE_LIST,
     methods::HOST_WORKSPACE_OPEN,
     methods::HOST_WORKSPACE_SAVE,
+    methods::HOST_GRID_SET,
+    methods::HOST_KEYMAP_DECLARE,
     HOST_GIT_STATUS,
     HOST_GIT_COMMIT,
 ];
@@ -183,6 +186,12 @@ pub(crate) struct Dispatcher {
     /// Event kinds the module asked for (`host.events.subscribe`). The whole set;
     /// subscribing again replaces it.
     pub subscriptions: Mutex<BTreeSet<String>>,
+    /// The keymaps the module declared, by surface (`host.keymap.declare`).
+    ///
+    /// Kept even when no pane is open, because the keymap is what the preferences UI
+    /// binds against: a human must be able to rebind an editor's keys before opening it,
+    /// not only while looking at it.
+    pub keymaps: Mutex<BTreeMap<String, DeclareKeymap>>,
     /// Surfaces this module has an open pane for, by contribution id.
     ///
     /// A set, not a count: two panes on the same surface show the same rows, because the
@@ -303,6 +312,7 @@ impl Dispatcher {
             prefs: Mutex::new(Prefs::load(data_dir)),
             routes: Mutex::new(Vec::new()),
             subscriptions: Mutex::new(BTreeSet::new()),
+            keymaps: Mutex::new(BTreeMap::new()),
             panes: Mutex::new(BTreeSet::new()),
         }
     }
@@ -387,6 +397,8 @@ impl Dispatcher {
             methods::HOST_WORKSPACE_LIST => self.workspace_list(params),
             methods::HOST_WORKSPACE_OPEN => self.workspace_open(params),
             methods::HOST_WORKSPACE_SAVE => self.workspace_save(params),
+            methods::HOST_GRID_SET => self.grid_set(params),
+            methods::HOST_KEYMAP_DECLARE => self.keymap_declare(params),
             HOST_GIT_STATUS => self.git_status(params),
             HOST_GIT_COMMIT => self.git_commit(params),
             methods::HOST_KEYCHAIN_GET | methods::HOST_KEYCHAIN_SET => Err(unsupported(method)),
@@ -473,6 +485,98 @@ impl Dispatcher {
             entry,
             target,
             rows,
+        });
+        Ok(Value::Null)
+    }
+
+    /// `host.grid.set { surface, cols, rows, lines, cursor?, status } -> null`.
+    ///
+    /// A tier-5 frame, and the same rule as pane rows: the surface must be one the module
+    /// already opened with `host.panes.spawn`. A frame for a pane nobody is showing is the
+    /// shape a typo'd surface takes, and silence would leave the module watching a blank
+    /// rectangle with nothing to debug.
+    ///
+    /// The frame replaces whatever the surface last showed. There is no damage list,
+    /// because the two sides are separate processes that restart independently: a module
+    /// that came back cannot know what the host still has on screen, and a whole frame is
+    /// the only message that is correct from both sides of a restart.
+    fn grid_set(&self, params: &Value) -> Result<Value, RpcError> {
+        let frame: GridFrame = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if frame.surface.trim().is_empty() {
+            return Err(invalid_params("a frame must name its surface"));
+        }
+        if !self
+            .panes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&frame.surface)
+        {
+            return Err(invalid_params(format!(
+                "no pane is open for surface `{}`",
+                frame.surface
+            )));
+        }
+        if frame.lines.len() > usize::from(frame.rows) {
+            return Err(invalid_params(format!(
+                "{} lines for a {}-row frame",
+                frame.lines.len(),
+                frame.rows
+            )));
+        }
+        self.shared.events.send(HostEvent::Grid {
+            module: self.module.clone(),
+            frame,
+        });
+        Ok(Value::Null)
+    }
+
+    /// `host.keymap.declare { surface, actions, presets, default_preset? } -> null`.
+    ///
+    /// Unlike a frame, this does *not* require an open pane. The declaration is what the
+    /// preferences UI binds against, so it must survive — and precede — every window of
+    /// the surface; a module that could only declare its keys while a pane was open would
+    /// force the human to open the editor before they could rebind it.
+    ///
+    /// Every preset is checked against the declared actions here rather than at the far
+    /// end, because a binding naming an action that does not exist is a key that silently
+    /// does nothing, and the module is the only side that can still fix it.
+    fn keymap_declare(&self, params: &Value) -> Result<Value, RpcError> {
+        let map: DeclareKeymap = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if map.surface.trim().is_empty() {
+            return Err(invalid_params("a keymap must name its surface"));
+        }
+        for a in &map.actions {
+            if a.id.trim().is_empty() {
+                return Err(invalid_params("an action must have an id"));
+            }
+        }
+        for p in &map.presets {
+            if p.name.trim().is_empty() {
+                return Err(invalid_params("a preset must have a name"));
+            }
+            for (chord, action) in &p.bindings {
+                if !map.has_action(action) {
+                    return Err(invalid_params(format!(
+                        "preset `{}` binds `{chord}` to undeclared action `{action}`",
+                        p.name
+                    )));
+                }
+            }
+        }
+        if let Some(name) = &map.default_preset {
+            if map.preset(name).is_none() {
+                return Err(invalid_params(format!(
+                    "default preset `{name}` is not one of the declared presets"
+                )));
+            }
+        }
+        self.keymaps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(map.surface.clone(), map.clone());
+        self.shared.events.send(HostEvent::Keymap {
+            module: self.module.clone(),
+            keymap: map,
         });
         Ok(Value::Null)
     }
@@ -1132,7 +1236,10 @@ pub(crate) mod tests {
     #[test]
     fn every_contract_method_is_dispatched() {
         let rig = rig(&all_caps());
-        for m in methods::HOST_REQUIRED_V1 {
+        // The optional methods this host chose to serve are dispatched on the same terms:
+        // "optional" says the contract does not demand them, not that a served one may
+        // quietly fall through to the unknown-method arm.
+        for m in methods::HOST_REQUIRED_V1.iter().chain(SERVED) {
             let r = rig.d.call(m, &Value::Null);
             let unknown = matches!(&r, Err(e) if e.message.starts_with("unknown method"));
             assert!(!unknown, "{m} fell through to the unknown-method arm");
@@ -1433,6 +1540,133 @@ pub(crate) mod tests {
                 assert_eq!(rows[0].detail, "1.2.0");
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// A frame is a pane's contents, so it needs a pane, exactly as pane rows do — and
+    /// the surface a module never spawned is the shape a typo takes.
+    #[test]
+    fn a_frame_needs_a_pane_and_then_reaches_the_app_whole() {
+        let rig = rig(&[Capability::UiPane, Capability::PanesSpawn]);
+        let frame = json!({
+            "surface": "editor", "cols": 80, "rows": 24,
+            "lines": [{ "spans": [{ "text": "fn main() {", "fg": "accent", "bold": true }] }],
+            "cursor": { "line": 0, "col": 3, "shape": "bar" },
+            "status": "src/main.rs 1:4",
+        });
+        let e = rig.d.call(methods::HOST_GRID_SET, &frame).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("editor"), "{}", e.message);
+
+        rig.d
+            .call(
+                methods::HOST_PANES_SPAWN,
+                &json!({ "kind": "module", "surface": "editor" }),
+            )
+            .unwrap();
+        rig.d.call(methods::HOST_GRID_SET, &frame).unwrap();
+        loop {
+            match rig.events.recv().unwrap() {
+                HostEvent::Grid { frame, .. } => {
+                    assert_eq!((frame.cols, frame.rows), (80, 24));
+                    assert_eq!(frame.lines[0].text(), "fn main() {");
+                    assert!(frame.lines[0].spans[0].bold);
+                    assert_eq!(frame.status, "src/main.rs 1:4");
+                    let c = frame.cursor.expect("a cursor was sent");
+                    assert_eq!((c.line, c.col), (0, 3));
+                    break;
+                }
+                HostEvent::PaneSpawn { .. } => continue,
+                other => panic!("{other:?}"),
+            }
+        }
+
+        // A frame taller than it says it is would paint outside the rectangle the app
+        // reserved. Refused at the door rather than clipped in silence.
+        let e = rig
+            .d
+            .call(
+                methods::HOST_GRID_SET,
+                &json!({ "surface": "editor", "cols": 80, "rows": 1,
+                         "lines": [{ "spans": [] }, { "spans": [] }] }),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("2 lines"), "{}", e.message);
+    }
+
+    /// The keymap is the one grid method that does *not* need a pane: it is what the
+    /// rebinding UI reads, and a human must be able to rebind an editor before opening it.
+    #[test]
+    fn a_keymap_is_declarable_before_any_pane_and_is_kept_by_surface() {
+        let rig = rig(&[Capability::UiPane]);
+        let map = json!({
+            "surface": "editor",
+            "actions": [{ "id": "move.left", "label": "Move left" },
+                        { "id": "save", "label": "Save" }],
+            "presets": [
+                { "name": "helix", "bindings": { "h": "move.left", "space w": "save" } },
+                { "name": "vim", "bindings": { "h": "move.left" } }
+            ],
+            "default_preset": "helix",
+        });
+        rig.d.call(methods::HOST_KEYMAP_DECLARE, &map).unwrap();
+        match rig.events.recv().unwrap() {
+            HostEvent::Keymap { keymap, .. } => {
+                assert_eq!(keymap.surface, "editor");
+                assert_eq!(keymap.default_preset().unwrap().name, "helix");
+            }
+            other => panic!("{other:?}"),
+        }
+        let kept = rig.d.keymaps.lock().unwrap();
+        assert_eq!(kept.len(), 1, "one surface, declared once");
+        assert!(kept["editor"].has_action("save"));
+    }
+
+    /// A binding naming an action nobody declared is a key that does nothing, and the
+    /// module is the only side left that can still fix it — so it hears about it.
+    #[test]
+    fn a_keymap_that_binds_or_defaults_to_nothing_is_refused() {
+        let rig = rig(&[Capability::UiPane]);
+        for (params, want) in [
+            (
+                json!({ "surface": "", "actions": [], "presets": [] }),
+                "name its surface",
+            ),
+            (
+                json!({ "surface": "e", "actions": [{ "id": " " }], "presets": [] }),
+                "an action must have an id",
+            ),
+            (
+                json!({ "surface": "e", "actions": [{ "id": "save" }],
+                        "presets": [{ "name": "helix", "bindings": { "h": "typo" } }] }),
+                "undeclared action `typo`",
+            ),
+            (
+                json!({ "surface": "e", "actions": [], "presets": [],
+                        "default_preset": "helix" }),
+                "not one of the declared presets",
+            ),
+        ] {
+            let e = rig
+                .d
+                .call(methods::HOST_KEYMAP_DECLARE, &params)
+                .unwrap_err();
+            assert_eq!(e.kind(), ErrorCode::InvalidParams);
+            assert!(e.message.contains(want), "{} vs {want}", e.message);
+        }
+        assert!(rig.events.try_recv().is_err(), "nothing was announced");
+    }
+
+    /// Both grid methods ride on `ui.pane` rather than a capability of their own: a grid
+    /// surface IS a pane the module owns. A module with no pane right cannot paint one.
+    #[test]
+    fn the_grid_methods_are_gated_on_the_pane_right() {
+        let rig = rig(&[Capability::PanesSpawn]);
+        for m in [methods::HOST_GRID_SET, methods::HOST_KEYMAP_DECLARE] {
+            let e = rig.d.call(m, &Value::Null).unwrap_err();
+            assert_eq!(e.kind(), ErrorCode::CapabilityDenied, "{m}");
+            assert!(e.message.contains("ui.pane"), "{}", e.message);
         }
     }
 

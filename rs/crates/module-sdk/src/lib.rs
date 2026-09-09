@@ -15,6 +15,7 @@
 //! | [`install`] | the lockfile, side-by-side versions, workspace pins and the enable/disable state |
 //! | [`descriptor`] | the route descriptor table the control plane is built from and `GET /schema` serves; the CLI is generated from it |
 //! | [`rail`] | the left-panel rail entry a module registers at handshake |
+//! | [`grid`] | the cell-grid surface an editor paints into, and the keymap presets that feed it |
 //! | [`skills`] | `SKILL.md` frontmatter, the ownership fence, and the adapter table for every supported AI tool |
 //! | [`license`] | license claims and the introspection response, the one licensing mechanism for core and modules |
 //! | [`client`] | what a module process links: read the socket from the environment, frame messages, run the handshake |
@@ -39,6 +40,7 @@ pub mod caps;
 pub mod client;
 pub mod contract;
 pub mod descriptor;
+pub mod grid;
 pub mod install;
 pub mod license;
 pub mod manifest;

@@ -2394,7 +2394,22 @@ impl App {
         for (uid, on) in win.focus_acks.borrow_mut().drain(..) {
             st.note_pane_focus(&uid, on);
         }
-        paneview::pump(&win.app, &mut st, &win.ui, (aw, ah), scale, &self.mgr)
+        let out = paneview::pump(&win.app, &mut st, &win.ui, (aw, ah), scale, &self.mgr);
+
+        // Offer every settled tier-5 surface its cell size. It lives here rather than inside
+        // `pump` because the module runtime hangs off the app, not off a window's state, and
+        // `ModuleRuntime::grid_resize` is what drops the repeats this stateless sweep produces.
+        paneview::flush_grid_resizes(&st, std::time::Instant::now(), |m, cols, rows| {
+            self.modules.grid_resize(
+                &m.id,
+                &avada_core::module::grid::GridResize {
+                    surface: m.surface.clone(),
+                    cols,
+                    rows,
+                },
+            );
+        });
+        out
     }
 
     // ---- second-instance hand-offs ----
@@ -2551,6 +2566,37 @@ impl App {
         if crate::is_key(&msg.text, Key::Escape) && win.state.borrow().overlay_open() {
             self.run_command(win, Command::CloseOverlay);
             return;
+        }
+        // A tier-5 module surface owns the keyboard inside its own pane. The chord is
+        // resolved to an action id *here*, not in the module (`module_ui::grid`), which is
+        // the whole reason an editor module is rebindable from Preferences without knowing
+        // Preferences exists. Placed after the app chords — Ctrl+Shift+…, the palette and
+        // the overlays outrank any module — and before the encode path below, which writes
+        // to a pty a module pane does not have.
+        {
+            let target = win
+                .state
+                .borrow()
+                .active_tab()
+                .panes
+                .get(idx)
+                .and_then(|p| match &p.kind {
+                    PaneKind::Module(m) => Some((m.id.clone(), m.surface.clone())),
+                    _ => None,
+                });
+            if let Some((id, surface)) = target {
+                // No declared keymap means the surface is not a grid at all (a tier-2 rows
+                // pane, say), so its keys are none of our business.
+                if crate::module_ui::grid::keymap(&id, &surface).is_some() {
+                    if let Some((chord, text)) = crate::grid_chord(&msg) {
+                        let ev = crate::module_ui::grid::key_event(&id, &surface, &chord, text);
+                        self.modules.grid_key(&id, &ev);
+                    }
+                    // Swallowed either way: an unrecognised key in an editor pane is a key
+                    // the editor ignored, never one the shell underneath should receive.
+                    return;
+                }
+            }
         }
         // Escape: a tap reaches the shell; HOLDING it in fullscreen exits fullscreen.
         if crate::is_key(&msg.text, Key::Escape) {

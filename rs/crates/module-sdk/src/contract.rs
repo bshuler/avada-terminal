@@ -431,6 +431,24 @@ pub mod methods {
         pub const FILES_REVEAL: &str = "files.reveal";
     }
 
+    /// Host: replace a grid surface's frame (UI tier 5). Params: [`crate::grid::GridFrame`].
+    pub const HOST_GRID_SET: &str = "host.grid.set";
+    /// Host: declare a grid surface's actions and keymap presets.
+    /// Params: [`crate::grid::DeclareKeymap`].
+    pub const HOST_KEYMAP_DECLARE: &str = "host.keymap.declare";
+
+    /// Module: a keystroke landed in a focused grid surface (notification).
+    /// Params: [`crate::grid::GridKey`].
+    ///
+    /// A notification and not a request: a round trip per keystroke would put the module's
+    /// scheduling latency between the user and their own typing. The host therefore does
+    /// not learn whether the key was used, and instead keeps only what its own keymap
+    /// claims before forwarding — the same bargain a focused terminal already makes.
+    pub const MODULE_GRID_KEY: &str = "module.grid.key";
+    /// Module: a grid surface's pane changed size (notification).
+    /// Params: [`crate::grid::GridResize`].
+    pub const MODULE_GRID_RESIZE: &str = "module.grid.resize";
+
     /// Module: prefs changed (notification). Params: `{ values }`.
     pub const MODULE_PREFS_CHANGED: &str = "module.prefs.changed";
     /// Module: shut down (notification). The module must exit within 5 s.
@@ -480,7 +498,16 @@ pub mod methods {
         HOST_WORKSPACE_LIST,
         HOST_WORKSPACE_OPEN,
         HOST_WORKSPACE_SAVE,
+        HOST_GRID_SET,
+        HOST_KEYMAP_DECLARE,
     ];
+
+    /// Module methods that are **additive**, for the same reason [`HOST_OPTIONAL`] is.
+    ///
+    /// A host discovers whether a module speaks these from the tier its contributions
+    /// declare, not by asking: a tier-5 contribution is the promise that these are served,
+    /// and a module with none of them will simply never be sent one.
+    pub const MODULE_OPTIONAL: &[&str] = &[MODULE_GRID_KEY, MODULE_GRID_RESIZE];
 
     /// The capability a `host.*` method needs, or `None` for the always-allowed ones.
     pub fn required_capability(method: &str) -> Option<crate::caps::Capability> {
@@ -497,6 +524,12 @@ pub mod methods {
             HOST_TOAST => C::UiToast,
             HOST_ROUTES_REGISTER => C::ControlRoute,
             HOST_KEYCHAIN_GET | HOST_KEYCHAIN_SET => C::Keychain,
+            // A grid surface is a pane the module owns, so it is gated by the same right
+            // as its rows are. Its keymap rides along rather than needing `ui.commands`:
+            // the bindings are live only while that pane has focus and never reach the
+            // palette, and an editor should not have to ask for the palette to be typed
+            // into.
+            HOST_GRID_SET | HOST_KEYMAP_DECLARE => C::UiPane,
             HOST_WORKSPACE_LIST => C::WorkspaceRead,
             HOST_WORKSPACE_OPEN | HOST_WORKSPACE_SAVE => C::WorkspaceWrite,
             _ => return None,

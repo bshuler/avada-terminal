@@ -21,6 +21,7 @@ use avada_module_sdk::contract::{
     CONTRACT_VERSION,
 };
 use avada_module_sdk::descriptor::RouteDescriptor;
+use avada_module_sdk::grid::{DeclareKeymap, GridFrame, GridKey, GridResize};
 use avada_module_sdk::rail::RowActivate;
 use avada_module_sdk::rights::InstallRecord;
 use avada_module_sdk::ModuleId;
@@ -147,6 +148,24 @@ pub enum HostEvent {
         pane_id: String,
         /// The bytes to feed the pane, exactly as the module sent them.
         text: String,
+    },
+    /// The module replaced a grid surface's frame (`host.grid.set`). A tier-5 pane owns
+    /// its text and the host owns its pixels, so this carries the whole rectangle: the
+    /// app paints it and keeps nothing of what came before.
+    Grid {
+        /// Which module.
+        module: ModuleId,
+        /// The whole frame, surface included.
+        frame: GridFrame,
+    },
+    /// The module declared a grid surface's actions and keymap presets
+    /// (`host.keymap.declare`). The host resolves keystrokes to action ids before it
+    /// forwards them, so this is what that resolution — and the rebinding UI — reads.
+    Keymap {
+        /// Which module.
+        module: ModuleId,
+        /// The whole declaration, surface included; it replaces any earlier one.
+        keymap: DeclareKeymap,
     },
     /// The module asked for a saved workspace or set to be opened
     /// (`host.workspace.open`). The path is one the module got back from
@@ -584,6 +603,51 @@ impl Host {
             }
         }
         told
+    }
+
+    /// The keymaps a module has declared, by surface.
+    ///
+    /// Empty for a module that never declared one, which is every module that paints no
+    /// grid — the absence is the normal case, not a failure.
+    pub fn keymaps(&self, id: &ModuleId) -> Vec<DeclareKeymap> {
+        match lock(&self.inner.slots).get(id) {
+            Some(slot) => lock(&slot.dispatcher.keymaps).values().cloned().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// `module.grid.key` — one keystroke that landed in a focused grid surface.
+    ///
+    /// A notification, deliberately. A request would put the module's scheduling latency
+    /// between a human and their own typing, and there is no answer worth waiting for:
+    /// what the keystroke did shows up as the next frame.
+    pub fn grid_key(&self, id: &ModuleId, key: &GridKey) -> Result<(), HostError> {
+        self.notify(id, methods::MODULE_GRID_KEY, key)
+    }
+
+    /// `module.grid.resize` — the pane showing a grid surface changed size. Also a
+    /// notification: the module answers by painting, not by replying.
+    pub fn grid_resize(&self, id: &ModuleId, resize: &GridResize) -> Result<(), HostError> {
+        self.notify(id, methods::MODULE_GRID_RESIZE, resize)
+    }
+
+    /// Write one notification to a running module. `NotRunning` when it is not — a
+    /// keystroke for a dead module is worth reporting, because the pane it was typed into
+    /// is still on screen.
+    fn notify<T: serde::Serialize>(
+        &self,
+        id: &ModuleId,
+        method: &str,
+        params: &T,
+    ) -> Result<(), HostError> {
+        let slot = self.slot(id)?;
+        let writer = slot
+            .writer()
+            .ok_or_else(|| HostError::NotRunning(id.clone()))?;
+        let params = serde_json::to_value(params).map_err(io::Error::other)?;
+        let n = Notification::new(method, params);
+        lock(&writer).write_message(&Message::Notification(n))?;
+        Ok(())
     }
 
     /// `module.deactivate`.

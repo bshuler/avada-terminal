@@ -1,0 +1,181 @@
+// The tier-5 module pane body (docs/modules-fanout-plan.md, track H4): a rectangle of
+// character cells a module paints an editor into, plus the module's own status line.
+//
+// Nothing is decided here. `src/gridpane.rs` flattens the module's frame into runs, counts
+// each run's width in cells, resolves its colour to either a hex or a theme *role number*,
+// and hands over the cell metrics the layout pass actually sized the pane with. This file
+// multiplies and draws.
+//
+// Why a role number rather than a colour: a module names `accent` or `red`, and the answer
+// to what those are lives in `theme.slint` and changes when the user changes palette. Rust
+// cannot read a Slint global, so it sends the question rather than a stale answer.
+//
+// Drawn as a sibling over `ModulePlaceholder` (kind 10) rather than replacing it: a module
+// that has crashed, or has not painted yet, still owes the user the placeholder's
+// explanation, and `present` is what decides which of the two the user sees.
+
+import { Theme } from "theme.slint";
+import { GridRun, GridPaneItem, GridPaneAdapter } from "types.slint";
+
+export component GridPane inherits Rectangle {
+    // The pane's session uid: which row of `GridPaneAdapter.grids` is ours.
+    in property <string> uid;
+    // The breadcrumb, the same `view-title` every non-terminal pane shows.
+    in property <string> title;
+    in property <color> accent;
+
+    // Transparent, not `Theme.bg`: a pane whose module has never painted must let the
+    // placeholder underneath show through.
+    background: transparent;
+
+    // Role numbers are the wire; this is the only place they mean anything. 0 is "the
+    // pane's own ink", which is also the fallback for a name the host does not know —
+    // the SDK is explicit that an unreadable frame is worse than an unstyled one.
+    pure function ink(r: int, c: color) -> color {
+        return r == 1 ? c
+             : r == 3 ? Theme.subtext
+             : r == 4 ? Theme.faint
+             : r == 5 ? Theme.accent
+             : r == 6 ? Theme.danger
+             : r == 7 ? Theme.ok
+             : r == 8 ? Theme.warn
+             : r == 9 ? Theme.link
+             : r == 10 ? Theme.border
+             : r == 11 ? Theme.surface2
+             : r == 12 ? Theme.mantle
+             : r == 13 ? Theme.bg
+             : Theme.text;
+    }
+    // Same table, except that "no role" means "leave the pane's background alone".
+    pure function wash(r: int, c: color) -> color {
+        return r == 0 ? Colors.transparent : root.ink(r, c);
+    }
+
+    for g in GridPaneAdapter.grids : Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        if g.uid == root.uid && g.present : Rectangle {
+            background: Theme.bg;
+
+            // --- breadcrumb ---
+            crumb := Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 20px;
+                background: Theme.mantle;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    height: 100%;
+                    vertical-alignment: center;
+                    text: root.title;
+                    color: Theme.subtext;
+                    font-size: 10px;
+                    overflow: elide;
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    width: 100%;
+                    background: Theme.border;
+                }
+            }
+
+            // --- the cell grid ---
+            // Clipped rather than scrolled: the module was told how many cells it has
+            // (`module.grid.resize`) and lays out to that, so anything past the edge is a
+            // frame from before the last resize, not content the user is missing.
+            stage := Rectangle {
+                x: 0;
+                y: crumb.height;
+                width: 100%;
+                height: max(0px, root.height - crumb.height - foot.height);
+                clip: true;
+
+                for r in GridPaneAdapter.runs : Rectangle {
+                    x: r.col * g.cell-w * 1px;
+                    y: r.line * g.cell-h * 1px;
+                    width: r.len * g.cell-w * 1px;
+                    height: g.cell-h * 1px;
+                    // The uid test is inside the geometry rather than around it because a
+                    // `for` needs an element per row either way; an off-pane run collapses
+                    // to an empty rectangle that draws nothing.
+                    visible: r.uid == root.uid;
+                    background: root.wash(r.bg-role, r.bg);
+                    if r.uid == root.uid : Text {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        text: r.text;
+                        color: root.ink(r.fg-role, r.fg);
+                        font-family: "JetBrainsMono Nerd Font";
+                        font-size: g.font-px * 1px;
+                        font-weight: r.bold ? 700 : 400;
+                        font-italic: r.italic;
+                        // A run is one line of an editor; wrapping it would put the frame's
+                        // rows out of step with the module's own idea of them.
+                        wrap: no-wrap;
+                        accessible-role: text;
+                        accessible-label: r.text;
+                    }
+                    if r.uid == root.uid && r.underline : Rectangle {
+                        x: 0;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: root.ink(r.fg-role, r.fg);
+                    }
+                }
+
+                // The caret. Translucent for the block shape so the glyph underneath stays
+                // readable — the alternative is re-drawing that one cell inverted, which
+                // would mean the host knowing which run owns the cursor's column.
+                if g.has-cursor : Rectangle {
+                    x: g.cursor-col * g.cell-w * 1px;
+                    y: g.cursor-line * g.cell-h * 1px
+                        + (g.cursor-shape == 2 ? (g.cell-h - 2) * 1px : 0px);
+                    width: g.cursor-shape == 1 ? 2px : g.cell-w * 1px;
+                    height: g.cursor-shape == 2 ? 2px : g.cell-h * 1px;
+                    background: g.cursor-shape == 0
+                        ? root.accent.with-alpha(0.45)
+                        : root.accent;
+                }
+            }
+
+            // --- the module's own status line ---
+            foot := Rectangle {
+                x: 0;
+                y: root.height - self.height;
+                width: 100%;
+                // A module with nothing to say gets no footer at all, rather than an empty
+                // strip the grid could have used.
+                height: g.status == "" ? 0px : 22px;
+                background: Theme.mantle;
+                visible: g.status != "";
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    width: 100%;
+                    background: Theme.border;
+                }
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    height: 100%;
+                    vertical-alignment: center;
+                    text: g.status;
+                    color: Theme.subtext;
+                    font-size: 10px;
+                    overflow: elide;
+                    accessible-role: text;
+                    accessible-label: g.status;
+                }
+            }
+        }
+    }
+}

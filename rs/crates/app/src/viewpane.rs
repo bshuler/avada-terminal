@@ -1409,7 +1409,11 @@ fn markdown_text(src: &str) -> slint::StyledText {
 #[tracing::instrument(level = "debug", ret)]
 fn revision(uid: &str, kind: &PaneKind) -> u64 {
     match kind {
-        PaneKind::Module(m) => crate::module_ui::rows::generation(&m.id, &m.surface),
+        // A module pane may be tier 2 (rows) or tier 5 (a grid), and the same pane can
+        // carry both stores over its life — the sum changes whichever side painted, and a
+        // sum cannot go backwards the way picking one of the two could.
+        PaneKind::Module(m) => crate::module_ui::rows::generation(&m.id, &m.surface)
+            .wrapping_add(crate::module_ui::grid::generation(&m.id, &m.surface)),
         _ => crate::datatree::generation(uid),
     }
 }

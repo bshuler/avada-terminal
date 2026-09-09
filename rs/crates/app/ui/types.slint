@@ -823,3 +823,46 @@ export global ImagePaneAdapter {
     // unbound it returns all zeros and the image is drawn 0×0.
     pure callback fit(float, float, float, float, float) -> ImageFit;
 }
+
+// ---- track H4: the tier-5 module grid pane: a rectangle of character cells a module
+// paints an editor into. `src/gridpane.rs` flattens the module's frame (lines of styled
+// spans) into one run list keyed by pane uid; `ui/gridpane.slint` filters by uid and
+// multiplies cell coordinates by the metrics on `GridPaneItem`. Nothing is decided in
+// the .slint — including which theme colour a role name means, which arrives as a role
+// number so the frame's palette follows the app's theme rather than baking hexes.
+export struct GridRun {
+    uid: string,       // which pane's frame this run belongs to
+    line: int,         // row within the frame, zero-based
+    col: int,          // starting column, zero-based, in cells
+    len: int,          // width in cells — `text`'s char count, counted in Rust
+    text: string,
+    fg: color,         // used only when `fg-role` is 1 (an explicit #rrggbb span)
+    bg: color,
+    fg-role: int,      // 0 = the pane's own ink, 1 = `fg`, else a theme role
+    bg-role: int,      // 0 = the pane's own background, 1 = `bg`, else a theme role
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+// One tier-5 pane's frame, minus the runs. Split from `GridRun` because a frame is one
+// header and many runs, and Slint models are flat.
+export struct GridPaneItem {
+    uid: string,
+    present: bool,     // the surface has painted at least once; false draws nothing
+    cols: int,
+    rows: int,
+    status: string,    // the module's own footer line; empty means no footer
+    cursor-line: int,
+    cursor-col: int,
+    cursor-shape: int, // 0 block, 1 bar, 2 underline
+    has-cursor: bool,
+    cell-w: float,     // logical px per cell, the same metrics the layout pass sized with
+    cell-h: float,
+    font-px: float,    // the pane's font size, so the glyphs fill the cells they were sized for
+}
+
+export global GridPaneAdapter {
+    in property <[GridPaneItem]> grids: [];
+    in property <[GridRun]> runs: [];
+}
