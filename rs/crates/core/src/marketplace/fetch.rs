@@ -6,6 +6,7 @@
 //! landed where `ls-remote` said. Output is streamed line by line to the caller's log
 //! sink so an install job shows progress while it runs.
 
+use crate::edition::{Edition, COMMERCIAL_URL};
 use avada_module_sdk::manifest::{DistributionKind, Manifest};
 use semver::Version;
 use std::collections::BTreeMap;
@@ -254,18 +255,26 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ManifestReadError> {
     Ok(manifest)
 }
 
-/// The free tier builds from source and cannot license: refuse binary and commercial
-/// modules before any work is done.
-pub fn check_free_build(manifest: &Manifest) -> Result<(), String> {
+/// Whether `edition` may install `manifest` at all, before any work is done.
+///
+/// The free edition builds from source and cannot license, so a prebuilt or commercial
+/// module is refused by name with the commercial edition pointed at — the caller
+/// prefixes the id when the refusal is about a dependency rather than the module that
+/// was asked for. The commercial edition allows both; what it does *with* a prebuilt
+/// artifact is the loader's business (`marketplace::loader`), not this gate's.
+pub fn check_edition(edition: Edition, manifest: &Manifest) -> Result<(), String> {
+    if edition.is_commercial() {
+        return Ok(());
+    }
     if manifest.distribution.kind == DistributionKind::Binary {
         return Err(format!(
-            "{} ships as a prebuilt binary; the free tier installs source modules only",
+            "{} ships as a prebuilt binary; the free tier installs source modules only \u{2014} {COMMERCIAL_URL}",
             manifest.id().as_str()
         ));
     }
     if manifest.distribution.commercial {
         return Err(format!(
-            "{} is a commercial module and needs a license; the free tier cannot install it",
+            "{} is a commercial module and needs a license; the free tier cannot install it \u{2014} {COMMERCIAL_URL}",
             manifest.id().as_str()
         ));
     }
@@ -309,17 +318,42 @@ contract = "^1"
         .unwrap()
     }
 
+    const COMMERCIAL_MANIFEST: &str =
+        "kind = \"source\"\ncommercial = true\nissuer = \"https://x.example\"";
+
     #[test]
-    fn free_build_refuses_binary_and_commercial() {
-        assert!(check_free_build(&manifest("kind = \"source\"")).is_ok());
-        let bin = check_free_build(&manifest("kind = \"binary\"")).unwrap_err();
+    fn free_build_refuses_binary_and_commercial_and_says_where_to_get_them() {
+        assert!(check_edition(Edition::Free, &manifest("kind = \"source\"")).is_ok());
+        let bin = check_edition(Edition::Free, &manifest("kind = \"binary\"")).unwrap_err();
         assert!(bin.contains("prebuilt binary"), "{bin}");
         assert!(bin.contains("acme/avada-files"));
-        let com = check_free_build(&manifest(
-            "kind = \"source\"\ncommercial = true\nissuer = \"https://x.example\"",
-        ))
-        .unwrap_err();
+        // Naming the module without saying what to do about it is half an answer.
+        assert!(bin.contains(COMMERCIAL_URL), "{bin}");
+        let com = check_edition(Edition::Free, &manifest(COMMERCIAL_MANIFEST)).unwrap_err();
         assert!(com.contains("commercial"), "{com}");
+        assert!(
+            com.contains("acme/avada-files") && com.contains(COMMERCIAL_URL),
+            "{com}"
+        );
+    }
+
+    #[test]
+    fn the_commercial_edition_installs_what_the_free_one_refuses() {
+        // The branch the private crate turns on, tested from the build that does not
+        // have it: the edition is an argument, not a `cfg!` read at the point of use.
+        for extra in [
+            "kind = \"source\"",
+            "kind = \"binary\"",
+            COMMERCIAL_MANIFEST,
+        ] {
+            let m = manifest(extra);
+            assert!(check_edition(Edition::Commercial, &m).is_ok(), "{extra}");
+            assert_eq!(
+                check_edition(Edition::Free, &m).is_ok(),
+                extra == "kind = \"source\"",
+                "{extra}"
+            );
+        }
     }
 
     #[test]

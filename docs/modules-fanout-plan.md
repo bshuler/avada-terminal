@@ -80,6 +80,18 @@ contract type.
   **notarized** binaries (macOS codesign/spctl + Team ID, Windows Authenticode via
   `WinVerifyTrust`, Linux minisign ed25519). Policy traits with OSS impls; the commercial
   crate swaps them.
+- **How the two are wired — the dependency runs the other way** (deviation from the
+  literal wording below, settled in G10). `avada-commercial` is **not** a git dependency
+  of `avada-core`, optional or otherwise: Cargo resolves optional dependencies too, so a
+  git dep would break every `--offline` build in this repo, and `avada-commercial` needs
+  `avada-core`'s traits, which is a cycle. Instead `avada-commercial` **depends on**
+  `avada-core` and installs itself at startup through two seams the free build already
+  has — `Marketplace::set_verifier` (G7) and `Marketplace::install_loader` (G10). The
+  `commercial` feature therefore pulls in **no crate**; it only moves
+  `Edition::CURRENT`. Every edition-dependent decision takes an `Edition` **argument**
+  (`marketplace::fetch::check_edition`, `Marketplace::set_edition`), so the free build's
+  own test suite drives the commercial path end to end — see
+  `marketplace::commercial_wiring`.
 - **Licensing** (one mechanism for core and modules, revocable):
   - License = JWT (RFC 7519) signed EdDSA (RFC 8037) with claims: license id, product id
     (`core` or module id), licensee display name, seat count, not-before, not-after (the
@@ -185,7 +197,8 @@ rs/
       src/leftpanel/rail.rs        rail rendering from RailEntry
       src/module_ui/               tier-1 renderer, tier-2 slots, placeholder pane
       src/prefs/rights.rs          rights page
-    avada-commercial/              PRIVATE repo, git dependency behind `commercial` feature
+    avada-commercial/              PRIVATE repo; depends on avada-core and registers
+                                   its verifier + loader at startup (see "Free vs commercial")
 modules/                           first-party module repos live OUTSIDE this repo, one each:
   avada-files, avada-git, avada-tools, avada-workspace, avada-hyperpane, avada-editor,
   avada-marketplace

@@ -20,6 +20,7 @@ pub mod cache;
 pub mod fetch;
 pub mod github;
 pub mod job;
+pub mod loader;
 // ---- track G6 resolver
 pub mod resolve;
 // ---- end track G6 resolver
@@ -34,7 +35,6 @@ pub(crate) mod testing;
 #[cfg(test)]
 mod live;
 
-use crate::install::dirs::binary_name;
 use crate::install::{
     hash_file, FileKeyStore, InstallError, InstallPaths, InstallStore, KeyStore, RecordStatus,
 };
@@ -47,13 +47,15 @@ use semver::VersionReq;
 // ---- track G7 policy
 use crate::policy::{self, Decision, Policy, Verifier};
 // ---- end track G7 policy
+use crate::edition::Edition;
 use avada_module_sdk::caps::Capability;
 use avada_module_sdk::manifest::{DistributionKind, Manifest, ModuleId};
 use avada_module_sdk::rights::{InstallKind, InstallRecord};
 use cache::Cache;
-use fetch::{check_free_build, newest_tag, read_manifest, run_streaming, Git};
+use fetch::{check_edition, newest_tag, read_manifest, Git};
 use github::{DevicePoll, GitHubApi, GitHubConfig, GitHubError, HttpGitHub, RepoSummary, TagInfo};
 use job::{Job, JobBook, Phase};
+use loader::{LoadError, LoadRequest, Loader, SourceLoader};
 use semver::Version;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -336,6 +338,16 @@ pub struct Marketplace {
     /// verifier) and the test hook are the same one line.
     verifier: Mutex<Arc<dyn Verifier>>,
     // ---- end track G7 policy
+    // ---- track G10 commercial
+    /// How an artifact is obtained, one loader per distribution kind. The free build
+    /// ships exactly one; the commercial crate adds the precompiled one at startup.
+    loaders: Mutex<Vec<Arc<dyn Loader>>>,
+    /// Which edition's rules this marketplace applies. A field rather than a `cfg!`
+    /// read at the point of use so that a free build can drive the commercial path in
+    /// a test — the only way the commercial path is tested before the private crate
+    /// exists. Defaults to whatever this binary was compiled as.
+    edition: Mutex<Edition>,
+    // ---- end track G10 commercial
 }
 
 impl Marketplace {
@@ -360,6 +372,10 @@ impl Marketplace {
             // ---- track G7 policy
             verifier: Mutex::new(policy::platform_verifier()),
             // ---- end track G7 policy
+            // ---- track G10 commercial
+            loaders: Mutex::new(vec![Arc::new(SourceLoader)]),
+            edition: Mutex::new(Edition::CURRENT),
+            // ---- end track G10 commercial
         }
     }
 
@@ -424,6 +440,53 @@ impl Marketplace {
     }
 
     // ---- end track G7 policy
+
+    // ---- track G10 commercial
+
+    /// Add a loader, ahead of the ones already installed.
+    ///
+    /// The commercial crate calls this at startup with its precompiled loader; tests
+    /// call it with a fake. Installing a second loader for a kind that already has one
+    /// replaces it in effect, because the search takes the first match — which is how
+    /// the commercial build overrides the source path if it ever needs to.
+    pub fn install_loader(&self, loader: Arc<dyn Loader>) {
+        self.loaders.lock().expect("loader lock").insert(0, loader);
+    }
+
+    /// The edition whose rules this marketplace applies.
+    pub fn edition(&self) -> Edition {
+        *self.edition.lock().expect("edition lock")
+    }
+
+    /// Change the edition in force. The commercial crate calls this at startup beside
+    /// [`Marketplace::install_loader`]; tests call it to exercise the other branch.
+    pub fn set_edition(&self, edition: Edition) {
+        *self.edition.lock().expect("edition lock") = edition;
+    }
+
+    /// The loader that serves `kind`, or a refusal naming the edition.
+    fn loader_for(&self, kind: DistributionKind) -> Result<Arc<dyn Loader>, MarketplaceError> {
+        let loaders = self.loaders.lock().expect("loader lock");
+        loaders
+            .iter()
+            .find(|l| l.serves(kind))
+            .map(Arc::clone)
+            .ok_or_else(|| {
+                // In a free build `check_edition` has already refused a prebuilt module
+                // by the time anything asks for a loader, so reaching this is either a
+                // commercial build that forgot to install one or a kind nobody serves.
+                MarketplaceError::Refused(format!(
+                    "no loader in the {} edition can produce a {} module",
+                    self.edition(),
+                    match kind {
+                        DistributionKind::Source => "source",
+                        DistributionKind::Binary => "prebuilt",
+                    }
+                ))
+            })
+    }
+
+    // ---- end track G10 commercial
 
     /// The production wiring over the modules root `modules_root`: file key store, file
     /// token store (both in the store's key directory), the real GitHub client caching
@@ -698,7 +761,7 @@ impl Marketplace {
                 manifest.module.version
             )));
         }
-        check_free_build(&manifest).map_err(MarketplaceError::Refused)?;
+        check_edition(self.edition(), &manifest).map_err(MarketplaceError::Refused)?;
         log(&format!(
             "manifest ok: {} {} ({} capabilities)",
             manifest.module.name,
@@ -713,44 +776,29 @@ impl Marketplace {
         }
         // ---- end track G6 resolver
 
-        // Build.
+        // ---- track G10 commercial
+        // Build, or download: which one is the loader's business, and past this line
+        // the two are the same artifact.
         jobs.phase(job_id, Phase::Build, Some(50));
-        let cargo = toolchain
-            .cargo
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("cargo"));
-        let target_dir = scratch.join("target");
-        let mut cmd = std::process::Command::new(&cargo);
-        cmd.current_dir(&scratch)
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .env("CARGO_TERM_COLOR", "never")
-            .args(["build", "--release", "--locked"]);
-        if let Some(bin) = &manifest.distribution.bin {
-            cmd.args(["--bin", bin]);
-        }
-        if let Some(p) = self.path() {
-            cmd.env("PATH", p);
-        }
-        let mut compiled = 0u8;
-        run_streaming(cmd, "cargo build", &mut |line| {
-            if line.trim_start().starts_with("Compiling") {
-                compiled = compiled.saturating_add(1);
-                jobs.progress(job_id, 50 + compiled.min(35));
-            }
-            log(line);
-        })
-        .map_err(|e| MarketplaceError::Build(e.to_string()))?;
-        let binary = target_dir.join("release").join(format!(
-            "{}{}",
-            binary_name(&id, &manifest),
-            std::env::consts::EXE_SUFFIX
-        ));
-        if !binary.is_file() {
-            return Err(MarketplaceError::Build(format!(
-                "cargo finished but produced no {}",
-                binary.display()
-            )));
-        }
+        let loader = self.loader_for(manifest.distribution.kind)?;
+        let request = LoadRequest {
+            id: &id,
+            manifest: &manifest,
+            repo: &url,
+            tag: &tag,
+            commit: &head,
+            scratch: &scratch,
+            cargo: toolchain.cargo.clone(),
+            path: self.path().map(OsStr::to_os_string),
+        };
+        let binary = loader
+            .load(&request, &log, &|pct| jobs.progress(job_id, pct))
+            .map_err(|e| match e {
+                LoadError::Refused(m) => MarketplaceError::Refused(m),
+                LoadError::Failed(m) => MarketplaceError::Build(m),
+            })?;
+        log(&format!("{} produced {}", loader.name(), binary.display()));
+        // ---- end track G10 commercial
 
         // ---- track G7 policy
         // Between "the artifact exists" and "the record blesses it": assess it, and
@@ -887,7 +935,7 @@ impl Marketplace {
             if step.id == id {
                 continue; // already checked, with the plain message
             }
-            check_free_build(&step.manifest)
+            check_edition(self.edition(), &step.manifest)
                 .map_err(|e| MarketplaceError::Refused(format!("{}: {e}", step.id.as_str())))?;
         }
 
@@ -1658,3 +1706,246 @@ mod policy_wiring {
 }
 
 // ---- end track G7 policy
+
+// ---- track G10 commercial
+
+/// The commercial half of the install pipeline, exercised from a build that does not
+/// have the private crate.
+///
+/// That is the whole point of making the edition a value and the artifact step a trait:
+/// a free build can install a fake precompiled loader, declare itself commercial, and
+/// drive the prebuilt path end to end. When `avada-commercial` lands, the only thing
+/// these tests do not cover is the body of its two implementations.
+#[cfg(test)]
+mod commercial_wiring {
+    use super::testing::{files_state, manifest_for, rig, wait, FakeCargo, FILES};
+    use super::*;
+    use crate::edition::{Edition, COMMERCIAL_URL};
+    use crate::marketplace::loader::{LoadError, LoadRequest, Loader};
+    use crate::policy::{Context, Verdict, Verifier};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    const PAID: &str = "acme/avada-paid";
+    const PREBUILT: &str =
+        "kind = \"binary\"\ncommercial = true\nissuer = \"https://license.example\"";
+
+    /// Stands in for the private crate's downloader: writes a file where the pipeline
+    /// expects the artifact and records what it was asked for.
+    #[derive(Debug, Default)]
+    struct FakeLoader {
+        calls: Mutex<Vec<String>>,
+        fail: Option<String>,
+    }
+
+    impl FakeLoader {
+        fn new() -> Arc<Self> {
+            Arc::new(FakeLoader::default())
+        }
+
+        fn refusing(why: &str) -> Arc<Self> {
+            Arc::new(FakeLoader {
+                calls: Mutex::new(Vec::new()),
+                fail: Some(why.to_string()),
+            })
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls").clone()
+        }
+    }
+
+    impl Loader for FakeLoader {
+        fn name(&self) -> &'static str {
+            "fake-prebuilt"
+        }
+
+        fn serves(&self, kind: DistributionKind) -> bool {
+            kind == DistributionKind::Binary
+        }
+
+        fn load(
+            &self,
+            req: &LoadRequest<'_>,
+            log: &dyn Fn(&str),
+            progress: &dyn Fn(u8),
+        ) -> Result<PathBuf, LoadError> {
+            self.calls.lock().expect("calls").push(format!(
+                "{} {} {}",
+                req.id.as_str(),
+                req.tag,
+                req.commit
+            ));
+            if let Some(why) = &self.fail {
+                return Err(LoadError::Refused(why.clone()));
+            }
+            log("downloading the signed artifact");
+            progress(70);
+            let out = req.scratch.join("downloaded");
+            std::fs::write(&out, "prebuilt artifact\n").expect("write artifact");
+            Ok(out)
+        }
+    }
+
+    /// Trusts everything, so the prebuilt policy default (`require-signature`) passes
+    /// and these tests are about the loader, not about G7.
+    #[derive(Debug)]
+    struct TrustingVerifier(AtomicUsize);
+
+    impl Verifier for TrustingVerifier {
+        fn name(&self) -> &'static str {
+            "fake-trusting"
+        }
+
+        fn verify(&self, binary: &Path, _ctx: &Context) -> Verdict {
+            assert!(binary.is_file(), "{} is not a file", binary.display());
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Verdict::Trusted {
+                by: "Fake Publisher".into(),
+            }
+        }
+    }
+
+    /// A rig with one prebuilt commercial fixture repo published.
+    async fn prebuilt_rig(name: &str) -> super::testing::Rig {
+        let r = rig(
+            name,
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(60),
+        )
+        .await;
+        r.fixtures
+            .repo(PAID, "v1.0.0", &manifest_for(PAID, "1.0.0", PREBUILT, ""));
+        r
+    }
+
+    #[tokio::test]
+    async fn the_free_edition_refuses_a_prebuilt_commercial_module_by_name() {
+        let r = prebuilt_rig("g10-free").await;
+        assert_eq!(r.mp.edition(), Edition::Free, "the test build is free");
+        let job = r.mp.install(InstallRequest::new(PAID)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Failed, "{done:?}");
+        let err = done.error.unwrap_or_default();
+        assert!(err.contains(PAID), "{err}");
+        assert!(err.contains("prebuilt binary"), "{err}");
+        // A refusal that does not say where to get the thing is half an answer.
+        assert!(err.contains(COMMERCIAL_URL), "{err}");
+        assert!(r.mp.installed().expect("installed").is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_commercial_edition_installs_what_the_loader_produced() {
+        let r = prebuilt_rig("g10-install").await;
+        let loader = FakeLoader::new();
+        r.mp.install_loader(Arc::clone(&loader) as Arc<dyn Loader>);
+        r.mp.set_verifier(Arc::new(TrustingVerifier(AtomicUsize::new(0))) as Arc<dyn Verifier>);
+        r.mp.set_edition(Edition::Commercial);
+
+        let job = r.mp.install(InstallRequest::new(PAID)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+
+        // The loader ran instead of cargo, on the tag and commit the resolver settled.
+        let calls = loader.calls();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert!(
+            calls[0].starts_with(&format!("{PAID} v1.0.0 ")),
+            "{calls:?}"
+        );
+        assert!(
+            done.log_tail
+                .iter()
+                .any(|l| l.contains("fake-prebuilt produced")),
+            "{:?}",
+            done.log_tail
+        );
+        assert!(
+            !done.log_tail.iter().any(|l| l.contains("Compiling")),
+            "cargo must not have run: {:?}",
+            done.log_tail
+        );
+
+        // Past the loader the artifact is an artifact: hashed, notarized, recorded.
+        let id = ModuleId::new(PAID).unwrap();
+        let installed = r.mp.store().record(&id).unwrap().expect("active record");
+        assert_eq!(
+            std::fs::read_to_string(&installed.binary).unwrap(),
+            "prebuilt artifact\n"
+        );
+        assert_eq!(
+            installed.rights().artifact_sha256,
+            hash_file(&installed.binary).unwrap()
+        );
+        let recorded = policy::read_verdict(&installed.binary).expect("verdict beside it");
+        assert_eq!(recorded.source, "prebuilt", "{recorded:?}");
+        assert_eq!(recorded.verdict, "trusted");
+        assert_eq!(recorded.decision, "run");
+    }
+
+    #[tokio::test]
+    async fn a_commercial_build_with_no_prebuilt_loader_says_so() {
+        // The free build's one loader serves source only, so a commercial edition that
+        // never installed the private one has nothing to run — and must say which
+        // edition and which kind rather than falling back to cargo.
+        let r = prebuilt_rig("g10-noloader").await;
+        r.mp.set_edition(Edition::Commercial);
+        let job = r.mp.install(InstallRequest::new(PAID)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Failed, "{done:?}");
+        let err = done.error.unwrap_or_default();
+        assert!(err.contains("commercial edition"), "{err}");
+        assert!(err.contains("prebuilt"), "{err}");
+        assert!(r.mp.installed().expect("installed").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_loader_refusal_fails_the_job_and_installs_nothing() {
+        let r = prebuilt_rig("g10-refuse").await;
+        let loader = FakeLoader::refusing("no entitlement for this seat");
+        r.mp.install_loader(Arc::clone(&loader) as Arc<dyn Loader>);
+        r.mp.set_edition(Edition::Commercial);
+        let job = r.mp.install(InstallRequest::new(PAID)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Failed, "{done:?}");
+        assert!(
+            done.error.unwrap_or_default().contains("no entitlement"),
+            "the loader's own words reach the user"
+        );
+        assert_eq!(loader.calls().len(), 1);
+        assert!(r.mp.installed().expect("installed").is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_source_path_is_unchanged_by_the_commercial_edition() {
+        // The commercial build is a superset, not a fork: a source module still goes
+        // through cargo when the precompiled loader is installed beside it.
+        let r = rig(
+            "g10-source",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(60),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+        let loader = FakeLoader::new();
+        r.mp.install_loader(Arc::clone(&loader) as Arc<dyn Loader>);
+        r.mp.set_edition(Edition::Commercial);
+        let job = r.mp.install(InstallRequest::new(FILES)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        assert!(loader.calls().is_empty(), "the prebuilt loader was asked");
+        assert!(
+            done.log_tail.iter().any(|l| l.contains("cargo produced")),
+            "{:?}",
+            done.log_tail
+        );
+    }
+}
+
+// ---- end track G10 commercial

@@ -15,6 +15,14 @@ publish = false
 name = "avada"
 path = "src/main.rs"
 
+# The commercial edition is built with `--features commercial`; it forwards to the core
+# switch and adds no dependency here either. The private `avada-commercial` crate is what
+# supplies the strict verifier and the precompiled loader, and it depends on this repo
+# rather than being depended on by it (see crates/core/Cargo.toml).
+[features]
+default = []
+commercial = ["avada-core/commercial"]
+
 [dependencies]
 avada-core = { path = "../core" }
 avada-terminal-widget = { path = "../terminal-widget" }

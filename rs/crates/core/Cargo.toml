@@ -9,6 +9,17 @@ publish = false
 # Dependencies are PRE-DECLARED by the fan-out scaffold so no track edits this file
 # (a parallel Cargo.toml edit would collide at merge). Need another crate or feature?
 # STOP and ask the orchestrator — it's a checkpoint, not a unilateral edit.
+# ---- track G10 commercial
+# The edition switch (docs/modules-fanout-plan.md §2 "Free vs commercial"). It pulls in
+# NO crate on purpose: the private `avada-commercial` crate depends on this one and
+# installs its verifier and precompiled loader at startup, so the free build has no git
+# dependency it cannot resolve offline and there is no cycle between the two crates.
+# Turning it on changes policy only — which modules may install, and whether a missing
+# precompiled loader is a bug or the expected state.
+[features]
+default = []
+commercial = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
