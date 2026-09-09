@@ -807,20 +807,54 @@ impl App {
             self.modules.submit(&mut st);
         }
 
-        let ops = self.modules.take_pane_ops();
-        if ops.is_empty() {
+        let pane_ops = self.modules.take_pane_ops();
+        let workspace_ops = self.modules.take_workspace_ops();
+        if pane_ops.is_empty() && workspace_ops.is_empty() {
             return;
         }
         let Some(first) = windows.first() else {
             // No window to open a pane in. Dropping them is the honest outcome: the module
             // was already answered, and queueing panes for a window that may never exist
             // would open a burst of them at the worst possible moment.
-            tracing::debug!(dropped = ops.len(), "module pane ops with no window");
+            tracing::debug!(
+                dropped = pane_ops.len() + workspace_ops.len(),
+                "module pane ops with no window"
+            );
             return;
         };
         let mut st = first.state.borrow_mut();
-        for op in ops {
+        for op in pane_ops {
             self.apply_pane_op(&mut st, op);
+        }
+        for op in workspace_ops {
+            self.apply_workspace_op(&mut st, op);
+        }
+    }
+
+    /// Carry out one thing a module asked of the saved-workspace drawers.
+    ///
+    /// Which drawer a path belongs to is decided by the directory it sits in, not by
+    /// sniffing the file: a set's legacy bare form and a named workspace are both objects
+    /// with a `name`, so content alone cannot tell them apart, while the two drawers are
+    /// separate directories the module was handed paths from.
+    fn apply_workspace_op(&self, st: &mut State, op: crate::module_runtime::WorkspaceOp) {
+        use crate::module_runtime::WorkspaceOp;
+        match op {
+            WorkspaceOp::Open { path } => {
+                let path = std::path::PathBuf::from(path);
+                if path.parent() == Some(avada_core::persistence::paths::sets_dir().as_path()) {
+                    st.open_set_path(&path, &self.mgr);
+                } else {
+                    st.open_workspace_path(&path, &self.mgr);
+                }
+            }
+            WorkspaceOp::Save { name, as_set } => {
+                if as_set {
+                    st.save_set_to_library_as(name.as_deref());
+                } else {
+                    st.save_workspace_to_library_as(name.as_deref());
+                }
+            }
         }
     }
 

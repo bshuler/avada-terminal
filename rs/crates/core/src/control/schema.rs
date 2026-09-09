@@ -162,9 +162,14 @@ impl SchemaRegistry {
 
 /// Every JSON-RPC method of contract v1, host- and module-side, sorted by name, with the
 /// capability `contract::methods::required_capability` demands for the host ones.
+///
+/// The additive host methods are listed too: this document is what a module author reads
+/// to find out what *this* host can do, and an optional method that never appears here is
+/// one nobody will discover.
 pub fn rpc_descriptors() -> Vec<RpcDescriptor> {
     let mut out: Vec<RpcDescriptor> = methods::HOST_REQUIRED_V1
         .iter()
+        .chain(methods::HOST_OPTIONAL.iter())
         .chain(methods::MODULE_REQUIRED_V1.iter())
         .map(|m| RpcDescriptor {
             method: m.to_string(),
@@ -200,6 +205,9 @@ fn rpc_summary(method: &str) -> &'static str {
         methods::HOST_ROUTES_REGISTER => "Register control-plane routes",
         methods::HOST_KEYCHAIN_GET => "Read a keychain entry the module owns",
         methods::HOST_KEYCHAIN_SET => "Write a keychain entry the module owns",
+        methods::HOST_WORKSPACE_LIST => "List the saved-workspace library and the sets drawer",
+        methods::HOST_WORKSPACE_OPEN => "Open a saved workspace or set",
+        methods::HOST_WORKSPACE_SAVE => "Save the current workspace",
         methods::MODULE_ACTIVATE => "A workspace became active",
         methods::MODULE_DEACTIVATE => "The workspace is going away",
         methods::MODULE_COMMAND_INVOKE => "The user invoked a command",
@@ -306,7 +314,9 @@ mod tests {
         assert_eq!(rpcs, sorted, "rpcs are sorted by method");
         assert_eq!(
             rpcs.len(),
-            methods::HOST_REQUIRED_V1.len() + methods::MODULE_REQUIRED_V1.len()
+            methods::HOST_REQUIRED_V1.len()
+                + methods::HOST_OPTIONAL.len()
+                + methods::MODULE_REQUIRED_V1.len()
         );
         let spawn = doc
             .rpcs

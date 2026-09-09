@@ -38,6 +38,9 @@ pub const SERVED: &[&str] = &[
     methods::HOST_PANES_SPAWN,
     methods::HOST_PANES_INPUT,
     methods::HOST_EVENTS_SUBSCRIBE,
+    methods::HOST_WORKSPACE_LIST,
+    methods::HOST_WORKSPACE_OPEN,
+    methods::HOST_WORKSPACE_SAVE,
     HOST_GIT_STATUS,
     HOST_GIT_COMMIT,
 ];
@@ -226,6 +229,28 @@ struct SpawnPane {
     surface: Option<String>,
 }
 
+/// `host.workspace.list` params. Absent `what` means both drawers.
+#[derive(Deserialize)]
+struct ListWorkspaces {
+    #[serde(default)]
+    what: Option<String>,
+}
+
+/// `host.workspace.open` params.
+#[derive(Deserialize)]
+struct OpenWorkspace {
+    path: String,
+}
+
+/// `host.workspace.save` params.
+#[derive(Deserialize)]
+struct SaveWorkspace {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    as_set: bool,
+}
+
 /// `host.panes.input` params.
 #[derive(Deserialize)]
 struct PaneInput {
@@ -288,9 +313,32 @@ impl Dispatcher {
     }
 
     /// The gate check every arm goes through.
+    ///
+    /// **Fail-closed.** A method this host *serves* but that maps to no capability is
+    /// refused rather than waved through — that combination means someone added a dispatch
+    /// arm and forgot the mapping, and forgetting must cost the module the call, not the
+    /// user their consent. The two git extensions are the named exception: they check
+    /// `git.read` inside their own arms, because the SDK's versioned `required_capability`
+    /// cannot know about methods this host spelled locally.
+    ///
+    /// A method that is neither served nor mapped is left alone here so
+    /// [`Dispatcher::call`] can answer the honest `MethodNotFound`; refusing it for want of
+    /// a capability would tell a module its typo was a permissions problem.
+    /// `served_methods_all_gate_or_self_gate` is what keeps the exception list from
+    /// quietly growing.
     fn gate(&self, method: &str) -> Result<(), RpcError> {
-        let Some(cap) = required_capability(method) else {
+        if matches!(method, HOST_GIT_STATUS | HOST_GIT_COMMIT) {
             return Ok(());
+        }
+        let Some(cap) = required_capability(method) else {
+            return if SERVED.contains(&method) {
+                Err(RpcError::new(
+                    ErrorCode::CapabilityDenied,
+                    format!("`{method}` maps to no capability"),
+                ))
+            } else {
+                Ok(())
+            };
         };
         match self.shared.gate.check(&self.module, cap) {
             Decision::Allow => Ok(()),
@@ -319,6 +367,9 @@ impl Dispatcher {
             methods::HOST_PANES_SPAWN => self.panes_spawn(params),
             methods::HOST_PANES_INPUT => self.panes_input(params),
             methods::HOST_EVENTS_SUBSCRIBE => self.events_subscribe(params),
+            methods::HOST_WORKSPACE_LIST => self.workspace_list(params),
+            methods::HOST_WORKSPACE_OPEN => self.workspace_open(params),
+            methods::HOST_WORKSPACE_SAVE => self.workspace_save(params),
             HOST_GIT_STATUS => self.git_status(params),
             HOST_GIT_COMMIT => self.git_commit(params),
             methods::HOST_KEYCHAIN_GET | methods::HOST_KEYCHAIN_SET => Err(unsupported(method)),
@@ -804,6 +855,83 @@ impl Dispatcher {
         Ok(json!({ "pane_id": pane_id }))
     }
 
+    /// `host.workspace.list { what? } -> { workspaces: [...], sets: [...] }`.
+    ///
+    /// The saved-workspace library and the sets drawer, which live under the host's data
+    /// directory and are therefore outside every `fs.read` scope. Both keys are always
+    /// present; `what` only decides which one is filled, so a caller never has to branch
+    /// on a missing field.
+    ///
+    /// Counts and an mtime, never a formatted line: how "2 tabs, 5m ago" reads is the
+    /// module's decision and its locale, not the host's.
+    fn workspace_list(&self, params: &Value) -> Result<Value, RpcError> {
+        let ListWorkspaces { what } = if params.is_null() {
+            ListWorkspaces { what: None }
+        } else {
+            serde_json::from_value(params.clone()).map_err(invalid_params)?
+        };
+        let (want_ws, want_sets) = match what.as_deref() {
+            None => (true, true),
+            Some("workspaces") => (true, false),
+            Some("sets") => (false, true),
+            Some(other) => {
+                return Err(invalid_params(format!(
+                    "`what` must be `workspaces` or `sets`, not `{other}`"
+                )))
+            }
+        };
+        let workspaces = if want_ws {
+            crate::workspace::library::library()
+        } else {
+            Vec::new()
+        };
+        let sets = if want_sets {
+            crate::workspace::library::all_sets()
+        } else {
+            Vec::new()
+        };
+        Ok(json!({ "workspaces": workspaces, "sets": sets }))
+    }
+
+    /// `host.workspace.open { path } -> {}`.
+    ///
+    /// Fire-and-forget onto the event stream, like `panes.spawn`: the windows a workspace
+    /// describes are built on the UI thread, and a module that waited for them would block
+    /// its own request loop on the next frame.
+    fn workspace_open(&self, params: &Value) -> Result<Value, RpcError> {
+        let OpenWorkspace { path } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if path.trim().is_empty() {
+            return Err(invalid_params("path must not be empty"));
+        }
+        self.shared.events.send(HostEvent::WorkspaceOpen {
+            module: self.module.clone(),
+            path,
+        });
+        Ok(json!({}))
+    }
+
+    /// `host.workspace.save { name?, as_set? } -> {}`.
+    ///
+    /// Also fire-and-forget: only the app knows what its windows currently hold. An absent
+    /// `name` means "ask the human", which is what the built-in Save button does.
+    fn workspace_save(&self, params: &Value) -> Result<Value, RpcError> {
+        let SaveWorkspace { name, as_set } = if params.is_null() {
+            SaveWorkspace {
+                name: None,
+                as_set: false,
+            }
+        } else {
+            serde_json::from_value(params.clone()).map_err(invalid_params)?
+        };
+        self.shared.events.send(HostEvent::WorkspaceSave {
+            module: self.module.clone(),
+            name,
+            as_set,
+        });
+        Ok(json!({}))
+    }
+
     /// `host.panes.input` `{ pane_id, text }` -> `{}`.
     ///
     /// Typing into a pane the module opened, which is the whole point of a shell-tier
@@ -955,18 +1083,46 @@ pub(crate) mod tests {
         ));
     }
 
-    /// The advertised set is the contract's, plus the git service. The exception is
-    /// spelled out rather than loosened away: anything else appearing in `SERVED` that the
-    /// contract does not name is a method somebody forgot to put through the SDK.
+    /// The advertised set is the contract's — required and optional — plus the git
+    /// service. The exception is spelled out rather than loosened away: anything else
+    /// appearing in `SERVED` that the contract does not name is a method somebody forgot
+    /// to put through the SDK.
     #[test]
     fn served_methods_are_the_contract_plus_the_named_extensions() {
         for m in SERVED {
             assert!(
                 methods::HOST_REQUIRED_V1.contains(m)
+                    || methods::HOST_OPTIONAL.contains(m)
                     || [HOST_GIT_STATUS, HOST_GIT_COMMIT].contains(m),
                 "{m} is not in the contract and is not a named extension"
             );
         }
+    }
+
+    /// Every method this host advertises is either gated by [`Dispatcher::gate`] or is one
+    /// of the two that gate themselves. This is the invariant that makes the gate's
+    /// fail-closed branch a backstop rather than the thing standing between a module and
+    /// an ungranted capability: if it ever fires in production, this test was deleted.
+    #[test]
+    fn served_methods_all_gate_or_self_gate() {
+        for m in SERVED {
+            assert!(
+                required_capability(m).is_some() || [HOST_GIT_STATUS, HOST_GIT_COMMIT].contains(m),
+                "{m} is served, needs no capability, and does not gate itself"
+            );
+        }
+    }
+
+    /// The fail-closed branch itself, exercised the only way it can be: a module holding
+    /// every capability the contract knows about still cannot reach a served method whose
+    /// mapping is missing. `host.git.status` stands in for that method — it is served and
+    /// unmapped — and the assertion is that its *own* check is what refuses it, not the
+    /// gate, which is exactly the distinction the exception list encodes.
+    #[test]
+    fn an_unmapped_method_that_is_not_served_is_a_missing_method_not_a_denial() {
+        let rig = rig(&all_caps());
+        let e = rig.d.call("host.nope", &Value::Null).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::MethodNotFound);
     }
 
     /// The git arms are outside `required_capability`, so the shared gate cannot protect
@@ -1649,6 +1805,111 @@ pub(crate) mod tests {
             .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::InvalidParams);
         assert!(e.message.contains("stops at"), "{}", e.message);
+    }
+
+    /// The library and the sets drawer live outside every `fs.read` scope, so this is the
+    /// only door to them — and it must be a locked one. `workspace.read` is not in
+    /// `all_caps()` (it is not a contract-required method's capability), which is exactly
+    /// the shape of a module that never asked for it.
+    #[test]
+    fn the_workspace_drawers_are_refused_without_workspace_read() {
+        let rig = rig(&all_caps());
+        let e = rig
+            .d
+            .call(methods::HOST_WORKSPACE_LIST, &Value::Null)
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+    }
+
+    /// Both keys are always present, whichever drawer was asked for, so a module never has
+    /// to branch on a missing field. The *contents* are the real user's data directory and
+    /// are not asserted here — [`crate::workspace::library`] tests the scan against a
+    /// scratch directory it owns.
+    #[test]
+    fn listing_answers_both_drawers_and_refuses_a_drawer_it_has_never_heard_of() {
+        let rig = rig(&[Capability::WorkspaceRead]);
+        for params in [
+            Value::Null,
+            json!({}),
+            json!({ "what": "workspaces" }),
+            json!({ "what": "sets" }),
+        ] {
+            let v = rig.d.call(methods::HOST_WORKSPACE_LIST, &params).unwrap();
+            assert!(v["workspaces"].is_array(), "{params}");
+            assert!(v["sets"].is_array(), "{params}");
+        }
+        let e = rig
+            .d
+            .call(methods::HOST_WORKSPACE_LIST, &json!({ "what": "panes" }))
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+    }
+
+    /// Opening and saving are writes — a module that may only *read* the drawer cannot do
+    /// either — and both answer at once, announcing the intent on the event stream, because
+    /// windows are built on the UI thread.
+    #[test]
+    fn opening_and_saving_are_writes_and_are_announced_rather_than_awaited() {
+        let read_only = rig(&[Capability::WorkspaceRead]);
+        for m in [methods::HOST_WORKSPACE_OPEN, methods::HOST_WORKSPACE_SAVE] {
+            let e = read_only
+                .d
+                .call(m, &json!({ "path": "/w/a.avada" }))
+                .unwrap_err();
+            assert_eq!(e.kind(), ErrorCode::CapabilityDenied, "{m}");
+        }
+
+        let rig = rig(&[Capability::WorkspaceWrite]);
+        rig.d
+            .call(
+                methods::HOST_WORKSPACE_OPEN,
+                &json!({ "path": "/w/a.avada" }),
+            )
+            .unwrap();
+        match rig.events.recv().unwrap() {
+            HostEvent::WorkspaceOpen { module, path } => {
+                assert_eq!(module, testkit::module_id());
+                assert_eq!(path, "/w/a.avada");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // An absent name is "ask the human", the same as the built-in Save button; it is
+        // not an error, so the app — not the module — owns that prompt.
+        rig.d
+            .call(methods::HOST_WORKSPACE_SAVE, &Value::Null)
+            .unwrap();
+        match rig.events.recv().unwrap() {
+            HostEvent::WorkspaceSave { name, as_set, .. } => {
+                assert_eq!(name, None);
+                assert!(!as_set);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        rig.d
+            .call(
+                methods::HOST_WORKSPACE_SAVE,
+                &json!({ "name": "Morning", "as_set": true }),
+            )
+            .unwrap();
+        match rig.events.recv().unwrap() {
+            HostEvent::WorkspaceSave { name, as_set, .. } => {
+                assert_eq!(name.as_deref(), Some("Morning"));
+                assert!(as_set);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // A blank path is refused before anything reaches the app: an event the app can
+        // only answer with a toast is worse than an error the module can read.
+        assert_eq!(
+            rig.d
+                .call(methods::HOST_WORKSPACE_OPEN, &json!({ "path": "  " }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams
+        );
     }
 
     #[test]

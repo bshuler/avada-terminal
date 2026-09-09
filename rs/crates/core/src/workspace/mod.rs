@@ -2,6 +2,7 @@
 //! `launch` (resolveLaunchWorkspace / getInitialWindows), this wave. Frozen map.
 pub mod io;
 pub mod launch;
+pub mod library;
 pub mod model;
 pub mod project;
 pub mod sets;

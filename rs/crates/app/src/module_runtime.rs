@@ -109,6 +109,33 @@ pub enum PaneOp {
     },
 }
 
+/// A saved-workspace operation a module asked for, waiting for the app to carry it out.
+///
+/// Same shape and same promise as [`PaneOp`]: the host answered `{}` the moment the
+/// request arrived, because "open a workspace" happens on the UI thread and a module that
+/// waited for it would block its own request loop. A path that no longer resolves is the
+/// app's problem to report, never an error the module sees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceOp {
+    /// Open a saved workspace or set (`host.workspace.open`).
+    ///
+    /// One variant for both drawers on purpose: the path is the only thing the module was
+    /// given, and which drawer it came from is decided by reading the file, not by
+    /// trusting a flag a module could get wrong.
+    Open {
+        /// A path the module got back from `host.workspace.list`.
+        path: String,
+    },
+    /// Save the current workspace (`host.workspace.save`).
+    Save {
+        /// The name to save under; `None` means "ask the human", exactly as the panel's
+        /// own Save button does.
+        name: Option<String>,
+        /// Save into the sets drawer rather than the library.
+        as_set: bool,
+    },
+}
+
 /// One tick's worth of what the modules said, drained once and folded into every window.
 #[derive(Debug, Default, Clone)]
 pub struct ModuleTick {
@@ -135,6 +162,7 @@ pub struct ModuleRuntime {
     /// fresh `Shared` that needs the invoker again.
     attached: Cell<bool>,
     panes: RefCell<Vec<PaneOp>>,
+    workspaces: RefCell<Vec<WorkspaceOp>>,
     /// Host pane id → the session uid the app opened for it.
     ///
     /// The host mints a uuid inside `host.panes.spawn` and answers the module with it
@@ -178,6 +206,7 @@ impl ModuleRuntime {
                     worker: RefCell::new(None),
                     attached: Cell::new(false),
                     panes: RefCell::new(Vec::new()),
+                    workspaces: RefCell::new(Vec::new()),
                     pane_uids: RefCell::new(std::collections::HashMap::new()),
                 };
             }
@@ -220,6 +249,7 @@ impl ModuleRuntime {
             worker: RefCell::new(worker),
             attached: Cell::new(false),
             panes: RefCell::new(Vec::new()),
+            workspaces: RefCell::new(Vec::new()),
             pane_uids: RefCell::new(std::collections::HashMap::new()),
         };
         rt.start_installed(modules_root, workspace);
@@ -305,6 +335,13 @@ impl ModuleRuntime {
         std::mem::take(&mut self.panes.borrow_mut())
     }
 
+    /// Workspace operations the modules asked for since the last drain. Drained beside
+    /// [`Self::take_pane_ops`] and for the same reason: the runtime knows what was asked
+    /// for, the app knows how to do it.
+    pub fn take_workspace_ops(&self) -> Vec<WorkspaceOp> {
+        std::mem::take(&mut self.workspaces.borrow_mut())
+    }
+
     /// Remember which session a module's pane became, so later `host.panes.input` for that
     /// id reaches the right PTY.
     pub fn record_pane(&self, pane_id: &str, uid: &str) {
@@ -351,6 +388,14 @@ impl ModuleRuntime {
                 .panes
                 .borrow_mut()
                 .push(PaneOp::Input { pane_id, text }),
+            HostEvent::WorkspaceOpen { path, .. } => self
+                .workspaces
+                .borrow_mut()
+                .push(WorkspaceOp::Open { path }),
+            HostEvent::WorkspaceSave { name, as_set, .. } => self
+                .workspaces
+                .borrow_mut()
+                .push(WorkspaceOp::Save { name, as_set }),
             // The rail already learns a module is gone through `RailEvent::Gone`, and the
             // control plane unmounts its routes in `attach_host`'s own thread. Nothing
             // left for the panel to do.
@@ -686,6 +731,7 @@ label = "Tree"
             worker: RefCell::new(None),
             attached: Cell::new(false),
             panes: RefCell::new(Vec::new()),
+            workspaces: RefCell::new(Vec::new()),
             pane_uids: RefCell::new(HashMap::new()),
         }
     }
@@ -751,6 +797,7 @@ label = "Tree"
         let tick = rt.poll();
         assert!(tick.rail.is_empty() && tick.toasts.is_empty());
         assert!(rt.take_pane_ops().is_empty());
+        assert!(rt.take_workspace_ops().is_empty());
         // Neither control-plane call panics without a host.
         rt.detach_control();
     }
@@ -814,6 +861,62 @@ label = "Tree"
         );
         // Drained, not copied.
         assert!(rt.take_pane_ops().is_empty());
+    }
+
+    /// Opening and saving are announcements too, and they drain on their own queue: a
+    /// module that asks for a workspace must not have its request folded in with panes,
+    /// because the app applies the two in different orders and to different state.
+    #[test]
+    fn workspace_open_and_save_become_workspace_ops_on_their_own_queue() {
+        let rt = hostless();
+        let mut tick = ModuleTick::default();
+        rt.fold_event(
+            HostEvent::WorkspaceOpen {
+                module: id("acme/avada-one"),
+                path: "/w/api.avada".into(),
+            },
+            &mut tick,
+        );
+        rt.fold_event(
+            HostEvent::WorkspaceSave {
+                module: id("acme/avada-one"),
+                name: Some("API work".into()),
+                as_set: true,
+            },
+            &mut tick,
+        );
+        rt.fold_event(
+            HostEvent::WorkspaceSave {
+                module: id("acme/avada-one"),
+                name: None,
+                as_set: false,
+            },
+            &mut tick,
+        );
+
+        assert!(tick.toasts.is_empty() && tick.rail.is_empty());
+        assert!(
+            rt.take_pane_ops().is_empty(),
+            "workspace ops must not land on the pane queue"
+        );
+        assert_eq!(
+            rt.take_workspace_ops(),
+            vec![
+                WorkspaceOp::Open {
+                    path: "/w/api.avada".into()
+                },
+                WorkspaceOp::Save {
+                    name: Some("API work".into()),
+                    as_set: true,
+                },
+                WorkspaceOp::Save {
+                    name: None,
+                    as_set: false,
+                },
+            ]
+        );
+        // Drained, not copied.
+        assert!(rt.take_workspace_ops().is_empty());
     }
 
     /// The host mints a pane id before the pane exists, so the app has to remember which

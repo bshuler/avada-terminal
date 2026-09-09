@@ -148,6 +148,27 @@ pub enum HostEvent {
         /// The bytes to feed the pane, exactly as the module sent them.
         text: String,
     },
+    /// The module asked for a saved workspace or set to be opened
+    /// (`host.workspace.open`). The path is one the module got back from
+    /// `host.workspace.list`; opening it is the app's job, and a path that no longer
+    /// exists is a toast, not an error the module ever sees.
+    WorkspaceOpen {
+        /// Which module.
+        module: ModuleId,
+        /// The file to open, as listed.
+        path: String,
+    },
+    /// The module asked for the current workspace to be saved (`host.workspace.save`).
+    /// What "current" means is the app's business — the host has no window.
+    WorkspaceSave {
+        /// Which module.
+        module: ModuleId,
+        /// The name to save under; `None` means "ask the human", exactly as the
+        /// built-in Save button does.
+        name: Option<String>,
+        /// Save the open windows as a *set* rather than as one workspace.
+        as_set: bool,
+    },
 }
 
 /// Why a host operation failed.

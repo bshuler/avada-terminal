@@ -5433,11 +5433,25 @@ impl State {
     /// than overwriting the earlier snapshot.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn save_workspace_to_library(&mut self) {
+        self.save_workspace_to_library_as(None);
+    }
+
+    /// [`Self::save_workspace_to_library`], with the name supplied rather than taken from
+    /// the active tab.
+    ///
+    /// `None` keeps the tab's own title, which is what the panel's Save button has always
+    /// done; a module passes a name because it has no tab strip to name things after. A
+    /// blank name is treated as no name at all rather than saved as an empty label.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn save_workspace_to_library_as(&mut self, name: Option<&str>) {
         if self.refuse_saving_system_tab() {
             return;
         }
         let file = self.to_library_workspace_file();
-        let name = self.active_tab().title.to_string();
+        let name = match name.map(str::trim) {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => self.active_tab().title.to_string(),
+        };
         if crate::leftpanel::save_to_library(&name, &file).is_none() {
             tracing::warn!("failed to save workspace into the library");
         }
@@ -5451,8 +5465,18 @@ impl State {
         let Some(entry) = crate::leftpanel::library().into_iter().nth(i) else {
             return;
         };
-        let Some(file) = read_workspace(&entry.path) else {
-            tracing::warn!("{} is not a valid workspace", entry.path.display());
+        self.open_workspace_path(&entry.path, mgr);
+    }
+
+    /// Open a saved workspace by path.
+    ///
+    /// The path form is the one a module gets: `host.workspace.list` hands out paths, not
+    /// row indices, and an index would be a race anyway — the drawer can be rescanned
+    /// between the list and the open. The index form above resolves to this.
+    #[tracing::instrument(level = "debug", skip(self, mgr))]
+    pub fn open_workspace_path(&mut self, path: &std::path::Path, mgr: &SessionManager) {
+        let Some(file) = read_workspace(path) else {
+            tracing::warn!("{} is not a valid workspace", path.display());
             // The row is stale (deleted or corrupted since the scan) — rescan so it goes.
             crate::leftpanel::refresh_library();
             self.dirty = true;
@@ -5473,12 +5497,22 @@ impl State {
     /// title cannot clobber the first set's members.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn save_set_to_library(&mut self) {
+        self.save_set_to_library_as(None);
+    }
+
+    /// [`Self::save_set_to_library`], with the name supplied rather than taken from the
+    /// active tab — the set-drawer twin of [`Self::save_workspace_to_library_as`].
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn save_set_to_library_as(&mut self, name: Option<&str>) {
         let dir = paths::sets_dir();
         if std::fs::create_dir_all(&dir).is_err() {
             tracing::warn!("failed to create the sets directory");
             return;
         }
-        let title = self.active_tab().title.trim().to_string();
+        let title = match name.map(str::trim) {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => self.active_tab().title.trim().to_string(),
+        };
         let base = if title.is_empty() {
             "set".to_string()
         } else {
@@ -5513,7 +5547,14 @@ impl State {
         let Some(entry) = crate::leftpanel::sets_rows().into_iter().nth(i) else {
             return;
         };
-        if self.open_set_from(&entry.path, mgr) == 0 {
+        self.open_set_path(&entry.path, mgr);
+    }
+
+    /// Open a saved set by path — the path-shaped sibling of
+    /// [`Self::open_set_from_library`], for the same reason.
+    #[tracing::instrument(level = "debug", skip(self, mgr))]
+    pub fn open_set_path(&mut self, path: &std::path::Path, mgr: &SessionManager) {
+        if self.open_set_from(path, mgr) == 0 {
             // Nothing loaded: the row is stale (deleted or corrupted since the scan), or
             // every member reference is dead. Rescan so a vanished row goes.
             crate::leftpanel::refresh_sets();

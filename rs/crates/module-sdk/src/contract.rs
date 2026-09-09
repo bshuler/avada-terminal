@@ -390,6 +390,18 @@ pub mod methods {
     /// Host: write a keychain entry the module owns. Params: `{ key, value }`.
     pub const HOST_KEYCHAIN_SET: &str = "host.keychain.set";
 
+    /// Host: list the saved-workspace library and the sets drawer.
+    /// Params: `{ what?: "workspaces" | "sets" }` (absent means both).
+    /// Result: `{ workspaces: [LibraryItem], sets: [SetItem] }`.
+    ///
+    /// These live under the host's data directory, outside any workspace root, so
+    /// `fs.read` cannot reach them; this is the only way a module can see them.
+    pub const HOST_WORKSPACE_LIST: &str = "host.workspace.list";
+    /// Host: open a saved workspace or set. Params: `{ path }` (as listed).
+    pub const HOST_WORKSPACE_OPEN: &str = "host.workspace.open";
+    /// Host: save the current workspace. Params: `{ name?, as_set?: bool }`.
+    pub const HOST_WORKSPACE_SAVE: &str = "host.workspace.save";
+
     /// Module: a workspace became active. Params: `{ workspace: WorkspaceInfo }`.
     pub const MODULE_ACTIVATE: &str = "module.activate";
     /// Module: the workspace is going away. Params: `{ workspace_id }`.
@@ -454,6 +466,22 @@ pub mod methods {
         MODULE_SHUTDOWN,
     ];
 
+    /// Host methods that are **additive**: served by hosts new enough to have them, and
+    /// absent from older ones.
+    ///
+    /// They are deliberately not in [`HOST_REQUIRED_V1`] — that list is the definition of
+    /// what conformance at contract version 1 means, and appending to it would retroactively
+    /// make every already-shipped host non-conformant. A module discovers these the way the
+    /// contract says to (`HostHello::methods`) and does without them when they are missing.
+    /// That is also why adding them does not bump `CONTRACT_VERSION`: the host negotiates
+    /// with that constant as both its floor and its ceiling, so a bump would refuse every
+    /// module already built against v1.
+    pub const HOST_OPTIONAL: &[&str] = &[
+        HOST_WORKSPACE_LIST,
+        HOST_WORKSPACE_OPEN,
+        HOST_WORKSPACE_SAVE,
+    ];
+
     /// The capability a `host.*` method needs, or `None` for the always-allowed ones.
     pub fn required_capability(method: &str) -> Option<crate::caps::Capability> {
         use crate::caps::Capability as C;
@@ -469,6 +497,8 @@ pub mod methods {
             HOST_TOAST => C::UiToast,
             HOST_ROUTES_REGISTER => C::ControlRoute,
             HOST_KEYCHAIN_GET | HOST_KEYCHAIN_SET => C::Keychain,
+            HOST_WORKSPACE_LIST => C::WorkspaceRead,
+            HOST_WORKSPACE_OPEN | HOST_WORKSPACE_SAVE => C::WorkspaceWrite,
             _ => return None,
         })
     }
@@ -567,7 +597,10 @@ mod tests {
 
     #[test]
     fn every_host_method_maps_to_a_capability() {
-        for m in methods::HOST_REQUIRED_V1 {
+        for m in methods::HOST_REQUIRED_V1
+            .iter()
+            .chain(methods::HOST_OPTIONAL)
+        {
             assert!(
                 methods::required_capability(m).is_some(),
                 "{m} has no capability"
