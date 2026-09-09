@@ -140,6 +140,7 @@ pub(crate) mod testkit {
             commit: "0".repeat(40),
             version: manifest.module.version.clone(),
             artifact_sha256: self_hash(),
+            skills_sha256: String::new(),
             source: DistributionKind::Source,
             accepted: caps.iter().copied().collect(),
             manifest,

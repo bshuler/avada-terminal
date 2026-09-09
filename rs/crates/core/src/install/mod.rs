@@ -33,7 +33,7 @@ pub mod record;
 pub mod resolver;
 pub mod store;
 
-pub use artifact::{hash_file, verify_artifact};
+pub use artifact::{hash_file, hash_skills, verify_artifact, verify_skills};
 pub use dirs::InstallPaths;
 pub use keyring::{FileKeyStore, KeyError, KeyStore, MemoryKeyStore, SecretKey, DEFAULT_KEY_ID};
 pub use store::{InstallStore, Installed, RecordStatus};

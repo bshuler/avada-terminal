@@ -37,6 +37,7 @@ fn record(m: &Manifest, accepted: &[Capability]) -> InstallRecord {
         commit: "0123456789abcdef0123456789abcdef01234567".into(),
         version: m.module.version.clone(),
         artifact_sha256: "ab".repeat(32),
+        skills_sha256: String::new(),
         source: DistributionKind::Source,
         accepted: accepted.iter().copied().collect(),
         manifest: m.clone(),

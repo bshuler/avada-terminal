@@ -7131,6 +7131,7 @@ mod rights_routes {
             commit: "0".repeat(40),
             version: m.module.version.clone(),
             artifact_sha256: "00".repeat(32),
+            skills_sha256: String::new(),
             source: DistributionKind::Source,
             accepted,
             manifest: m,

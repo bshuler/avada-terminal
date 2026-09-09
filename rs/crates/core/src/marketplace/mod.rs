@@ -831,6 +831,9 @@ impl Marketplace {
             commit: head.clone(),
             version: version.clone(),
             artifact_sha256: sha256,
+            // Left for `install` to fill: the pin has to describe the tree the host
+            // actually staged, and only `install` has seen that tree.
+            skills_sha256: String::new(),
             source: manifest.distribution.kind,
             accepted,
             manifest,

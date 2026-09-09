@@ -88,6 +88,7 @@ pub(crate) mod fixtures {
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             version,
             artifact_sha256: String::new(),
+            skills_sha256: String::new(),
             source: DistributionKind::Source,
             accepted: accepted.iter().copied().collect::<BTreeSet<_>>(),
             manifest,

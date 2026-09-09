@@ -46,6 +46,21 @@ pub struct InstallRecord {
     pub version: Version,
     /// SHA-256 (hex) of the built or downloaded binary.
     pub artifact_sha256: String,
+    /// SHA-256 (hex) over the staged skill tree — every file the manifest's `[skills]
+    /// paths` brought into the install, keyed by its path as well as its bytes.
+    ///
+    /// The artifact hash covers the binary and nothing else, but a module's skills are
+    /// instructions handed to an agent: editing one after install changes what the agent
+    /// is told to do without touching a single byte the host was checking. This is the
+    /// hash that closes that, and it is inside the signed payload, so widening it needs
+    /// the keychain key rather than a text editor.
+    ///
+    /// Empty means nothing is pinned — either the module ships no skills, or the record
+    /// was minted before this field existed. Old records stay verifiable rather than
+    /// turning into a wall of broken installs on upgrade; a *forged* empty is not a way
+    /// in, because clearing the field means re-signing the record.
+    #[serde(default)]
+    pub skills_sha256: String,
     /// Source or binary.
     pub source: DistributionKind,
     /// The capabilities the user accepted. A subset of the manifest's request.
@@ -261,6 +276,7 @@ pub(crate) fn sample_record(manifest: Manifest) -> InstallRecord {
         commit: "0123456789abcdef0123456789abcdef01234567".into(),
         version: manifest.module.version.clone(),
         artifact_sha256: "ab".repeat(32),
+        skills_sha256: String::new(),
         source: manifest.distribution.kind,
         accepted: manifest.capabilities.iter().copied().collect(),
         manifest,

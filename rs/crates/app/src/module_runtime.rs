@@ -754,6 +754,7 @@ label = "Tree"
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             version: manifest.module.version.clone(),
             artifact_sha256: String::new(),
+            skills_sha256: String::new(),
             source: DistributionKind::Source,
             accepted: BTreeSet::from([Capability::UiRail]),
             manifest,

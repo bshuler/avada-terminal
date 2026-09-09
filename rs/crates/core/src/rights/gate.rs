@@ -108,6 +108,7 @@ mod tests {
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             version: m.module.version.clone(),
             artifact_sha256: "00".repeat(32),
+            skills_sha256: String::new(),
             source: DistributionKind::Source,
             accepted: m.capabilities.iter().copied().collect(),
             manifest: m,

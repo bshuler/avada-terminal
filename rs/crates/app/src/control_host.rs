@@ -1848,6 +1848,7 @@ kind = "source"
             commit: "0".repeat(40),
             version: manifest.module.version.clone(),
             artifact_sha256: String::new(),
+            skills_sha256: String::new(),
             source: avada_core::rights::DistributionKind::Source,
             accepted: manifest.capabilities.iter().copied().collect(),
             manifest,
