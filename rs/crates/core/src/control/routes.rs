@@ -6846,6 +6846,112 @@ mod license_routes {
         assert_eq!(v["gate"]["gate"], "refuse");
     }
 
+    /// The licence token is the one string in this subsystem that must never travel back out
+    /// of the host, and every licence route is a place it could. The install route already
+    /// carries that assertion for its own answer; this one holds the *whole* surface to the
+    /// rule at once — success bodies, refusal bodies, and the refusal for a token so broken
+    /// that the natural way to report it is to quote it.
+    ///
+    /// It sweeps `license_routes()` rather than a hand-written list, so a seventh route added
+    /// later is covered the day it is registered rather than the day someone remembers.
+    /// `LicenseError`'s own Display is proven token-free one layer down in
+    /// `license::tests::a_refusal_names_the_product_and_never_the_token`; what is proven here
+    /// is that nothing between that error and the wire puts it back.
+    #[tokio::test]
+    async fn no_license_route_ever_echoes_the_token_back() {
+        let s = boot_with_control_tag(true, "lic-opaque").await;
+        let r = rig();
+        s.shared.install_license(Arc::clone(&r.service));
+
+        let dir = std::env::temp_dir().join(format!(
+            "avada-license-opaque-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let token = r
+            .issuer
+            .issue(&Grant::for_product(PRODUCT).licensed_to("Acme Ltd"))
+            .expect("mint");
+        let good = dir.join("license.jwt");
+        write_private(&good, token.as_bytes()).expect("write licence");
+
+        // A file that is unmistakably not a JWT, and unmistakably *this* test's. If a refusal
+        // ever quotes what it was handed, this string is what shows up in the body.
+        let junk = "NOTAJWT-canary-4f1c9a2b";
+        let bad = dir.join("junk.jwt");
+        write_private(&bad, junk.as_bytes()).expect("write junk");
+
+        let mut bodies: Vec<(String, String)> = Vec::new();
+        let mut record = |what: &str, text: String| bodies.push((what.to_string(), text));
+
+        let install = serde_json::json!({ "path": good.to_string_lossy() }).to_string();
+        let (st, v, text) = send(
+            &s,
+            Verb::Post,
+            "/license/install",
+            Some(&s.token),
+            Some(&install),
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        record("install", text);
+
+        let refused = serde_json::json!({ "path": bad.to_string_lossy() }).to_string();
+        let (st, v, text) = send(
+            &s,
+            Verb::Post,
+            "/license/install",
+            Some(&s.token),
+            Some(&refused),
+        )
+        .await;
+        assert_eq!(
+            st, 422,
+            "a token that does not verify is the caller's problem: {v}"
+        );
+        record("install refusal", text);
+
+        // Every GET route in the table, with a licence installed so the read paths have
+        // something real to render rather than a 404 that would trivially pass.
+        for route in license_routes() {
+            if route.verb != Verb::Get {
+                continue;
+            }
+            let (_, _, text) =
+                send(&s, Verb::Get, &concrete(&route.path), Some(&s.token), None).await;
+            record(&route.method, text);
+        }
+
+        for (what, text) in &bodies {
+            assert!(
+                !text.contains(&token),
+                "{what} handed the licence token back: {text}"
+            );
+            assert!(
+                !text.contains("eyJ"),
+                "{what} handed back something JWT-shaped: {text}"
+            );
+            assert!(
+                !text.contains(junk),
+                "{what} quoted the file it was given: {text}"
+            );
+        }
+
+        // The bodies were not vacuously safe: the read paths really did render the licence.
+        let shown = &bodies
+            .iter()
+            .find(|(what, _)| what == "license.show")
+            .expect("license.show is a GET route")
+            .1;
+        assert!(
+            shown.contains("Acme Ltd") && shown.contains("valid"),
+            "the summary must still say who holds the licence: {shown}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn install_wants_exactly_one_of_path_or_url() {
         let s = boot_with_control_tag(true, "lic-body").await;

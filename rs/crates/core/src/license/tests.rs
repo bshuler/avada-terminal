@@ -605,3 +605,115 @@ fn the_gate_serialises_as_a_tagged_reason() {
     assert!(Gate::RunWithBanner(String::new()).allows_run());
     assert!(!Gate::Refuse(String::new()).allows_run());
 }
+
+/// Every refusal a licence route can answer, and the status it turns into.
+///
+/// A client keys its behaviour off the status rather than the sentence: 502 is "the issuer
+/// is having a bad day, try again", 422 is "this file will never work, stop retrying", 404
+/// is "there is nothing here", 409 is "you brought the wrong issuer's licence". Getting one
+/// of those wrong turns a transient outage into a permanent-looking failure, or the reverse.
+///
+/// The list is exhaustive by construction: every variant appears, so a new one added without
+/// a decision about its status shows up here as a missing row rather than silently
+/// inheriting whatever arm it happens to fall into.
+#[test]
+fn every_license_refusal_carries_the_status_a_client_should_act_on() {
+    let io = |kind: std::io::ErrorKind| std::io::Error::new(kind, "boom");
+    let cases: Vec<(LicenseError, u16)> = vec![
+        (
+            LicenseError::Store(StoreError::BadProduct("nope".into())),
+            500,
+        ),
+        (LicenseError::Verify(VerifyError::BadSignature), 422),
+        (LicenseError::Network("connection refused".into()), 502),
+        (
+            LicenseError::Issuer {
+                status: 500,
+                message: "upstream exploded".into(),
+            },
+            502,
+        ),
+        (LicenseError::Malformed("not a jwks".into()), 502),
+        (LicenseError::NotLicensed("acme/pro".into()), 404),
+        (LicenseError::IssuerUnknown("acme/pro".into()), 400),
+        (
+            LicenseError::IssuerMismatch {
+                product: "acme/pro".into(),
+                expected: "https://a.test".into(),
+                actual: "https://b.test".into(),
+            },
+            409,
+        ),
+        (
+            LicenseError::Io {
+                path: "/nope/license.jwt".into(),
+                source: io(std::io::ErrorKind::NotFound),
+            },
+            404,
+        ),
+        (
+            LicenseError::Io {
+                path: "/nope/license.jwt".into(),
+                source: io(std::io::ErrorKind::PermissionDenied),
+            },
+            400,
+        ),
+        (LicenseError::UnknownFlow("handle".into()), 404),
+    ];
+
+    for (e, want) in &cases {
+        assert_eq!(e.http_status(), *want, "{e}");
+        assert!(!e.to_string().is_empty(), "every refusal says something");
+    }
+
+    // The `Io` arm is the only one that decides rather than tabulates, and the two rows above
+    // are the decision: a missing file is a 404 the caller can fix by naming another path, and
+    // anything else — a permission wall, a directory where a file was meant to be — is a bad
+    // request rather than a promise the file will appear.
+    assert_ne!(cases[8].0.http_status(), cases[9].0.http_status());
+}
+
+/// The sentence a refusal carries goes into a route body and a log line verbatim, so it is
+/// part of the contract that it names *what* went wrong without quoting the licence itself.
+/// The token is the one string in the whole subsystem that must never travel outwards.
+#[tokio::test]
+async fn a_refusal_names_the_product_and_never_the_token() {
+    let w = world();
+    let token = w
+        .issuer
+        .issue(&Grant::for_product("acme/pro"))
+        .expect("mint");
+
+    // The three refusals that are handed a token and could echo it back.
+    let stranger = StubIssuer::new("https://stranger.test");
+    let forged = stranger
+        .issue(&Grant::for_product("acme/pro"))
+        .expect("mint");
+    let refusals = [
+        w.service
+            .install_token(LicenseToken::new(forged.clone()), None)
+            .await
+            .expect_err("a stranger's signature must not verify"),
+        w.service
+            .install_token(LicenseToken::new("not.a.jwt"), None)
+            .await
+            .expect_err("garbage is not a licence"),
+        w.service
+            .show("acme/other")
+            .await
+            .expect_err("nothing is installed for that product"),
+    ];
+
+    for e in &refusals {
+        let said = e.to_string();
+        assert!(
+            !said.contains(&token) && !said.contains(&forged),
+            "a refusal must not quote the licence: {said}"
+        );
+    }
+    assert!(
+        refusals[2].to_string().contains("acme/other"),
+        "…while still naming the product the caller asked about: {}",
+        refusals[2]
+    );
+}
