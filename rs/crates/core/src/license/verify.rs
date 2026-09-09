@@ -304,8 +304,23 @@ impl SigningKey {
 
     /// A fresh random key with this `kid`.
     pub fn generate_with_kid(kid: &str) -> Self {
+        Self::from_seed(kid, &rand::random())
+    }
+
+    /// The key an issuer already has, rather than one invented on the spot.
+    ///
+    /// [`generate_with_kid`](Self::generate_with_kid) is right for a stub that lives and
+    /// dies with the test around it, and wrong for anything that has signed a licence
+    /// somebody paid for: a key generated at start means every restart repudiates every
+    /// licence in the field. A real issuer reads its seed from wherever it is kept ---
+    /// for `avada-license`, a vault, at start, never a file --- and hands it here.
+    ///
+    /// The 32 bytes are the Ed25519 seed (RFC 8032 §5.1.5), not the expanded key, and not
+    /// the public half. They are consumed into the key and never given back: `SigningKey`
+    /// has no accessor for its private half and no `Debug` that could leak one.
+    pub fn from_seed(kid: &str, seed: &[u8; 32]) -> Self {
         use ed25519_dalek::pkcs8::EncodePrivateKey;
-        let seed: [u8; 32] = rand::random();
+        let seed: [u8; 32] = *seed;
         let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
         let public = signing.verifying_key().to_bytes();
         let der = signing
@@ -410,6 +425,41 @@ mod tests {
         assert_eq!(peek.product, "acme/widget");
         assert_eq!(peek.kid.as_deref(), Some("k1"));
         assert!(peek.iss.is_none());
+    }
+
+    /// The property a licence server is bought for: restarting it does not repudiate
+    /// what it signed yesterday.
+    ///
+    /// `generate_with_kid` mints a new key every call, so a server that generated its key
+    /// at start would hand out licences that its own next boot could not verify --- and
+    /// the failure would look, from the customer's side, exactly like a forged licence.
+    /// Seeding from a value kept elsewhere is what makes the key outlive the process, so
+    /// what this proves is that the *same* seed really does reproduce the same key, and
+    /// that a token signed before a restart still verifies against the key set after one.
+    #[test]
+    fn a_seeded_key_survives_the_restart_that_a_generated_one_would_repudiate() {
+        let seed = [7u8; 32];
+        let before = SigningKey::from_seed("k1", &seed);
+        let tok = before
+            .sign(&claims("acme/widget", "k1", 0, 0), "JWT")
+            .unwrap();
+
+        // The restart: a second process, the same seed out of the vault, nothing shared.
+        let after = SigningKey::from_seed("k1", &seed);
+        assert_eq!(after.jwk(), before.jwk(), "the same seed is the same key");
+        let v = Verifier::default();
+        v.verify_license(&tok, &keyset(&after), None, 10)
+            .expect("yesterday's licence still verifies after a restart");
+
+        // And the seed is the whole of the difference: a different one is a different
+        // key even under the same `kid`, which is the case that must *not* verify.
+        let other = SigningKey::from_seed("k1", &[8u8; 32]);
+        assert_ne!(other.jwk(), before.jwk());
+        assert_eq!(
+            v.verify_license(&tok, &keyset(&other), None, 10)
+                .unwrap_err(),
+            VerifyError::BadSignature
+        );
     }
 
     #[test]
