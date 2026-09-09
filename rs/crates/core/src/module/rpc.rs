@@ -1266,6 +1266,65 @@ pub(crate) mod tests {
         }
     }
 
+    /// The mirror of the test above, and the half that was missing: `SERVED` is not merely a
+    /// subset of the contract, it is a *promise*. The host hello hands the list to every
+    /// module, and a module built to the contract calls what it names and does without what
+    /// it omits. So the list and the dispatcher have to agree in **both** directions.
+    ///
+    /// A method in `SERVED` that answers `unsupported` breaks every module that believed the
+    /// hello. A contract method absent from `SERVED` has to answer `unsupported` and not
+    /// `unknown method`, because those two say different things to a module: "I know this one
+    /// and I do not do it" means an older host, and is worth degrading around; "I never heard
+    /// of it" reads as a typo, and is worth reporting. Today only the two keychain methods
+    /// take that path — this host is deliberately non-conformant on them and says so out
+    /// loud rather than by omission — and this test is what makes the next optional method
+    /// the SDK grows take it too, instead of quietly reading to a module as a typo.
+    #[test]
+    fn the_hello_promises_exactly_what_the_dispatcher_serves() {
+        let named: Vec<&str> = methods::HOST_REQUIRED_V1
+            .iter()
+            .chain(methods::HOST_OPTIONAL)
+            .chain(&[HOST_GIT_STATUS, HOST_GIT_COMMIT])
+            .copied()
+            .collect();
+        // Hold every capability any of them maps to, so that a denial never stands in for
+        // an answer about whether the method exists.
+        let caps: Vec<Capability> = named
+            .iter()
+            .filter_map(|m| required_capability(m))
+            .collect();
+        let rig = rig(&caps);
+        for m in &named {
+            let answer = rig.d.call(m, &Value::Null);
+            let refused =
+                matches!(&answer, Err(e) if e.data == Some(json!({ "unsupported": true })));
+            let unknown = matches!(&answer, Err(e) if e.message.starts_with("unknown method"));
+            // The third answer, and the one with no honest reading: the contract names this
+            // method, so telling a module it was never heard of sends it looking for a typo
+            // that is not there.
+            assert!(
+                !unknown,
+                "`{m}` is named by the contract but answers `unknown method`; a host that \
+                 does not serve it owes the module `unsupported` instead"
+            );
+            assert_eq!(
+                SERVED.contains(m),
+                !refused,
+                "`{m}` is {} the hello but the dispatcher {}",
+                if SERVED.contains(m) {
+                    "in"
+                } else {
+                    "absent from"
+                },
+                if refused {
+                    "refuses it as unsupported"
+                } else {
+                    "serves it"
+                },
+            );
+        }
+    }
+
     /// Every method this host advertises is either gated by [`Dispatcher::gate`] or is one
     /// of the two that gate themselves. This is the invariant that makes the gate's
     /// fail-closed branch a backstop rather than the thing standing between a module and
