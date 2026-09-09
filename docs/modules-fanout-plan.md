@@ -197,8 +197,9 @@ rs/
       src/leftpanel/rail.rs        rail rendering from RailEntry
       src/module_ui/               tier-1 renderer, tier-2 slots, placeholder pane
       src/prefs/rights.rs          rights page
-    avada-commercial/              PRIVATE repo; depends on avada-core and registers
-                                   its verifier + loader at startup (see "Free vs commercial")
+    avada-commercial/              PRIVATE repo, bshuler/avada-commercial; depends on
+                                   avada-core and registers its verifier + loader at
+                                   startup (see "Free vs commercial")
 modules/                           first-party module repos live OUTSIDE this repo, one each:
   avada-files, avada-git, avada-tools, avada-workspace, avada-hyperpane, avada-editor,
   avada-marketplace
