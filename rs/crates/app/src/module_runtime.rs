@@ -31,6 +31,11 @@
 //!
 //! The capability gate is [`DeclaredOnly`] seeded from each record's signed `accepted` set,
 //! so a module can only reach the host methods the human agreed to at install time.
+//!
+//! A module whose manifest says `commercial` also needs a licence decision, and the host
+//! reads that decision synchronously from a cache. [`decide_license`] fills the cache on
+//! the worker thread just before each start; see its note for why the issuer binding
+//! matters as much as the refresh does.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -45,7 +50,7 @@ use avada_core::control::server::Shared;
 use avada_core::install::dirs::InstallPaths;
 use avada_core::install::store::{InstallStore, Installed, RecordStatus};
 use avada_core::install::{FileKeyStore, KeyStore};
-use avada_core::license::{CachedGate, LicenseService};
+use avada_core::license::{CachedGate, Gate, LicenseService};
 use avada_core::marketplace::state_dir_beside;
 use avada_core::marketplace::workspace::WorkspaceStates;
 use avada_core::module::grid::{GridKey, GridResize};
@@ -57,6 +62,46 @@ use avada_core::rights::{InstallRecord, ModuleId};
 use crate::leftpanel::{RailGesture, RailRequest};
 use crate::prefs::rights::Applied;
 use crate::state::State;
+
+/// The licence service and the synchronous gate the module host reads.
+///
+/// Kept together because neither is useful alone: `Slot::start` runs on whichever thread
+/// asked for the module and cannot await, so it reads [`CachedGate`], which answers only
+/// from decisions the service made earlier. Something has to make those decisions, and
+/// [`decide_license`] is it.
+struct Licenses {
+    service: Arc<LicenseService>,
+    gate: Arc<CachedGate>,
+}
+
+/// Give the host a licence decision for `record` before it is asked to spawn it, and bind
+/// the product to the issuer its manifest names.
+///
+/// The binding is the security half. Without it `LicenseService` falls back to whatever
+/// issuer the *stored token* claims, so a token minted by anybody's issuer would unlock a
+/// commercial module; with it, a token from any issuer but the one the manifest declares
+/// is refused. The refresh is the liveness half: a gate nothing refreshed refuses
+/// everything, and says so.
+///
+/// Done per start rather than once at boot so a module installed, licensed or restarted
+/// mid-session gets a decision made now rather than one made before its licence existed.
+/// `None` for a module whose manifest does not say `commercial` — the host never asks
+/// about those, so deciding would only cache an answer nobody reads.
+async fn decide_license(licenses: &Licenses, record: &InstallRecord) -> Option<Gate> {
+    let dist = &record.manifest.distribution;
+    if !dist.commercial {
+        return None;
+    }
+    let product = record.module_id.to_string();
+    if let Some(issuer) = &dist.issuer {
+        licenses.service.register_issuer(&product, issuer);
+    }
+    let gate = licenses.gate.refresh(&product, record.version.major).await;
+    if let Gate::Refuse(reason) = &gate {
+        tracing::info!(module = %product, "not licensed: {reason}");
+    }
+    Some(gate)
+}
 
 /// One blocking piece of host→module work, posted to the worker thread.
 ///
@@ -233,9 +278,12 @@ impl ModuleRuntime {
             .unwrap_or(modules_root)
             .join("module-data");
         let host = Host::new(HostConfig::new(data_root), gate.clone());
-        host.set_licensing(CachedGate::new(Arc::new(LicenseService::under(
-            modules_root,
-        ))));
+        let service = Arc::new(LicenseService::under(modules_root));
+        let licenses = Arc::new(Licenses {
+            gate: CachedGate::new(service.clone()),
+            service,
+        });
+        host.set_licensing(licenses.gate.clone());
 
         // Subscribe BEFORE anything spawns, or the first rail registration — which arrives
         // during the handshake — is sent to nobody and the panel starts empty.
@@ -246,7 +294,7 @@ impl ModuleRuntime {
         let worker_host = host.clone();
         let worker = std::thread::Builder::new()
             .name("module-runtime".into())
-            .spawn(move || run_worker(worker_host, rx))
+            .spawn(move || run_worker(worker_host, licenses, rx))
             .ok();
         if worker.is_none() {
             tracing::warn!("could not start the module worker thread; modules will not run");
@@ -669,11 +717,25 @@ fn wire_gesture(g: RailGesture) -> Gesture {
 }
 
 /// The worker loop: every blocking host→module call in the app happens here.
-fn run_worker(host: Host, rx: Receiver<Job>) {
+fn run_worker(host: Host, licenses: Arc<Licenses>, rx: Receiver<Job>) {
+    // One runtime for the worker's whole life. The only async work here is
+    // `decide_license`, which for an installed licence is a signature check against keys
+    // already on disk, so a current-thread runtime is the right size; it reaches the
+    // network only the first time it meets an unknown signing key. A runtime that will
+    // not build costs the commercial modules and nothing else, which is why this is a
+    // warning and not a return.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .inspect_err(|e| tracing::warn!(error = %e, "no runtime for license checks; commercial modules will not start"))
+        .ok();
     while let Ok(job) = rx.recv() {
         match job {
             Job::Start { record, binary } => {
                 let id = record.module_id.clone();
+                if let Some(rt) = rt.as_ref() {
+                    rt.block_on(decide_license(&licenses, &record));
+                }
                 match host.spawn(&record, &binary) {
                     // Activating right after the handshake is what makes the entry appear:
                     // a module registers its rail from inside `module.activate`.
@@ -712,6 +774,8 @@ fn run_worker(host: Host, rx: Receiver<Job>) {
 mod tests {
     use super::*;
     use avada_core::install::keyring::MemoryKeyStore;
+    use avada_core::license::stub_issuer::{Grant, StubIssuer};
+    use avada_core::license::{LicenseHttp, LicenseToken, MemoryLicenseStore};
     use avada_core::module::RailEvent;
     use avada_core::rights::{Capability, DistributionKind, InstallKind, Manifest};
     use std::collections::{BTreeSet, HashMap};
@@ -1094,5 +1158,182 @@ label = "Tree"
         // And so does the same surface name under a different module.
         let other = id("bshuler/avada-files");
         assert_eq!(rt.grid_size(&other, "editor"), None);
+    }
+
+    // --- licensing -------------------------------------------------------------------
+    //
+    // `Slot::start` reads a decision the gate already holds, so everything that can go
+    // wrong with licensing in the shipped binary goes wrong *here*, before a process is
+    // ever spawned: a gate nobody refreshed refuses every commercial module, and a
+    // product bound to no issuer accepts a token from any of them.
+
+    /// Epoch instant every licence test runs at, so a perpetual grant is unambiguously
+    /// live and a check-in interval has not yet elapsed.
+    const NOW: u64 = 1_700_000_000;
+
+    /// A commercial manifest naming `issuer` as the only issuer whose tokens count.
+    fn commercial_manifest(id: &str, issuer: &str) -> Manifest {
+        Manifest::parse(&format!(
+            r#"
+capabilities = ["ui.rail"]
+
+[module]
+id = "{id}"
+name = "Test"
+version = "1.0.0"
+description = "A commercial module that exists only in this test"
+publisher = "Test"
+contract = "^1"
+
+[distribution]
+kind = "source"
+commercial = true
+issuer = "{issuer}"
+
+[[contributions]]
+kind = "rail"
+id = "tree"
+tier = 1
+label = "Tree"
+"#
+        ))
+        .unwrap()
+    }
+
+    fn commercial_record(id: &str, issuer: &str) -> InstallRecord {
+        InstallRecord {
+            manifest: commercial_manifest(id, issuer),
+            ..record(id)
+        }
+    }
+
+    /// A service and gate over an in-process issuer and a store that never touches disk —
+    /// the same pair `under` builds, with the network and the filesystem taken out.
+    fn licenses(http: Arc<dyn LicenseHttp>) -> Licenses {
+        let service = Arc::new(LicenseService::new(
+            Arc::new(MemoryLicenseStore::new()),
+            http,
+            Arc::new(|| NOW),
+        ));
+        Licenses {
+            gate: CachedGate::new(service.clone()),
+            service,
+        }
+    }
+
+    async fn install(issuer: &StubIssuer, service: &LicenseService, product: &str) {
+        let token = LicenseToken::new(issuer.issue(&Grant::for_product(product)).unwrap());
+        service
+            .install_token(token, None)
+            .await
+            .expect("a freshly minted license installs");
+    }
+
+    /// A module that is not commercial is never asked about, so deciding for one would
+    /// cache an answer the host will not read — and, worse, make the cache look refreshed.
+    #[tokio::test]
+    async fn a_free_module_is_never_asked_about() {
+        let issuer = Arc::new(StubIssuer::with_clock(
+            "https://issuer.test",
+            Arc::new(|| NOW),
+        ));
+        let lic = licenses(issuer);
+        assert_eq!(decide_license(&lic, &record("acme/avada-free")).await, None);
+        assert_eq!(lic.gate.decided("acme/avada-free", 1), None);
+    }
+
+    /// The liveness half. `CachedGate::new` starts empty and refuses everything with
+    /// "nothing has refreshed it", which is what the app shipped before this: a correct
+    /// licence, correctly installed, and the module still would not start.
+    #[tokio::test]
+    async fn a_licensed_module_has_a_decision_waiting_before_it_is_spawned() {
+        let issuer = Arc::new(StubIssuer::with_clock(
+            "https://issuer.test",
+            Arc::new(|| NOW),
+        ));
+        let lic = licenses(issuer.clone());
+        install(&issuer, &lic.service, "acme/avada-pro").await;
+
+        let record = commercial_record("acme/avada-pro", "https://issuer.test");
+        assert_eq!(decide_license(&lic, &record).await, Some(Gate::Run));
+        // Not just returned: left where the synchronous gate will find it, keyed by the
+        // major the record carries.
+        assert_eq!(lic.gate.decided("acme/avada-pro", 1), Some(Gate::Run));
+    }
+
+    /// The three tests above prove [`decide_license`] is right; this proves the worker
+    /// actually calls it, which is the half that regresses silently. The binary here does
+    /// not exist, so the start fails at the hash check immediately afterwards — the point
+    /// is that by then the decision is already in the gate, because `Slot::start` reads it
+    /// synchronously and there is no later moment at which to make it.
+    #[test]
+    fn the_worker_decides_before_it_tries_to_spawn() {
+        let issuer = Arc::new(StubIssuer::with_clock(
+            "https://issuer.test",
+            Arc::new(|| NOW),
+        ));
+        let lic = Arc::new(licenses(issuer.clone()));
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(install(&issuer, &lic.service, "acme/avada-pro"));
+
+        let root = scratch("worker-license");
+        let host = Host::new(
+            HostConfig::new(root.join("data")),
+            Arc::new(DeclaredOnly::new()),
+        );
+        let (tx, rx) = channel::<Job>();
+        let worker = std::thread::spawn({
+            let lic = lic.clone();
+            move || run_worker(host, lic, rx)
+        });
+        tx.send(Job::Start {
+            record: Box::new(commercial_record("acme/avada-pro", "https://issuer.test")),
+            binary: root.join("nothing-is-here"),
+        })
+        .unwrap();
+        tx.send(Job::Stop).unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(
+            lic.gate.decided("acme/avada-pro", 1),
+            Some(Gate::Run),
+            "the worker started a commercial module without asking about its license"
+        );
+    }
+
+    /// The security half, and the reason the issuer binding is not merely tidy.
+    ///
+    /// The token here verifies perfectly — it is properly signed, unexpired and names the
+    /// right product. It is simply not from the issuer the manifest declares. With no
+    /// binding, `LicenseService` believes whatever issuer the stored token claims, so
+    /// anybody who can run a signing key can unlock any commercial module. The binding
+    /// makes the manifest, which is covered by the signed install record, the authority.
+    #[tokio::test]
+    async fn a_perfectly_valid_token_from_the_wrong_issuer_unlocks_nothing() {
+        let forger = Arc::new(StubIssuer::with_clock(
+            "https://forger.test",
+            Arc::new(|| NOW),
+        ));
+        let lic = licenses(forger.clone());
+        install(&forger, &lic.service, "acme/avada-pro").await;
+        // Believable on its own: this is what the gate says with nothing bound.
+        assert_eq!(lic.service.gate("acme/avada-pro").await, Gate::Run);
+
+        let record = commercial_record("acme/avada-pro", "https://issuer.test");
+        match decide_license(&lic, &record).await {
+            Some(Gate::Refuse(why)) => {
+                assert!(
+                    why.contains("forger.test"),
+                    "the refusal should name the issuer that signed it: {why}"
+                );
+                assert!(
+                    why.contains("issuer.test"),
+                    "and the one the manifest requires: {why}"
+                );
+            }
+            other => panic!("a token from an unbound issuer must not run: {other:?}"),
+        }
     }
 }
