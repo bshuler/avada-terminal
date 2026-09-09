@@ -143,11 +143,15 @@ impl PaneKind {
     /// Whether this pane draws a projected row model instead of a terminal surface —
     /// the Family B views.
     ///
-    /// The inverse of [`is_pty`](Self::is_pty) *today*, and deliberately not written
-    /// as one: [`PaneKind::Browser`] is neither, and the day a kind arrives that is
-    /// neither either, the two predicates have to be able to disagree. It exists at
-    /// all because the Slint side used to ask this question as `kind >= 2 && kind <= 4`
-    /// — a range that silently swallowed `Browser` the moment a sixth kind was added.
+    /// Not the inverse of [`is_pty`](Self::is_pty), and deliberately not written as
+    /// one: [`PaneKind::Browser`] is neither, which is why the two predicates have to
+    /// be able to disagree. A module pane belongs here — its rows arrive from the
+    /// module on `host.rows.set` rather than from a file, but a projected row model is
+    /// a projected row model whoever filled it.
+    ///
+    /// It exists at all because the Slint side used to ask this question as
+    /// `kind >= 2 && kind <= 4` — a range that silently swallowed `Browser` the moment
+    /// a sixth kind was added.
     /// Deciding it once on the producing side is the same rule `ViewRow::path` and the
     /// left panel's `blocked` flag follow.
     #[tracing::instrument(level = "debug", ret)]
@@ -161,6 +165,7 @@ impl PaneKind {
                 | PaneKind::Data
                 | PaneKind::Table
                 | PaneKind::Image
+                | PaneKind::Module(_)
         )
     }
 
@@ -396,7 +401,7 @@ mod tests {
             pinned,
             "the id is case-folded like the manifest's"
         );
-        assert!(!pinned.is_pty() && !pinned.is_view());
+        assert!(!pinned.is_pty() && pinned.is_view());
         assert_eq!(pinned.module().unwrap().surface, "tree");
         assert_eq!(pinned.ui_name(), "avada-files · tree");
         assert_eq!(pinned.ui_kind(), 10);
@@ -538,8 +543,8 @@ mod tests {
         }
         let m = PaneKind::Module(module_ref(None));
         assert!(
-            !m.is_pty() && !m.is_view(),
-            "a module surface is a third family"
+            !m.is_pty() && m.is_view(),
+            "a tier-1 module surface projects rows like any other Family B pane"
         );
     }
 

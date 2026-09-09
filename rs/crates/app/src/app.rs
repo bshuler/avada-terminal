@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use avada_core::layout::presets::DividerKind;
 use avada_core::session_manager::{AgentLiveness, SessionEvent, SessionManager};
+use avada_core::tools::kind::{ModulePaneRef, PaneKind};
 use avada_terminal_widget::{encode_key, keys};
 
 use slint::platform::Key;
@@ -881,18 +882,37 @@ impl App {
                         );
                         st.active_tab().panes.last().map(|p| p.uid.clone())
                     }
-                    // A module surface has no renderer in this build past the placeholder,
-                    // so there is nothing to open yet. Announced rather than dropped
-                    // silently: this is the one pane kind whose absence is a missing
-                    // feature rather than a module bug.
-                    ("module", _) => {
-                        tracing::debug!(
-                            module = %module.as_str(),
-                            surface = ?surface,
-                            "module surfaces are not rendered yet; pane not opened"
-                        );
-                        None
-                    }
+                    // The module's own tier-1 surface: a pane whose rows are whatever the
+                    // module last sent on `host.rows.set { target: "pane" }`, projected by
+                    // `crate::module_ui::rows`. It opens empty and fills when the module
+                    // speaks, which is the normal order — a module spawns the pane and then
+                    // populates it.
+                    ("module", _) => match surface
+                        .as_deref()
+                        .and_then(|s| ModulePaneRef::new(module.as_str(), s, None))
+                    {
+                        Some(r) => {
+                            let kind = PaneKind::Module(r);
+                            crate::command::dispatch(
+                                st,
+                                crate::command::Command::SubmitNewPane(Box::new(NewPaneOpts {
+                                    label: Some(kind.ui_name()),
+                                    kind: Some(kind),
+                                    ..Default::default()
+                                })),
+                                &self.mgr,
+                            );
+                            st.active_tab().panes.last().map(|p| p.uid.clone())
+                        }
+                        None => {
+                            tracing::debug!(
+                                module = %module.as_str(),
+                                surface = ?surface,
+                                "module pane with no usable surface"
+                            );
+                            None
+                        }
+                    },
                     (other, path) => {
                         tracing::debug!(
                             module = %module.as_str(),
@@ -3821,20 +3841,36 @@ impl App {
                 };
                 // Resolve the pane's uid under a read-only borrow, dropped before any
                 // dispatch (borrow rule #18).
-                let uid = {
+                let resolved = {
                     let st = w.state.borrow();
                     st.tabs
                         .get(st.active)
                         .and_then(|t| t.panes.get(pane as usize))
-                        .map(|p| p.uid.clone())
+                        .map(|p| (p.uid.clone(), st.effective_kind(p)))
                 };
-                let Some(uid) = uid else { return };
+                let Some((uid, kind)) = resolved else { return };
                 // The projection the view was drawn from — the same cache, so the index
                 // cannot resolve against a different list than the one clicked.
                 let Some(r) = crate::viewpane::row_at(&uid, row as usize) else {
                     return;
                 };
                 if !r.activatable() {
+                    return;
+                }
+                // A module pane's rows belong to the module: the click goes back to it
+                // rather than through any of the app's own row meanings below. Checked
+                // before `datatree::activate` because a module row carries no path and
+                // the fold store must never see it.
+                if let (Some(m), crate::viewpane::role::MODULE_ROW) = (kind.module(), r.role) {
+                    // A disclosure triangle toggles; a leaf opens. Exactly the rule the
+                    // rail's rows follow, so the same row means the same thing on both
+                    // surfaces.
+                    let gesture = if r.check >= 0 { "toggle" } else { "open" };
+                    let key = crate::leftpanel::entry_key(&m.id, &m.surface);
+                    app.run_command(
+                        &w,
+                        Command::ModulePaneRow(key, r.node.clone(), gesture.to_string()),
+                    );
                     return;
                 }
                 if let Some(cmd) = crate::datatree::activate(pane as usize, &r) {

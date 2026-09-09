@@ -86,6 +86,12 @@ pub mod role {
     /// `node` the path a toggle names. `text` is the key alone on a container and
     /// `key: value` on a scalar; the glyph is decoration and never enters it.
     pub const DATA_NODE: i32 = 18;
+    /// One row a module projected into a pane of its own (see [`crate::module_ui::rows`]).
+    /// The same shape as [`DATA_NODE`] — `indent` the depth, `check` the disclosure
+    /// (`-1` flat, `0` folded, `1` open), `detail` the dim trailing column, `node` the row
+    /// id the module named — but a separate role, because a data node's click toggles a
+    /// fold the app owns and a module row's click goes back to the module.
+    pub const MODULE_ROW: i32 = 19;
 }
 
 /// One cell of a markdown table.
@@ -165,7 +171,9 @@ impl ViewRow {
     /// Whether clicking this row does anything (drives the pointer cursor).
     #[tracing::instrument(level = "debug", ret)]
     pub fn activatable(&self) -> bool {
-        !self.path.as_os_str().is_empty()
+        // A module row has no path — the module decides what its row means — so it says so
+        // by its role. Everything else earns the pointer by having something to open.
+        self.role == role::MODULE_ROW || !self.path.as_os_str().is_empty()
     }
 
     /// This row as one line of plain text, for the clipboard.
@@ -305,6 +313,11 @@ pub fn resolve_local_href(target: &Path, href: &str) -> Option<PathBuf> {
 pub fn view_title(kind: &PaneKind, target: Option<&str>) -> String {
     if !kind.is_view() {
         return String::new();
+    }
+    // A module pane has no file behind it, so there is no path to shorten. What it does
+    // have is a module and a surface, which is exactly what `ui_name` spells.
+    if kind.module().is_some() {
+        return kind.ui_name();
     }
     match target.filter(|t| !t.is_empty()) {
         // The full path is the honest title, but it is also 90 chars of noise in a
@@ -1253,10 +1266,11 @@ struct Fingerprint {
     /// baked into each row's markup, so a palette change is a content change. Without
     /// this the viewer would keep the old theme's ink until the file was next touched.
     palette: usize,
-    /// A data pane's fold generation (see [`crate::datatree::generation`]): the one
-    /// input to a view that is not the file, so a toggle is a cache miss, not a stale
-    /// tree. Zero for every other kind.
-    folds: u64,
+    /// The one projection input that is not the file: a data pane's fold generation
+    /// (see [`crate::datatree::generation`]) or a module pane's row generation (see
+    /// [`crate::module_ui::rows::generation`]), so a toggle or a fresh `host.rows.set` is
+    /// a cache miss rather than a stale view. Zero for every other kind.
+    revision: u64,
 }
 
 #[tracing::instrument(level = "debug")]
@@ -1282,7 +1296,7 @@ fn fingerprint(kind: &PaneKind, target: Option<&str>, palette: usize) -> Fingerp
         mtime,
         len,
         palette,
-        folds: 0,
+        revision: 0,
     }
 }
 
@@ -1390,6 +1404,16 @@ fn markdown_text(src: &str) -> slint::StyledText {
         .unwrap_or_else(|_| slint::StyledText::from_plain_text(src))
 }
 
+/// The non-file input a pane's projection depends on, by kind. Two stores answer this —
+/// folds for a data pane, projected rows for a module pane — and no other kind has one.
+#[tracing::instrument(level = "debug", ret)]
+fn revision(uid: &str, kind: &PaneKind) -> u64 {
+    match kind {
+        PaneKind::Module(m) => crate::module_ui::rows::generation(&m.id, &m.surface),
+        _ => crate::datatree::generation(uid),
+    }
+}
+
 #[tracing::instrument(level = "debug", ret)]
 pub fn model_for(
     uid: &str,
@@ -1398,7 +1422,7 @@ pub fn model_for(
     palette: usize,
 ) -> ModelRc<PaneViewRow> {
     let fp = Fingerprint {
-        folds: crate::datatree::generation(uid),
+        revision: revision(uid, kind),
         ..fingerprint(kind, target, palette)
     };
     VIEW_CACHE.with(|c| {
@@ -1632,6 +1656,9 @@ fn rows_for_pane(uid: &str, kind: &PaneKind, target: Option<&str>, palette: usiz
         (PaneKind::Data, Some(t)) => {
             data_rows(Path::new(t), &crate::datatree::flipped(uid), palette)
         }
+        // Not the file — the module. Its rows arrive on `host.rows.set` and the pane is
+        // whatever the module last said, including nothing at all before it has spoken.
+        (PaneKind::Module(m), _) => crate::module_ui::rows::view_rows(&m.id, &m.surface),
         _ => rows_for(kind, target, palette),
     }
 }

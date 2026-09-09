@@ -117,6 +117,11 @@ pub enum Command {
     /// gesture (`open` / `toggle` / `context`); an unknown gesture is dropped rather than
     /// guessed, since the module acts on it.
     RailRow(String, String, String),
+    /// A row inside a module's own pane was clicked. The pane twin of
+    /// [`Command::RailRow`] — same key shape (`<owner/repo>#<surface>`), same gestures —
+    /// and a separate variant because the two surfaces have separate row stores and a
+    /// click on one must never resolve against the other's rows.
+    ModulePaneRow(String, String, String),
     /// A module row was right-clicked, at window-logical `(x, y)`. Not folded into
     /// [`Command::RailRow`] with a `context` gesture because it goes two ways at once: the
     /// module is told, and the host opens its own file menu over the row's path.
@@ -701,6 +706,15 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                 return Effect::None;
             };
             state.rail_row(&key, &row, g);
+        }
+        Command::ModulePaneRow(key, row, gesture) => {
+            let (Some((module, surface)), Some(g)) = (
+                crate::leftpanel::split_key(&key),
+                crate::leftpanel::RailGesture::parse(&gesture),
+            ) else {
+                return Effect::None;
+            };
+            state.module_pane_row(&module, surface, &row, g);
         }
         Command::RailContext(key, row, x, y) => state.rail_context(&key, &row, x, y),
         Command::RailQuery(q) => state.rail_query(&q),
@@ -1602,6 +1616,7 @@ mod rail_command_tests {
             entries: vec![entry("browse")],
         });
         st.apply_rail_event(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: module(),
             entry: "browse".into(),
             rows: vec![row("installed")],
@@ -1682,11 +1697,82 @@ mod rail_command_tests {
                 module: module(),
                 entry: "browse".into(),
                 row: "installed".into(),
+                target: avada_core::module::RowTarget::Rail,
                 data: serde_json::json!({ "page": 2 }),
                 gesture: RailGesture::Toggle,
             }],
             "the module hung `data` off the row precisely so it need keep no row table"
         );
+    }
+
+    /// A module's pane is its second row surface, and a click there goes back to it the
+    /// same way a rail click does. `target` is the whole difference — without it the
+    /// module could not tell which of its two surfaces the user touched, and a module
+    /// that uses one contribution id for both (the marketplace does) would answer the
+    /// wrong one.
+    #[test]
+    fn a_pane_row_reaches_the_module_tagged_as_a_pane_row() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        crate::module_ui::rows::set(
+            &module(),
+            "market",
+            vec![avada_core::module::Row {
+                id: "installed".into(),
+                label: "Installed".into(),
+                detail: String::new(),
+                depth: 0,
+                expandable: true,
+                expanded: false,
+                icon: None,
+                marks: Vec::new(),
+                data: serde_json::json!({ "page": 2 }),
+            }],
+        );
+        let _ = st.take_rail_requests();
+
+        dispatch(
+            &mut st,
+            Command::ModulePaneRow(
+                entry_key(&module(), "market"),
+                "installed".into(),
+                "toggle".into(),
+            ),
+            &mgr,
+        );
+        assert_eq!(
+            st.take_rail_requests(),
+            vec![RailRequest::Row {
+                module: module(),
+                entry: "market".into(),
+                row: "installed".into(),
+                target: avada_core::module::RowTarget::Pane,
+                data: serde_json::json!({ "page": 2 }),
+                gesture: RailGesture::Toggle,
+            }],
+            "the payload comes from the pane store, not from the click"
+        );
+    }
+
+    /// The three ways a pane-row click can be nonsense: a key that names no module, a
+    /// gesture the `.slint` spelled wrong, and a row the module never sent. Each is a
+    /// dropped click — never a request built out of a guess.
+    #[test]
+    fn a_nonsense_pane_row_click_sends_nothing() {
+        let mgr = mgr();
+        let mut st = with_a_module();
+        crate::module_ui::rows::set(&module(), "market", Vec::new());
+        let key = entry_key(&module(), "market");
+        let _ = st.take_rail_requests();
+
+        for cmd in [
+            Command::ModulePaneRow("no-hash".into(), "installed".into(), "open".into()),
+            Command::ModulePaneRow(key.clone(), "installed".into(), "wiggle".into()),
+            Command::ModulePaneRow(key, "no-such-row".into(), "open".into()),
+        ] {
+            dispatch(&mut st, cmd, &mgr);
+            assert!(st.take_rail_requests().is_empty());
+        }
     }
 
     /// A gesture spelled wrong in the `.slint` is a dropped click, never a different
@@ -1766,6 +1852,7 @@ mod rail_command_tests {
         // A real path, because the menu is built from what is actually on disk.
         let here = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
         st.apply_rail_event(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: module(),
             entry: "browse".into(),
             rows: vec![Row {
@@ -1788,6 +1875,7 @@ mod rail_command_tests {
                 module: module(),
                 entry: "browse".into(),
                 row: "manifest".into(),
+                target: avada_core::module::RowTarget::Rail,
                 data: serde_json::json!({ "path": here }),
                 gesture: RailGesture::Context,
             }],

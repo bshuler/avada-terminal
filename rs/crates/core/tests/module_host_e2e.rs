@@ -318,6 +318,7 @@ fn hello_module_installs_runs_restarts_and_refuses_a_tampered_binary() {
             module,
             entry,
             rows,
+            ..
         } if module == id => Some((entry, rows)),
         _ => None,
     });

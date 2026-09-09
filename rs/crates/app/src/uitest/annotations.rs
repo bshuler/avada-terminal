@@ -339,6 +339,7 @@ fn install_files(w: &crate::AppWindow) {
         }
     };
     rail.apply(avada_core::module::RailEvent::Rows {
+        target: avada_core::module::RowTarget::Rail,
         module: module.clone(),
         entry: "files".into(),
         rows: vec![

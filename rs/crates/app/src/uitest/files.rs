@@ -76,6 +76,7 @@ fn install(w: &crate::AppWindow, rows: Vec<Row>) -> String {
         entries: vec![files_entry()],
     });
     rail.apply(RailEvent::Rows {
+        target: avada_core::module::RowTarget::Rail,
         module: module.clone(),
         entry: "files".into(),
         rows,
@@ -359,6 +360,7 @@ fn right_clicking_a_row_opens_the_hosts_own_file_menu_over_its_path() {
             entries: vec![files_entry()],
         });
         st.apply_rail_event(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: files_module(),
             entry: "files".into(),
             rows: a_project(),

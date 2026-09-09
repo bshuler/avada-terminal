@@ -7,7 +7,7 @@
 //! (`recv_timeout`) without a runtime. A receiver that has been dropped is pruned at the
 //! next send.
 
-pub use avada_module_sdk::rail::{Gesture, RailEntry, Row, RowActivate};
+pub use avada_module_sdk::rail::{Gesture, RailEntry, Row, RowActivate, RowTarget};
 use avada_module_sdk::ModuleId;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -23,12 +23,16 @@ pub enum RailEvent {
         /// Every entry, validated, `module` field filled in.
         entries: Vec<RailEntry>,
     },
-    /// The module replaced the rows beneath one entry.
+    /// The module replaced the rows beneath one entry, or the rows filling one of its
+    /// panes — `target` says which, and the panel and the pane projection each ignore the
+    /// other's events rather than sharing a store keyed by an id that means two things.
     Rows {
         /// Which module.
         module: ModuleId,
-        /// The entry id.
+        /// The rail entry id, or the pane surface name.
         entry: String,
+        /// Which of the module's two tier-1 row surfaces.
+        target: RowTarget,
         /// The whole new list.
         rows: Vec<Row>,
     },

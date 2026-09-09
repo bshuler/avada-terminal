@@ -172,6 +172,7 @@ fn the_active_entrys_rows_render_and_a_click_carries_the_gesture() {
         let mut rail = ModuleRail::default();
         rail.apply(registered);
         rail.apply(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: module.clone(),
             entry: "browse".into(),
             rows: vec![
@@ -239,6 +240,7 @@ fn an_entry_with_no_rows_yet_shows_its_empty_text() {
         );
 
         rail.apply(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module,
             entry: "browse".into(),
             rows: vec![row("installed", "Installed", false)],
@@ -307,6 +309,7 @@ fn every_rail_control_announces_itself() {
             .expect("a rail entry with an inline icon")],
         });
         rail.apply(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: module.clone(),
             entry: "browse".into(),
             rows: vec![row("installed", "Installed", true)],

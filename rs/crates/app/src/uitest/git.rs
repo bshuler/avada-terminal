@@ -100,6 +100,7 @@ fn install(w: &crate::AppWindow, rows: Vec<Row>) -> String {
         entries: vec![git_entry()],
     });
     rail.apply(RailEvent::Rows {
+        target: avada_core::module::RowTarget::Rail,
         module: module.clone(),
         entry: "git".into(),
         rows,
@@ -243,6 +244,7 @@ fn right_clicking_a_commit_row_offers_the_hosts_diff_for_that_revision() {
             entries: vec![git_entry()],
         });
         st.apply_rail_event(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: git_module(),
             entry: "git".into(),
             rows,
@@ -293,6 +295,7 @@ fn a_row_that_claims_no_revision_gets_the_plain_file_menu() {
             entries: vec![entry],
         });
         st.apply_rail_event(RailEvent::Rows {
+            target: avada_core::module::RowTarget::Rail,
             module: module.clone(),
             entry: "files".into(),
             rows: vec![Row {

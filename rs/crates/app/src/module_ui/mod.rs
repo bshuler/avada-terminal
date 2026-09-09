@@ -3,3 +3,4 @@
 //! renderer. Owned by the H1 track in Wave 1.
 
 pub mod placeholder;
+pub mod rows;

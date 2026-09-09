@@ -4999,6 +4999,21 @@ impl State {
     /// entry with it, and the resync ships `rail.active` verbatim, so the panel falls back
     /// to its own frame rather than showing a head with no module behind it.
     pub fn apply_rail_event(&mut self, event: avada_core::module::RailEvent) -> bool {
+        // One host stream, two surfaces. The pane store is fed here rather than inside
+        // `ModuleRail` because a module pane is not part of the left panel at all — it is a
+        // pane in the workspace, and the panel has no business owning its rows.
+        match &event {
+            avada_core::module::RailEvent::Rows {
+                module,
+                entry,
+                target: avada_core::module::RowTarget::Pane,
+                rows,
+            } => crate::module_ui::rows::set(module, entry, rows.clone()),
+            avada_core::module::RailEvent::Gone { module } => {
+                crate::module_ui::rows::forget(module)
+            }
+            _ => {}
+        }
         self.rail.apply(event);
         self.dirty = true;
         true
@@ -5046,6 +5061,36 @@ impl State {
         self.rail_requests.push(RailRequest::Row {
             module,
             entry: entry.to_string(),
+            target: avada_core::module::RowTarget::Rail,
+            row: row.to_string(),
+            data: r.data.clone(),
+            gesture,
+        });
+        self.dirty = true;
+    }
+
+    /// A row inside a module's own pane was clicked. The pane twin of [`State::rail_row`]:
+    /// same queue, same round trip back to the module, `target` the one difference.
+    ///
+    /// The row's `data` is looked up in the pane store rather than taken from the click,
+    /// because the view carries only what it draws — the opaque payload never reaches Slint
+    /// and must not, since it is the module's private business.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn module_pane_row(
+        &mut self,
+        module: &avada_core::rights::ModuleId,
+        surface: &str,
+        row: &str,
+        gesture: RailGesture,
+    ) {
+        let rows = crate::module_ui::rows::rows(module, surface);
+        let Some(r) = rows.iter().find(|r| r.id == row) else {
+            return;
+        };
+        self.rail_requests.push(RailRequest::Row {
+            module: module.clone(),
+            entry: surface.to_string(),
+            target: avada_core::module::RowTarget::Pane,
             row: row.to_string(),
             data: r.data.clone(),
             gesture,

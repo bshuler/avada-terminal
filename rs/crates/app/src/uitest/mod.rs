@@ -19,6 +19,7 @@ mod git;
 mod image;
 mod links;
 mod matrix;
+mod modulepane;
 mod placeholder;
 mod rail;
 mod rights;
@@ -1808,7 +1809,7 @@ fn install_view_pane_at(
 /// tests set both rather than letting the helper infer a view from the row roles.
 /// [`the_is_view_flag_matches_the_kind_it_claims`] is what keeps this list honest.
 fn view_flag(kind: i32) -> bool {
-    matches!(kind, 2 | 3 | 4 | 6 | 7 | 8 | 9)
+    matches!(kind, 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10)
 }
 
 /// `PaneItem::is-view` replaced a `kind >= 2 && kind <= 4` range test in the `.slint`, and

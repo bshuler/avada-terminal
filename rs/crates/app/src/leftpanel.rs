@@ -536,6 +536,9 @@ pub enum RailRequest {
         module: avada_core::rights::ModuleId,
         /// Its entry id (not the key).
         entry: String,
+        /// Which of the module's two tier-1 surfaces the row was on. Handed straight back
+        /// so a module that projects the same id to both can tell the two clicks apart.
+        target: avada_core::module::RowTarget,
         /// The row id the module gave.
         row: String,
         /// The payload the module hung off the row, handed straight back.
@@ -588,9 +591,16 @@ impl ModuleRail {
             RailEvent::Rows {
                 module,
                 entry,
+                target,
                 rows,
             } => {
-                self.set_rows(&module, &entry, rows);
+                // Pane rows are the other tier-1 surface and live in
+                // `crate::module_ui::rows`; they reach the panel only as an event it must
+                // step over. Filtering here rather than upstream keeps one host stream:
+                // both projections see everything and each keeps what is its own.
+                if target == avada_core::module::RowTarget::Rail {
+                    self.set_rows(&module, &entry, rows);
+                }
                 false
             }
             RailEvent::Gone { module } => self.gone(&module),

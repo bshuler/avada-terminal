@@ -68,11 +68,31 @@ pub struct RegisterRail {
     pub entries: Vec<RailEntry>,
 }
 
+/// Which of a module's two tier-1 row surfaces a set of rows belongs to.
+///
+/// A module's rail contributions and its pane contributions are separate namespaces in
+/// the manifest, so the same contribution id can name both — the first-party marketplace
+/// uses `marketplace` for each. Without this the host would have to guess which surface
+/// `host.rows.set` meant, and would guess wrong for exactly the modules that use both.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RowTarget {
+    /// The entry's rows in the left panel's rail. The default, because the rail came
+    /// first and every module written against contract 1 omits the field.
+    #[default]
+    Rail,
+    /// The rows filling a module pane opened with `host.panes.spawn`.
+    Pane,
+}
+
 /// `host.rows.set` params.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetRows {
     /// Entry id.
     pub entry: String,
+    /// Which surface the rows are for.
+    #[serde(default)]
+    pub target: RowTarget,
     /// Full list; replaces.
     pub rows: Vec<Row>,
 }
@@ -82,6 +102,9 @@ pub struct SetRows {
 pub struct RowActivate {
     /// Entry id.
     pub entry: String,
+    /// Which surface the row was on; mirrors the [`SetRows::target`] that put it there.
+    #[serde(default)]
+    pub target: RowTarget,
     /// Row id.
     pub row: String,
     /// The payload the module put on the row.
@@ -206,6 +229,7 @@ mod tests {
     fn rows_round_trip_with_opaque_data() {
         let rows = SetRows {
             entry: "files".into(),
+            target: RowTarget::default(),
             rows: vec![Row {
                 id: "src".into(),
                 label: "src".into(),
@@ -223,6 +247,7 @@ mod tests {
         assert_eq!(serde_json::from_value::<SetRows>(v).unwrap(), rows);
         let act = RowActivate {
             entry: "files".into(),
+            target: RowTarget::default(),
             row: "src".into(),
             data: Value::Null,
             gesture: Gesture::Toggle,

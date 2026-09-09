@@ -422,6 +422,7 @@ impl ModuleRuntime {
                 RailRequest::Row {
                     module,
                     entry,
+                    target,
                     row,
                     data,
                     gesture,
@@ -429,6 +430,7 @@ impl ModuleRuntime {
                     module,
                     row: Box::new(RowActivate {
                         entry,
+                        target,
                         row,
                         data,
                         gesture: wire_gesture(gesture),

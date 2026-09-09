@@ -70,7 +70,7 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
     use avada_module_sdk::contract::methods;
     use avada_module_sdk::contract::{ErrorCode, Message, RpcError};
     use avada_module_sdk::manifest::{Manifest, UiTier};
-    use avada_module_sdk::rail::{RailEntry, RegisterRail, Row, SetRows};
+    use avada_module_sdk::rail::{RailEntry, RegisterRail, Row, RowTarget, SetRows};
     use avada_module_sdk::Capability;
     use serde_json::json;
 
@@ -118,6 +118,7 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
             methods::HOST_ROWS_SET,
             serde_json::to_value(SetRows {
                 entry: "hello".into(),
+                target: RowTarget::Rail,
                 rows: vec![
                     row("greeting", "Hello, world", String::new()),
                     row(

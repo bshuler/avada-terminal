@@ -84,7 +84,7 @@ pub use avada_module_sdk::contract::methods;
 
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
-pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate};
+pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate, RowTarget};
 pub use rpc::CommandSpec;
 pub use spawn::{HandshakeError, SpawnError};
 pub use supervisor::{ModuleStatus, RestartPolicy};
@@ -192,7 +192,7 @@ pub(crate) mod testkit {
         use avada_module_sdk::client::{self, ENV_FD};
         use avada_module_sdk::contract::methods;
         use avada_module_sdk::contract::{Message, Request};
-        use avada_module_sdk::rail::{RailEntry, RegisterRail, Row, SetRows};
+        use avada_module_sdk::rail::{RailEntry, RegisterRail, Row, RowTarget, SetRows};
         use serde_json::json;
         use std::os::unix::io::FromRawFd;
 
@@ -287,6 +287,7 @@ pub(crate) mod testkit {
             methods::HOST_ROWS_SET,
             serde_json::to_value(SetRows {
                 entry: "files".into(),
+                target: RowTarget::Rail,
                 rows: vec![Row {
                     id: "readme".into(),
                     label: "README.md".into(),
@@ -369,7 +370,7 @@ mod host_tests {
     use avada_module_sdk::caps::Capability;
     use avada_module_sdk::contract::methods::events as contract_events;
     use avada_module_sdk::contract::ErrorCode;
-    use avada_module_sdk::rail::{Gesture, RowActivate};
+    use avada_module_sdk::rail::{Gesture, RowActivate, RowTarget};
     use avada_module_sdk::rights::InstallRecord;
     use avada_module_sdk::ModuleId;
     use serde_json::{json, Map, Value};
@@ -486,6 +487,7 @@ mod host_tests {
         );
         let row = RowActivate {
             entry: "files".into(),
+            target: RowTarget::Rail,
             row: "readme".into(),
             data: json!({ "path": "README.md" }),
             gesture: Gesture::Open,

@@ -152,20 +152,22 @@ component ViewRowView inherits Rectangle {
         : root.item.role == 12 ? "Diagram"
         // Two identical lines of a file are two different rows, and the viewer already
         // prints the number that tells them apart.
-        : root.item.role == 3 || (root.item.role > 16 && root.item.role != 18)
+        : root.item.role == 3 || (root.item.role > 16 && root.item.role != 18 && root.item.role != 19)
             ? "Line " + root.item.detail + ": " + root.item.text
         : root.item.text;
 
     accessible-role: list-item;
     accessible-label: root.a11y;
-    // A data node (role 18) folds. Its `check` is the disclosure: -1 a scalar, 0 folded,
-    // 1 open — so only a container is expandable, and a scalar reads as a plain item.
-    accessible-expandable: root.item.role == 18 && root.item.check >= 0;
-    accessible-expanded: root.item.role == 18 && root.item.check == 1;
+    // A data node (role 18) and a module row (role 19) fold. `check` is the disclosure:
+    // -1 a leaf, 0 folded, 1 open — so only a container is expandable, and a leaf reads as
+    // a plain item. A module row's fold belongs to the module, but a screen reader has no
+    // way to know that and no reason to care: it is a disclosure either way.
+    accessible-expandable: (root.item.role == 18 || root.item.role == 19) && root.item.check >= 0;
+    accessible-expanded: (root.item.role == 18 || root.item.role == 19) && root.item.check == 1;
     // The dim trailing column — a size and an age in a listing, a container's "2 keys"
     // in a data tree. It elaborates the name rather than being part of it, which is
     // the whole distinction between a description and a label.
-    accessible-description: root.item.role <= 2 || root.item.role == 18 ? root.item.detail : "";
+    accessible-description: root.item.role <= 2 || root.item.role == 18 || root.item.role == 19 ? root.item.detail : "";
     // Selection is a range here, not a cursor, so every row is a candidate and the
     // highlight is the only thing that says which ones are in it.
     accessible-item-selectable: true;
@@ -613,7 +615,43 @@ component ViewRowView inherits Rectangle {
         }
     }
 
-    if root.item.role == 3 || root.item.role > 18 : HorizontalLayout {
+    // A row a module projected into a pane of its own (role 19). The same shape as a data
+    // node, with two differences that follow from who owns it: the label is the module's
+    // plain string rather than markdown, and the trailing detail is always shown — the
+    // module put it there deliberately, so hiding it while open would be the host editing
+    // a module's output.
+    if root.item.role == 19 : Rectangle {
+        clip: true;
+        HorizontalLayout {
+            padding-left: (6px + 14px * root.item.indent) * root.zoom;
+            padding-right: 8px * root.zoom;
+            spacing: 6px * root.zoom;
+            Text {
+                width: 12px * root.zoom;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                text: root.item.check == 1 ? "▾" : root.item.check == 0 ? "▸" : "";
+                color: Theme.subtext;
+                font-size: 11px * root.zoom;
+            }
+            Text {
+                vertical-alignment: center;
+                text: root.item.text;
+                color: Theme.text;
+                font-size: 12px * root.zoom;
+                overflow: elide;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.item.detail != "" : Text {
+                vertical-alignment: center;
+                text: root.item.detail;
+                color: Theme.faint;
+                font-size: 10px * root.zoom;
+            }
+        }
+    }
+
+    if root.item.role == 3 || root.item.role > 19 : HorizontalLayout {
         padding-left: 6px * root.zoom;
         padding-right: 8px * root.zoom;
         spacing: 8px * root.zoom;

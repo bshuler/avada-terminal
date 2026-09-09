@@ -14,7 +14,7 @@ use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::{self, required_capability};
 use avada_module_sdk::contract::{ErrorCode, Notification, Request, Response, RpcError};
 use avada_module_sdk::descriptor::{validate_table, RouteDescriptor, Scope};
-use avada_module_sdk::rail::{validate_entry, RegisterRail, SetRows};
+use avada_module_sdk::rail::{validate_entry, RegisterRail, RowTarget, SetRows};
 use avada_module_sdk::ModuleId;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -183,6 +183,14 @@ pub(crate) struct Dispatcher {
     /// Event kinds the module asked for (`host.events.subscribe`). The whole set;
     /// subscribing again replaces it.
     pub subscriptions: Mutex<BTreeSet<String>>,
+    /// Surfaces this module has an open pane for, by contribution id.
+    ///
+    /// A set, not a count: two panes on the same surface show the same rows, because the
+    /// rows belong to the surface and not to one window of it. Nothing removes an entry
+    /// yet — the host is not told when the human closes a pane — so this is "has ever been
+    /// opened", which is the safe direction: it can only let through rows for a surface
+    /// the module was entitled to draw.
+    pub panes: Mutex<BTreeSet<String>>,
 }
 
 /// `host.routes.register` params.
@@ -295,6 +303,7 @@ impl Dispatcher {
             prefs: Mutex::new(Prefs::load(data_dir)),
             routes: Mutex::new(Vec::new()),
             subscriptions: Mutex::new(BTreeSet::new()),
+            panes: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -324,10 +333,18 @@ impl Dispatcher {
     /// A method that is neither served nor mapped is left alone here so
     /// [`Dispatcher::call`] can answer the honest `MethodNotFound`; refusing it for want of
     /// a capability would tell a module its typo was a permissions problem.
+    /// `host.rows.set` is the third exception, for a different reason: which capability
+    /// it needs depends on the `target` in its *params* — `ui.rail` for the panel,
+    /// `ui.pane` for a pane — and a method name alone cannot say. Gating it here on
+    /// `ui.rail` would make every pane-only module ask for a rail entry it never wants.
+    ///
     /// `served_methods_all_gate_or_self_gate` is what keeps the exception list from
     /// quietly growing.
     fn gate(&self, method: &str) -> Result<(), RpcError> {
-        if matches!(method, HOST_GIT_STATUS | HOST_GIT_COMMIT) {
+        if matches!(
+            method,
+            HOST_GIT_STATUS | HOST_GIT_COMMIT | methods::HOST_ROWS_SET
+        ) {
             return Ok(());
         }
         let Some(cap) = required_capability(method) else {
@@ -415,17 +432,46 @@ impl Dispatcher {
         Ok(Value::Null)
     }
 
+    /// `host.rows.set { entry, target?, rows } -> null`.
+    ///
+    /// Both tier-1 row surfaces come through here, and both insist the surface exists
+    /// first: rail rows need a registered entry, pane rows need a pane the module already
+    /// opened with `host.panes.spawn`. Rows for a surface nobody is showing are not a
+    /// harmless no-op — they are the shape a typo'd id takes, and a module that never
+    /// hears about it debugs an empty panel instead of a rejected call.
     fn rows_set(&self, params: &Value) -> Result<Value, RpcError> {
-        let SetRows { entry, rows } =
-            serde_json::from_value(params.clone()).map_err(invalid_params)?;
-        self.rail
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .set_rows(&entry, rows.clone())
-            .map_err(invalid_params)?;
+        let SetRows {
+            entry,
+            target,
+            rows,
+        } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        match target {
+            RowTarget::Rail => {
+                self.require(Capability::UiRail)?;
+                self.rail
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_rows(&entry, rows.clone())
+                    .map_err(invalid_params)?;
+            }
+            RowTarget::Pane => {
+                self.require(Capability::UiPane)?;
+                if !self
+                    .panes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&entry)
+                {
+                    return Err(invalid_params(format!(
+                        "no pane is open for surface `{entry}`"
+                    )));
+                }
+            }
+        }
         self.shared.rail_events.send(RailEvent::Rows {
             module: self.module.clone(),
             entry,
+            target,
             rows,
         });
         Ok(Value::Null)
@@ -711,14 +757,17 @@ impl Dispatcher {
     /// The `git.read` check the two git arms make for themselves. See [`HOST_GIT_STATUS`]
     /// for why the shared [`Dispatcher::gate`] cannot make it for them.
     fn require_git_read(&self) -> Result<(), RpcError> {
-        match self.shared.gate.check(&self.module, Capability::GitRead) {
+        self.require(Capability::GitRead)
+    }
+
+    /// The same check [`Dispatcher::gate`] makes, for an arm that had to work out its own
+    /// capability. Same error text, so a module cannot tell the two paths apart.
+    fn require(&self, cap: Capability) -> Result<(), RpcError> {
+        match self.shared.gate.check(&self.module, cap) {
             Decision::Allow => Ok(()),
             Decision::Deny | Decision::Ask => Err(RpcError::new(
                 ErrorCode::CapabilityDenied,
-                format!(
-                    "`{}` was not granted to this module",
-                    Capability::GitRead.name()
-                ),
+                format!("`{}` was not granted to this module", cap.name()),
             )),
         }
     }
@@ -843,6 +892,17 @@ impl Dispatcher {
         } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
         if kind.trim().is_empty() {
             return Err(invalid_params("pane kind must not be empty"));
+        }
+        // A module pane's rows arrive on a later `host.rows.set`, so remember which
+        // surface is legitimately open before the id goes back to the module.
+        if kind == "module" {
+            let Some(s) = surface.as_deref().filter(|s| !s.trim().is_empty()) else {
+                return Err(invalid_params("a module pane needs a `surface`"));
+            };
+            self.panes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(s.to_string());
         }
         let pane_id = uuid::Uuid::new_v4().to_string();
         self.shared.events.send(HostEvent::PaneSpawn {
@@ -1308,6 +1368,69 @@ pub(crate) mod tests {
             RailEvent::Rows { entry, rows, .. } => {
                 assert_eq!(entry, "files");
                 assert_eq!(rows[0].id, "a");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The two surfaces are gated separately, and neither capability buys the other. A
+    /// module that only draws panes must never be forced to ask for a rail entry it does
+    /// not want, and a rail-only module must not be able to reach a pane.
+    #[test]
+    fn pane_rows_need_ui_pane_and_rail_rows_need_ui_rail() {
+        let pane = json!({ "entry": "market", "target": "pane", "rows": [] });
+        let rail = json!({ "entry": "market", "target": "rail", "rows": [] });
+
+        let rail_only = rig(&[Capability::UiRail]);
+        let e = rail_only.d.call(methods::HOST_ROWS_SET, &pane).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+        assert!(e.message.contains("ui.pane"), "{}", e.message);
+
+        let pane_only = rig(&[Capability::UiPane, Capability::PanesSpawn]);
+        let e = pane_only.d.call(methods::HOST_ROWS_SET, &rail).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::CapabilityDenied);
+        assert!(e.message.contains("ui.rail"), "{}", e.message);
+    }
+
+    /// Rows for a pane that is not open are the pane twin of rows for an unregistered rail
+    /// entry: there is nothing to draw them on, so the host says so rather than banking
+    /// them against a pane that may never appear.
+    #[test]
+    fn pane_rows_need_a_pane_that_was_actually_spawned() {
+        let rig = rig(&[Capability::UiPane, Capability::PanesSpawn]);
+        let rows = json!({
+            "entry": "market", "target": "pane",
+            "rows": [{ "id": "a", "label": "A", "detail": "1.2.0" }],
+        });
+        let e = rig.d.call(methods::HOST_ROWS_SET, &rows).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("market"), "{}", e.message);
+
+        // A module pane with no surface is refused too — the surface IS the pane's name,
+        // and without one the rows could never be addressed.
+        assert_eq!(
+            rig.d
+                .call(methods::HOST_PANES_SPAWN, &json!({ "kind": "module" }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams
+        );
+        rig.d
+            .call(
+                methods::HOST_PANES_SPAWN,
+                &json!({ "kind": "module", "surface": "market" }),
+            )
+            .unwrap();
+        rig.d.call(methods::HOST_ROWS_SET, &rows).unwrap();
+        match rig.rail.recv().unwrap() {
+            RailEvent::Rows {
+                entry,
+                target,
+                rows,
+                ..
+            } => {
+                assert_eq!((entry.as_str(), target), ("market", RowTarget::Pane));
+                assert_eq!(rows[0].detail, "1.2.0");
             }
             other => panic!("{other:?}"),
         }
