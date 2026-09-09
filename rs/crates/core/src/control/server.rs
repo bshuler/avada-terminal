@@ -142,6 +142,17 @@ pub struct Shared {
     /// real modules root and hands it over here.
     pub license: RwLock<Option<Arc<crate::license::LicenseService>>>,
     // ---- end track G8 license
+    // ---- track G11 rights
+    /// The one [`crate::rights::RightsService`] this process uses, shared with whatever UI
+    /// also edits it. Empty until the app installs it; until then every rights route
+    /// answers 503, never 404 — same contract as `marketplace`.
+    ///
+    /// A `Mutex` rather than an `RwLock` because every interesting call on the service is a
+    /// write that persists to disk, and the read side (`rows`, `profiles`) is a handful of
+    /// map lookups: a reader-writer split would buy nothing and let a UI thread and an HTTP
+    /// handler disagree about what is on disk.
+    pub rights: RwLock<Option<Arc<Mutex<crate::rights::RightsService>>>>,
+    // ---- end track G11 rights
 }
 
 impl Shared {
@@ -190,6 +201,9 @@ impl Shared {
             // ---- track G8 license
             license: RwLock::new(None),
             // ---- end track G8 license
+            // ---- track G11 rights
+            rights: RwLock::new(None),
+            // ---- end track G11 rights
         })
     }
 
@@ -212,6 +226,14 @@ impl Shared {
         *self.license.write().unwrap() = Some(svc);
     }
     // ---- end track G8 license
+
+    // ---- track G11 rights
+    /// Install (or replace) the rights service that answers `/marketplace/.../rights`.
+    /// Takes effect on the next request; no router rebuild.
+    pub fn install_rights(&self, rights: Arc<Mutex<crate::rights::RightsService>>) {
+        *self.rights.write().unwrap() = Some(rights);
+    }
+    // ---- end track G11 rights
 
     /// Set the requested bind address/port (from `control_settings`) BEFORE `run_server`.
     /// `address` must be a bare IP (the settings loader already validated it); `port` 0 =

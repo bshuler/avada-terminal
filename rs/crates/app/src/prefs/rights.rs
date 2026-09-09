@@ -15,11 +15,33 @@
 //! is a pure function here so it can be tested without a window.
 
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use avada_core::rights::{
     AskAnswer, Capability, Decision, ModuleId, PendingAsk, RightValue, RightsRow, RightsService,
 };
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+
+// ---------------------------------------------------------------------------------
+// the one service (track G11)
+// ---------------------------------------------------------------------------------
+
+/// The rights service this process uses.
+///
+/// It is a singleton for two reasons that both bite in practice. First, [`crate::state::State`]
+/// is *per window*, so a field-owned service meant three windows kept three caches of the
+/// same files on disk and the last one to write won. Second, G11 put the rights page on the
+/// control plane as well, and a marketplace module editing a right over HTTP has to be
+/// editing the same object the Preferences page is drawing, or the two disagree until a
+/// restart.
+///
+/// It is rooted at [`RightsService::new`]'s real app-support dir and starts empty: nothing
+/// is read or written until [`crate::control_host::install_module_services`] registers the
+/// installed modules, so a build with nothing installed never touches the disk.
+pub fn shared() -> &'static Arc<Mutex<RightsService>> {
+    static SHARED: OnceLock<Arc<Mutex<RightsService>>> = OnceLock::new();
+    SHARED.get_or_init(|| Arc::new(Mutex::new(RightsService::new())))
+}
 
 // ---------------------------------------------------------------------------------
 // value ↔ picker index

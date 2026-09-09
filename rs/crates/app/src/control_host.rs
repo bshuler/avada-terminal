@@ -90,10 +90,47 @@ struct PaneSnap {
 /// with it. The licence service has no fallible setup, so it always installs.
 fn install_module_services(shared: &Arc<Shared>, modules_root: &Path) {
     match Marketplace::open_under(modules_root, GitHubConfig::default()) {
-        Ok(mp) => shared.install_marketplace(Arc::new(mp)),
+        Ok(mp) => {
+            register_installed_rights(&mp);
+            shared.install_marketplace(Arc::new(mp));
+        }
         Err(e) => tracing::warn!(error = %e, "marketplace unavailable; /marketplace stays 503"),
     }
     shared.install_license(Arc::new(LicenseService::under(modules_root)));
+    shared.install_rights(crate::prefs::rights::shared().clone());
+}
+
+/// Tell the rights service which modules exist.
+///
+/// [`avada_core::rights::RightsService`] answers `rows`, `profiles` and `decide` from the
+/// install records it has been handed; with none registered it reports an empty world, which
+/// is exactly what the Preferences rights page drew before this ran — no module ever called
+/// `register`, so a user with modules installed saw an empty list and could not grant
+/// anything. The install records are the marketplace's, so this is the one place in the app
+/// where both halves are in scope.
+///
+/// A broken record is skipped, not fatal: an install directory that fails verification has no
+/// trustworthy manifest, so there are no capabilities to ask about, and the marketplace pane
+/// reports it separately.
+fn register_installed_rights(mp: &Marketplace) {
+    let records = match mp.store().records() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "rights: could not list installs; the page stays empty");
+            return;
+        }
+    };
+    let mut rights = crate::prefs::rights::shared().lock().unwrap();
+    for status in records {
+        match status {
+            avada_core::install::RecordStatus::Ok(installed) => {
+                rights.register(installed.rights().clone());
+            }
+            avada_core::install::RecordStatus::Broken { dir, reason, .. } => {
+                tracing::debug!(dir = %dir.display(), %reason, "rights: skipping a broken install");
+            }
+        }
+    }
 }
 
 /// Hosts the embedded control server beside the GUI. UI-thread-owned (all interior mutability
@@ -1737,6 +1774,10 @@ mod tests {
             shared.license.read().unwrap().is_some(),
             "/license/... would still answer 503"
         );
+        assert!(
+            shared.rights.read().unwrap().is_some(),
+            "/marketplace/.../rights would still answer 503"
+        );
     }
 
     /// A modules root that cannot be opened costs one surface, not the process. The GUI hosts
@@ -1759,6 +1800,131 @@ mod tests {
         assert!(
             shared.license.read().unwrap().is_some(),
             "the licence service has no fallible setup; it must still install"
+        );
+        assert!(
+            shared.rights.read().unwrap().is_some(),
+            "rights hang off their own service; an unreadable install root must not take \
+             the permissions page down with the marketplace"
+        );
+    }
+
+    /// A manifest for `acme/<repo>`, declaring one capability so its rights page has a row.
+    /// Written out rather than pulled from a fixture because the app crate has no fixtures,
+    /// and the point here is the *wiring*, not the manifest schema.
+    fn manifest_toml(repo: &str) -> String {
+        format!(
+            r#"capabilities = ["fs.read"]
+
+[module]
+id = "acme/{repo}"
+name = "Test"
+version = "1.0.0"
+description = "a module that exists on disk"
+publisher = "Acme"
+contract = "^1"
+
+[distribution]
+kind = "source"
+"#
+        )
+    }
+
+    /// Put a real, signed install of `acme/<repo>` under `modules_root`, the way a finished
+    /// marketplace job does.
+    fn install_a_module(modules_root: &Path, repo: &str) -> avada_core::rights::ModuleId {
+        let manifest = avada_core::rights::Manifest::parse(&manifest_toml(repo))
+            .expect("the test manifest parses");
+        let id = manifest.id().clone();
+        let paths = avada_core::install::InstallPaths::under(modules_root);
+        let keys: Arc<dyn avada_core::install::KeyStore> =
+            Arc::new(avada_core::install::FileKeyStore::new(paths.keys_dir()));
+        let store = avada_core::install::InstallStore::open(paths, keys).expect("open the store");
+        let artifact = modules_root.join(format!("{repo}-artifact"));
+        std::fs::write(&artifact, b"#!/bin/sh\nexit 0\n").expect("write the artifact");
+        let record = avada_core::rights::InstallRecord {
+            module_id: id.clone(),
+            repo: format!("https://github.com/acme/{repo}"),
+            tag: manifest.tag(),
+            commit: "0".repeat(40),
+            version: manifest.module.version.clone(),
+            artifact_sha256: String::new(),
+            source: avada_core::rights::DistributionKind::Source,
+            accepted: manifest.capabilities.iter().copied().collect(),
+            manifest,
+            installed_at: 1_700_000_000,
+            kind: avada_core::rights::InstallKind::Manual,
+        };
+        store.install(record, &artifact, None).expect("install");
+        id
+    }
+
+    /// The defect this closes: nothing in the app ever called
+    /// [`avada_core::rights::RightsService::register`], so the service knew about no modules
+    /// at all. Every rights surface reads from that registry — the Preferences page drew an
+    /// empty list, and the control route would have answered 404 for a module the user had
+    /// installed. Both halves are only in scope here, which is why the wiring lives in
+    /// `install_module_services` and the proof lives with it.
+    #[test]
+    fn the_rights_service_learns_about_the_modules_that_are_installed() {
+        let root = tmp_root();
+        let modules = root.modules();
+        let id = install_a_module(modules.as_path(), "avada-registered");
+
+        assert!(
+            crate::prefs::rights::shared()
+                .lock()
+                .unwrap()
+                .record(&id)
+                .is_none(),
+            "the module must be unknown before the wiring runs, or this proves nothing"
+        );
+
+        let shared = bare_shared(root.0.as_path());
+        install_module_services(&shared, modules.as_path());
+
+        let rights = crate::prefs::rights::shared().lock().unwrap();
+        let record = rights
+            .record(&id)
+            .expect("the installed module reached the rights service");
+        assert_eq!(record.version.to_string(), "1.0.0");
+        assert_eq!(
+            rights
+                .rows(&id, None)
+                .iter()
+                .map(|r| r.cap.to_string())
+                .collect::<Vec<_>>(),
+            ["fs.read"],
+            "the page draws the capabilities the manifest declares"
+        );
+    }
+
+    /// A version directory that fails verification has no trustworthy manifest, so it has no
+    /// capabilities to ask about. It must be skipped, never allowed to abort the sweep — one
+    /// tampered install would otherwise hide every *good* module's rights page.
+    #[test]
+    fn a_broken_install_is_skipped_rather_than_stopping_the_sweep() {
+        let root = tmp_root();
+        let modules = root.modules();
+        let broken = install_a_module(modules.as_path(), "avada-broken");
+        let good = install_a_module(modules.as_path(), "avada-intact");
+
+        // Corrupt the broken one's record so its signature no longer checks out.
+        let dir = avada_core::install::InstallPaths::under(modules.as_path())
+            .version_dir(&broken, &"1.0.0".parse().unwrap());
+        std::fs::write(dir.join("record.json"), b"{\"not\": \"a record\"}")
+            .expect("corrupt the record");
+
+        let shared = bare_shared(root.0.as_path());
+        install_module_services(&shared, modules.as_path());
+
+        let rights = crate::prefs::rights::shared().lock().unwrap();
+        assert!(
+            rights.record(&good).is_some(),
+            "the intact module must still be registered"
+        );
+        assert!(
+            rights.record(&broken).is_none(),
+            "an install that cannot be verified has no rights to show"
         );
     }
 }

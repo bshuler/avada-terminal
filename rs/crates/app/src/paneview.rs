@@ -999,7 +999,7 @@ pub fn resync(
     // to do with whether the user happens to be looking at the rights page.
     crate::prefs::rights::fill(
         app,
-        &state.rights,
+        &state.rights.lock().unwrap(),
         state.rights_selected.as_ref(),
         state.rights_workspace().as_deref(),
     );

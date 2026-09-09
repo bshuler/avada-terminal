@@ -1585,7 +1585,9 @@ pub struct State {
     /// page projects and the ask toast answers against (track H2). Constructed empty and
     /// rooted at the real app-support dir; nothing is read or written until a module is
     /// registered, so a build with no modules installed never touches the disk.
-    pub rights: avada_core::rights::RightsService,
+    /// Shared, not owned: `State` is per window and the control plane edits the same
+    /// service (see [`crate::prefs::rights::shared`]).
+    pub rights: std::sync::Arc<std::sync::Mutex<avada_core::rights::RightsService>>,
     /// The module the rights page is showing (`None` = its first row). Page selection, not
     /// rights truth, so it lives here rather than in the service.
     pub rights_selected: Option<avada_core::rights::ModuleId>,
@@ -1809,7 +1811,7 @@ impl State {
             rail_requests: Vec::new(),
             rail_scroll_hold: None,
             module_events: Vec::new(),
-            rights: avada_core::rights::RightsService::new(),
+            rights: crate::prefs::rights::shared().clone(),
             rights_selected: None,
             rights_effects: Vec::new(),
             closed: Vec::new(),
@@ -5149,7 +5151,10 @@ impl State {
     /// rights overrides in. The one place `workspace_path` is written, so the rights
     /// column can never be a workspace behind the tabs on screen.
     pub fn set_workspace_path(&mut self, path: std::path::PathBuf) {
-        self.rights.load_workspace(&path.to_string_lossy());
+        self.rights
+            .lock()
+            .unwrap()
+            .load_workspace(&path.to_string_lossy());
         self.workspace_path = Some(path);
     }
 
@@ -5160,10 +5165,12 @@ impl State {
     /// that would not write must not take the window down with it.
     pub fn rights_apply(&mut self, cmd: &crate::prefs::rights::RightsCommand) {
         let ws = self.rights_workspace();
-        match crate::prefs::rights::apply(&mut self.rights, cmd, ws.as_deref()) {
+        let mut rights = self.rights.lock().unwrap();
+        let applied = crate::prefs::rights::apply(&mut rights, cmd, ws.as_deref());
+        match applied {
             Ok(crate::prefs::rights::Applied::Nothing) => return,
             Ok(crate::prefs::rights::Applied::Selected(i)) => {
-                self.rights_selected = self.rights.modules().get(i).map(|r| r.module_id.clone());
+                self.rights_selected = rights.modules().get(i).map(|r| r.module_id.clone());
             }
             Ok(crate::prefs::rights::Applied::Written) => {}
             Ok(effect) => self.rights_effects.push(effect),
@@ -5172,6 +5179,7 @@ impl State {
                 return;
             }
         }
+        drop(rights);
         self.dirty = true;
     }
 

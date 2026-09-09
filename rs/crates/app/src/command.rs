@@ -2021,7 +2021,9 @@ mod rights_command_tests {
             std::env::temp_dir().join(format!("avada-rights-cmd-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut st = State::new(theme::load_font(1.0));
-        st.rights = RightsService::with_root(&dir);
+        // A fresh Arc, not the process singleton: these tests write rights files and
+        // must not touch the developer's real app-support root.
+        st.rights = std::sync::Arc::new(std::sync::Mutex::new(RightsService::with_root(&dir)));
         (st, dir)
     }
 
@@ -2035,7 +2037,11 @@ mod rights_command_tests {
     #[test]
     fn answering_an_ask_writes_the_column_and_queues_the_decision_for_the_host() {
         let (mut st, dir) = with_a_temp_rights_root("answer");
-        let id = st.rights.ask(&module(), Capability::WorkspaceRead, None);
+        let id = st
+            .rights
+            .lock()
+            .unwrap()
+            .ask(&module(), Capability::WorkspaceRead, None);
 
         dispatch(
             &mut st,
@@ -2044,7 +2050,10 @@ mod rights_command_tests {
         );
 
         assert_eq!(
-            st.rights.user_value(&module(), Capability::WorkspaceRead),
+            st.rights
+                .lock()
+                .unwrap()
+                .user_value(&module(), Capability::WorkspaceRead),
             RightValue::Always
         );
         let queued = st.take_rights_effects();
@@ -2070,7 +2079,10 @@ mod rights_command_tests {
         );
 
         assert_eq!(
-            st.rights.user_value(&module(), Capability::WorkspaceRead),
+            st.rights
+                .lock()
+                .unwrap()
+                .user_value(&module(), Capability::WorkspaceRead),
             RightValue::Never
         );
         assert!(st.take_rights_effects().is_empty());
@@ -2088,7 +2100,10 @@ mod rights_command_tests {
             &mgr(),
         );
         assert_eq!(
-            st.rights.user_value(&module(), Capability::WorkspaceRead),
+            st.rights
+                .lock()
+                .unwrap()
+                .user_value(&module(), Capability::WorkspaceRead),
             RightValue::Ask
         );
         assert!(st.take_rights_effects().is_empty());

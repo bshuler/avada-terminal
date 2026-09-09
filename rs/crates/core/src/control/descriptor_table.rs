@@ -488,6 +488,73 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             ),
             vec![path_id("id", "Sign-in id")],
         ),
+        // ---- track G11 rights (marketplace.* so the capability gate is MarketplaceManage)
+        with(
+            route(
+                "marketplace.rights",
+                "/marketplace/modules/{owner}/{repo}/rights",
+                Get,
+                "One module's rights page: profiles and a row per capability",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p(
+                    "workspace",
+                    Query,
+                    "string",
+                    false,
+                    "Workspace whose overrides to show",
+                ),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.rights.set",
+                "/marketplace/modules/{owner}/{repo}/rights",
+                Post,
+                "Set or clear one capability's right value",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p("cap", Body, "string", true, "Capability wire name"),
+                p(
+                    "value",
+                    Body,
+                    "string",
+                    false,
+                    "never|always|workspace|ask; absent clears",
+                ),
+                p(
+                    "workspace",
+                    Body,
+                    "string",
+                    false,
+                    "Edit this workspace's column instead of the user's",
+                ),
+            ],
+        ),
+        with(
+            route(
+                "marketplace.profile",
+                "/marketplace/modules/{owner}/{repo}/profile",
+                Post,
+                "Select one of the manifest's permission profiles",
+            ),
+            vec![
+                path_id("owner", "GitHub owner"),
+                path_id("repo", "GitHub repository"),
+                p(
+                    "profile",
+                    Body,
+                    "string",
+                    false,
+                    "Profile name; absent selects none",
+                ),
+            ],
+        ),
+        // ---- end track G11 rights
         // ---- end track F2 marketplace
         // ---- track G8 license
         route(

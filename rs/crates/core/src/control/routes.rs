@@ -16,7 +16,7 @@
 //! source (omit-when-unset; ordered structs where field order is observable).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use avada_module_sdk::caps::Capability;
@@ -144,6 +144,11 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("marketplace.toolchain", marketplace_toolchain),
         h("marketplace.signin", marketplace_signin),
         h("marketplace.signin.poll", marketplace_signin_poll),
+        // ---- track G11 rights (mirrors the fenced block in descriptor_table)
+        h("marketplace.rights", marketplace_rights),
+        h("marketplace.rights.set", marketplace_rights_set),
+        h("marketplace.profile", marketplace_profile),
+        // ---- end track G11 rights
         // ---- track G8 license (mirrors the fenced block in descriptor_table)
         h("license.list", license_list),
         h("license.show", license_show),
@@ -2962,6 +2967,209 @@ fn product_of(owner: &str, repo: &str) -> String {
     format!("{owner}/{repo}")
 }
 
+// ---- track G11 rights
+
+/// Identity first (401), then the service (503). Same ladder as [`marketplace_for`]: a
+/// stranger must not learn from the status code whether this build even has a rights
+/// service, and a headless embedder that never installed one answers "unavailable"
+/// rather than "no such route".
+#[allow(clippy::result_large_err)]
+fn rights_for(
+    shared: &Arc<Shared>,
+    headers: &HeaderMap,
+) -> Result<Arc<Mutex<crate::rights::RightsService>>, Response> {
+    authorize(shared, headers)?;
+    let svc = shared.rights.read().unwrap().clone();
+    svc.ok_or_else(|| jstatus(503, json!({ "error": "rights unavailable" })))
+}
+
+/// `owner/repo` from the path as a validated [`ModuleId`]. The path segments came off the
+/// wire, so `.` and `..` have to be refused here rather than trusted into a store lookup.
+#[allow(clippy::result_large_err)]
+fn rights_module(owner: &str, repo: &str) -> Result<crate::rights::ModuleId, Response> {
+    crate::rights::ModuleId::new(&format!("{owner}/{repo}"))
+        .map_err(|e| jstatus(400, json!({ "error": e.to_string() })))
+}
+
+/// The whole rights page for one module as JSON. Built here rather than in
+/// `crate::rights` so the service stays a truth-keeper with no opinion about wire shapes.
+///
+/// `Err(404)` for a module the service has never registered: an unknown module has no
+/// capabilities, and answering `{"rows": []}` would read as "this module asks for
+/// nothing", which is the most dangerous possible lie on a permissions page.
+#[allow(clippy::result_large_err)]
+fn rights_view(
+    svc: &crate::rights::RightsService,
+    module: &crate::rights::ModuleId,
+    workspace: Option<&str>,
+) -> Result<Value, Response> {
+    let Some(record) = svc.record(module) else {
+        return Err(jstatus(
+            404,
+            json!({ "error": format!("module {module} is not installed") }),
+        ));
+    };
+    let version = record.version.to_string();
+    let rows: Vec<Value> = svc
+        .rows(module, workspace)
+        .into_iter()
+        .map(|r| {
+            json!({
+                "cap": r.cap.to_string(),
+                "description": r.description,
+                "accepted": r.accepted,
+                "user": r.user,
+                "workspace": r.workspace,
+                "effective": r.effective,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "module": module.as_str(),
+        "version": version,
+        "workspace": workspace,
+        "profile": svc.user_rights(module).profile,
+        "profiles": svc.profiles(module),
+        "rows": rows,
+    }))
+}
+
+/// `GET /marketplace/modules/{owner}/{repo}/rights?workspace=` → the rights page.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_rights(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let svc = match rights_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let module = match rights_module(&owner, &repo) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let workspace = q.get("workspace").filter(|w| !w.is_empty()).cloned();
+    let mut svc = svc.lock().unwrap();
+    if let Some(key) = workspace.as_deref() {
+        svc.load_workspace(key);
+    }
+    match rights_view(&svc, &module, workspace.as_deref()) {
+        Ok(v) => ok_json(v),
+        Err(r) => r,
+    }
+}
+
+/// `{cap, value?, workspace?}` → the rights page after the change.
+///
+/// An absent `value` *clears* rather than denying: the two are different states, because a
+/// cleared row falls back to the selected profile while `never` overrides it. A `workspace`
+/// key edits that workspace's column; without one the user-level column is edited.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_rights_set(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let svc = match rights_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let module = match rights_module(&owner, &repo) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(cap) = body_str(&body, "cap") else {
+        return jstatus(400, json!({ "error": "missing cap" }));
+    };
+    let Ok(cap) = cap.parse::<crate::rights::Capability>() else {
+        return jstatus(
+            400,
+            json!({ "error": format!("unknown capability {cap:?}") }),
+        );
+    };
+    let value = match body.get("value") {
+        None | Some(Value::Null) => None,
+        Some(v) => match serde_json::from_value::<crate::rights::RightValue>(v.clone()) {
+            Ok(v) => Some(v),
+            Err(_) => {
+                return jstatus(400, json!({ "error": format!("bad right value {v}") }));
+            }
+        },
+    };
+    let workspace = body_str(&body, "workspace").filter(|w| !w.is_empty());
+
+    let mut svc = svc.lock().unwrap();
+    // Refuse before writing: a set on an unknown module would otherwise persist a rights
+    // file for something that is not installed, which a later install would then inherit.
+    if let Err(r) = rights_view(&svc, &module, workspace.as_deref()) {
+        return r;
+    }
+    let wrote = match workspace.as_deref() {
+        Some(key) => svc.set_workspace(&module, key, cap, value),
+        None => match value {
+            Some(v) => svc.set_user(&module, cap, v),
+            None => svc.clear_user(&module, cap),
+        },
+    };
+    if let Err(e) = wrote {
+        return jstatus(500, json!({ "error": e.to_string() }));
+    }
+    match rights_view(&svc, &module, workspace.as_deref()) {
+        Ok(v) => ok_json(v),
+        Err(r) => r,
+    }
+}
+
+/// `{profile?}` → the rights page after the change. An absent name selects no profile,
+/// which is how a caller undoes a selection; a name the manifest does not ship is 400.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_profile(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((owner, repo)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let svc = match rights_for(&shared, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let module = match rights_module(&owner, &repo) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let profile = body_str(&body, "profile").filter(|p| !p.is_empty());
+
+    let mut svc = svc.lock().unwrap();
+    if let Err(r) = rights_view(&svc, &module, None) {
+        return r;
+    }
+    if let Err(e) = svc.set_profile(&module, profile.as_deref()) {
+        let status = if e.kind() == std::io::ErrorKind::InvalidInput {
+            400
+        } else {
+            500
+        };
+        return jstatus(status, json!({ "error": e.to_string() }));
+    }
+    match rights_view(&svc, &module, None) {
+        Ok(v) => ok_json(v),
+        Err(r) => r,
+    }
+}
+
+// ---- end track G11 rights
+
 /// Every installed licence, with its state and reason.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn license_list(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
@@ -5620,6 +5828,9 @@ mod marketplace_routes {
                 "marketplace.toolchain",
                 "marketplace.signin",
                 "marketplace.signin.poll",
+                "marketplace.rights",
+                "marketplace.rights.set",
+                "marketplace.profile",
             ]
         );
         for r in &routes {
@@ -5656,13 +5867,13 @@ mod marketplace_routes {
                 );
             }
         }
-        // install, enable, disable, pin, unpin, defaults.set, signin.
+        // install, enable, disable, pin, unpin, defaults.set, signin, rights.set, profile.
         assert_eq!(
             routes
                 .iter()
                 .filter(|r| matches!(r.verb, Verb::Post))
                 .count(),
-            7
+            9
         );
         // uninstall, defaults.clear.
         assert_eq!(
@@ -5686,10 +5897,19 @@ mod marketplace_routes {
             assert_eq!(v["error"], "unauthorized", "{}", r.method);
             let (st, _, _) = send(&s, r.verb, &path, Some("tok-nothing"), None).await;
             assert_eq!(st, 403, "{} let an empty token through", r.method);
+            // The rights routes hang off a second service, installed separately, so an
+            // app that opened a marketplace but no rights store still answers 503 there.
+            let want = if r.method.starts_with("marketplace.rights")
+                || r.method == "marketplace.profile"
+            {
+                "rights unavailable"
+            } else {
+                "marketplace unavailable"
+            };
             for tok in ["tok-mp", s.token.as_str()] {
                 let (st, v, _) = send(&s, r.verb, &path, Some(tok), None).await;
                 assert_eq!(st, 503, "{} with {tok}", r.method);
-                assert_eq!(v["error"], "marketplace unavailable", "{}", r.method);
+                assert_eq!(v["error"], want, "{}", r.method);
             }
         }
         // Installing takes effect on the next request; no router rebuild.
@@ -6870,3 +7090,361 @@ mod tools_routes {
     }
 }
 // ---- end track G2 tools
+
+// ---- track G11 rights
+
+/// The rights page over HTTP: what the marketplace module's profiles UI reads and writes.
+///
+/// These go through the real router (identity, capability, service handle and all), because
+/// every interesting failure here is a *status code* — a 404 that should have been a 503, a
+/// write that landed on an unregistered module — and none of those are visible from a direct
+/// call into [`crate::rights::RightsService`].
+#[cfg(test)]
+mod rights_routes {
+    use super::golden::{boot_with_control_tag, client, Server};
+    use crate::rights::{
+        Capability, DistributionKind, InstallKind, InstallRecord, Manifest, RightValue,
+        RightsService,
+    };
+    use avada_module_sdk::descriptor::Verb;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// The SDK's reference manifest: `acme/avada-files` 1.2.0, six capabilities, one profile.
+    const FIXTURE: &str = include_str!("../../../module-sdk/tests/fixtures/avada.toml");
+
+    /// Accepts everything the manifest declares except `skills.materialize`, so the
+    /// "declined at install" column is not uniformly true.
+    fn record() -> InstallRecord {
+        let m = Manifest::parse(FIXTURE).expect("fixture manifest parses");
+        let accepted = m
+            .capabilities
+            .iter()
+            .copied()
+            .filter(|c| *c != Capability::SkillsMaterialize)
+            .collect();
+        InstallRecord {
+            module_id: m.module.id.clone(),
+            repo: "https://github.com/acme/avada-files".into(),
+            tag: m.tag(),
+            commit: "0".repeat(40),
+            version: m.module.version.clone(),
+            artifact_sha256: "00".repeat(32),
+            source: DistributionKind::Source,
+            accepted,
+            manifest: m,
+            installed_at: 1_700_000_000,
+            kind: InstallKind::Manual,
+        }
+    }
+
+    /// A rights service on its own temp root, with the fixture module registered, installed
+    /// into `s`. The root is deleted first, never shared, and never the real app-support dir.
+    fn install_rights(s: &Server, tag: &str) -> std::path::PathBuf {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "avada-rights-routes-{}-{tag}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut svc = RightsService::with_root(&dir);
+        svc.register(record());
+        s.shared.install_rights(Arc::new(Mutex::new(svc)));
+        dir
+    }
+
+    async fn send(s: &Server, verb: Verb, path: &str, body: Option<Value>) -> (u16, Value) {
+        let url = format!("{}{}", s.base, path);
+        let c = client();
+        let mut req = match verb {
+            Verb::Get => c.get(&url),
+            _ => c.post(&url),
+        };
+        req = req.header("authorization", format!("Bearer {}", s.token));
+        if let Some(b) = body {
+            req = req
+                .header("content-type", "application/json")
+                .body(b.to_string());
+        }
+        let r = req.send().await.unwrap();
+        let status = r.status().as_u16();
+        let text = r.text().await.unwrap();
+        (
+            status,
+            serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
+        )
+    }
+
+    const RIGHTS: &str = "/marketplace/modules/acme/avada-files/rights";
+    const PROFILE: &str = "/marketplace/modules/acme/avada-files/profile";
+
+    async fn get(s: &Server, path: &str) -> (u16, Value) {
+        send(s, Verb::Get, path, None).await
+    }
+
+    async fn post(s: &Server, path: &str, body: Value) -> (u16, Value) {
+        send(s, Verb::Post, path, Some(body)).await
+    }
+
+    /// One row by capability name, so an assertion names the capability it means rather
+    /// than an index into manifest order.
+    fn row<'a>(v: &'a Value, cap: &str) -> &'a Value {
+        v["rows"]
+            .as_array()
+            .expect("rows is a list")
+            .iter()
+            .find(|r| r["cap"] == cap)
+            .unwrap_or_else(|| panic!("no row for {cap} in {v}"))
+    }
+
+    /// The page as a module's profiles UI first sees it: every declared capability, in
+    /// manifest order, with the install-time answer and the resolved decision.
+    #[tokio::test]
+    async fn the_page_lists_every_declared_capability_with_its_effective_decision() {
+        let s = boot_with_control_tag(true, "rights-page").await;
+        let dir = install_rights(&s, "page");
+
+        let (st, v) = get(&s, RIGHTS).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["module"], "acme/avada-files");
+        assert_eq!(v["version"], "1.2.0");
+        assert_eq!(v["workspace"], Value::Null);
+        assert_eq!(v["profile"], Value::Null);
+
+        let caps: Vec<&str> = v["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["cap"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            caps,
+            [
+                "fs.read",
+                "workspace.read",
+                "ui.rail",
+                "ui.pane",
+                "ui.commands",
+                "skills.materialize"
+            ],
+            "manifest order, so the UI never has to sort"
+        );
+
+        // A capability declined at install stays visible and stays denied: hiding it would
+        // leave the user no way to change their mind.
+        let declined = row(&v, "skills.materialize");
+        assert_eq!(declined["accepted"], false);
+        assert_eq!(declined["effective"], "deny");
+        let accepted = row(&v, "fs.read");
+        assert_eq!(accepted["accepted"], true);
+        assert_eq!(accepted["effective"], "ask");
+        assert_eq!(accepted["user"], "ask", "the default before any choice");
+        assert_eq!(accepted["workspace"], Value::Null);
+        assert!(
+            !declined["description"].as_str().unwrap().is_empty(),
+            "the UI needs prose for the row, not just a wire name"
+        );
+
+        // The manifest's profiles come down with the page — the picker has no other source.
+        assert_eq!(v["profiles"][0]["name"], "High security");
+        assert_eq!(v["profiles"][0]["values"]["fs.read"], "always");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A user-level choice is written, resolved and reflected — and clearing it is a
+    /// different operation from denying it.
+    #[tokio::test]
+    async fn setting_and_clearing_a_user_right_round_trips() {
+        let s = boot_with_control_tag(true, "rights-set").await;
+        let dir = install_rights(&s, "set");
+
+        let (st, v) = post(&s, RIGHTS, json!({ "cap": "fs.read", "value": "always" })).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(row(&v, "fs.read")["user"], "always");
+        assert_eq!(row(&v, "fs.read")["effective"], "allow");
+
+        // It is on disk, not just in the reply.
+        let (_, again) = get(&s, RIGHTS).await;
+        assert_eq!(row(&again, "fs.read")["user"], "always");
+
+        let (st, v) = post(&s, RIGHTS, json!({ "cap": "fs.read", "value": "never" })).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(row(&v, "fs.read")["effective"], "deny");
+
+        // Absent value clears rather than denying: back to the default, not to "never".
+        let (st, v) = post(&s, RIGHTS, json!({ "cap": "fs.read" })).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(row(&v, "fs.read")["user"], "ask");
+        assert_eq!(row(&v, "fs.read")["effective"], "ask");
+
+        // An accepted capability is still refusable, and a *declined* one cannot be
+        // granted by writing "always" — the install-time answer is the ceiling.
+        let (st, v) = post(
+            &s,
+            RIGHTS,
+            json!({ "cap": "skills.materialize", "value": "always" }),
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(
+            row(&v, "skills.materialize")["effective"],
+            "deny",
+            "a right the user never accepted cannot be turned on from the page"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The workspace column is a separate scope: it is only read when a workspace is named,
+    /// and it does not disturb the user-level answer.
+    #[tokio::test]
+    async fn a_workspace_override_is_scoped_to_that_workspace() {
+        let s = boot_with_control_tag(true, "rights-ws").await;
+        let dir = install_rights(&s, "ws");
+
+        let (st, v) = post(
+            &s,
+            RIGHTS,
+            json!({ "cap": "workspace.read", "value": "always", "workspace": "proj-a" }),
+        )
+        .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["workspace"], "proj-a");
+        assert_eq!(row(&v, "workspace.read")["workspace"], "always");
+
+        // Another workspace does not inherit it, and neither does the unscoped page.
+        let (_, other) = get(&s, &format!("{RIGHTS}?workspace=proj-b")).await;
+        assert_eq!(row(&other, "workspace.read")["workspace"], Value::Null);
+        let (_, none) = get(&s, RIGHTS).await;
+        assert_eq!(row(&none, "workspace.read")["workspace"], Value::Null);
+
+        // And it reads back from disk under its own key.
+        let (_, back) = get(&s, &format!("{RIGHTS}?workspace=proj-a")).await;
+        assert_eq!(row(&back, "workspace.read")["workspace"], "always");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Profiles are named presets from the manifest; selecting one moves every row it
+    /// mentions, and only the names the module shipped are selectable.
+    #[tokio::test]
+    async fn a_profile_can_be_selected_and_dropped_but_never_invented() {
+        let s = boot_with_control_tag(true, "rights-profile").await;
+        let dir = install_rights(&s, "profile");
+
+        let (st, v) = post(&s, PROFILE, json!({ "profile": "High security" })).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["profile"], "High security");
+        assert_eq!(row(&v, "fs.read")["effective"], "allow");
+
+        // A name the manifest never declared is a client bug, not a silent no-op.
+        let (st, v) = post(&s, PROFILE, json!({ "profile": "Wide open" })).await;
+        assert_eq!(st, 400, "{v}");
+        let (_, still) = get(&s, RIGHTS).await;
+        assert_eq!(
+            still["profile"], "High security",
+            "the bad set changed nothing"
+        );
+
+        // Absent profile deselects.
+        let (st, v) = post(&s, PROFILE, json!({})).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["profile"], Value::Null);
+        assert_eq!(row(&v, "fs.read")["effective"], "ask");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A module the service does not know is a 404 on read *and* on write. Answering an
+    /// empty row list would read as "this module asks for nothing", and letting the write
+    /// through would persist a rights file a later install silently inherits.
+    #[tokio::test]
+    async fn an_unregistered_module_is_404_on_both_verbs_and_writes_nothing() {
+        let s = boot_with_control_tag(true, "rights-404").await;
+        let dir = install_rights(&s, "404");
+        const GHOST: &str = "/marketplace/modules/acme/avada-ghost/rights";
+
+        let (st, v) = get(&s, GHOST).await;
+        assert_eq!(st, 404, "{v}");
+        let (st, v) = post(&s, GHOST, json!({ "cap": "fs.read", "value": "always" })).await;
+        assert_eq!(st, 404, "{v}");
+        let (st, _) = post(
+            &s,
+            "/marketplace/modules/acme/avada-ghost/profile",
+            json!({ "profile": "High security" }),
+        )
+        .await;
+        assert_eq!(st, 404);
+        assert!(
+            !dir.join("modules").join("acme").exists() || {
+                let ghost = std::fs::read_dir(dir.join("modules").join("acme"))
+                    .map(|d| {
+                        d.filter_map(Result::ok)
+                            .any(|e| e.file_name().to_string_lossy().contains("ghost"))
+                    })
+                    .unwrap_or(false);
+                !ghost
+            },
+            "the refused write must not leave a file behind"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bodies a UI can get wrong: a missing field, a capability this build does not
+    /// know, and a value outside the four-state enum. All are 400s, not 500s and not
+    /// silent defaults — a permissions page that quietly reinterprets input is a hazard.
+    #[tokio::test]
+    async fn a_malformed_body_is_a_client_error_not_a_guess() {
+        let s = boot_with_control_tag(true, "rights-bad").await;
+        let dir = install_rights(&s, "bad");
+
+        for (body, want) in [
+            (json!({}), "missing cap"),
+            (json!({ "cap": "fs.teleport" }), "unknown capability"),
+            (
+                json!({ "cap": "fs.read", "value": "maybe" }),
+                "bad right value",
+            ),
+        ] {
+            let (st, v) = post(&s, RIGHTS, body.clone()).await;
+            assert_eq!(st, 400, "{body} → {v}");
+            let msg = v["error"].as_str().unwrap_or_default();
+            assert!(msg.contains(want), "{body} → {msg}");
+        }
+
+        // Nothing above touched the page.
+        let (_, v) = get(&s, RIGHTS).await;
+        assert_eq!(row(&v, "fs.read")["user"], "ask");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The four right values are the wire contract the marketplace module codes against.
+    #[tokio::test]
+    async fn every_right_value_survives_the_round_trip() {
+        let s = boot_with_control_tag(true, "rights-values").await;
+        let dir = install_rights(&s, "values");
+        for (wire, value) in [
+            ("never", RightValue::Never),
+            ("always", RightValue::Always),
+            ("workspace", RightValue::Workspace),
+            ("ask", RightValue::Ask),
+        ] {
+            let (st, v) = post(&s, RIGHTS, json!({ "cap": "fs.read", "value": wire })).await;
+            assert_eq!(st, 200, "{wire} → {v}");
+            assert_eq!(row(&v, "fs.read")["user"], wire);
+            assert_eq!(
+                serde_json::to_value(value).unwrap(),
+                json!(wire),
+                "the enum and the wire name agree"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ---- end track G11 rights
