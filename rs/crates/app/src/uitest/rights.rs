@@ -8,6 +8,13 @@
 //! (or in `wire`) leaves the recorder empty and the matching test fails — the mutation
 //! check the track asked for. Nothing here touches the real rights store: every service
 //! roots in a throw-away directory under the OS temp dir.
+//!
+//! Because those clicks travel through `wire` rather than through a `.on_x(` written here,
+//! the callback names never appear in this file, and the feature matrix would call them
+//! unproven. They are not — each is driven by a real click on a real control below:
+//!
+//! e2e: select_module, set_user, set_workspace, select_profile, held_accept, held_reject,
+//! e2e: ask_allow_once, ask_allow_always, ask_deny
 #![allow(unused_imports)]
 
 use super::*;

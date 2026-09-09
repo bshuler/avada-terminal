@@ -345,6 +345,14 @@ component CtxToggle inherits Rectangle {
         }
     }
     ta := TouchArea { clicked => { root.toggled(!root.on); } }
+    // The tick is drawn, not glyphed, and the label lives in a sibling Text, so without
+    // these a screen reader (and a test) sees an anonymous rectangle rather than a
+    // named, checkable row.
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { root.toggled(!root.on); }
 }
 
 // A floating submenu card (the flyout container).
