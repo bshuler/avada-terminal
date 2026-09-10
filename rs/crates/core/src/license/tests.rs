@@ -563,6 +563,128 @@ async fn a_removed_license_is_gone_and_the_gate_closes() {
     assert!(matches!(w.gate("acme/pro").await, Gate::Refuse(_)));
 }
 
+/// Removing a licence tells whoever is remembering decisions about it.
+///
+/// The gate the module host reads is a *cache* --- it has to be, because the host decides
+/// whether to spawn on a thread that cannot await. So the store going empty is invisible to
+/// it until something says so. Without this hook the only thing that ever said so was an
+/// hourly sweep, and a module the user had just unlicensed kept running until the next tick.
+#[tokio::test]
+async fn removing_a_license_tells_the_things_that_cached_the_decision() {
+    let w = world();
+    let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    w.service
+        .on_removed(move |p| sink.lock().unwrap().push(p.to_string()));
+
+    w.install(&Grant::for_product("acme/pro")).await;
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "installing is not a removal"
+    );
+
+    assert!(w.service.revoke_local("acme/pro").unwrap());
+    assert_eq!(&*seen.lock().unwrap(), &["acme/pro".to_string()]);
+
+    // A removal that removed nothing is not news, or every stray DELETE would invalidate a
+    // cache that was right.
+    assert!(!w.service.revoke_local("acme/pro").unwrap());
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+/// The hook, wired the way the app wires it: straight into [`CachedGate::forget`].
+#[tokio::test]
+async fn a_cached_gate_wired_to_the_hook_stops_saying_run() {
+    use crate::license::CachedGate;
+    use crate::module::Licensing;
+
+    // One `Arc<LicenseService>` shared by the gate and the caller, which is the app's own
+    // shape: `module_runtime` builds the service, wraps it in a `CachedGate`, and the
+    // control plane removes licences through the same handle.
+    let dial = Dial::new(T0);
+    let issuer = Arc::new(StubIssuer::with_clock("https://issuer.test", dial.clock()));
+    let http: Arc<dyn LicenseHttp> = issuer.clone();
+    let service = Arc::new(LicenseService::new(
+        Arc::new(MemoryLicenseStore::new()),
+        http,
+        dial.clock(),
+    ));
+    let token = LicenseToken::new(issuer.issue(&Grant::for_product("acme/pro")).unwrap());
+    service.install_token(token, None).await.unwrap();
+
+    let gate = CachedGate::new(service.clone());
+    // `Weak`, not `Arc`: the gate holds the service, so a strong capture here would close a
+    // cycle and neither would ever be dropped.
+    let weak = Arc::downgrade(&gate);
+    service.on_removed(move |p| {
+        if let Some(g) = weak.upgrade() {
+            g.forget(p);
+        }
+    });
+
+    assert_eq!(gate.refresh("acme/pro", 1).await, Gate::Run);
+    assert_eq!(
+        gate.gate(&"acme/pro".parse().unwrap(), 1),
+        Gate::Run,
+        "the cache is what the module host reads"
+    );
+
+    assert!(service.revoke_local("acme/pro").unwrap());
+    assert_eq!(gate.decided("acme/pro", 1), None, "the entry must be gone");
+    // And what it answers instead names its own cause rather than reading as a licence
+    // problem --- there is no licence any more to have a problem with.
+    assert!(matches!(
+        gate.gate(&"acme/pro".parse().unwrap(), 1),
+        Gate::Refuse(_)
+    ));
+}
+
+/// The removal the hook cannot see: a *second* service over the same store.
+///
+/// This is the app's real shape, not a hypothetical. `module_runtime` builds one
+/// `LicenseService` for the module host, and `control_host` builds another over the same
+/// directory for the control routes --- so `DELETE /license/{owner}/{repo}`, the path a human
+/// actually takes, revokes through an instance that has never heard of the first one's hooks.
+/// The same is true of a removal from another process entirely. So the cached `Run` has to
+/// die from the store going empty, not only from being told.
+#[tokio::test]
+async fn a_cached_run_dies_when_another_service_removes_the_licence() {
+    use crate::license::CachedGate;
+    use crate::module::Licensing;
+
+    let dial = Dial::new(T0);
+    let issuer = Arc::new(StubIssuer::with_clock("https://issuer.test", dial.clock()));
+    let http: Arc<dyn LicenseHttp> = issuer.clone();
+    let store = Arc::new(MemoryLicenseStore::new());
+
+    let mine = Arc::new(LicenseService::new(
+        store.clone(),
+        http.clone(),
+        dial.clock(),
+    ));
+    let token = LicenseToken::new(issuer.issue(&Grant::for_product("acme/pro")).unwrap());
+    mine.install_token(token, None).await.unwrap();
+
+    let gate = CachedGate::new(mine.clone());
+    assert_eq!(gate.refresh("acme/pro", 1).await, Gate::Run);
+
+    // No hook, no shared handle --- only the store in common.
+    let theirs = LicenseService::new(store, http, dial.clock());
+    assert!(theirs.revoke_local("acme/pro").unwrap());
+
+    let answer = gate.gate(&"acme/pro".parse().unwrap(), 1);
+    let Gate::Refuse(why) = answer else {
+        panic!("a cached Run outlived its licence: {answer:?}");
+    };
+    // And it says which of the two refusals this is, because they send a reader to different
+    // places: "removed" points at the removal, "no decision" at the refresh path.
+    assert!(why.contains("removed after this decision"), "{why}");
+
+    // The entry is still cached --- nothing forgot it --- which is the point: the store check
+    // is what makes it harmless.
+    assert_eq!(gate.decided("acme/pro", 1), Some(Gate::Run));
+}
+
 #[tokio::test]
 async fn a_license_stored_on_disk_survives_a_restart() {
     let dir = scratch("restart");

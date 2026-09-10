@@ -36,6 +36,18 @@ fn undecided(product: &str) -> Gate {
     ))
 }
 
+/// What a decision outlived by its own licence answers.
+///
+/// Distinct from [`undecided`] because the cause is: there *was* a decision, and the licence
+/// it was decided from is gone. "Nothing has refreshed it" would send the reader looking for
+/// a bug in the refresh path instead of at the removal they just performed.
+fn removed(product: &str) -> Gate {
+    Gate::Refuse(format!(
+        "no license for {product} on this machine; it was removed after this decision was \
+         cached"
+    ))
+}
+
 impl CachedGate {
     /// A gate with nothing decided yet. Every commercial module is refused until
     /// [`refresh`](Self::refresh) has been called for it.
@@ -75,15 +87,36 @@ impl CachedGate {
             .get(&(product.to_string(), major))
             .cloned()
     }
+
+    /// Is the licence behind a cached decision definitely absent from the store?
+    ///
+    /// `false` on a read error, deliberately. A store that cannot be read says nothing about
+    /// whether a licence exists, and turning an unreadable directory into a refusal would
+    /// disable a paying customer's module over a transient failure --- exactly the shape of
+    /// outage the grace window exists to survive.
+    fn gone(&self, product: &str) -> bool {
+        matches!(self.service.store().load(product), Ok(None))
+    }
 }
 
 impl Licensing for CachedGate {
     fn gate(&self, product: &ModuleId, major: u64) -> Gate {
         let product = product.to_string();
-        lock(&self.decided)
-            .get(&(product.clone(), major))
-            .cloned()
-            .unwrap_or_else(|| undecided(&product))
+        let Some(decided) = lock(&self.decided).get(&(product.clone(), major)).cloned() else {
+            return undecided(&product);
+        };
+        // A cached `Run` must not outlive the licence it was decided from. In-process,
+        // `LicenseService::on_removed` calls `forget` the moment a licence goes --- but the
+        // CLI removes licences in a *different process*, and the app runs a second
+        // `LicenseService` over the same directory for its control routes, so neither of
+        // those removals can reach this map. Without the check below the module the human
+        // just unlicensed keeps running until the next hourly sweep.
+        //
+        // The cost is one small read at spawn time, which is the only time this is asked.
+        if !matches!(decided, Gate::Refuse(_)) && self.gone(&product) {
+            return removed(&product);
+        }
+        decided
     }
 }
 

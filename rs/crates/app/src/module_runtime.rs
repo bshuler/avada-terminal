@@ -287,6 +287,17 @@ impl ModuleRuntime {
             gate: CachedGate::new(service.clone()),
             service,
         });
+        // A licence the human deletes has to stop the module now, not at the next sweep.
+        // `CachedGate` is a cache by necessity --- the host decides whether to spawn on a
+        // thread that cannot await --- so removing the licence from the store is invisible
+        // to it unless the service says so. `Weak`, because the gate already holds the
+        // service and a strong capture here would close a cycle that never drops.
+        let weak = Arc::downgrade(&licenses.gate);
+        licenses.service.on_removed(move |product| {
+            if let Some(gate) = weak.upgrade() {
+                gate.forget(product);
+            }
+        });
         host.set_licensing(licenses.gate.clone());
 
         // Subscribe BEFORE anything spawns, or the first rail registration — which arrives

@@ -482,7 +482,18 @@ pub struct LicenseService {
     verifier: Verifier,
     issuers: RwLock<HashMap<String, String>>,
     flows: Mutex<HashMap<String, PendingFlow>>,
+    removed: RwLock<Vec<RemovalHook>>,
 }
+
+/// Told, by product id, that a licence has just been removed from this machine.
+///
+/// The one thing a store cannot say for itself. Anything that *remembers* a decision --- and
+/// the whole point of [`crate::license::CachedGate`] is that it remembers, because the module
+/// host is on a thread that cannot await --- would otherwise keep answering `Run` for a
+/// licence the human has already deleted, until whatever re-reads the disk next happens to
+/// run. Here that is an hourly sweep, so without this the module the user just unlicensed
+/// keeps running for up to an hour.
+pub type RemovalHook = Box<dyn Fn(&str) + Send + Sync>;
 
 impl LicenseService {
     /// A service over these parts.
@@ -494,7 +505,19 @@ impl LicenseService {
             verifier: Verifier::default(),
             issuers: RwLock::new(HashMap::new()),
             flows: Mutex::new(HashMap::new()),
+            removed: RwLock::new(Vec::new()),
         }
+    }
+
+    /// Be told when a licence is removed from this machine.
+    ///
+    /// Hooks fire in registration order, inside [`revoke_local`](Self::revoke_local) and only
+    /// when a licence was actually there --- a removal that removed nothing is not news. Keep
+    /// them short and non-blocking: `revoke_local` is called from a request handler, and a
+    /// hook that captures an `Arc` back to something holding this service should capture a
+    /// `Weak` instead, or the two will keep each other alive forever.
+    pub fn on_removed(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        self.removed.write().unwrap().push(Box::new(hook));
     }
 
     /// The production wiring rooted anywhere: the file store under `modules_root`, reqwest,
@@ -799,10 +822,17 @@ impl LicenseService {
     }
 
     /// Forget a product's license. `Ok(false)` when there was none.
+    ///
+    /// Fires every [`on_removed`](Self::on_removed) hook, in order, when there was one --- so
+    /// a cache of decisions can drop the product rather than keep saying `Run` for a licence
+    /// that is gone.
     pub fn revoke_local(&self, product: &str) -> Result<bool, LicenseError> {
         let removed = self.store.remove(product)?;
         if removed {
             tracing::info!(product, "license removed");
+            for hook in self.removed.read().unwrap().iter() {
+                hook(product);
+            }
         }
         Ok(removed)
     }
