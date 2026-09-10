@@ -390,7 +390,7 @@ disappears; it does not check the prose, which is a judgement.
 | Talk — recognising a pane's transcript | `partial` | `core/src/speech/tailer.rs` understands `ClaudeJsonl` and `CursorJsonl` only. A pane running anything else is silently mute. |
 | Dictation — the microphone itself | `partial` | The whisper path is proven against a real 120s WAV (`core/src/stt/dictation.rs`, `#[ignore]`d). The cpal capture seam is not. |
 | Live typing of a transcript | `unproven` | `df6e148` types the transcript into the pane as you speak. Unit-tested; never run against a real microphone. |
-| `keepAlive` setting | `partial` | Its only effect is inline in the quit path at `app/src/main.rs`. Covered at the route layer; no seam to drive. |
+| `keepAlive` setting | `partial` | The decision is a seam now (`main.rs::quit_action`, covered); the effects it picks between still only run while a real GUI is quitting. |
 | Windows keyboard behaviour | `unproven` | `keybindings.rs` puts Windows on the Linux branch. Coverage by construction only — no live Windows run has happened. |
 | macOS Finder drag-and-drop | `unproven` | The Linux/Xvfb harness proves XDND. The macOS equivalent has never been exercised. |
 

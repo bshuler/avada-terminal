@@ -707,20 +707,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //  * In-process backend (either way) → the PTYs are our children and die with us; the
     //    keep-alive preference is INERT, and `kill_all` is the historical clean teardown.
     let keep_alive = prefs::load().keep_alive;
-    if mgr.is_daemon() {
-        if keep_alive || GUI_RESTARTING.load(std::sync::atomic::Ordering::SeqCst) {
-            tracing::debug!(
-                "quit: keep-alive ON (or GUI restart) — leaving the daemon + sessions running"
-            );
-        } else {
+    match quit_action(
+        mgr.is_daemon(),
+        keep_alive,
+        GUI_RESTARTING.load(std::sync::atomic::Ordering::SeqCst),
+    ) {
+        QuitAction::LeaveRunning => tracing::debug!(
+            "quit: keep-alive ON (or GUI restart) — leaving the daemon + sessions running"
+        ),
+        QuitAction::ShutdownDaemon => {
             tracing::debug!("quit: keep-alive OFF — shutting the daemon down");
             mgr.shutdown_daemon();
         }
-    } else {
-        // In-process: keep-alive can't apply (no out-of-process daemon); kill our children.
-        mgr.kill_all();
+        QuitAction::KillChildren => mgr.kill_all(),
     }
     Ok(())
+}
+
+/// What quitting should do to the terminals this GUI was showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuitAction {
+    /// Walk away. The daemon and its sessions outlive us, and the next launch re-attaches.
+    LeaveRunning,
+    /// Ask the daemon to kill its sessions and exit, so an explicit quit leaves nothing.
+    ShutdownDaemon,
+    /// No daemon: the ptys are our own children and want the historical clean teardown.
+    KillChildren,
+}
+
+/// Decide [`QuitAction`] from the three facts that bear on it.
+///
+/// Lifted out of the quit path so it can be tested at all. The effects it chooses between —
+/// killing a process tree, telling a daemon to exit — only happen while a real GUI is shutting
+/// down, which is exactly the moment no test can be present for; the *decision*, meanwhile, is
+/// three booleans and has been wrong before.
+///
+/// `restarting` is the subtle one. `keep_alive = false` means "don't leave terminals running
+/// after I **quit**", and a GUI restart is not a quit: the whole point of one is that the panes
+/// survive while a new build re-attaches to them. So a restart overrides the preference rather
+/// than obeying it. `keep_alive` is inert without a daemon, because there is nothing
+/// out-of-process to keep alive.
+#[tracing::instrument(level = "debug", ret)]
+pub(crate) fn quit_action(is_daemon: bool, keep_alive: bool, restarting: bool) -> QuitAction {
+    match (is_daemon, keep_alive || restarting) {
+        (false, _) => QuitAction::KillChildren,
+        (true, true) => QuitAction::LeaveRunning,
+        (true, false) => QuitAction::ShutdownDaemon,
+    }
+}
+
+#[cfg(test)]
+mod quit_action_tests {
+    use super::{quit_action, QuitAction};
+
+    #[test]
+    fn a_restart_never_takes_the_terminals_down_with_it() {
+        // The case this seam exists for: `keep_alive = false` plus a restart used to be one
+        // `||` away from killing every pane the restart was supposed to preserve.
+        assert_eq!(
+            quit_action(true, false, true),
+            QuitAction::LeaveRunning,
+            "a GUI restart is not a quit"
+        );
+        assert_eq!(quit_action(true, true, true), QuitAction::LeaveRunning);
+    }
+
+    #[test]
+    fn an_explicit_quit_obeys_the_preference() {
+        assert_eq!(quit_action(true, true, false), QuitAction::LeaveRunning);
+        assert_eq!(quit_action(true, false, false), QuitAction::ShutdownDaemon);
+    }
+
+    #[test]
+    fn without_a_daemon_the_preference_is_inert() {
+        // Nothing out-of-process to keep alive: the ptys are our children either way, and a
+        // `LeaveRunning` here would orphan them rather than persist them.
+        for keep_alive in [true, false] {
+            for restarting in [true, false] {
+                assert_eq!(
+                    quit_action(false, keep_alive, restarting),
+                    QuitAction::KillChildren,
+                    "keep_alive={keep_alive} restarting={restarting}"
+                );
+            }
+        }
+    }
 }
 
 /// Seed a richer workspace (2 tabs, several panes, non-default layouts) so a
