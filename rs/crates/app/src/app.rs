@@ -939,9 +939,15 @@ impl App {
                     self.modules.forget_pane(&pane_id);
                     return;
                 }
-                // A failed write means the pty is gone; the pane's own exit handling will
-                // notice and tear it down, so there is nothing useful to do here.
-                let _ = self.mgr.write(&uid, &text);
+                // Routed through `pane_write` like every other write to a live pane. The
+                // comment that used to sit here said a failed write needs no handling
+                // because "the pane's own exit handling will notice and tear it down" —
+                // which is true of a process that exits, and false of the case that
+                // actually bit: when the session daemon dies it takes the exit
+                // notifications with it, so nothing ever notices. A module then writes
+                // into a pane that still looks alive, gets no error, and the human sees a
+                // module that silently does nothing.
+                crate::state::pane_write(&self.mgr, &uid, &text, "module-input");
             }
         }
     }
