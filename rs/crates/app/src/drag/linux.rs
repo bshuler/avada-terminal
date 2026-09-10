@@ -44,7 +44,7 @@ struct X11 {
     root: u32,
 }
 
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 fn x11() -> Option<&'static X11> {
     static X: OnceLock<Option<X11>> = OnceLock::new();
     X.get_or_init(|| {
@@ -59,7 +59,7 @@ fn x11() -> Option<&'static X11> {
 pub struct PlatformPointer;
 
 impl super::GlobalPointer for PlatformPointer {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip_all)]
     fn poll(&self) -> Option<(slint::PhysicalPosition, bool)> {
         if is_wayland() {
             // Nothing tracked yet (no pointer event ever hit our windows) → the pump
@@ -81,7 +81,7 @@ impl super::GlobalPointer for PlatformPointer {
         }
     }
 
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip_all)]
     fn supports_cross_window(&self) -> bool {
         !is_wayland()
     }
@@ -127,7 +127,7 @@ const GHOST_W: u16 = 200;
 const GHOST_H: u16 = 44;
 
 impl Ghost {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new() -> Ghost {
         Ghost {
             win: Cell::new(None),
@@ -136,7 +136,7 @@ impl Ghost {
     }
 
     /// Move + show, offset a little below/right of the cursor hotspot (root coords).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn follow(&self, p: (i32, i32)) {
         let Some(x) = x11() else { return };
         let id = match self.win.get() {
@@ -176,7 +176,7 @@ impl Ghost {
         let _ = x.conn.flush();
     }
 
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn hide(&self) {
         let Some(x) = x11() else { return };
         if self.mapped.replace(false) {

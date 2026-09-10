@@ -80,7 +80,7 @@ impl PointerTrack {
 }
 
 /// Snapshot of the tracked pointer state (for `drag/linux.rs`).
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn pointer_track() -> PointerTrack {
     POINTER.with(|p| p.get())
 }
@@ -99,7 +99,7 @@ pub(crate) fn is_wayland() -> bool {
 
 /// Run `f` against the winit window `raw` encodes; `None` for 0 / unknown / dead
 /// handles (the contractual no-op cases).
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn with_window<T>(raw: isize, f: impl FnOnce(&WinitWindow) -> T) -> Option<T> {
     if raw == 0 {
         return None;
@@ -115,7 +115,7 @@ pub(crate) fn with_window<T>(raw: isize, f: impl FnOnce(&WinitWindow) -> T) -> O
 
 /// Run `f` on every live registered window (cursor overrides are global on Win32; the
 /// closest Linux equivalent is applying to all our windows).
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 fn for_each_window(f: impl Fn(&WinitWindow)) {
     REGISTRY.with(|r| {
         for e in r.borrow().iter() {
@@ -136,7 +136,7 @@ pub struct SavedPlacement {
 /// Native handle of a Slint window, encoded as the winit window's allocation address.
 /// `0` until winit realizes the window (callers retry each tick). First success
 /// registers the window and installs the pointer-tracking event hook.
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn hwnd_of(win: &slint::Window) -> isize {
     // `winit_window()` resolves immediately once the window exists; a single poll with a
     // no-op waker turns the async accessor into the sync probe this call site needs
@@ -352,7 +352,7 @@ pub fn close(_raw: isize) {}
 
 /// Cover the current monitor borderlessly. winit remembers the floating geometry and
 /// restores it on exit; we only need to carry the maximized flag across.
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn enter_fullscreen(raw: isize) -> Option<SavedPlacement> {
     with_window(raw, |w| {
         let maximized = w.is_maximized();
@@ -362,7 +362,7 @@ pub fn enter_fullscreen(raw: isize) -> Option<SavedPlacement> {
 }
 
 /// Restore the placement captured by [`enter_fullscreen`].
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn exit_fullscreen(raw: isize, saved: SavedPlacement) {
     with_window(raw, |w| {
         w.set_fullscreen(None);

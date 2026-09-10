@@ -58,6 +58,7 @@ use avada_core::license::{CachedGate, Gate, LicenseService};
 use avada_core::marketplace::state_dir_beside;
 use avada_core::marketplace::workspace::WorkspaceStates;
 use avada_core::module::grid::{GridKey, GridResize};
+use avada_core::module::WorkspaceInfo;
 use avada_core::module::{
     DeclaredOnly, Gesture, Host, HostConfig, HostEvent, RailEvent, RowActivate,
 };
@@ -235,21 +236,36 @@ pub struct ModuleRuntime {
 
 impl ModuleRuntime {
     /// The production runtime: the install store under the app-support modules root, the
-    /// licence gate beside it, and every enabled module started.
-    pub fn new() -> ModuleRuntime {
+    /// licence gate beside it, and every module enabled in `workspace` started.
+    ///
+    /// `workspace` is the key of the workspace file this launch named (see
+    /// `avada_core::workspace::launch::launch_workspace_key`); `None` — a bare launch, an
+    /// inline `-c` launch — starts whatever the lockfile says is on by default. A module
+    /// the human disabled in a workspace is the one thing a per-workspace choice exists to
+    /// stop, so the key has to reach here or the marketplace's disable is decorative.
+    ///
+    /// `info` is what every module is told about the workspace: it goes out in the hello
+    /// and in each `module.activate`, and its `root` scopes `host.fs.*`. Without it a
+    /// file browser has nothing to browse (see
+    /// `avada_core::workspace::launch::module_workspace`).
+    pub fn new(workspace: Option<&str>, info: WorkspaceInfo) -> ModuleRuntime {
         let root = InstallPaths::host().root().to_path_buf();
-        ModuleRuntime::under(&root, None)
+        ModuleRuntime::under(&root, workspace, info)
     }
 
     /// The same runtime rooted at `modules_root`, with `workspace` deciding which modules
-    /// are disabled. Tests root it in a temp dir so nothing under the real app-support
-    /// directory is touched.
+    /// are disabled and `info` describing the workspace to them. Tests root it in a temp
+    /// dir so nothing under the real app-support directory is touched.
     ///
     /// A store that will not open leaves a runtime with no host: [`ModuleRuntime::sync`]
     /// then does nothing, which is exactly the behaviour of a build with no modules
     /// installed. That is a better failure than taking the GUI down over a directory the
     /// user can delete.
-    pub fn under(modules_root: &Path, workspace: Option<&str>) -> ModuleRuntime {
+    pub fn under(
+        modules_root: &Path,
+        workspace: Option<&str>,
+        info: WorkspaceInfo,
+    ) -> ModuleRuntime {
         let gate = Arc::new(DeclaredOnly::new());
         let paths = InstallPaths::under(modules_root);
         let keys: Arc<dyn KeyStore> = Arc::new(FileKeyStore::new(paths.keys_dir()));
@@ -281,7 +297,13 @@ impl ModuleRuntime {
             .parent()
             .unwrap_or(modules_root)
             .join("module-data");
-        let host = Host::new(HostConfig::new(data_root), gate.clone());
+        // The workspace goes into the host's config rather than into each activate call:
+        // the hello is sent from inside `spawn`, before any activate, and a module that
+        // reads its root from the hello (as the file browser does) would otherwise start
+        // on "no workspace" and stay there.
+        let mut config = HostConfig::new(data_root);
+        config.workspace = Some(info);
+        let host = Host::new(config, gate.clone());
         let service = Arc::new(LicenseService::under(modules_root));
         let licenses = Arc::new(Licenses {
             gate: CachedGate::new(service.clone()),
@@ -637,8 +659,17 @@ impl ModuleRuntime {
 }
 
 impl Default for ModuleRuntime {
+    /// A bare launch in the process's own directory: no workspace key, and the modules
+    /// see the directory the process started in.
     fn default() -> Self {
-        ModuleRuntime::new()
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string());
+        let argv: Vec<String> = std::env::args().collect();
+        ModuleRuntime::new(
+            None,
+            avada_core::workspace::launch::module_workspace(&argv, &cwd, None),
+        )
     }
 }
 
@@ -985,6 +1016,27 @@ label = "Tree"
 
     fn id(s: &str) -> ModuleId {
         ModuleId::new(s).unwrap()
+    }
+
+    /// The workspace handed to `new`/`under` has to reach the host's config, because
+    /// that is where the hello and every `activate(.., None)` read it from. A runtime
+    /// that keeps it anywhere else leaves modules with "no workspace".
+    #[test]
+    fn the_host_is_told_the_workspace_root() {
+        let root = scratch("ws-root");
+        drop(store_with(&root, &[]));
+        let info = WorkspaceInfo {
+            id: "dev".to_string(),
+            name: "Dev".to_string(),
+            root: Some("/somewhere/project".to_string()),
+        };
+        let rt = ModuleRuntime::under(&root, Some("dev"), info);
+        let host = rt.host.as_ref().expect("a store that opens gives a host");
+        assert_eq!(
+            host.workspace_root().as_deref(),
+            Some(Path::new("/somewhere/project"))
+        );
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]

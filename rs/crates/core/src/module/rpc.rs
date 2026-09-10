@@ -796,6 +796,14 @@ impl Dispatcher {
             entries.push((ent.file_name().to_string_lossy().into_owned(), kind));
         }
         entries.sort_by(|a, b| a.0.cmp(&b.0));
+        // The one line that proves a module saw the workspace: which directory it listed
+        // and how much was there. The GUI harness reads it back at `debug`.
+        tracing::debug!(
+            module = %self.module,
+            path = %dir.display(),
+            entries = entries.len(),
+            "host.fs.list"
+        );
         let entries: Vec<Value> = entries
             .into_iter()
             .map(|(name, kind)| json!({ "name": name, "kind": kind }))

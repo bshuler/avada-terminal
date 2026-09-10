@@ -467,7 +467,19 @@ lands it between waves.
 5. Empirical check on the isolated sandbox bundle (`/tmp/hphr/HP.app`, bundle id
    `to.avada.hotreload`, `HOME=/tmp/hphr`; ids change with the rename) — never the
    user's real install, never `/Applications`, never focus-stealing input. From Wave 2 the
-   check is the module round trip in §5 Wave 2 exit, recorded as a screenshot in `shots/`.
+   check is the module round trip in §5 Wave 2 exit, recorded as a screenshot in `shots/`:
+   `scripts/module-roundtrip-demo.sh` runs it headless on this machine (install from a
+   bare mirror, build, enable, disable; prints `ROUNDTRIP_DEMO_GREEN`), and
+   `scripts/gui-harness/ptah.sh roundtrip` photographs it in the container on a box with
+   no seat (`shots/rt-1-fresh.png`, `rt-2-installed.png`, `rt-2b-files-open.png`,
+   `rt-3-disabled.png`, plus `rt-report.txt`; prints `ROUNDTRIP_SHOT_GREEN`). "File
+   browser works" is proven two ways in that run: the rail click changes the panel's
+   pixels, and the module's `host.fs.list` debug line names the project root the first
+   pane sits under with the expected entry count. The root reaches the module through the
+   host hello (`HostConfig.workspace`, computed by `workspace::launch::module_workspace`:
+   the launch file's key and name, root = the `.avada`/`.git` project above the first
+   pane's cwd, else that directory, else the process cwd). The photographed run relaunches
+   the window between steps — see the launch-time rule under §10.
 6. Secrets: no token, HMAC key or license key is logged, passed as an argument, or written
    into a working tree, including tests. The keyring is mocked in tests.
 7. `cargo fmt --check` and `cargo clippy -D warnings` on the files the agent owns.
@@ -521,6 +533,13 @@ URL.
   this.
 - **First-party modules in separate repos** means the free edition cannot ship them
   prebuilt; that is the decision, not an oversight.
+- **Modules are chosen at launch, not live.** The app reads the workspace's module state
+  once, when it starts (`ModuleRuntime::installs_to_start`), keyed by the stem of the
+  workspace file it was launched with (`dev.avada` → `dev`; a launch with no positional
+  file, or a stem the marketplace refuses as a key, uses the lockfile defaults). An enable
+  or disable made through `/marketplace/modules/{o}/{r}/enable|disable` is therefore
+  honoured at the NEXT launch: the rail entry does not appear or vanish in the running
+  window. Live start/stop on enable/disable is a backlog item, not a bug in the state.
 - The `permissions/` directory name collides with the rights concept; the new code is
   `rights/` and the OS-probing directory keeps its name until the rename wave, where it
   becomes `os_permissions/`.

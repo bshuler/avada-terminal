@@ -81,6 +81,8 @@ pub mod transport;
 /// should not depend on the module SDK — spells `files.reveal` and friends exactly once,
 /// in the crate that defines them.
 pub use avada_module_sdk::contract::methods;
+/// What a module is told about the workspace it runs in (`hello.workspace`, `module.activate`).
+pub use avada_module_sdk::contract::WorkspaceInfo;
 
 /// The tier-5 cell-grid vocabulary, re-exported for the same reason as [`methods`]: the app
 /// paints these frames and routes these keystrokes, and it reaches the SDK only through

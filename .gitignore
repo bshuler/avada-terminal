@@ -23,6 +23,9 @@ bench/results/
 # GUI harness photographs (scripts/gui-harness/ptah.sh shot) — evidence for a
 # rendering change, regenerated on demand, never worth a commit
 shots/
+# bare git mirrors the harness installs modules from (scripts/gui-harness/ptah.sh
+# roundtrip) — a clone of a public repo, remade on demand
+fixtures/
 
 # Rust build output (native rewrite under rs/ and spikes)
 target/

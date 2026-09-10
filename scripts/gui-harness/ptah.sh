@@ -6,7 +6,8 @@
 #   scripts/gui-harness/ptah.sh build   # cargo build --release inside it
 #   scripts/gui-harness/ptah.sh test    # run gui-test.sh inside it
 #   scripts/gui-harness/ptah.sh shot    # photograph the window, fetch the PNGs
-#   scripts/gui-harness/ptah.sh all     # all four, in order
+#   scripts/gui-harness/ptah.sh roundtrip # install/enable/disable the Files module, photographed
+#   scripts/gui-harness/ptah.sh all     # sync, image, build, test, in order
 #
 # Why remote and not this Mac: the harness drives a GUI with synthetic mouse and
 # keyboard events. On the local machine those land on whatever the human is
@@ -44,11 +45,14 @@ docker_run() {
 cmd_sync() {
     note "syncing $REPO_ROOT -> $HOST:$REMOTE"
     rsh "mkdir -p '$REMOTE'"
+    # shots/ is an output the container writes as root; pushing our copy back into it
+    # is both pointless and a permission error.
     rsync -a --delete \
         --exclude '.git/' \
         --exclude 'target/' \
         --exclude 'rs/packaging/out/' \
         --exclude 'node_modules/' \
+        --exclude 'shots/' \
         "$REPO_ROOT/" "$HOST:$REMOTE/"
 }
 
@@ -80,12 +84,41 @@ cmd_shot() {
     ls -1 "$dest"
 }
 
+# The §7.5 module round trip (docs/modules-fanout-plan.md), photographed. The module
+# is installed from a bare mirror under fixtures/ (gitignored; rsync ships it) so the
+# container never needs GitHub for the module itself. AVADA_FILES_SRC names a local
+# checkout to mirror; otherwise the mirror is cloned from GitHub once and kept.
+cmd_roundtrip() {
+    local mirror="$REPO_ROOT/fixtures/bshuler/avada-files.git"
+    if [[ ! -d "$mirror" ]]; then
+        note "mirroring bshuler/avada-files -> $mirror"
+        mkdir -p "$(dirname "$mirror")"
+        git clone -q --bare "${AVADA_FILES_SRC:-https://github.com/bshuler/avada-files}" "$mirror"
+    fi
+    cmd_sync
+    # Rebuild every time: the binary lives on the target volume, and a round trip run on
+    # a stale one photographs last week's app with this week's checks. Incremental, so
+    # an unchanged tree costs seconds.
+    cmd_build
+    note "module round trip inside $IMAGE"
+    # `set -e` is on: keep a failed run's pictures reachable before reporting it.
+    local rc=0
+    docker_run bash /work/scripts/gui-harness/in-container.sh roundtrip /work/shots || rc=$?
+    local dest="${AVADA_SHOT_DIR:-$REPO_ROOT/shots}"
+    mkdir -p "$dest"
+    note "fetching PNGs + report -> $dest"
+    rsync -a "$HOST:$REMOTE/shots/" "$dest/"
+    ls -1 "$dest" | grep '^rt-'
+    return $rc
+}
+
 case "${1:-all}" in
     sync)  cmd_sync ;;
     image) cmd_image ;;
     build) cmd_build ;;
     test)  cmd_test ;;
     shot)  cmd_shot ;;
+    roundtrip) cmd_roundtrip ;;
     all)   cmd_sync; cmd_image; cmd_build; cmd_test ;;
-    *) echo "usage: ptah.sh [sync|image|build|test|shot|all]" >&2; exit 2 ;;
+    *) echo "usage: ptah.sh [sync|image|build|test|shot|roundtrip|all]" >&2; exit 2 ;;
 esac

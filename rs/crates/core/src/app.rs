@@ -39,6 +39,20 @@ struct MetaUpdate {
     pairs: Vec<(String, String)>,
 }
 
+/// Serve the marketplace and licence routes over the host's modules root. A marketplace that
+/// cannot open (an unreadable key directory, say) is logged and left 503, as the GUI does.
+fn install_module_services(shared: &Arc<Shared>) {
+    use crate::install::InstallPaths;
+    use crate::license::LicenseService;
+    use crate::marketplace::Marketplace;
+    let root = InstallPaths::host().root().to_path_buf();
+    match Marketplace::open_under(&root, Default::default()) {
+        Ok(mp) => shared.install_marketplace(Arc::new(mp)),
+        Err(e) => tracing::warn!(error = %e, "marketplace unavailable; /marketplace stays 503"),
+    }
+    shared.install_license(Arc::new(LicenseService::under(&root)));
+}
+
 /// Run the headless daemon: wire the engine + control server + AI + single-instance gate, seed the
 /// launch workspace, and serve the loopback control API until the process exits.
 #[tracing::instrument(level = "debug", ret)]
@@ -71,6 +85,12 @@ pub async fn run(version: &str) -> io::Result<()> {
             settings.port.unwrap_or(0),
         );
     }
+
+    // The module services the GUI host also installs (`control_host::install_module_services`):
+    // without them every `/marketplace/...` and `/license/...` route answers 503, and the
+    // sandbox round trip in `scripts/module-roundtrip-demo.sh` has nothing to drive. Rights
+    // registration stays with the GUI, which owns the preferences page that reads it.
+    install_module_services(&shared);
 
     // Seed the read-model from the launch workspace (argv only — no last-session restore, so the
     // daemon starts clean and deterministic). Always leaves ≥1 window for open_pane to target.

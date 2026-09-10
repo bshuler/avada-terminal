@@ -18,11 +18,14 @@ case "${1:-}" in
     shot)
         exec /work/scripts/gui-harness/shot.sh "${@:2}"
         ;;
+    roundtrip)
+        exec /work/scripts/gui-harness/roundtrip-shot.sh "${@:2}"
+        ;;
     shell)
         exec bash
         ;;
     *)
-        echo "usage: in-container.sh [build|test|shot|shell]" >&2
+        echo "usage: in-container.sh [build|test|shot|roundtrip|shell]" >&2
         exit 2
         ;;
 esac

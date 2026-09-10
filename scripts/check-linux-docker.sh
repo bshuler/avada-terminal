@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run the core + module-sdk test suite and clippy on Linux, inside Docker, from
-# any machine. This is the local stand-in for the disabled GitHub test matrix.
+# Run the core + module-sdk test suite and clippy, plus clippy on the GUI crate,
+# on Linux inside Docker, from any machine. This is the local stand-in for the disabled GitHub test matrix.
 #
 # Usage:
 #   scripts/check-linux-docker.sh          # build, test, clippy; blocks until done
@@ -41,7 +41,14 @@ if [[ "${1:-}" != "--wait" ]]; then
       cargo clippy --all --all-targets -- -D warnings 2>&1 | grep -E "^(error|warning)" | cut -c1-200
       echo "CLIPPY_EXIT=${PIPESTATUS[0]}"
       echo "=== FMT"
-      cargo fmt --all -- --check >/dev/null 2>&1; echo "FMT_EXIT=$?"
+      cargo fmt --all -- --check 2>&1 | head -40; echo "FMT_EXIT=${PIPESTATUS[0]}"
+      echo "=== APP CLIPPY"
+      # The GUI crate is its own workspace and is what ships on Linux; the image
+      # already carries the Slint system libraries, so a compile check is cheap
+      # next to the tests above. Tests stay on the GUI harness (scripts/gui-harness).
+      cd /src/rs/crates/app
+      cargo clippy --all-targets -- -D warnings 2>&1 | grep -E "^(error|warning)" | cut -c1-200
+      echo "APP_CLIPPY_EXIT=${PIPESTATUS[0]}"
     ' >/dev/null
   echo "container $name started (image $image)"
 fi
@@ -50,7 +57,7 @@ code=$(docker wait "$name")
 docker logs "$name" 2>&1 | tail -80
 log=$(docker logs "$name" 2>&1)
 ok=1
-for key in CARGO_TEST_EXIT CLIPPY_EXIT FMT_EXIT; do
+for key in CARGO_TEST_EXIT CLIPPY_EXIT FMT_EXIT APP_CLIPPY_EXIT; do
   v=$(printf '%s\n' "$log" | grep -o "^$key=[0-9]*" | tail -1 | cut -d= -f2)
   [[ "$v" == "0" ]] || ok=0
 done

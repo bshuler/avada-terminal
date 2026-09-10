@@ -175,15 +175,35 @@ pub struct GitHubConfig {
     pub user_agent: String,
 }
 
+/// Environment variable that points the REST client somewhere other than GitHub (a
+/// loopback fake in the sandbox round trip). Empty or unset means `api.github.com`.
+pub const API_BASE_ENV: &str = "AVADA_GITHUB_API_BASE";
+/// Same for the device-flow web base.
+pub const WEB_BASE_ENV: &str = "AVADA_GITHUB_WEB_BASE";
+
 impl Default for GitHubConfig {
     fn default() -> Self {
         GitHubConfig {
-            api_base: "https://api.github.com".into(),
-            web_base: "https://github.com".into(),
+            api_base: env_base(API_BASE_ENV, "https://api.github.com"),
+            web_base: env_base(WEB_BASE_ENV, "https://github.com"),
             client_id: std::env::var("AVADA_GITHUB_CLIENT_ID").unwrap_or_default(),
             ttl: Duration::from_secs(5 * 60),
             user_agent: format!("avada-terminal/{}", env!("CARGO_PKG_VERSION")),
         }
+    }
+}
+
+/// `var` trimmed of whitespace and trailing slashes, or `fallback` when it is unset or
+/// blank. A trailing slash would double up against the `/repos/...` paths below.
+fn env_base(var: &str, fallback: &str) -> String {
+    base_or(std::env::var(var).ok().as_deref(), fallback)
+}
+
+/// The pure half of [`env_base`].
+fn base_or(raw: Option<&str>, fallback: &str) -> String {
+    match raw.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => v.trim_end_matches('/').to_string(),
+        None => fallback.to_string(),
     }
 }
 
@@ -525,6 +545,22 @@ impl GitHubApi for HttpGitHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_base_override_is_trimmed_and_blank_means_github() {
+        assert_eq!(
+            base_or(None, "https://api.github.com"),
+            "https://api.github.com"
+        );
+        assert_eq!(
+            base_or(Some("  "), "https://api.github.com"),
+            "https://api.github.com"
+        );
+        assert_eq!(
+            base_or(Some(" http://127.0.0.1:8123/ "), "https://api.github.com"),
+            "http://127.0.0.1:8123"
+        );
+    }
 
     #[test]
     fn form_encoding_escapes_what_github_needs() {

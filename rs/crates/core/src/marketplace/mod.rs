@@ -204,6 +204,32 @@ impl Default for MarketplaceOptions {
     }
 }
 
+/// Environment variable that points installs at a different git root, for offline and
+/// sandbox runs: `file:///some/dir` makes `owner/repo` clone from
+/// `/some/dir/owner/repo.git`. Empty or unset means GitHub.
+pub const GIT_BASE_ENV: &str = "AVADA_MARKETPLACE_GIT_BASE";
+
+impl MarketplaceOptions {
+    /// The defaults, with [`GIT_BASE_ENV`] honoured. `Default` stays pure so tests that
+    /// build options by hand are unaffected by the caller's environment; only the
+    /// production constructors ([`Marketplace::open_under`]) go through here.
+    pub fn from_env() -> Self {
+        let raw = std::env::var_os(GIT_BASE_ENV).map(|v| v.to_string_lossy().into_owned());
+        Self::with_git_base_override(raw.as_deref())
+    }
+
+    /// `from_env` with the variable's value passed in, so it can be tested without the
+    /// process-wide `set_var`. Blank means "no override"; a trailing slash is dropped
+    /// because the clone URL appends `/owner/repo.git`.
+    pub fn with_git_base_override(raw: Option<&str>) -> Self {
+        let mut o = MarketplaceOptions::default();
+        if let Some(base) = raw.map(str::trim).filter(|b| !b.is_empty()) {
+            o.git_base = base.trim_end_matches('/').to_string();
+        }
+        o
+    }
+}
+
 /// What a caller asks to install.
 #[derive(Debug, Clone)]
 pub struct InstallRequest {
@@ -507,7 +533,7 @@ impl Marketplace {
             store,
             api,
             tokens,
-            MarketplaceOptions::default(),
+            MarketplaceOptions::from_env(),
         ))
     }
 
@@ -1359,5 +1385,32 @@ impl Drop for Cleanup {
         if let Some(parent) = self.0.parent() {
             let _ = std::fs::remove_dir(parent);
         }
+    }
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::MarketplaceOptions;
+
+    #[test]
+    fn git_base_override_is_trimmed_and_blank_means_github() {
+        assert_eq!(
+            MarketplaceOptions::with_git_base_override(None).git_base,
+            "https://github.com"
+        );
+        assert_eq!(
+            MarketplaceOptions::with_git_base_override(Some("  ")).git_base,
+            "https://github.com"
+        );
+        // A trailing slash would double up against the `/owner/repo.git` the clone appends.
+        assert_eq!(
+            MarketplaceOptions::with_git_base_override(Some(" file:///srv/mirror/ ")).git_base,
+            "file:///srv/mirror"
+        );
+        // The override never touches the local path override.
+        assert_eq!(
+            MarketplaceOptions::with_git_base_override(Some("file:///x")).path,
+            None
+        );
     }
 }

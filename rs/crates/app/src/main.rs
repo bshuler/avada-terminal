@@ -613,8 +613,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         avada_core::claude_hook::ensure_registered(&hook);
     }
 
-    // The app owns the window registry + the shared session stream.
-    let application = App::new(mgr.clone(), erx);
+    // The app owns the window registry + the shared session stream. The module runtime
+    // starts inside `App::new`, before the launch workspace is loaded below, so the
+    // workspace's key is worked out from argv here and handed over: a module disabled in
+    // the workspace this launch names must not start.
+    //
+    // The launch workspace is resolved here too (it seeds the first window below): the
+    // modules are told its root — the project above its first pane — so a module that
+    // browses files has something to browse. Resolving once keeps the two in step.
+    let modules_workspace = avada_core::workspace::launch::launch_workspace_key(&argv);
+    let launch_file = avada_core::workspace::launch::resolve_launch_workspace(&argv, &cwd);
+    let module_workspace =
+        avada_core::workspace::launch::module_workspace(&argv, &cwd, launch_file.as_ref());
+    let application = App::new(
+        mgr.clone(),
+        erx,
+        modules_workspace.as_deref(),
+        module_workspace,
+    );
 
     // Primary: accept hand-offs on a background task; `App::tick` drains the channel on the
     // UI thread (the handler runs on the tokio runtime and must not touch UI state).
@@ -636,7 +652,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the final window closes — see `app::persist_last_session`), so tabs/layout/per-pane
     // zoom survive a plain relaunch (#14). A first-ever launch (no last-session file)
     // stays an empty shell pane.
-    let seed = match avada_core::workspace::launch::resolve_launch_workspace(&argv, &cwd) {
+    let seed = match launch_file {
         Some(file) => PendingSeed::Workspace(Box::new(file)),
         None => PendingSeed::EmptyTab,
     };

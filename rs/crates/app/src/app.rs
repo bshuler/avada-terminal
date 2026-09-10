@@ -307,13 +307,22 @@ const SPRING_DELAY: std::time::Duration = std::time::Duration::from_millis(450);
 
 impl App {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(mgr: Arc<SessionManager>, erx: UnboundedReceiver<SessionEvent>) -> Rc<Self> {
+    pub fn new(
+        mgr: Arc<SessionManager>,
+        erx: UnboundedReceiver<SessionEvent>,
+        modules_workspace: Option<&str>,
+        module_workspace: avada_core::module::WorkspaceInfo,
+    ) -> Rc<Self> {
         let control = crate::control_host::ControlHost::new(&mgr);
         // Starting the modules here, before the first window exists, is deliberate: a
         // module registers its rail entries from inside `module.activate`, and the panel
         // should be populated by the time the human can look at it rather than filling in
-        // a second later.
-        let modules = crate::module_runtime::ModuleRuntime::new();
+        // a second later. `modules_workspace` is the launch file's key, so a module the
+        // human disabled in that workspace stays down. `module_workspace` is what the
+        // modules are told about the workspace, root included, so a file browser has a
+        // tree to show from its first frame.
+        let modules =
+            crate::module_runtime::ModuleRuntime::new(modules_workspace, module_workspace);
         // Register the SessionStart/SessionEnd hooks for the tools that have them, next to
         // the Claude registration `main` already does. Additive, idempotent and
         // best-effort: a tool that isn't installed has no config directory, and a build
