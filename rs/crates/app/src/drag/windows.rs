@@ -27,12 +27,12 @@ unsafe extern "system" fn ghost_wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARA
 pub struct PlatformPointer;
 
 impl super::GlobalPointer for PlatformPointer {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn poll(&self) -> Option<(slint::PhysicalPosition, bool)> {
         let (x, y) = cursor_pos();
         Some((slint::PhysicalPosition::new(x, y), left_button_down()))
     }
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn supports_cross_window(&self) -> bool {
         true
     }
@@ -76,7 +76,7 @@ pub struct Ghost {
 }
 
 impl Ghost {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug")]
     pub fn new() -> Ghost {
         let w = 200;
         let h = 44;
@@ -121,7 +121,7 @@ impl Ghost {
     }
 
     /// Move + show, offset a little below/right of the cursor hotspot.
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn follow(&self, p: (i32, i32)) {
         unsafe {
             let _ = SetWindowPos(
@@ -136,7 +136,7 @@ impl Ghost {
         }
     }
 
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn hide(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);

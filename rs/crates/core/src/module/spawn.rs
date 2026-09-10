@@ -352,12 +352,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn spawn_sets_the_environment_and_the_child_sees_the_descriptor() {
-        // `sh -c` reads the fd number from the env and writes one line down it.
+        // The script reads the fd number from the env and writes one line down it.
+        // bash, not sh: under a test binary the descriptor is routinely 10 or higher,
+        // and dash (Debian's /bin/sh) rejects `>&10` outright as a "Bad fd number".
         let dir = Dir::new("spawn");
         let script = dir.0.join("mod.sh");
         std::fs::write(
             &script,
-            "#!/bin/sh\nprintf '{\"jsonrpc\":\"2.0\",\"method\":\"module.event\",\"params\":{\"d\":\"'\"$AVADA_MODULE_DATA\"'\"}}\\n' >&$AVADA_MODULE_FD\n",
+            "#!/usr/bin/env bash\nprintf '{\"jsonrpc\":\"2.0\",\"method\":\"module.event\",\"params\":{\"d\":\"'\"$AVADA_MODULE_DATA\"'\"}}\\n' >&$AVADA_MODULE_FD\n",
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;

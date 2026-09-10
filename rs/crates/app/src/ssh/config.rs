@@ -15,6 +15,9 @@
 //! * `allowResize` defaults to **false** → `ResizePolicy::Observe`: a phone attaching must
 //!   not reflow the desktop's panes.
 
+// Called only from the unix-only server and `avada ssh` subcommands.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 

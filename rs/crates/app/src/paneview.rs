@@ -283,7 +283,7 @@ fn sync_model<T: Clone + 'static>(model: &VecModel<T>, items: Vec<T>) {
 /// converges (verified live: one 1px move corrects it). No-op when the cursor is outside the
 /// window.
 #[cfg(windows)]
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", ret, skip(app))]
 fn replay_cursor_pos(app: &AppWindow, link_active: bool) {
     use slint::ComponentHandle;
     use windows::Win32::Foundation::POINT;

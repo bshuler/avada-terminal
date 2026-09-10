@@ -41,6 +41,9 @@
 //! either way — iTerm2 sends it unconditionally during attach and treats an error as a fatal
 //! protocol failure — but only `--resize` makes it act.
 
+// `run` is unix-only; on Windows the parser and help text it calls have no caller yet.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use avada_core::session::attach::ResizePolicy;
 use avada_core::session::control_mode::ControlMode;
 

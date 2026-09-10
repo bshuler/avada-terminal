@@ -195,7 +195,13 @@ impl Dictation {
         // model is cached, and a failure here is deliberately ignored — the recording must
         // not be blocked by it, and the same fetch is retried, with its error reported,
         // when there is finally a transcript to make.
-        super::whisper::prefetch(settings);
+        //
+        // Not when the person has named their own transcriber, though: the built-in model
+        // is never consulted on that path, so fetching it there is 142 MB of nothing —
+        // and, in a test, a real download racing every other test in the binary.
+        if !matches!(detect_transcriber(settings), Transcriber::Custom(_)) {
+            super::whisper::prefetch(settings);
+        }
 
         std::fs::create_dir_all(&self.dir).map_err(|e| format!("dictation dir: {e}"))?;
         // Per *recording*, not per pane. A fixed per-pane path plus the `remove_file`
@@ -699,6 +705,9 @@ mod tests {
             // A template naming a program that does not exist still resolves to a
             // Custom recorder — the failure surfaces at spawn, with the reason.
             record_template: Some(vec!["avada-no-such-recorder".into()]),
+            // Never reached, but its presence keeps `start` from fetching the built-in
+            // model on a machine that has not cached it.
+            transcribe_template: Some(vec!["avada-no-such-transcriber".into()]),
             ..Default::default()
         };
         let err = d.start("p1", &s).unwrap_err();
@@ -842,6 +851,8 @@ mod tests {
         let d = Dictation::new(dir.clone());
         let s = SttSettings {
             record_template: Some(fake_recorder(8192)),
+            // A cancel never transcribes; this only keeps `start` off the network.
+            transcribe_template: Some(echo_transcriber("unused")),
             ..Default::default()
         };
         d.start("p1", &s).unwrap();

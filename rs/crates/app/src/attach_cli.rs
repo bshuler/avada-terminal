@@ -36,6 +36,9 @@
 //! 4. `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT` → a handler that calls `tcsetattr` (POSIX
 //!    async-signal-safe) and `_exit`s, because those never run destructors.
 
+// `run` is unix-only; on Windows the parser and help text it calls have no caller yet.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 // Everything below the tty layer is `core`'s: see the module docs for the split. The
 // unix-only half of the surface is imported inside `run`, so the Windows build (whose
 // `run` is a one-line "not yet") stays warning-clean under clippy's `-D warnings`.

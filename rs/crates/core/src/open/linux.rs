@@ -210,7 +210,7 @@ pub fn handlers_for_ext(ext: &str) -> Vec<super::HandlerApp> {
         };
         for e in entries.flatten() {
             let file = e.path();
-            if !file.extension().is_some_and(|x| x == "desktop") {
+            if file.extension().is_none_or(|x| x != "desktop") {
                 continue;
             }
             let id = file
@@ -234,7 +234,7 @@ pub fn handlers_for_ext(ext: &str) -> Vec<super::HandlerApp> {
             });
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|a| a.name.to_lowercase());
     out
 }
 

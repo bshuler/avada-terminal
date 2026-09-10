@@ -97,7 +97,7 @@ unsafe extern "system" fn subclass_proc(
             return LRESULT(1); // TRUE → handled; stop default cursor processing.
         }
         let hv = HOVER_CURSOR.load(Ordering::Relaxed);
-        if hv != 0 && (lparam.0 as u32 & 0xffff) == HTCLIENT as u32 {
+        if hv != 0 && (lparam.0 as u32 & 0xffff) == HTCLIENT {
             SetCursor(Some(HCURSOR(hv as *mut c_void)));
             return LRESULT(1);
         }
@@ -162,7 +162,7 @@ unsafe extern "system" fn subclass_proc(
 
 /// Pull the native HWND (as isize) out of a Slint window. 0 until the native
 /// window is realized by the event loop (callers retry).
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", ret, skip(win))]
 pub fn hwnd_of(win: &slint::Window) -> isize {
     let sh = win.window_handle();
     match HasWindowHandle::window_handle(&sh) {
@@ -186,7 +186,11 @@ pub fn make_frameless(raw: isize) {
         // Subclass to remove the non-client frame (kills the top gap). Install
         // before the FRAMECHANGED so our handler catches the recalc.
         if OLD_WNDPROC.load(Ordering::Relaxed) == 0 {
-            let prev = SetWindowLongPtrW(h, GWLP_WNDPROC, subclass_proc as usize as isize);
+            let prev = SetWindowLongPtrW(
+                h,
+                GWLP_WNDPROC,
+                subclass_proc as *const () as usize as isize,
+            );
             OLD_WNDPROC.store(prev, Ordering::Relaxed);
         }
         // Windows 11 rounded corners (ignored on Win10).
@@ -334,7 +338,7 @@ pub fn close(raw: isize) {
 }
 
 /// Cover the current monitor borderlessly, returning the prior placement.
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug")]
 pub fn enter_fullscreen(raw: isize) -> Option<SavedPlacement> {
     unsafe {
         let h = hwnd(raw);
@@ -373,7 +377,7 @@ pub fn enter_fullscreen(raw: isize) -> Option<SavedPlacement> {
 }
 
 /// Restore the placement captured by [`enter_fullscreen`].
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", skip(saved))]
 pub fn exit_fullscreen(raw: isize, saved: SavedPlacement) {
     unsafe {
         let h = hwnd(raw);

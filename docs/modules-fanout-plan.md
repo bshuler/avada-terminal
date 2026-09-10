@@ -455,7 +455,11 @@ lands it between waves.
 
 1. `cargo test --manifest-path rs/Cargo.toml` and
    `cargo test --manifest-path rs/crates/app/Cargo.toml --bins`; neither count regresses.
-2. `cargo check` for `core`, `module-sdk` and `app` on macOS, Windows and Linux (CI matrix).
+2. `cargo check` for `core`, `module-sdk` and `app` on macOS, Windows and Linux. The GitHub
+   test matrix is disabled, so the proof is local and scripted: `scripts/check-windows.sh`
+   (windows-gnu via mingw-w64, core + module-sdk + app, clippy `-D warnings`) and
+   `scripts/check-linux-docker.sh` (tests, clippy and fmt in a `rust:1.96-bookworm`
+   container). Both print a single `*_CHECK_GREEN` / `*_CHECK_RED` line.
 3. Compat suite green: `workspace_kind_compat.rs` and its Wave 0 clone in all four
    directions; from Wave 2, the lockfile and install-record round-trip tests.
 4. The headless Slint harness (`app/src/uitest.rs`) has a test for every new control: rail

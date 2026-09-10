@@ -69,6 +69,17 @@ impl Git {
         // Never let git open a credential prompt from a background thread.
         cmd.env("GIT_TERMINAL_PROMPT", "0");
         cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        // Neither ls-remote nor clone needs a repository, but git still looks for
+        // one from the working directory first, and a lookup that *fails* is fatal:
+        // a worktree whose `.git` file names a gitdir that is not there (the
+        // checkout mounted into a container, a worktree moved by hand) turns every
+        // call into "fatal: not a git repository". So these run from the temp dir,
+        // not from wherever the host process happens to be, and an exported
+        // GIT_DIR / GIT_WORK_TREE cannot redirect them either. `head_commit` sets
+        // its own directory on top of this.
+        cmd.current_dir(std::env::temp_dir());
+        cmd.env_remove("GIT_DIR");
+        cmd.env_remove("GIT_WORK_TREE");
         if let Some(p) = &self.path {
             cmd.env("PATH", p);
         }
@@ -378,6 +389,31 @@ contract = "^1"
             read_manifest(&dir).unwrap().id().as_str(),
             "acme/avada-files"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The process may be sitting in a directory git cannot make sense of (a
+    /// worktree whose gitdir is on another machine); ls-remote and clone must not
+    /// care. The fake reports where it ran as a tag.
+    #[cfg(unix)]
+    #[test]
+    fn remote_commands_run_from_the_temp_dir_not_the_callers_cwd() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("avada-mp-fetch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("git");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf '%s refs/tags/cwd\\n' \"$(pwd -P)\"\nprintf 'GIT_DIR=%s refs/tags/env\\n' \"${GIT_DIR:-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tags = Git::new(&fake, None)
+            .ls_remote_tags("file:///nowhere")
+            .unwrap();
+        let expected = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert_eq!(tags["cwd"], expected.to_string_lossy().as_ref());
+        assert_eq!(tags["env"], "GIT_DIR=unset");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

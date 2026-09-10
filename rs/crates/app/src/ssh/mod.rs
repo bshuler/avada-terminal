@@ -56,6 +56,9 @@
 //! transport, which is outside this milestone. [`config`] is portable and is compiled and
 //! tested on the Windows leg; everything else refuses with a message that says the above.
 
+// The server, and with it every caller of the settings helpers, is unix-only.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 /// Settings + on-disk layout. Portable: no crypto, no unix APIs, tested on every CI leg.
 pub mod config;
 
