@@ -387,7 +387,7 @@ disappears; it does not check the prose, which is a judgement.
 | Gap | Verdict | Where |
 |---|---|---|
 | Talk — speaking a reply aloud | `faked` | `scripts/talk-demo.sh` drives a file-backed TTS backend; no audio is ever produced, so the OS/hardware seam has never run. |
-| Talk — recognising a pane's transcript | `partial` | `core/src/speech/tailer.rs` understands `ClaudeJsonl` and `CursorJsonl` only. A pane running anything else is silently mute. |
+| Talk — recognising a pane's transcript | `partial` | `core/src/speech/tailer.rs` speaks claude, cursor-agent, copilot, codex and gemini. The other registry tools (aider, goose, ollama, cody, continue, opencode, amp) keep no tailable log and stay silent by design — never scraped from the terminal. |
 | Dictation — the microphone itself | `partial` | The whisper path is proven against a real 120s WAV (`core/src/stt/dictation.rs`, `#[ignore]`d). The cpal capture seam is not. |
 | Live typing of a transcript | `unproven` | `df6e148` types the transcript into the pane as you speak. Unit-tested; never run against a real microphone. |
 | `keepAlive` setting | `partial` | The decision is a seam now (`main.rs::quit_action`, covered); the effects it picks between still only run while a real GUI is quitting. |

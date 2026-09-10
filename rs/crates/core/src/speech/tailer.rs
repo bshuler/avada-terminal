@@ -61,8 +61,15 @@ pub fn transcript_path(marker: &PaneClaudeSession) -> Option<PathBuf> {
 }
 
 /// Which on-disk record shape a transcript file speaks. One variant per tool that keeps a
-/// live, append-only conversation log; tools without one are spoken from their terminal
-/// output instead (see `crate::control::speech_service`).
+/// live, append-only conversation log.
+///
+/// A tool with no such log is **not** spoken at all — it stays silent. This comment used to
+/// claim the opposite ("spoken from their terminal output instead"), which contradicted the
+/// module that actually decides: `crate::control::speech_service` reads reply text only from
+/// a tool's own record of what it said, never from scraping a terminal, because terminal
+/// output carries spinners, progress bars, box drawing and the human's echoed keystrokes
+/// with no way to tell them from prose. Adding a tool here is therefore the only way to give
+/// it a voice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptFormat {
     /// `{"type":"assistant","message":{"content":[{"type":"text","text":"…"}]}}`
