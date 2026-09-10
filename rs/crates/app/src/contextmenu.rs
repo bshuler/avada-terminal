@@ -601,6 +601,26 @@ pub fn file_menu(
                 }),
             );
         }
+        // The human's own `editorCommand`, if they set one. Last of the "Open in …" rows
+        // because the registry rows above are discovered — this one was asked for, so it
+        // reads as the deliberate choice it is rather than competing with them. Absent
+        // entirely when the preference is blank, which is the default: a row that opened
+        // nothing would be worse than no row.
+        //
+        // No line or column: by the time a row is right-clicked, the position a clicked
+        // terminal path carried has already gone to the Files module and the host kept no
+        // copy. `Command::OpenPathInEditor` takes them anyway, for the caller that one day
+        // does know.
+        if !state.settings.editor_command.trim().is_empty() {
+            b.item(
+                "Open in Editor",
+                Command::OpenPathInEditor {
+                    path: p.clone(),
+                    line: None,
+                    col: None,
+                },
+            );
+        }
         if !handlers.is_empty() {
             b.row(
                 "Open With",
@@ -1127,8 +1147,64 @@ mod read_only_menu_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_runnable, link_menu, parse_custom_duration};
+    use super::{file_menu, is_runnable, link_menu, parse_custom_duration};
     use crate::command::Command;
+
+    /// The `editorCommand` preference reaches a human through exactly one row, and only
+    /// when they set it.
+    ///
+    /// Worth a test of its own because this setting spent a long release cycle validating,
+    /// persisting and round-tripping through the control API while being wired to nothing at
+    /// all --- the feature matrix carried it as `dead`. A row that vanishes when the
+    /// preference is blank is the whole contract: the default is blank, and a visible "Open
+    /// in Editor" that launched nothing would be a worse lie than the silence it replaced.
+    #[test]
+    fn the_open_in_editor_row_exists_only_when_a_template_is_set() {
+        let file = std::env::temp_dir().join("avada-editor-row-test.txt");
+        std::fs::write(&file, b"x").expect("write probe file");
+        let labels = |st: &crate::state::State| -> Vec<String> {
+            file_menu(st, &file, None, 0.0, 0.0)
+                .entries
+                .iter()
+                .map(|e| e.label.to_string())
+                .collect()
+        };
+
+        let mut st = crate::state::State::new(crate::theme::load_font(1.0));
+        assert!(
+            !labels(&st).iter().any(|l| l == "Open in Editor"),
+            "blank is the default, and it must offer nothing"
+        );
+        // Blank-but-not-empty is still blank --- the same trim `plan_open` applies, so the
+        // row can never promise an open that `open_resolved_path` would decline to perform.
+        st.settings.editor_command = "   ".into();
+        assert!(!labels(&st).iter().any(|l| l == "Open in Editor"));
+
+        st.settings.editor_command = "subl {path}:{line}:{col}".into();
+        let rows = labels(&st);
+        let at = rows.iter().position(|l| l == "Open in Editor");
+        assert!(at.is_some(), "a set template must offer the row: {rows:?}");
+        // Below the discovered editors, above the OS's own list: asked-for beats detected,
+        // and neither belongs after the separator where the non-opening verbs live.
+        assert!(
+            rows[..at.unwrap()].iter().any(|l| l.starts_with("Open in")),
+            "the row must sit under the registry editors, not replace them: {rows:?}"
+        );
+
+        // The row carries the path and no position, and reads the template at run time
+        // rather than baking it in --- see `Command::OpenPathInEditor`.
+        let m = file_menu(&st, &file, None, 0.0, 0.0);
+        assert!(
+            matches!(
+                &m.commands[at.unwrap()],
+                Some(Command::OpenPathInEditor { path, line: None, col: None })
+                    if path == &file.display().to_string()
+            ),
+            "row must carry the path and no position: {:?}",
+            m.commands[at.unwrap()]
+        );
+        let _ = std::fs::remove_file(&file);
+    }
 
     const NOON: u64 = 12 * 3_600;
 

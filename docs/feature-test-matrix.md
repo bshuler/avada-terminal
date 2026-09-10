@@ -27,7 +27,7 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 | …proven end-to-end | 106 |
 | …bound but unproven | 0 |
 | …ui-local or dead | 74 |
-| Command variants | 144 |
+| Command variants | 145 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
@@ -294,6 +294,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `OpenNewPane` | — |
 | `OpenPaneContext` | — |
 | `OpenPathInApp` | — |
+| `OpenPathInEditor` | — |
 | `OpenPathWith` | — |
 | `OpenProject` | — |
 | `OpenSet` | — |
@@ -389,9 +390,6 @@ disappears; it does not check the prose, which is a judgement.
 | Talk — recognising a pane's transcript | `partial` | `core/src/speech/tailer.rs` understands `ClaudeJsonl` and `CursorJsonl` only. A pane running anything else is silently mute. |
 | Dictation — the microphone itself | `partial` | The whisper path is proven against a real 120s WAV (`core/src/stt/dictation.rs`, `#[ignore]`d). The cpal capture seam is not. |
 | Live typing of a transcript | `unproven` | `df6e148` types the transcript into the pane as you speak. Unit-tested; never run against a real microphone. |
-| A write to a dead session daemon | `defect` | Returns `{"ok": true}`. Both `ctl send` and the GUI keypress path swallow the broken pipe, so a backend crash looks like dead keys. |
-| `ctl panes` / `ctl state` liveness | `defect` | Reports `running` from shadow state without probing, which is why the defect above is invisible to remote inspection. |
-| `editorCommand` setting | `dead` | Validates, persists and round-trips, but nothing calls `paths::plan_open`. A clicked path always goes to `RevealInFiles`. |
 | `keepAlive` setting | `partial` | Its only effect is inline in the quit path at `app/src/main.rs`. Covered at the route layer; no seam to drive. |
 | Windows keyboard behaviour | `unproven` | `keybindings.rs` puts Windows on the Linux branch. Coverage by construction only — no live Windows run has happened. |
 | macOS Finder drag-and-drop | `unproven` | The Linux/Xvfb harness proves XDND. The macOS equivalent has never been exercised. |

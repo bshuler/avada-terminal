@@ -168,6 +168,24 @@ pub enum Command {
         path: String,
         tool: String,
     },
+    /// Open `path` with the human's own `editorCommand` template from Preferences.
+    ///
+    /// Separate from [`Command::OpenPathWith`], which runs a *registry* editor inside a
+    /// terminal pane. This one is whatever the human typed, launched detached, and it is
+    /// the only path in the app that can carry a line and column into an editor. The menu
+    /// row that produces it only exists when the template is non-blank, so an unset
+    /// preference can never reach here.
+    ///
+    /// `line`/`col` are `None` from the file menu — by the time a row is right-clicked the
+    /// position a clicked terminal path carried is long gone (it went to the Files module
+    /// as an event payload, and the host kept no copy). They are in the signature anyway
+    /// because [`avada_core::paths::open_resolved_path`] takes them and a future caller
+    /// that *does* know the position should not have to change this variant.
+    OpenPathInEditor {
+        path: String,
+        line: Option<u32>,
+        col: Option<u32>,
+    },
     /// Hand `path` to one specific application the OS says can open its kind — the
     /// "Open With" flyout. `app` is a [`avada_core::open::HandlerApp`]'s launcher,
     /// which is opaque and per-OS, so it is passed straight back through the same seam
@@ -809,6 +827,25 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     session: None,
                 },
             );
+        }
+        Command::OpenPathInEditor { path, line, col } => {
+            // The template is read here rather than baked into the row, so a preference
+            // changed while the menu was open is the one that runs.
+            let res = avada_core::paths::open_resolved_path(
+                &path,
+                line,
+                col,
+                &state.settings.editor_command,
+            );
+            if !res.ok {
+                // `error` carries the refused extension on the blocked branch and a message
+                // otherwise, so it is never the right thing to show raw.
+                let msg = match res.blocked {
+                    true => "that file type will not be opened automatically".to_string(),
+                    false => format!("could not open: {}", res.error.unwrap_or_default()),
+                };
+                state.toast_active(&msg);
+            }
         }
         Command::OpenPathWith { path, tool } => {
             // The tool's resolved binary, so a user override in Preferences → Tools is what
