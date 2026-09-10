@@ -2459,7 +2459,9 @@ mod tests {
         let head = tight
             .link_at(6.5, 0.5, 13.0, 3.0)
             .expect("the severed head should link");
-        assert!(head.abs_path.ends_with("Volumes/Data"), "{}", head.abs_path);
+        // Windows reports the join with backslashes; the shape is what matters here.
+        let head_slashed = head.abs_path.replace('\\', "/");
+        assert!(head_slashed.ends_with("Volumes/Data"), "{}", head.abs_path);
         assert_eq!((head.x, head.w), (4.0, 9.0), "underline covers `./Volumes`");
         let tail = tight
             .link_at(2.5, 1.5, 13.0, 3.0)
@@ -2497,7 +2499,9 @@ mod tests {
             &rel[33..]
         ));
         let (w, h) = (cols as f32, 5.0);
-        let want = dir.join(rel).to_string_lossy().into_owned();
+        // `dir` arrives in the platform's separators and `rel` in forward slashes; compare
+        // both sides slashed so Windows judges the same thing macOS and Linux do.
+        let want = dir.join(rel).to_string_lossy().replace('\\', "/");
 
         for (label, x, y, ux, uw) in [
             ("head", 7.5, 0.5, 5.0, 15.0),
@@ -2507,7 +2511,7 @@ mod tests {
             let hit = p
                 .link_at(x, y, w, h)
                 .unwrap_or_else(|| panic!("{label} row should link"));
-            assert_eq!(hit.abs_path, want, "{label}");
+            assert_eq!(hit.abs_path.replace('\\', "/"), want, "{label}");
             assert!(hit.exists, "{label}");
             assert_eq!((hit.x, hit.w), (ux, uw), "{label} underline");
         }
