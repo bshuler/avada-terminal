@@ -543,3 +543,45 @@ URL.
 - The `permissions/` directory name collides with the rights concept; the new code is
   `rights/` and the OS-probing directory keeps its name until the rename wave, where it
   becomes `os_permissions/`.
+
+---
+
+## 11. Quality check, 2026-09-10
+
+An audit of every wave exit in §5 and every item in §7 against the code and the
+proofs, run at `bac98a0`. "Proven" means a test or script that fails when the
+claim stops being true, run on this date.
+
+### Met, with the proof
+
+| Claim | Proof |
+|---|---|
+| Rename (W0.5): new name everywhere outside the compat layer | `grep` for the old repo path is empty in `rs/crates/app`, `ui/` and the README; the updater, crash dialog, About block and releases link name `bshuler/avada-terminal` (`bac98a0`). Author credit and the funding file keep the upstream name on purpose. |
+| Host and shell (W1): spawn, handshake, rail entry, tier-1 rows, crash cap, hash refusal, descriptor-table routes, `GET /schema` | `module::host_tests`, `control::routes` tests, `uitest::rail`, `uitest::modulepane` (mac, green). |
+| First module (W2): free build installs `avada-files` from GitHub by topic, compiles it, enables it | `marketplace::live` ignored test run against the real repo (green, 13 s); `scripts/module-roundtrip-demo.sh` prints `ROUNDTRIP_DEMO_GREEN` at HEAD; ptah GUI round trip 9 printed `ROUNDTRIP_SHOT_GREEN` with real file rows on screen. |
+| W2: disable → rail entry gone, pane becomes the placeholder | ptah round trip shots `rt-3-disabled*.png`; `uitest::placeholder`. |
+| W2: reveal-in-files from a link | Three layers, not one live run: `command.rs` asserts a link resolves to `files.reveal`; `uitest::files` proves the revealed row scrolls on screen; `avada-files` handles the reveal event in its own tests. |
+| §7.4 uitests: rail click, placeholder buttons, rights rows, marketplace install | `uitest::rail`, `uitest::placeholder` (install-from-marketplace click reaches Rust), `uitest::modulepane` (a marketplace row activation is the install gesture, since the marketplace is itself a module pane). |
+| Every module repo builds and passes its own tests | `scripts/check-modules.sh` printed `MODULES_CHECK_GREEN` for all seven topic repos plus `avada-commercial` and `avada-license`. |
+| Licence: offline install, revoke stops the module after grace | `license` tests against the stub issuer; the app installs the service, builds the `CachedGate` and runs `checkin_all` (docs/licensing.md follow-ups corrected in `bac98a0`). |
+| Three-OS matrix | `scripts/check-windows.sh` and `scripts/check-linux-docker.sh` now also cover the terminal-widget workspace, which is where the last release run's Windows job died. |
+
+### Not met
+
+1. **"Tag a release" (W2 exit).** Tag `v0.2.0` exists but its release run failed
+   (Windows compile errors, two ubuntu test failures) and `bshuler/avada-terminal`
+   has no release at all. Every one of those failures is fixed at HEAD
+   (`3ed5449`, `bac98a0`), but only a new tag proves it on the runners, and the
+   app crate still says `version = "0.0.36"`, so a `v0.2.x` build would report
+   the wrong version and the updater would nag forever. A release needs a version
+   bump and a tag together, and publishing on a public repo is the owner's call.
+2. **Live start/stop on enable/disable** stays the documented deviation in §10.
+3. **Windows signature check** is still the stub; minisign is what ships.
+
+### Carried backlog
+
+Lossy `host.panes.spawn` params · marketplace detail rendering · pins/defaults
+UI · real `WinVerifyTrust` · keyring `TokenStore` · dictation never run live ·
+`multi = true` fan-out · prehashed minisign · deb/rpm assets on R2 · the SDK is
+pinned at five different revisions across the module repos (all still handshake,
+the wire format has not changed, but a bump sweep is due).

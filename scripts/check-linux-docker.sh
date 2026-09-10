@@ -37,6 +37,11 @@ if [[ "${1:-}" != "--wait" ]]; then
       cargo test --all --no-fail-fast -- --skip permissions 2>&1 \
         | grep -E "^(test result|error|warning: unused|failures:|    [a-z_:]+$|---- |thread |  left:|  right:|note: )|panicked at|assertion" | cut -c1-240
       echo "CARGO_TEST_EXIT=${PIPESTATUS[0]}"
+      echo "=== WIDGET TEST"
+      # Its own workspace; the release gate runs these on ubuntu-latest too.
+      ( cd /src/rs/crates/terminal-widget && cargo test --all --no-fail-fast 2>&1 \
+        | grep -E "^(test result|error|failures:|---- |thread )|panicked at" | cut -c1-240
+        echo "WIDGET_TEST_EXIT=${PIPESTATUS[0]}" )
       echo "=== CLIPPY"
       cargo clippy --all --all-targets -- -D warnings 2>&1 | grep -E "^(error|warning)" | cut -c1-200
       echo "CLIPPY_EXIT=${PIPESTATUS[0]}"
@@ -57,7 +62,7 @@ code=$(docker wait "$name")
 docker logs "$name" 2>&1 | tail -80
 log=$(docker logs "$name" 2>&1)
 ok=1
-for key in CARGO_TEST_EXIT CLIPPY_EXIT FMT_EXIT APP_CLIPPY_EXIT; do
+for key in CARGO_TEST_EXIT WIDGET_TEST_EXIT CLIPPY_EXIT FMT_EXIT APP_CLIPPY_EXIT; do
   v=$(printf '%s\n' "$log" | grep -o "^$key=[0-9]*" | tail -1 | cut -d= -f2)
   [[ "$v" == "0" ]] || ok=0
 done

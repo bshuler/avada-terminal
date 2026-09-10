@@ -43,6 +43,15 @@ echo "=== core + module-sdk: clippy --target $target"
 ( cd "$root/rs" && cargo clippy --target "$target" -p avada-core -p avada-module-sdk --all-targets -- -D warnings ) || status=1
 echo "CORE_WIN_EXIT=$status"
 
+# The widget is its own workspace and the release gate runs its tests on
+# windows-latest, so its test targets have to compile there too — the a871f01
+# release run died on exactly that (`cannot find unix in os`).
+widget=0
+echo "=== terminal-widget: clippy --target $target (all targets)"
+( cd "$root/rs/crates/terminal-widget" && cargo clippy --target "$target" --all-targets -- -D warnings ) || widget=1
+echo "WIDGET_WIN_EXIT=$widget"
+(( widget == 0 )) || status=1
+
 if (( with_app )); then
   app=0
   echo "=== app: clippy --target $target"
