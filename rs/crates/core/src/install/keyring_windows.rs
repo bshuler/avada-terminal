@@ -24,6 +24,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use super::keyring::{KeyError, KeyStore, SecretKey};
+#[cfg(not(windows))] // the Windows vault module imports its own
 use std::io;
 use std::path::PathBuf;
 
@@ -276,6 +277,7 @@ mod tests {
 mod vault_tests {
     use super::*;
     use crate::install::keyring::KEY_LEN;
+    use std::io;
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Security::Credentials::{
         CredDeleteW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,

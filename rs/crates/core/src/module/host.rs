@@ -538,6 +538,7 @@ impl Host {
     /// The live token itself, for tests that play the module's side of the wire. Never
     /// compiled into the shipped binary.
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))] // its callers are unix-gated tests
     pub(crate) fn test_token(&self, id: &ModuleId) -> Option<String> {
         lock(&self.inner.slots).get(id).and_then(|slot| {
             lock(&slot.state)

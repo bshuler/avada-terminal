@@ -22,7 +22,7 @@ struct MutexGuard {
 }
 unsafe impl Send for MutexGuard {}
 impl Drop for MutexGuard {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip(self))]
     fn drop(&mut self) {
         unsafe {
             let _ = CloseHandle(self.handle);
@@ -34,7 +34,7 @@ impl Drop for MutexGuard {
 // (i.e. a primary is already running). `GetLastError` is read immediately after the
 // success-returning `CreateMutexW` (whose windows-rs wrapper does not touch the
 // thread-error on the Ok path), so ERROR_ALREADY_EXISTS is preserved.
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug")]
 fn create_named_mutex(name: &str) -> windows::core::Result<(MutexGuard, bool)> {
     let wide = HSTRING::from(name);
     let handle = unsafe { CreateMutexW(None, false, &wide) }?;
@@ -42,7 +42,7 @@ fn create_named_mutex(name: &str) -> windows::core::Result<(MutexGuard, bool)> {
     Ok((MutexGuard { handle }, already_existed))
 }
 
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug")]
 pub fn acquire(salt: &str) -> io::Result<Instance> {
     let names = instance_names(salt);
     let (guard, already) = create_named_mutex(&names.mutex).map_err(win_err)?;
@@ -66,7 +66,7 @@ pub struct PrimaryInstance {
 
 impl PrimaryInstance {
     /// The pipe path we serve (exposed mainly for diagnostics/tests).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn pipe_name(&self) -> &str {
         &self.names.pipe
     }
@@ -79,7 +79,7 @@ impl PrimaryInstance {
     /// Per-connection errors (a secondary that died mid-send, a malformed payload) are
     /// swallowed and the loop continues — one bad launch must never take down the
     /// primary's hand-off channel. Only failure to (re)bind the pipe is fatal.
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self, handler))]
     pub async fn run_server<F>(self, mut handler: F) -> io::Result<()>
     where
         F: FnMut(HandoffMessage),
@@ -120,7 +120,7 @@ pub struct SecondaryInstance {
 
 impl SecondaryInstance {
     /// The pipe path we forward to (exposed mainly for diagnostics/tests).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn pipe_name(&self) -> &str {
         &self.names.pipe
     }
@@ -128,7 +128,7 @@ impl SecondaryInstance {
     /// Connect to the primary's pipe and send our `{argv,cwd}` as JSON. Retries briefly
     /// while the pipe is momentarily busy (the primary is between accepting one
     /// connection and re-arming the next instance).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     pub async fn forward(&self, msg: &HandoffMessage) -> io::Result<()> {
         let bytes = serde_json::to_vec(msg)?;
         let mut client = open_client(&self.names.pipe).await?;

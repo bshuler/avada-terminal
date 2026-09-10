@@ -119,30 +119,30 @@ struct Lifecycle {
 }
 
 impl Lifecycle {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug")]
     fn new() -> Self {
         Lifecycle {
             active_conns: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
         }
     }
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn conn_opened(&self) {
         self.active_conns.fetch_add(1, Ordering::SeqCst);
     }
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn conn_closed(&self) {
         self.active_conns.fetch_sub(1, Ordering::SeqCst);
     }
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn conn_count(&self) -> u64 {
         self.active_conns.load(Ordering::SeqCst)
     }
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn begin_shutdown(&self) -> bool {
         !self.shutting_down.swap(true, Ordering::SeqCst)
     }
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::SeqCst)
     }
@@ -207,7 +207,7 @@ fn request_takeover(pipe: &str) -> io::Result<()> {
     crate::session::proto::write_frame(&mut conn, &ClientMsg::Takeover)?;
     match transport::read_frame_deadline::<DaemonMsg>(&conn, TAKEOVER_RECV_TIMEOUT)? {
         Some(DaemonMsg::Sessions(sessions)) => {
-            crate::session::daemon_client::tracing::debug!(
+            tracing::debug!(
                 "takeover: incumbent stood down, {} session(s) stay in the pty-host",
                 sessions.len()
             );
@@ -322,7 +322,7 @@ impl Daemon {
     /// host is, by design, an older build than we are. That is the whole Windows answer to
     /// "upgrade without dropping terminals": an `HPCON` cannot cross a process boundary, so
     /// instead the process holding it never has to.
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug")]
     fn new(salt: &str) -> io::Result<Self> {
         let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<SessionEvent>();
         let sessions = if is_host_salt(salt) {
@@ -376,14 +376,14 @@ impl Daemon {
 
     /// Push the whole claim table to every connection (M7). Full snapshots, never deltas:
     /// applying one is idempotent, so a dropped or reordered push cannot desync a client.
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn broadcast_claims(&self) {
         let _ = self.notices.send(DaemonMsg::Claims(self.claims.snapshot()));
     }
 
     /// Push the whole live-session list to every connection (M7) — the fix for a client
     /// shadow that would otherwise only learn about sessions created before it connected.
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn broadcast_sessions(&self) {
         let _ = self
             .notices
@@ -392,7 +392,7 @@ impl Daemon {
 
     /// Idle-exit monitor (mirror of the unix one): 0 sessions AND 0 clients through the grace
     /// → exit. On Windows we just `process::exit(0)` (no socket file to unlink).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn start_idle_monitor(&self, grace: Duration) {
         let lifecycle = Arc::clone(&self.lifecycle);
         let sessions = self.sessions.clone();
@@ -430,7 +430,7 @@ impl Daemon {
     /// and re-arms the next instance before handing the current one off — the
     /// `single_instance::windows::run_server` pattern — so a connect arriving during a handoff
     /// is never refused.
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self, server))]
     async fn serve(&self, pipe: &str, mut server: NamedPipeServer) -> io::Result<()> {
         loop {
             if self.lifecycle.is_shutting_down() {
@@ -462,7 +462,7 @@ impl Daemon {
     /// for the uids this connection attached to. (Single-task simplification vs the unix
     /// two-thread split — the async pipe is full-duplex, so we can `tokio::select!` between the
     /// inbound frames and the bus on one task; the buffering shim feeds `read_frame`.)
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self, conn))]
     async fn handle_connection(&self, conn: NamedPipeServer) {
         self.lifecycle.conn_opened();
         let mut pc = PipeConn::new(conn);
@@ -586,7 +586,18 @@ impl Daemon {
                     self.broadcast_sessions();
                 }
             }
-            ClientMsg::Write { uid, data } => self.sessions.write(&uid, &data),
+            ClientMsg::Write { uid, data } => {
+                if let Err(e) = self.sessions.write(&uid, &data) {
+                    tracing::debug!("write to {uid} failed: {e}");
+                }
+            }
+            // Same no-ack story as `Write`; bracketing is decided here because the
+            // terminal mode lives in this process's screen mirror -- see `ClientMsg::Paste`.
+            ClientMsg::Paste { uid, text } => {
+                if let Err(e) = self.sessions.paste(&uid, &text) {
+                    tracing::debug!("paste to {uid} failed: {e}");
+                }
+            }
             ClientMsg::Resize { uid, cols, rows } => {
                 self.sessions.resize(&uid, cols, rows);
             }
@@ -676,7 +687,7 @@ impl Daemon {
         true
     }
 
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn list_sessions(&self) -> Vec<SessionMeta> {
         session_metas(&self.sessions, &self.cwds)
     }
@@ -684,7 +695,7 @@ impl Daemon {
 
 /// The live-session snapshot, as a free function so the event pump — which holds clones of
 /// the pieces, not a `Daemon` — can build exactly the same list the connection paths do.
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", ret, skip_all)]
 fn session_metas(
     sessions: &SessionManager,
     cwds: &Mutex<std::collections::HashMap<String, String>>,
@@ -744,7 +755,7 @@ struct PipeConn {
 }
 
 impl PipeConn {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip_all)]
     fn new(pipe: NamedPipeServer) -> Self {
         PipeConn {
             pipe,
@@ -815,7 +826,7 @@ impl PipeConn {
 
 /// Serialize a message into a length-prefixed frame (the same wire shape as
 /// `proto::write_frame`, materialized as bytes for the async writers here).
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug", ret, skip(msg))]
 fn frame_bytes(msg: &impl serde::Serialize) -> io::Result<Vec<u8>> {
     let body = serde_json::to_vec(msg).map_err(io::Error::other)?;
     let len: u32 = body

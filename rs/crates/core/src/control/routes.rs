@@ -5708,20 +5708,32 @@ mod table {
 /// (`crate::marketplace::testing`). No network, no real toolchain, no real HOME.
 #[cfg(test)]
 mod marketplace_routes {
-    use super::golden::{boot_with_control_tag, client, Server};
+    // Some helpers here serve only tests that are `cfg(unix)` (they drive POSIX-shell
+    // fakes), so they are dead on Windows by design, not by neglect.
+    #![cfg_attr(not(unix), allow(dead_code, unused_imports))]
+    #[cfg(unix)]
+    use super::golden::boot_with_control_tag;
+    use super::golden::{client, Server};
     use crate::control::descriptor_table::core_routes;
     use crate::control::dispatch::CapabilitySource;
+    #[cfg(unix)]
     use crate::marketplace::job::Phase;
+    // The pipeline rigs run POSIX-shell fakes for cargo/rustup/git; see `testing::write_exec`.
+    #[cfg(unix)]
     use crate::marketplace::testing::{
         files_state, manifest_for, reopen, rig, scratch, wait, DeviceOutcome, FakeCargo,
         FAKE_ACCESS_TOKEN, FILES, GIT,
     };
+    #[cfg(unix)]
     use crate::marketplace::InstallRequest;
     use avada_module_sdk::caps::Capability;
     use avada_module_sdk::descriptor::{ParamLocation, Verb};
-    use serde_json::{json, Value};
+    #[cfg(unix)]
+    use serde_json::json;
+    use serde_json::Value;
     use std::collections::BTreeSet;
     use std::sync::Arc;
+    #[cfg(unix)]
     use std::time::Duration;
 
     struct Fixed {
@@ -5885,6 +5897,7 @@ mod marketplace_routes {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn every_route_is_401_then_403_then_503_until_a_marketplace_is_installed() {
         let s = boot_with_control_tag(true, "mp-gates").await;
@@ -5935,6 +5948,7 @@ mod marketplace_routes {
         assert_eq!(st, 403, "{v}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn install_enable_disable_uninstall_through_the_routes() {
         let s = boot_with_control_tag(true, "mp-install").await;
@@ -6120,6 +6134,7 @@ mod marketplace_routes {
     /// enabled in the workspace still needs the old version, the pin it accepts, the
     /// unpin that is content to do nothing, and a default that must name a module which
     /// is installed *and* actually provides the shape.
+    #[cfg(unix)]
     #[tokio::test]
     async fn pins_and_defaults_through_the_routes() {
         let s = boot_with_control_tag(true, "mp-pins").await;
@@ -6316,6 +6331,7 @@ mod marketplace_routes {
         assert_eq!(v["error"], "missing workspace");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn install_refusals_are_statuses_and_a_failed_build_is_a_failed_job() {
         let s = boot_with_control_tag(true, "mp-refuse").await;
@@ -6456,6 +6472,7 @@ mod marketplace_routes {
         assert!(v["guide"].as_str().unwrap().contains("rustup"), "{v}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sign_in_routes_show_the_user_code_and_never_the_token() {
         let s = boot_with_control_tag(true, "mp-signin").await;

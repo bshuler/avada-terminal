@@ -540,6 +540,9 @@ fn sanitize(pane_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    // Some helpers here serve only tests that are `cfg(unix)` (they drive POSIX-shell
+    // fakes), so they are dead on Windows by design, not by neglect.
+    #![cfg_attr(not(unix), allow(dead_code, unused_imports))]
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {

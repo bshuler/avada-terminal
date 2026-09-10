@@ -166,7 +166,7 @@ pub fn handlers_for_ext(ext: &str) -> Vec<super::HandlerApp> {
         };
         for line in body.lines() {
             if let Some((name, _)) = reg_value(line) {
-                if name != "(Default)" && !progids.iter().any(|p| *p == name) {
+                if name != "(Default)" && !progids.contains(&name) {
                     progids.push(name);
                 }
             }
@@ -178,7 +178,7 @@ pub fn handlers_for_ext(ext: &str) -> Vec<super::HandlerApp> {
             Some((n, data)) if n == "(Default)" && !data.is_empty() => Some(data),
             _ => None,
         }) {
-            if !progids.iter().any(|p| *p == d) {
+            if !progids.contains(&d) {
                 progids.insert(0, d);
             }
         }
@@ -211,7 +211,13 @@ pub fn handlers_for_ext(ext: &str) -> Vec<super::HandlerApp> {
 }
 
 /// (our id, display name, [(env var naming a root, path under it)])
-const KNOWN: &[(&str, &str, &[(&str, &str)])] = &[
+type KnownApp = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+const KNOWN: &[KnownApp] = &[
     (
         "edge",
         "Microsoft Edge",

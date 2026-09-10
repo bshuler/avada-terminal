@@ -508,7 +508,7 @@ impl AttachWriter {
     /// SSH channel closes its own transport; this keeps `core` compiling for the
     /// windows-latest leg without pretending to a capability the handle lacks.
     #[cfg(windows)]
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn disconnect(&self) {}
 }
 

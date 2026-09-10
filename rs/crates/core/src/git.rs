@@ -29,7 +29,7 @@ trait NoWindow {
 }
 impl NoWindow for Command {
     #[cfg(windows)]
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip(self))]
     fn no_window(&mut self) -> &mut Self {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

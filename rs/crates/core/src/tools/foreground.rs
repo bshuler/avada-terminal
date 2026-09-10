@@ -623,6 +623,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     mod live {
         use super::*;
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -671,11 +672,20 @@ mod tests {
             // then ask the question the test is actually about.
             let own = foreground_command(std::process::id() as i32).unwrap_or_default();
             let mine = program_name(&own);
+            // On Linux the not-yet-exec'd child answers with `comm`, which is the name of
+            // the *thread* that forked it cut to 15 bytes -- `tools::foregrou`, not the
+            // binary's name -- so that spelling of "still us" has to be excluded too.
+            let thread = std::thread::current()
+                .name()
+                .map(|n| n.get(..15).unwrap_or(n).to_string());
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
                 let name = foreground_name(fd);
                 if Instant::now() >= deadline
-                    || (foreground_pgrp(fd) == want_pgrp && name.is_some() && name != mine)
+                    || (foreground_pgrp(fd) == want_pgrp
+                        && name.is_some()
+                        && name != mine
+                        && name != thread)
                 {
                     return (name, pair, child);
                 }

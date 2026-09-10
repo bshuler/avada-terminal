@@ -508,7 +508,11 @@ fn speak(shared: &Arc<Shared>, utterance: &Utterance, generation: u64) {
 
 #[cfg(test)]
 mod tests {
+    // Some helpers here serve only tests that are `cfg(unix)` (they drive POSIX-shell
+    // fakes), so they are dead on Windows by design, not by neglect.
+    #![cfg_attr(not(unix), allow(dead_code, unused_imports))]
     use super::*;
+    #[cfg(unix)] // timed by the /bin/sh-backed stop_all test only
     use std::time::Instant;
 
     #[test]
@@ -572,12 +576,23 @@ mod tests {
 
     #[test]
     fn the_platform_has_a_backend_to_fall_back_on() {
-        // Every platform avada ships on can speak without configuration. If this
-        // fails on a new target, that target needs a `detect` branch, not an exemption.
+        // macOS ships `say` and Windows ships SAPI, so on those a bare install can speak
+        // without configuration. If this fails on a new target, that target needs a
+        // `detect` branch, not an exemption.
+        #[cfg(any(target_os = "macos", windows))]
         assert_ne!(
             detect(&SpeechSettings::default()),
             Backend::None,
             "no built-in TTS backend on this platform"
+        );
+        // Linux ships no speech engine at all: `spd-say` and `espeak-ng` are packages, and
+        // a bare CI runner has neither. What holds there is that `detect` agrees with PATH:
+        // a backend exactly when one of its two engines is installed.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(
+            detect(&SpeechSettings::default()) == Backend::None,
+            !on_path("spd-say") && !on_path("espeak-ng"),
+            "detect disagrees with PATH about spd-say/espeak-ng"
         );
     }
 
@@ -619,6 +634,10 @@ mod tests {
             dirs.iter().any(|d| d.ends_with(".local/bin")),
             "unix must search ~/.local/bin: {dirs:?}"
         );
+        // Windows has no conventional prefix a GUI launch would strip, so the fallback
+        // list is deliberately empty there -- PATH alone is the search.
+        #[cfg(windows)]
+        assert!(dirs.is_empty(), "windows adds no prefixes: {dirs:?}");
     }
 
     #[test]

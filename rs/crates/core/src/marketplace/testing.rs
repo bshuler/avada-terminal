@@ -1,6 +1,10 @@
 //! Marketplace tests and the fixtures the route tests reuse: a fake GitHub on
 //! 127.0.0.1, fixture git repositories served over `file://`, and fake `cargo`/`rustup`
 //! first on an injected `PATH`. No real network, no real cargo, no real `HOME`.
+//!
+//! Windows never runs the pipeline rigs (see `write_exec`), so the helpers only they
+//! reach are dead there. Expected, not a leak to prune.
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 use super::github::{GitHubConfig, HttpGitHub};
 use super::job::Phase;
@@ -424,6 +428,10 @@ pub(crate) enum FakeCargo {
     Fails,
 }
 
+/// The fakes are `#!/bin/sh` scripts, which is why everything that reaches this is
+/// `#[cfg(unix)]`: Windows has no marketplace-pipeline coverage until the fakes are
+/// real executables, and a gate says that louder than a test that cannot spawn them.
+#[cfg(unix)]
 fn write_exec(path: &Path, text: &str) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::write(path, text).unwrap();
@@ -433,6 +441,7 @@ fn write_exec(path: &Path, text: &str) {
 /// A directory with fake `rustup`, fake `cargo` and a wrapper around the real `git`.
 /// `git_head_lies` makes `git rev-parse HEAD` answer forty zeros — the clone disagreeing
 /// with `ls-remote`.
+#[cfg(unix)]
 pub(crate) fn fake_tools(name: &str, cargo: FakeCargo, git_head_lies: bool) -> PathBuf {
     let dir = scratch(&format!("tools-{name}"));
     write_exec(&dir.join("rustup"), "#!/bin/sh\necho 'rustup 1.0 (fake)'\n");
@@ -488,10 +497,12 @@ pub(crate) struct Rig {
 
 /// Build a marketplace on a fresh root: fake GitHub with `state`, fixture repos, fake
 /// tools on `PATH`. `ttl` is the GitHub cache TTL.
+#[cfg(unix)]
 pub(crate) async fn rig(name: &str, state: FakeState, cargo: FakeCargo, ttl: Duration) -> Rig {
     rig_with(name, state, cargo, ttl, false).await
 }
 
+#[cfg(unix)]
 pub(crate) async fn rig_with(
     name: &str,
     state: FakeState,
@@ -612,6 +623,7 @@ fn the_state_dir_is_a_sibling_of_the_modules_root() {
     );
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn install_from_source_records_pins_and_enables() {
     let r = rig(
@@ -694,6 +706,7 @@ async fn install_from_source_records_pins_and_enables() {
     assert_eq!(r.mp.jobs().len(), 1);
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn a_failing_build_fails_the_job_with_the_tail() {
     let r = rig(
@@ -725,6 +738,7 @@ async fn a_failing_build_fails_the_job_with_the_tail() {
     );
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn accepted_set_and_explicit_tag_are_honoured() {
     let r = rig(
@@ -753,6 +767,7 @@ async fn accepted_set_and_explicit_tag_are_honoured() {
     );
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn refusals_before_the_build() {
     let r = rig(
@@ -873,6 +888,7 @@ async fn refusals_before_the_build() {
     assert_eq!(list[0].module.as_deref(), Some(FILES));
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn a_clone_that_disagrees_with_ls_remote_is_refused() {
     let r = rig_with(
@@ -896,6 +912,7 @@ async fn a_clone_that_disagrees_with_ls_remote_is_refused() {
     assert!(r.mp.installed().unwrap().is_empty());
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn bad_ids_workspaces_and_a_missing_toolchain_are_refused_up_front() {
     let r = rig(
@@ -956,6 +973,7 @@ fn an_uninjected_path_detects_the_process_toolchain_and_not_an_empty_one() {
     );
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn dependencies_are_installed_first_as_dependencies() {
     let r = rig(
@@ -1050,6 +1068,7 @@ async fn dependencies_are_installed_first_as_dependencies() {
     );
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn enable_disable_uninstall_persist_across_reopen() {
     let r = rig(
@@ -1114,6 +1133,7 @@ async fn enable_disable_uninstall_persist_across_reopen() {
     );
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn search_and_show_use_the_cache_and_the_token() {
     let r = rig(
@@ -1221,6 +1241,7 @@ async fn search_and_show_use_the_cache_and_the_token() {
     assert!(!r.mp.signed_in());
 }
 
+#[cfg(unix)] // drives the POSIX-shell fakes; see `write_exec`
 #[tokio::test]
 async fn device_flow_sign_in_stores_the_token_and_never_shows_it() {
     let r = rig(

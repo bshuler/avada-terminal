@@ -146,6 +146,9 @@ pub fn guide_for(os: &str, missing: &[&str], build_tools_hint: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
+    // Some helpers here serve only tests that are `cfg(unix)` (they drive POSIX-shell
+    // fakes), so they are dead on Windows by design, not by neglect.
+    #![cfg_attr(not(unix), allow(dead_code, unused_imports))]
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {

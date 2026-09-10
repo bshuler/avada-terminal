@@ -153,6 +153,7 @@ pub(crate) mod testkit {
     /// go through here, because the host compares the record's manifest with the one the
     /// module sends at handshake and a difference is a `ManifestMismatch`.
     /// `Manifest::validate` only accepts `commercial` alongside an issuer.
+    #[cfg_attr(not(unix), allow(dead_code))] // its callers are unix-gated tests
     pub(crate) fn sell(manifest: &mut Manifest) {
         manifest.distribution.commercial = true;
         manifest.distribution.issuer = Some("https://issuer.test".into());

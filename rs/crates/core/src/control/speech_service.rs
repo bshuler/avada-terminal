@@ -265,7 +265,11 @@ fn poll_tick(
 
 #[cfg(test)]
 mod tests {
+    // Some helpers here serve only tests that are `cfg(unix)` (they drive POSIX-shell
+    // fakes), so they are dead on Windows by design, not by neglect.
+    #![cfg_attr(not(unix), allow(dead_code, unused_imports))]
     use super::*;
+    #[cfg(unix)] // only the /bin/sh-backed tests write transcripts
     use std::io::Write;
 
     /// Wrap a temp transcript path as a Claude-format source — the shape `poll_tick`'s

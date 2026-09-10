@@ -206,7 +206,7 @@ struct StartupQueryFilter {
 
 #[cfg(windows)]
 impl StartupQueryFilter {
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip(writer))]
     fn new(writer: Arc<Mutex<Box<dyn Write + Send>>>) -> Self {
         StartupQueryFilter {
             writer,
@@ -219,7 +219,7 @@ impl StartupQueryFilter {
 
     /// Process one read chunk, returning the bytes to forward to the sink now (a
     /// possible split-query suffix is held back in `carry` until the next chunk).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn process(&mut self, chunk: &[u8]) -> Vec<u8> {
         if !self.want_dsr && !self.want_da {
             return chunk.to_vec();
@@ -264,7 +264,7 @@ impl StartupQueryFilter {
     }
 
     /// Any held-back bytes at EOF (a query prefix that never completed).
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn flush(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.carry)
     }

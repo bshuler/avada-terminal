@@ -36,7 +36,8 @@ pub(crate) mod testing;
 mod live;
 
 // The G6/G7/G10 wiring proofs, which are about this module rather than part of it.
-#[cfg(test)]
+// Unix-only because they drive the pipeline through `testing::fake_tools`, a shell script.
+#[cfg(all(test, unix))]
 mod wiring_tests;
 
 use crate::install::{

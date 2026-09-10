@@ -187,7 +187,7 @@ pub fn read_frame_deadline<T: for<'de> serde::Deserialize<'de>>(
 /// the shared decoder. Peeking never consumes, so a timeout leaves the stream byte-exact for
 /// whoever reads next — unlike a partial blocking read, which would desync the framing.
 #[cfg(windows)]
-#[tracing::instrument(level = "debug", ret)]
+#[tracing::instrument(level = "debug")]
 pub fn read_frame_deadline<T: for<'de> serde::Deserialize<'de>>(
     conn: &Conn,
     budget: Duration,

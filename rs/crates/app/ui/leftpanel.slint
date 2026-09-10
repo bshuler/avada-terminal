@@ -294,11 +294,12 @@ component SearchGlyph inherits Rectangle {
     }
 }
 
-// One module entry on the mode strip (track H4). Same footprint as `ModeButton` so the
-// strip reads as one row; the glyph is the module's own SVG path (viewbox 16x16, stroked
-// in the ink) or the plug glyph when it shipped none. Clicking hands the entry's KEY
-// (`<owner/repo>#<entry-id>`) back to Rust, which activates the module and projects its
-// rows; the -1 mode hides every built-in section at once (see `LEFT_MODE_RAIL`).
+// One module entry on the rail strip (track H4). Every button shares this footprint so
+// the strip reads as one row; the glyph is the module's own SVG path (viewbox 16x16,
+// stroked in the ink) or the plug glyph when it shipped none. Clicking hands the entry's
+// KEY (`<owner/repo>#<entry-id>`) back to Rust (`State::rail_activate`), which activates
+// the module and projects its rows; while `RailAdapter.active` names an entry, every
+// built-in section below the strip is hidden at once.
 component RailButton inherits Rectangle {
     in property <RailEntryRow> entry;
     in property <bool> active;
