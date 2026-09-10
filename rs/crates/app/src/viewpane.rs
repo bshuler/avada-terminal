@@ -273,15 +273,19 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<Vi
         // is shown as text, which is honest for the first two and a NOTICE for the third.
         PaneKind::Data => data_rows(&path, &BTreeSet::new(), palette),
         PaneKind::Table => table_rows(&path),
-        PaneKind::Image => vec![ViewRow::inert(
-            role::NOTICE,
-            "Image preview is not available in this build",
-        )],
-        // Family A, a module surface (drawn by the module, not projected), or a kind this
-        // build does not know: nothing to project.
-        PaneKind::Terminal | PaneKind::Tool(_) | PaneKind::Browser | PaneKind::Module(_) => {
-            Vec::new()
-        }
+        // Family A, a module surface (drawn by the module, not projected), an image (drawn
+        // as a texture by `imagepane`, likewise not projected), or a kind this build does
+        // not know: nothing to project.
+        //
+        // `Image` used to answer here with a NOTICE reading "Image preview is not available
+        // in this build". Track V3 made that false and unreachable in the same commit:
+        // `paneview::project` intercepts an image pane before `model_for` is ever asked, so
+        // the only way to see that sentence was to call `rows_for` from a test.
+        PaneKind::Terminal
+        | PaneKind::Tool(_)
+        | PaneKind::Browser
+        | PaneKind::Image
+        | PaneKind::Module(_) => Vec::new(),
     }
 }
 
@@ -2276,6 +2280,11 @@ mod tests {
         let t = f.display().to_string();
         assert!(rows_for(&PaneKind::Terminal, Some(&t), 0).is_empty());
         assert!(rows_for(&PaneKind::Tool("claude".into()), Some(&t), 0).is_empty());
+        // An image is family B but still projects nothing: `paneview::project` sends it to
+        // `imagepane`'s texture model before `model_for` is reached. The empty answer here
+        // is what says "somebody else draws this", and it is load-bearing --- a row put
+        // back would be painted over an image that is already on screen.
+        assert!(rows_for(&PaneKind::Image, Some(&t), 0).is_empty());
         assert!(!rows_for(&PaneKind::FileViewer, Some(&t), 0).is_empty());
         // No target is a notice, not a panic and not an empty pane.
         let none = rows_for(&PaneKind::FileBrowser, None, 0);
