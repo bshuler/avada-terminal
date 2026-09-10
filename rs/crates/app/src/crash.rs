@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use avada_core::persistence::paths;
 
-const REPO_NEW_ISSUE: &str = "https://github.com/Eyalm321/hyperpanes/issues/new";
+const REPO_NEW_ISSUE: &str = "https://github.com/bshuler/avada-terminal/issues/new";
 
 /// The crash-log path the panic hook writes to (must match `main`'s hook).
 #[tracing::instrument(level = "debug", ret)]

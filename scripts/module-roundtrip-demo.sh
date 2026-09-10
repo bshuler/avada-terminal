@@ -40,7 +40,13 @@ done
 SRC="${AVADA_FILES_SRC:-}"
 if [ -z "$SRC" ]; then
   SRC="$A/src"
-  git clone -q "https://github.com/$MODULE" "$SRC" || { echo "FAIL: clone $MODULE"; exit 1; }
+  # The module repos are private: without a tty git cannot ask for a username, so
+  # prefer `gh`, which reads the logged-in account's token itself and never prints it.
+  if command -v gh >/dev/null 2>&1; then
+    gh repo clone "$MODULE" "$SRC" -- -q || { echo "FAIL: clone $MODULE (gh)"; exit 1; }
+  else
+    git clone -q "https://github.com/$MODULE" "$SRC" || { echo "FAIL: clone $MODULE"; exit 1; }
+  fi
 fi
 git clone -q --bare "$SRC" "$A/mirror/$MODULE.git" || { echo "FAIL: bare mirror"; exit 1; }
 TAG=$(git -C "$A/mirror/$MODULE.git" tag | sort -V | tail -1)

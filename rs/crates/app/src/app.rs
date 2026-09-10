@@ -38,7 +38,7 @@ use crate::{filedrop, theme, window, AppWindow, KeyMsg};
 
 /// The GitHub releases page the NotifyOnly update flow (Linux/macOS) points the user at —
 /// the human URL matching `update::LATEST_RELEASE_API`'s repo.
-const RELEASES_PAGE: &str = "https://github.com/Eyalm321/hyperpanes/releases/latest";
+const RELEASES_PAGE: &str = "https://github.com/bshuler/avada-terminal/releases/latest";
 
 /// Fast (active) pump cadence in ms — the responsive default whenever there's work to do.
 pub const TICK_FAST_MS: u64 = 8;

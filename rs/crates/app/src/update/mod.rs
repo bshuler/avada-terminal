@@ -57,8 +57,10 @@ pub fn apply_strategy() -> ApplyStrategy {
 /// panel's "About" block and compared against the latest GitHub release tag.
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The "latest release" REST endpoint for the public `Eyalm321/avada` repo.
-const LATEST_RELEASE_API: &str = "https://api.github.com/repos/Eyalm321/avada/releases/latest";
+/// The "latest release" REST endpoint for the public `bshuler/avada-terminal` repo — the
+/// fork that ships the renamed app. Releases are cut there, not on the upstream repo.
+const LATEST_RELEASE_API: &str =
+    "https://api.github.com/repos/bshuler/avada-terminal/releases/latest";
 
 /// GitHub rejects API requests without a User-Agent; identify ourselves + the running version.
 const USER_AGENT: &str = concat!("avada-updater/", env!("CARGO_PKG_VERSION"));
@@ -427,7 +429,7 @@ mod tests {
 
     #[test]
     fn api_endpoint_targets_the_public_repo() {
-        assert!(LATEST_RELEASE_API.contains("Eyalm321/avada"));
+        assert!(LATEST_RELEASE_API.contains("bshuler/avada-terminal"));
         assert!(LATEST_RELEASE_API.ends_with("/releases/latest"));
     }
 }

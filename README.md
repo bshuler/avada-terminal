@@ -33,7 +33,7 @@ MCP** lets an agent — or a whole recursive agent org — watch and drive your 
 > app** (Slint · `alacritty_terminal` · `portable-pty`) — one self‑contained binary for **Windows,
 > Linux, and macOS**, replacing the original Electron build. Every feature below is implemented;
 > expect rough edges on the newer cross‑platform ports, and please file issues. Prebuilt downloads
-> are on the [Releases page](https://github.com/Eyalm321/hyperpanes/releases).
+> are on the [Releases page](https://github.com/bshuler/avada-terminal/releases).
 
 ## Features
 
@@ -148,7 +148,7 @@ MCP** lets an agent — or a whole recursive agent org — watch and drive your 
 
 ## Install
 
-Grab a prebuilt binary from the [**Releases page**](https://github.com/Eyalm321/hyperpanes/releases):
+Grab a prebuilt binary from the [**Releases page**](https://github.com/bshuler/avada-terminal/releases):
 
 - **Linux** — `avada-<ver>-x86_64.AppImage` (`chmod +x` and run), or the `.deb` / `.rpm`.
 - **macOS** — `avada-<ver>.dmg`.

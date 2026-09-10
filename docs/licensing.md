@@ -224,12 +224,15 @@ What the host does with each answer:
 
 ## Follow-ups (outside G8)
 
-* **App wiring.** Two calls the app does not yet make. Nothing calls
-  `Shared::install_license`, so every `/license/...` route answers 503 in a
-  running build; and nothing builds a `CachedGate`, so a build that *did* ship
-  commercial modules would refuse them all. Both belong with the module host the
-  app still does not construct.
-* **App UI.** Showing the banner, the licence list and the device-flow dialog is
-  a later track.
-* **`checkin_all` on a schedule.** Nothing calls it yet; the app should, once per
-  launch and then daily.
+* **App wiring — done.** The app installs the licence service at start-up
+  (`rs/crates/app/src/control_host.rs`, `avada_core::app::install_module_services`),
+  so the `/license/...` routes answer in a running build; the module runtime
+  builds a `CachedGate` and consults it before a commercial module is spawned
+  (`rs/crates/app/src/module_runtime.rs`); and `checkin_all` runs once at launch
+  and then on the daily timer in the same runtime.
+* **App UI.** The banner and the licence list are drawn; the device-flow dialog
+  is a later track.
+* **Real signature verification on Windows.** `WinVerifyTrust` is still the
+  stub; the minisign path is what ships today.
+* **Token storage.** The file-backed `TokenStore` is what ships; the keyring
+  swap is open.
