@@ -1007,165 +1007,192 @@ mod tests {
         );
     }
 
+    /// Runs a ConPTY-owning daemon test on a hand-built multi-thread runtime whose teardown
+    /// is time-bounded. `#[tokio::test]` joins its worker threads with no timeout when the
+    /// runtime drops; on Windows a live ConPTY's `ClosePseudoConsole` runs on a worker during
+    /// that join, so one stuck teardown freezes the whole test binary until the CI job's
+    /// timeout kills it — which is what hung the Windows release runs. `shutdown_timeout`
+    /// turns any stuck-worker teardown into a bounded wait plus a leaked thread: the same
+    /// "leak a thread, never freeze the process" bargain the ConPTY close itself makes, and
+    /// what production gets for free because its pty-host is a separate process that exits via
+    /// `process::exit` instead of dropping a runtime. These tests collapse both roles onto one
+    /// Drop-joined runtime, so they need the bound the macro cannot express.
+    fn conpty_test<Fut>(body: impl FnOnce() -> Fut)
+    where
+        Fut: std::future::Future<Output = ()>,
+    {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .expect("build the test runtime");
+        rt.block_on(body());
+        rt.shutdown_timeout(Duration::from_secs(5));
+    }
+
     // End-to-end over the real pipe: handshake, spawn a ConPTY, drive it, see its output
     // stream back, and kill it. This is the whole daemon contract on Windows.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn daemon_spawns_a_conpty_and_streams_its_output() {
-        let salt = test_salt("e2e");
-        // A host salt: this daemon owns the ConPTYs itself, with no pty-host to spawn.
-        let salt = host_salt(&salt);
-        let _daemon = start(&salt).await;
+    #[test]
+    fn daemon_spawns_a_conpty_and_streams_its_output() {
+        conpty_test(|| async {
+            let salt = test_salt("e2e");
+            // A host salt: this daemon owns the ConPTYs itself, with no pty-host to spawn.
+            let salt = host_salt(&salt);
+            let _daemon = start(&salt).await;
 
-        let mut conn = client(&salt);
-        send(
-            &mut conn,
-            &ClientMsg::Hello {
-                proto_ver: PROTO_VER,
-            },
-        );
-        let hello = recv_until(&conn, Duration::from_secs(5), |m| {
-            matches!(m, DaemonMsg::Hello { .. })
-        })
-        .expect("daemon answers the handshake");
-        match hello {
-            DaemonMsg::Hello { proto_ver, .. } => assert_eq!(proto_ver, PROTO_VER),
-            other => panic!("expected Hello, got {other:?}"),
-        }
+            let mut conn = client(&salt);
+            send(
+                &mut conn,
+                &ClientMsg::Hello {
+                    proto_ver: PROTO_VER,
+                },
+            );
+            let hello = recv_until(&conn, Duration::from_secs(5), |m| {
+                matches!(m, DaemonMsg::Hello { .. })
+            })
+            .expect("daemon answers the handshake");
+            match hello {
+                DaemonMsg::Hello { proto_ver, .. } => assert_eq!(proto_ver, PROTO_VER),
+                other => panic!("expected Hello, got {other:?}"),
+            }
 
-        // `cmd /c echo` is the smallest thing that proves a real console was allocated and
-        // its output made it back through the ConPTY, the registry, the bus and the pipe.
-        send(
-            &mut conn,
-            &ClientMsg::Create(SpawnSpec {
-                uid: Some("pane-e2e".into()),
-                shell: Some("cmd.exe".into()),
-                args: Some(vec!["/c".into(), "echo avada-ok".into()]),
-                cols: Some(80),
-                rows: Some(24),
-                ..Default::default()
-            }),
-        );
-        let created = recv_until(&conn, Duration::from_secs(5), |m| {
-            matches!(m, DaemonMsg::Created { .. })
-        })
-        .expect("daemon acks the create");
-        assert!(matches!(created, DaemonMsg::Created { uid } if uid == "pane-e2e"));
+            // `cmd /c echo` is the smallest thing that proves a real console was allocated and
+            // its output made it back through the ConPTY, the registry, the bus and the pipe.
+            send(
+                &mut conn,
+                &ClientMsg::Create(SpawnSpec {
+                    uid: Some("pane-e2e".into()),
+                    shell: Some("cmd.exe".into()),
+                    args: Some(vec!["/c".into(), "echo avada-ok".into()]),
+                    cols: Some(80),
+                    rows: Some(24),
+                    ..Default::default()
+                }),
+            );
+            let created = recv_until(&conn, Duration::from_secs(5), |m| {
+                matches!(m, DaemonMsg::Created { .. })
+            })
+            .expect("daemon acks the create");
+            assert!(matches!(created, DaemonMsg::Created { uid } if uid == "pane-e2e"));
 
-        assert!(
-            output_contains(&conn, Duration::from_secs(10), "avada-ok"),
-            "the ConPTY's output should stream back as Data events"
-        );
+            assert!(
+                output_contains(&conn, Duration::from_secs(10), "avada-ok"),
+                "the ConPTY's output should stream back as Data events"
+            );
 
-        send(
-            &mut conn,
-            &ClientMsg::Kill {
-                uid: "pane-e2e".into(),
-            },
-        );
-        assert!(
-            wait_until_gone(&mut conn, "pane-e2e", Duration::from_secs(10)),
-            "a killed session drops out of the session list"
-        );
+            send(
+                &mut conn,
+                &ClientMsg::Kill {
+                    uid: "pane-e2e".into(),
+                },
+            );
+            assert!(
+                wait_until_gone(&mut conn, "pane-e2e", Duration::from_secs(10)),
+                "a killed session drops out of the session list"
+            );
+        });
     }
 
     // The Windows live upgrade (M1), in miniature. A daemon proxying to a pty-host stands
     // down on `Takeover` — and the sessions, which live in the HOST, are untouched. That is
     // the whole reason the ConPTYs are not in the daemon: nothing has to be handed over,
     // because nothing moves.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn takeover_stands_the_daemon_down_and_leaves_the_terminals_running() {
-        let salt = test_salt("takeover");
-        // Start the pty-host FIRST so the daemon's `connect_or_spawn` finds it live and never
-        // tries to spawn `current_exe` (which, in a test binary, is not the app).
-        let host = host_salt(&salt);
-        let _pty_host = start(&host).await;
-        let daemon = start(&salt).await;
+    #[test]
+    fn takeover_stands_the_daemon_down_and_leaves_the_terminals_running() {
+        conpty_test(|| async {
+            let salt = test_salt("takeover");
+            // Start the pty-host FIRST so the daemon's `connect_or_spawn` finds it live and never
+            // tries to spawn `current_exe` (which, in a test binary, is not the app).
+            let host = host_salt(&salt);
+            let _pty_host = start(&host).await;
+            let daemon = start(&salt).await;
 
-        // Create a terminal through the daemon; it is really created in the host.
-        let mut conn = client(&salt);
-        send(
-            &mut conn,
-            &ClientMsg::Create(SpawnSpec {
-                uid: Some("pane-survivor".into()),
-                shell: Some("cmd.exe".into()),
-                args: Some(vec!["/k".into(), "echo survivor-ready".into()]),
-                cols: Some(80),
-                rows: Some(24),
-                ..Default::default()
-            }),
-        );
-        assert!(
-            recv_until(&conn, Duration::from_secs(5), |m| matches!(
-                m,
-                DaemonMsg::Created { .. }
-            ))
-            .is_some(),
-            "the daemon creates the session in the pty-host"
-        );
-        // `Created` is the daemon's word, given before the pty-host has finished spawning:
-        // the daemon forwards `Create` fire-and-forget and lists its own shadow of the
-        // session, while the host installs the session in its registry only after the
-        // synchronous ConPTY spawn returns. Wait for the terminal to be real before the
-        // takeover, or the "still there afterwards" check races the spawn itself.
-        assert!(
-            output_contains(&conn, Duration::from_secs(10), "survivor-ready"),
-            "the pty-host spawned the survivor"
-        );
-        let mut host_conn = client(&host);
-        assert!(
-            wait_until_listed(&mut host_conn, "pane-survivor", Duration::from_secs(10)),
-            "the pty-host lists the survivor before the takeover"
-        );
+            // Create a terminal through the daemon; it is really created in the host.
+            let mut conn = client(&salt);
+            send(
+                &mut conn,
+                &ClientMsg::Create(SpawnSpec {
+                    uid: Some("pane-survivor".into()),
+                    shell: Some("cmd.exe".into()),
+                    args: Some(vec!["/k".into(), "echo survivor-ready".into()]),
+                    cols: Some(80),
+                    rows: Some(24),
+                    ..Default::default()
+                }),
+            );
+            assert!(
+                recv_until(&conn, Duration::from_secs(5), |m| matches!(
+                    m,
+                    DaemonMsg::Created { .. }
+                ))
+                .is_some(),
+                "the daemon creates the session in the pty-host"
+            );
+            // `Created` is the daemon's word, given before the pty-host has finished spawning:
+            // the daemon forwards `Create` fire-and-forget and lists its own shadow of the
+            // session, while the host installs the session in its registry only after the
+            // synchronous ConPTY spawn returns. Wait for the terminal to be real before the
+            // takeover, or the "still there afterwards" check races the spawn itself.
+            assert!(
+                output_contains(&conn, Duration::from_secs(10), "survivor-ready"),
+                "the pty-host spawned the survivor"
+            );
+            let mut host_conn = client(&host);
+            assert!(
+                wait_until_listed(&mut host_conn, "pane-survivor", Duration::from_secs(10)),
+                "the pty-host lists the survivor before the takeover"
+            );
 
-        // A successor asks the incumbent to stand down.
-        let mut upgrade = client(&salt);
-        send(&mut upgrade, &ClientMsg::Takeover);
-        let ack = recv_until(&upgrade, Duration::from_secs(5), |m| {
-            matches!(m, DaemonMsg::Sessions(_))
-        })
-        .expect("the incumbent acknowledges the takeover");
-        assert!(
-            matches!(&ack, DaemonMsg::Sessions(s) if s.iter().any(|m| m.uid == "pane-survivor")),
-            "the ack reports what the successor is inheriting: {ack:?}"
-        );
-        assert!(
-            daemon.lifecycle.is_shutting_down(),
-            "the incumbent stands down after acknowledging"
-        );
+            // A successor asks the incumbent to stand down.
+            let mut upgrade = client(&salt);
+            send(&mut upgrade, &ClientMsg::Takeover);
+            let ack = recv_until(&upgrade, Duration::from_secs(5), |m| {
+                matches!(m, DaemonMsg::Sessions(_))
+            })
+            .expect("the incumbent acknowledges the takeover");
+            assert!(
+                matches!(&ack, DaemonMsg::Sessions(s) if s.iter().any(|m| m.uid == "pane-survivor")),
+                "the ack reports what the successor is inheriting: {ack:?}"
+            );
+            assert!(
+                daemon.lifecycle.is_shutting_down(),
+                "the incumbent stands down after acknowledging"
+            );
 
-        // The crux: ask the PTY-HOST directly. The terminal is still there.
-        send(&mut host_conn, &ClientMsg::ListSessions);
-        let listed = recv_until(&host_conn, Duration::from_secs(5), |m| {
-            matches!(m, DaemonMsg::Sessions(_))
-        })
-        .expect("the pty-host answers");
-        assert!(
-            matches!(listed, DaemonMsg::Sessions(s) if s.iter().any(|m| m.uid == "pane-survivor")),
-            "the takeover must NOT touch the terminals living in the pty-host"
-        );
+            // The crux: ask the PTY-HOST directly. The terminal is still there.
+            send(&mut host_conn, &ClientMsg::ListSessions);
+            let listed = recv_until(&host_conn, Duration::from_secs(5), |m| {
+                matches!(m, DaemonMsg::Sessions(_))
+            })
+            .expect("the pty-host answers");
+            assert!(
+                matches!(listed, DaemonMsg::Sessions(s) if s.iter().any(|m| m.uid == "pane-survivor")),
+                "the takeover must NOT touch the terminals living in the pty-host"
+            );
 
-        // And the successor can now claim the name the incumbent gave up.
-        drop(conn);
-        drop(upgrade);
-        assert!(
-            bind_when_released(&pipe_name(&salt), Duration::from_secs(5)).is_ok(),
-            "the stood-down daemon releases its pipe for the successor"
-        );
+            // And the successor can now claim the name the incumbent gave up.
+            drop(conn);
+            drop(upgrade);
+            assert!(
+                bind_when_released(&pipe_name(&salt), Duration::from_secs(5)).is_ok(),
+                "the stood-down daemon releases its pipe for the successor"
+            );
 
-        // Tidy up through the front door: the survivor is a live interactive `cmd.exe` in a
-        // ConPTY, and nothing else in this test ever ends it. Left alive, it is torn down
-        // by the runtime's shutdown instead — a pseudo-console close on a worker thread
-        // while the runtime is joining its workers, which is exactly the shape that hung
-        // the Windows release runs. Kill it while the pty-host is still serving.
-        send(
-            &mut host_conn,
-            &ClientMsg::Kill {
-                uid: "pane-survivor".into(),
-            },
-        );
-        assert!(
-            wait_until_gone(&mut host_conn, "pane-survivor", Duration::from_secs(10)),
-            "the pty-host drops the killed survivor from its list"
-        );
+            // Tidy up through the front door: the survivor is a live interactive `cmd.exe` in a
+            // ConPTY, and nothing else in this test ever ends it. Left alive, it is torn down
+            // by the runtime's shutdown instead — a pseudo-console close on a worker thread
+            // while the runtime is joining its workers, which is exactly the shape that hung
+            // the Windows release runs. Kill it while the pty-host is still serving.
+            send(
+                &mut host_conn,
+                &ClientMsg::Kill {
+                    uid: "pane-survivor".into(),
+                },
+            );
+            assert!(
+                wait_until_gone(&mut host_conn, "pane-survivor", Duration::from_secs(10)),
+                "the pty-host drops the killed survivor from its list"
+            );
+        });
     }
 }
