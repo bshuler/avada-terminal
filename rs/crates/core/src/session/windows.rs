@@ -1026,8 +1026,16 @@ mod tests {
             .enable_all()
             .build()
             .expect("build the test runtime");
-        rt.block_on(body());
+        // A panicking assertion in `body` (these tests are full of them) must not skip the
+        // bounded shutdown below: an escaping panic drops `rt` directly, and that drop joins
+        // the workers with no timeout — the very freeze this helper exists to prevent, and
+        // why the Windows release runs hung with no failure ever printed. Catch it, bound the
+        // teardown, then resume, so a flaky assertion fails the test instead of the binary.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.block_on(body())));
         rt.shutdown_timeout(Duration::from_secs(5));
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     // End-to-end over the real pipe: handshake, spawn a ConPTY, drive it, see its output
