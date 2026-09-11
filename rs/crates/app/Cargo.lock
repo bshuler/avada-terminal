@@ -565,6 +565,7 @@ version = "0.2.12"
 dependencies = [
  "arboard",
  "avada-core",
+ "avada-csv-parse",
  "avada-markdown-parse",
  "avada-terminal-widget",
  "i-slint-backend-testing",
@@ -626,6 +627,14 @@ dependencies = [
  "uuid",
  "whisper-rs",
  "windows",
+]
+
+[[package]]
+name = "avada-csv-parse"
+version = "0.1.0"
+dependencies = [
+ "avada-module-sdk",
+ "tracing",
 ]
 
 [[package]]

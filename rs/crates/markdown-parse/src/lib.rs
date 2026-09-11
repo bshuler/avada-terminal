@@ -106,6 +106,8 @@ pub fn parse_markdown(text: &str) -> Vec<Block> {
                 blocks.push(Block::Table {
                     headers,
                     rows: body_rows,
+                    // A GFM table is a prose table: proportional, author-aligned.
+                    dense: false,
                 });
                 open = None;
                 i = j;
@@ -650,6 +652,7 @@ mod tests {
             vec![Block::Table {
                 headers: vec![Cell::aligned("a", 0), Cell::aligned("b", 1), Cell::aligned("c", 2)],
                 rows: vec![vec![Cell::aligned("1", 0), Cell::aligned("2", 1), Cell::aligned("3", 2)]],
+                dense: false,
             }]
         );
     }

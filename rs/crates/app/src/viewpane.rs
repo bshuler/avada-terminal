@@ -597,11 +597,24 @@ pub(crate) fn project_doc(blocks: &[Block]) -> Vec<ViewRow> {
             }
             Block::Quote { text } => out.push(ViewRow::inert(role::QUOTE, clip(text))),
             Block::Rule => out.push(ViewRow::inert(role::RULE, "")),
-            Block::Table { headers, rows } => {
-                let aligns: Vec<i32> = headers.iter().map(|c| c.align as i32).collect();
-                out.push(table_row(role::TABLE_HEAD, &cell_texts(headers), &aligns));
-                for r in rows {
-                    out.push(table_row(role::TABLE_ROW, &cell_texts(r), &aligns));
+            Block::Table {
+                headers,
+                rows,
+                dense,
+            } => {
+                if *dense {
+                    // A data grid: the cells arrived raw, so the host measures the columns
+                    // and pads them monospace — the pixel half of the split a table module
+                    // owns the parse half of.
+                    out.append(&mut grid_rows(headers, rows));
+                } else {
+                    // A prose table: proportional columns, each cell keeping the alignment
+                    // its author wrote.
+                    let aligns: Vec<i32> = headers.iter().map(|c| c.align as i32).collect();
+                    out.push(table_row(role::TABLE_HEAD, &cell_texts(headers), &aligns));
+                    for r in rows {
+                        out.push(table_row(role::TABLE_ROW, &cell_texts(r), &aligns));
+                    }
                 }
             }
             // A fenced block's `text` splits back into the per-line rows the viewer
@@ -662,6 +675,47 @@ fn diagram_rows(src: &[String]) -> Vec<ViewRow> {
 #[tracing::instrument(level = "debug", ret)]
 fn cell_texts(cells: &[Cell]) -> Vec<String> {
     cells.iter().map(|c| c.text.clone()).collect()
+}
+
+/// A dense [`Block::Table`] as the monospace grid the pane paints. The cells arrived
+/// raw, so this is where the columns are measured: the header and body are folded back
+/// into the records [`crate::csv::Layout`] measures, and every cell is padded to its
+/// column's width and escaped for the markdown channel.
+///
+/// The row's `detail` is its 1-based record number (the header is row 1, the way a
+/// spreadsheet counts), and its `text` is the verbatim cells joined by ` | ` — what a
+/// screen reader announces and the copy path yields. A prose table leaves `detail`
+/// empty, which is how the shared 13/14 view block tells a grid from a document table.
+#[tracing::instrument(level = "debug", ret)]
+fn grid_rows(headers: &[Cell], rows: &[Vec<Cell>]) -> Vec<ViewRow> {
+    let mut records: Vec<Vec<String>> = Vec::with_capacity(rows.len() + 1);
+    records.push(headers.iter().map(|c| c.text.clone()).collect());
+    records.extend(
+        rows.iter()
+            .map(|r| r.iter().map(|c| c.text.clone()).collect()),
+    );
+    let cap = crate::csv::MAX_COL_CHARS;
+    let layout = crate::csv::Layout::of(&records, cap);
+    records
+        .iter()
+        .enumerate()
+        .map(|(i, rec)| {
+            let role = if i == 0 {
+                role::TABLE_HEAD
+            } else {
+                role::TABLE_ROW
+            };
+            let mut row = ViewRow::inert(role, clip(&rec.join(" | ")));
+            row.detail = (i + 1).to_string();
+            row.cells = (0..layout.columns())
+                .map(|j| TableCell {
+                    text: layout.cell(rec, j, cap),
+                    align: if layout.numeric[j] { 2 } else { 0 },
+                })
+                .collect();
+            row
+        })
+        .collect()
 }
 
 /// One table line as a row. Short lines are padded and long ones truncated to the
@@ -790,54 +844,17 @@ fn now_secs() -> u64 {
 /// is how the shared 13/14 view block tells a grid from a document table.
 #[tracing::instrument(level = "debug", ret)]
 pub fn table_rows(file: &Path) -> Vec<ViewRow> {
-    let text = match read_text(file) {
-        Ok(t) => t,
-        Err(row) => return vec![*row],
-    };
-    let delim = crate::csv::delimiter_for(file);
-    let records = match crate::csv::parse(&text, delim) {
-        Ok(r) => r,
-        Err(e) => {
-            return vec![ViewRow::inert(
-                role::NOTICE,
-                format!("Cannot parse as {}: {e}", crate::csv::format_name(delim)),
-            )];
+    match read_text(file) {
+        // The parse — records, the cap, the empty/unparseable notices — lives in the
+        // shared [`avada_csv_parse`] crate, so this built-in path and the `avada-table`
+        // module produce the identical `dense` [`Block::Table`]. `project_doc` then does
+        // the host's half: measuring the columns and painting the monospace grid.
+        Ok(text) => {
+            let delim = avada_csv_parse::delimiter_for(file);
+            project_doc(&avada_csv_parse::parse_table(&text, delim))
         }
-    };
-    if records.is_empty() {
-        return vec![ViewRow::inert(role::NOTICE, "Empty file")];
+        Err(row) => vec![*row],
     }
-    let total = records.len();
-    let shown = &records[..total.min(MAX_LINES)];
-    let cap = crate::csv::MAX_COL_CHARS;
-    let layout = crate::csv::Layout::of(shown, cap);
-    let mut rows: Vec<ViewRow> = shown
-        .iter()
-        .enumerate()
-        .map(|(i, rec)| {
-            let role = if i == 0 {
-                role::TABLE_HEAD
-            } else {
-                role::TABLE_ROW
-            };
-            let mut row = ViewRow::inert(role, clip(&rec.join(" | ")));
-            row.detail = (i + 1).to_string();
-            row.cells = (0..layout.columns())
-                .map(|j| TableCell {
-                    text: layout.cell(rec, j, cap),
-                    align: if layout.numeric[j] { 2 } else { 0 },
-                })
-                .collect();
-            row
-        })
-        .collect();
-    if total > MAX_LINES {
-        rows.push(ViewRow::inert(
-            role::NOTICE,
-            format!("… {} more rows not shown", total - MAX_LINES),
-        ));
-    }
-    rows
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,30 @@
+[package]
+name = "avada-table"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "A CSV/TSV table pane for Avada Terminal"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "avada-table"
+path = "src/main.rs"
+
+[dependencies]
+# Built by the host from source at install time, same as every module. The parser is a
+# workspace crate rather than a copy: the app's built-in table view and this module must
+# agree row-for-row, and one crate is the only way to keep them from drifting.
+avada-module-sdk = { path = "../../crates/module-sdk" }
+avada-csv-parse = { path = "../../crates/csv-parse" }
+serde_json = "1"
+
+[dev-dependencies]
+libc = "0.2"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

@@ -113,6 +113,17 @@ pub enum Block {
     Rule,
     /// A table: a header row and the body rows, each a list of [`Cell`]s. Alignment rides
     /// on the cell rather than a parallel column list, so a row is self-describing.
+    ///
+    /// `dense` picks which of two tables this is, and the two typeset differently:
+    ///
+    /// - A **prose** table (`dense: false`) is a document table — a GFM `| a | b |`. It
+    ///   draws proportionally, columns sharing the width, and honours each [`Cell`]'s own
+    ///   `align` (the author's `:--:`).
+    /// - A **dense** table (`dense: true`) is a data grid — a CSV/TSV opened as a table.
+    ///   The cells arrive **raw** (verbatim field text, `align` left at 0); the host
+    ///   measures the columns, pads them monospace, and derives alignment itself (a numeric
+    ///   column sits flush right). A cell's own `align` is ignored, because the grid's shape
+    ///   is a fact about the data, not a choice the author made per row.
     Table {
         /// The header cells, left to right.
         #[serde(default)]
@@ -121,6 +132,11 @@ pub enum Block {
         /// whoever built it.
         #[serde(default)]
         rows: Vec<Vec<Cell>>,
+        /// A data grid (monospace, host-measured columns, numeric-aware alignment) rather
+        /// than a prose table (proportional, cell-authored alignment). Defaults to the
+        /// prose table, so an older sender's table restores as one.
+        #[serde(default)]
+        dense: bool,
     },
     /// A fenced or indented code block. `text` is the verbatim source with its own
     /// newlines; `lang` is the fence's info word (`rust`, `sh`, empty for none) so the
@@ -253,6 +269,7 @@ mod tests {
         let table = Block::Table {
             headers: vec![Cell::plain("Name"), Cell::aligned("Size", 2)],
             rows: vec![vec![Cell::plain("a.txt"), Cell::aligned("12", 2)]],
+            dense: false,
         };
         let wire = serde_json::to_value(&table).unwrap();
         assert_eq!(wire["kind"], "table");
@@ -265,6 +282,33 @@ mod tests {
         // An omitted align defaults to left (0).
         let cell: Cell = serde_json::from_value(json!({ "text": "x" })).unwrap();
         assert_eq!(cell.align, 0);
+    }
+
+    #[test]
+    fn a_table_without_dense_restores_as_a_prose_table() {
+        // The grid flag is the prose table's default, so a table on the wire without it —
+        // an older sender's, or a markdown module's — comes back a prose table, not a grid.
+        let prose: Block = serde_json::from_value(json!({
+            "kind": "table",
+            "headers": [{ "text": "a" }],
+            "rows": [[{ "text": "1" }]],
+        }))
+        .unwrap();
+        assert_eq!(
+            prose,
+            Block::Table {
+                headers: vec![Cell::plain("a")],
+                rows: vec![vec![Cell::plain("1")]],
+                dense: false,
+            }
+        );
+        // And a grid says so on the wire.
+        let grid = Block::Table {
+            headers: vec![Cell::plain("a")],
+            rows: vec![vec![Cell::plain("1")]],
+            dense: true,
+        };
+        assert_eq!(serde_json::to_value(&grid).unwrap()["dense"], true);
     }
 
     #[test]

@@ -1,0 +1,35 @@
+# Manifest of the Avada table module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# This module is the panel *type* the built-in table view was: it claims `.csv` and its
+# kin, reads the file with its own `fs.read`, and hands the host a parsed document over
+# `host.doc.set`. It asks for nothing it does not use — no write, no rail, no commands —
+# because a data viewer only reads a file and typesets it.
+capabilities = [
+  "fs.read",
+  "ui.pane",
+  "events.subscribe",
+]
+
+[module]
+id = "bshuler/avada-table"
+name = "Table"
+version = "0.1.0"
+description = "Render CSV and TSV files as an aligned table"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+# One tier-5 pane, `table`, and the file types it claims. The host projects `opens` into
+# its opener table (core's `openers_project_every_pane_opens_claim_in_a_stable_order`); the
+# app routes a matching file to this surface instead of the built-in viewer and cues the
+# module with a `doc.open` carrying the surface and the path.
+[[contributions]]
+kind = "pane"
+id = "table"
+tier = 5
+label = "Table"
+opens = ["csv", "tsv", "tab"]

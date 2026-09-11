@@ -1,0 +1,18 @@
+[package]
+name = "avada-csv-parse"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+description = "The RFC 4180 CSV/TSV parser, shared by the app's built-in table view and the avada-table module."
+
+[dependencies]
+avada-module-sdk = { path = "../module-sdk" }
+tracing = "0.1"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

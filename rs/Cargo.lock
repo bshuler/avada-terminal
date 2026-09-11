@@ -181,6 +181,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "avada-csv-parse"
+version = "0.1.0"
+dependencies = [
+ "avada-module-sdk",
+ "tracing",
+]
+
+[[package]]
 name = "avada-editor"
 version = "0.1.0"
 dependencies = [
@@ -259,6 +267,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "avada-table"
+version = "0.1.0"
+dependencies = [
+ "avada-csv-parse",
+ "avada-module-sdk",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]
