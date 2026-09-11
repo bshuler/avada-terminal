@@ -3,12 +3,14 @@ resolver = "2"
 members = [
     "crates/core",
     "crates/module-sdk",
+    "crates/markdown-parse",
     "modules/files",
     "modules/git",
     "modules/tools",
     "modules/workspace",
     "modules/hyperpane",
     "modules/editor",
+    "modules/markdown",
     "modules/marketplace",
 ]
 # The spikes are throwaway, heavy-dependency (Slint/wgpu) crates owned entirely by

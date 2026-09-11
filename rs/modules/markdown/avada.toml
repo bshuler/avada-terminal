@@ -1,0 +1,35 @@
+# Manifest of the Avada markdown module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# This module is the panel *type* a preview once was: it claims `.md` and its kin, reads
+# the file with its own `fs.read`, and hands the host a parsed document over
+# `host.doc.set`. It asks for nothing it does not use — no write, no rail, no commands —
+# because a preview only reads a file and typesets it.
+capabilities = [
+  "fs.read",
+  "ui.pane",
+  "events.subscribe",
+]
+
+[module]
+id = "bshuler/avada-markdown"
+name = "Markdown"
+version = "0.1.0"
+description = "Render Markdown files as a formatted preview"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+# One tier-5 pane, `preview`, and the file types it claims. The host projects `opens`
+# into its opener table (core's `openers_project_every_pane_opens_claim_in_a_stable_order`);
+# the app routes a matching file to this surface instead of the built-in viewer and cues
+# the module with a `doc.open` carrying the surface and the path.
+[[contributions]]
+kind = "pane"
+id = "preview"
+tier = 5
+label = "Markdown"
+opens = ["md", "markdown", "mdown", "mkd"]
