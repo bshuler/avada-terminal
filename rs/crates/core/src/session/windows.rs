@@ -1151,5 +1151,21 @@ mod tests {
             bind_when_released(&pipe_name(&salt), Duration::from_secs(5)).is_ok(),
             "the stood-down daemon releases its pipe for the successor"
         );
+
+        // Tidy up through the front door: the survivor is a live interactive `cmd.exe` in a
+        // ConPTY, and nothing else in this test ever ends it. Left alive, it is torn down
+        // by the runtime's shutdown instead — a pseudo-console close on a worker thread
+        // while the runtime is joining its workers, which is exactly the shape that hung
+        // the Windows release runs. Kill it while the pty-host is still serving.
+        send(
+            &mut host_conn,
+            &ClientMsg::Kill {
+                uid: "pane-survivor".into(),
+            },
+        );
+        assert!(
+            wait_until_gone(&mut host_conn, "pane-survivor", Duration::from_secs(10)),
+            "the pty-host drops the killed survivor from its list"
+        );
     }
 }

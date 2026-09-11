@@ -104,7 +104,14 @@ jobs:
         with:
           workspaces: ${{ matrix.workspace }}
 
+      - name: Build tests
+        run: cd ${{ matrix.workspace }} && cargo test --all --no-run
+
+      # A wedged test binary must fail the run in minutes, not sit on the 6-hour default —
+      # and the log of a timed-out step is the only trace of a Windows hang we ever get,
+      # since scripts/check-windows.sh cross-compiles but cannot execute Windows tests.
       - name: Test
+        timeout-minutes: 30
         run: cd ${{ matrix.workspace }} && cargo test --all
 
   # Create the release exactly once, before any build job uploads into it.

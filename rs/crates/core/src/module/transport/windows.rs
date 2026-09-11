@@ -546,7 +546,10 @@ mod win_tests {
     fn round_trips_both_ways_and_closer_ends_it() {
         let (host, child) = pair().unwrap();
         let (mut reader, mut writer, closer) = host.split().unwrap();
-        let module = std::thread::spawn(move || {
+        // The module reports through a channel so the wait below has a deadline; a plain
+        // `join` would sit forever if the close never reached the module's read.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             let mut stream = child.connect().unwrap();
             stream
                 .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"module.event\"}\n")
@@ -563,7 +566,7 @@ mod win_tests {
             // After the closer fires the module's next read is EOF or a broken pipe.
             let mut rest = String::new();
             let after = lines.read_line(&mut rest);
-            (line, matches!(after, Ok(0) | Err(_)))
+            let _ = done_tx.send((line, matches!(after, Ok(0) | Err(_))));
         });
         let msg = reader.read_message().unwrap().unwrap();
         assert!(matches!(msg, Message::Notification(n) if n.method == "module.event"));
@@ -578,7 +581,9 @@ mod win_tests {
             Ok(None) | Err(FrameError::Io(_))
         ));
         assert!(writer.write_line("x").is_err());
-        let (line, eof) = module.join().unwrap();
+        let (line, eof) = done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the module sees the close within 10s");
         assert_eq!(
             line.trim(),
             "{\"jsonrpc\":\"2.0\",\"method\":\"host.ping\"}"

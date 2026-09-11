@@ -121,9 +121,35 @@ pub trait Pty: Send + Sync {
 /// `portable-pty` (conpty) implementation of [`Pty`]. The writer is `Arc`-shared with
 /// the reader thread, which answers ConPTY's startup cursor query (see [`spawn_pty`]).
 struct PortablePty {
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// `None` only once the Windows [`Drop`] has taken it for the off-thread close.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+}
+
+/// ConPTY teardown never runs on the caller's thread. Dropping the master calls
+/// `ClosePseudoConsole`, which blocks until the console host has flushed and gone away —
+/// and every session dies inside a daemon task, on a Tokio worker. A blocked drop there
+/// wedges the whole runtime: shutdown joins its workers with no timeout, so one stuck
+/// close freezes the daemon (and, in tests, the test binary — the v0.2.1 and v0.2.3
+/// Windows release runs sat in `cargo test` until the job timed out). The close moves to
+/// a detached thread; the worst case is a leaked thread, never a frozen process. Unix
+/// keeps the plain drop: closing a pty fd cannot block.
+#[cfg(windows)]
+impl Drop for PortablePty {
+    fn drop(&mut self) {
+        let master = match self.master.get_mut() {
+            Ok(m) => m.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(master) = master {
+            // A failed spawn drops the closure — and the master — right here, which is the
+            // pre-existing behaviour, not a new failure mode.
+            let _ = thread::Builder::new()
+                .name("hp-pty-close".into())
+                .spawn(move || drop(master));
+        }
+    }
 }
 
 impl Pty for PortablePty {
@@ -136,9 +162,11 @@ impl Pty for PortablePty {
 
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
-        self.master
-            .lock()
-            .unwrap()
+        let guard = self.master.lock().unwrap();
+        let Some(master) = guard.as_ref() else {
+            return Ok(());
+        };
+        master
             .resize(PtySize {
                 rows,
                 cols,
@@ -157,7 +185,8 @@ impl Pty for PortablePty {
     #[cfg(unix)]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn handoff_info(&self) -> Option<HandoffInfo> {
-        let master = self.master.lock().unwrap();
+        let guard = self.master.lock().unwrap();
+        let master = guard.as_ref()?;
         Some(HandoffInfo {
             master_fd: master.as_raw_fd()?,
             pgrp: master.process_group_leader(),
@@ -398,7 +427,7 @@ pub fn spawn_pty(
     drop(pair.slave);
 
     Ok(Box::new(PortablePty {
-        master: Mutex::new(pair.master),
+        master: Mutex::new(Some(pair.master)),
         writer,
         killer: Mutex::new(killer),
     }))
