@@ -40,6 +40,7 @@ pub mod caps;
 pub mod client;
 pub mod contract;
 pub mod descriptor;
+pub mod doc;
 pub mod grid;
 pub mod install;
 pub mod license;
