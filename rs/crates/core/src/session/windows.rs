@@ -1128,8 +1128,14 @@ mod tests {
                     ..Default::default()
                 }),
             );
+            // A generous budget: unlike the single-daemon e2e test, this cold start crosses TWO
+            // daemons — the daemon must establish its own connection to the pty-host (a connect
+            // that itself retries for up to 2s) before it can forward `Create` and answer
+            // `Created`. Under libtest's parallelism every sibling test owns a multi-worker
+            // runtime, so on a loaded Windows runner this first round-trip can take several
+            // seconds; 5s was too tight and timed the release run out here.
             assert!(
-                recv_until(&conn, Duration::from_secs(5), |m| matches!(
+                recv_until(&conn, Duration::from_secs(20), |m| matches!(
                     m,
                     DaemonMsg::Created { .. }
                 ))
@@ -1154,7 +1160,7 @@ mod tests {
             // A successor asks the incumbent to stand down.
             let mut upgrade = client(&salt);
             send(&mut upgrade, &ClientMsg::Takeover);
-            let ack = recv_until(&upgrade, Duration::from_secs(5), |m| {
+            let ack = recv_until(&upgrade, Duration::from_secs(10), |m| {
                 matches!(m, DaemonMsg::Sessions(_))
             })
             .expect("the incumbent acknowledges the takeover");
@@ -1169,7 +1175,7 @@ mod tests {
 
             // The crux: ask the PTY-HOST directly. The terminal is still there.
             send(&mut host_conn, &ClientMsg::ListSessions);
-            let listed = recv_until(&host_conn, Duration::from_secs(5), |m| {
+            let listed = recv_until(&host_conn, Duration::from_secs(10), |m| {
                 matches!(m, DaemonMsg::Sessions(_))
             })
             .expect("the pty-host answers");
@@ -1182,7 +1188,7 @@ mod tests {
             drop(conn);
             drop(upgrade);
             assert!(
-                bind_when_released(&pipe_name(&salt), Duration::from_secs(5)).is_ok(),
+                bind_when_released(&pipe_name(&salt), Duration::from_secs(10)).is_ok(),
                 "the stood-down daemon releases its pipe for the successor"
             );
 
