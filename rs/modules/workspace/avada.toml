@@ -1,0 +1,70 @@
+# Manifest of the Avada workspace module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# `fs.read` and `fs.write` are both scoped by the host to the open workspace root, and
+# this module never asks for the `_any` forms: the repo-local project file it reads and
+# the note it writes back are by definition inside the project, so a path outside it is
+# refused by the host rather than trusted to the module.
+#
+# `workspace.read` / `workspace.write` are deliberately *not* declared. They exist in the
+# capability vocabulary, but no wire method maps to them today
+# (`contract::methods::required_capability` answers `None` for every name), so declaring
+# them would ask the human to grant something that grants nothing. See the README.
+capabilities = [
+  "fs.read",
+  "fs.write",
+  "ui.rail",
+  "ui.pane",
+  "ui.commands",
+  "ui.toast",
+  "events.subscribe",
+  "panes.spawn",
+]
+
+[module]
+id = "bshuler/avada-workspace"
+name = "Workspace"
+version = "0.1.0"
+description = "The workspace tree, the saved-layout library and workspace sets, as a rail entry"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[[contributions]]
+kind = "rail"
+id = "workspace"
+tier = 1
+label = "Workspace"
+
+[[contributions]]
+kind = "command"
+id = "refresh"
+tier = 1
+label = "Workspace: Refresh"
+
+[[contributions]]
+kind = "command"
+id = "filter"
+tier = 1
+label = "Workspace: Filter"
+
+[[contributions]]
+kind = "command"
+id = "reveal"
+tier = 1
+label = "Workspace: Reveal a path"
+
+[[contributions]]
+kind = "command"
+id = "open-group"
+tier = 1
+label = "Workspace: Open every pane of a tab"
+
+[[contributions]]
+kind = "command"
+id = "note"
+tier = 1
+label = "Workspace: Note what a pane is for"

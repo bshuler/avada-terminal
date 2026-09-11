@@ -1,0 +1,73 @@
+# Manifest of the Avada Hyperpane module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# This module opens one terminal pane and then types into it, so it asks for both
+# `panes.spawn` and `panes.input` — separately granted, because opening a pane and
+# driving somebody's shell are different powers. It asks for no filesystem capability
+# at all: the only directory it cares about is its own data dir, which the host hands
+# it in the hello and which no capability guards.
+#
+# `skills.materialize` is what puts `skills/hyperpane/SKILL.md` in front of the agent
+# as an always-on rule; without it the pane still opens and the agent simply does not
+# know the app can be driven.
+capabilities = [
+  "ui.rail",
+  "ui.pane",
+  "ui.commands",
+  "ui.toast",
+  "events.subscribe",
+  "panes.spawn",
+  "panes.input",
+  "skills.materialize",
+]
+
+[module]
+id = "bshuler/avada-hyperpane"
+name = "Hyperpane"
+version = "0.1.0"
+description = "The always-on agent tab: a shell that drives Avada Terminal with `avada ctl`"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[skills]
+paths = ["skills"]
+
+[[contributions]]
+kind = "rail"
+id = "hyperpane"
+tier = 1
+label = "Hyperpane"
+
+[[contributions]]
+kind = "pane"
+id = "hyperpane"
+tier = 1
+label = "Hyperpane"
+
+[[contributions]]
+kind = "command"
+id = "open"
+tier = 1
+label = "Hyperpane: Open the tab"
+
+[[contributions]]
+kind = "command"
+id = "restart"
+tier = 1
+label = "Hyperpane: Restart the agent"
+
+[[contributions]]
+kind = "command"
+id = "send"
+tier = 1
+label = "Hyperpane: Send text to the agent"
+
+[[contributions]]
+kind = "command"
+id = "reveal"
+tier = 1
+label = "Hyperpane: Reveal the working directory"

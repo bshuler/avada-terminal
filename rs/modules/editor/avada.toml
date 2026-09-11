@@ -1,0 +1,86 @@
+# Manifest of the Avada editor module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# `fs.read`/`fs.write` are scoped by the host to the open workspace root; this module
+# never asks for the `_any` variants, so a path outside the project is refused by the
+# host rather than trusted to the module. `ui.pane` is what a tier-5 surface needs:
+# `host.grid.set` and `host.keymap.declare` are both gated on it.
+capabilities = [
+  "fs.read",
+  "fs.write",
+  "ui.rail",
+  "ui.pane",
+  "ui.commands",
+  "ui.prefs",
+  "ui.toast",
+  "events.subscribe",
+  "panes.spawn",
+]
+
+[module]
+id = "bshuler/avada-editor"
+name = "Editor"
+version = "0.1.0"
+description = "Edit workspace files in a grid pane, with Helix, Vim and modeless keymaps"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+# The rail entry lists the open buffers. It is tier 1 — rows — because that is all a
+# buffer list is; the editing happens in the tier-5 pane below.
+[[contributions]]
+kind = "rail"
+id = "editor"
+tier = 1
+label = "Editor"
+
+# One grid surface, named the same as the rail entry. See README "One surface, many
+# buffers" for why there is not one surface per open file.
+[[contributions]]
+kind = "pane"
+id = "editor"
+tier = 5
+label = "Editor"
+
+# One preference, `start_mode`. The host resolves keys before the module sees them, so a
+# modeless keymap never sends the module an action that would leave Normal mode; the
+# preference is how a modeless user says "start me in Insert" without the module having
+# to guess the dialect from traffic. See README "Modes and the modeless keymap".
+[[contributions]]
+kind = "prefs"
+id = "editor"
+tier = 1
+label = "Editor"
+
+[[contributions]]
+kind = "command"
+id = "open"
+tier = 1
+label = "Editor: Open a file"
+
+[[contributions]]
+kind = "command"
+id = "save"
+tier = 1
+label = "Editor: Save"
+
+[[contributions]]
+kind = "command"
+id = "close"
+tier = 1
+label = "Editor: Close the current buffer"
+
+[[contributions]]
+kind = "command"
+id = "next"
+tier = 1
+label = "Editor: Next buffer"
+
+[[contributions]]
+kind = "command"
+id = "prev"
+tier = 1
+label = "Editor: Previous buffer"

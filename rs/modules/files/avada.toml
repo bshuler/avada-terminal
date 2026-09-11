@@ -1,0 +1,63 @@
+# Manifest of the Avada files module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# `fs.read` is the whole point of this module and is scoped by the host to the open
+# workspace root; it never asks for `fs.read_any`, so a path outside the project is
+# refused by the host rather than trusted to the module.
+capabilities = [
+  "fs.read",
+  "ui.rail",
+  "ui.pane",
+  "ui.commands",
+  "ui.toast",
+  "events.subscribe",
+  "panes.spawn",
+]
+
+[module]
+id = "bshuler/avada-files"
+name = "Files"
+version = "0.1.0"
+description = "Browse the workspace as a tree and find files by fuzzy name"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[[contributions]]
+kind = "rail"
+id = "files"
+tier = 1
+label = "Files"
+
+[[contributions]]
+kind = "command"
+id = "up"
+tier = 1
+label = "Files: Go up a directory"
+
+[[contributions]]
+kind = "command"
+id = "refresh"
+tier = 1
+label = "Files: Refresh"
+
+[[contributions]]
+kind = "command"
+id = "reveal"
+tier = 1
+label = "Files: Reveal a path"
+
+[[contributions]]
+kind = "command"
+id = "filter"
+tier = 1
+label = "Files: Filter"
+
+[[contributions]]
+kind = "command"
+id = "set-root"
+tier = 1
+label = "Files: Set the root directory"

@@ -1,0 +1,59 @@
+# Manifest of the Avada git module. `docs/module-contract.md` in bshuler/avada-terminal
+# explains every key. Top-level keys come before the first table header (TOML rule).
+#
+# `git.read` is the whole point of this module. Note what is NOT here: the module never
+# runs git itself. `host.git.status` and `host.git.commit` are the host's own porcelain
+# parsing, scoped by the host to the open workspace, and this module only ever asks
+# questions through them. There is no capability that would let it spawn a command, and it
+# does not want one — the diff a row offers is drawn by the host, from the revision the row
+# states in its `data.git`.
+capabilities = [
+  "git.read",
+  "ui.rail",
+  "ui.pane",
+  "ui.commands",
+  "ui.toast",
+  "events.subscribe",
+  "panes.spawn",
+]
+
+[module]
+id = "bshuler/avada-git"
+name = "Git"
+version = "0.1.0"
+description = "The working tree and the commit a link points at, as rail rows"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[[contributions]]
+kind = "rail"
+id = "git"
+tier = 1
+label = "Git"
+
+[[contributions]]
+kind = "command"
+id = "refresh"
+tier = 1
+label = "Git: Refresh"
+
+[[contributions]]
+kind = "command"
+id = "show-commit"
+tier = 1
+label = "Git: Show a commit"
+
+[[contributions]]
+kind = "command"
+id = "working-tree"
+tier = 1
+label = "Git: Back to the working tree"
+
+[[contributions]]
+kind = "command"
+id = "filter"
+tier = 1
+label = "Git: Filter"

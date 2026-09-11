@@ -1,0 +1,78 @@
+# Manifest of the Avada tools module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# The five non-UI capabilities are what this module reads the host's control server
+# with, and they are deliberately five rather than one:
+#
+#   settings.read   `GET /settings` for the starred tools, and `GET /tools` for the
+#                   catalogue and where this machine has each binary.
+#   fs.read_any     `GET /tools/{tool}/sessions`. Transcripts live under the user's
+#                   home, outside any workspace root, and they are conversation text.
+#                   Holding settings.read must not be enough to read them.
+#   workspace.read  `GET /state`, for the window id a `newPane` command must name. The
+#                   module is never told one, and `POST /command` is a 400 without it.
+#   workspace.write `POST /command`, whose route capability floor that is.
+#   panes.spawn     the `newPane` verb inside it — resuming a conversation.
+capabilities = [
+  "settings.read",
+  "fs.read_any",
+  "workspace.read",
+  "workspace.write",
+  "panes.spawn",
+  "ui.rail",
+  "ui.commands",
+  "ui.toast",
+  "events.subscribe",
+]
+
+[module]
+id = "bshuler/avada-tools"
+name = "Tools"
+version = "0.1.0"
+description = "One rail entry per AI CLI, listing its resumable conversations"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+# One entry per tool Avada can actually read a history for. The ids are tool ids from
+# `GET /tools`, so a row's entry names its tool without a second lookup. At run time the
+# module registers the subset the human has starred; these three are what it can ever
+# offer, because they are the three the host has a transcript reader for.
+[[contributions]]
+kind = "rail"
+id = "claude"
+tier = 1
+label = "Claude Code"
+
+[[contributions]]
+kind = "rail"
+id = "cursor-agent"
+tier = 1
+label = "Cursor"
+
+[[contributions]]
+kind = "rail"
+id = "copilot"
+tier = 1
+label = "Copilot"
+
+[[contributions]]
+kind = "command"
+id = "refresh"
+tier = 1
+label = "Tools: Re-read the conversation history"
+
+[[contributions]]
+kind = "command"
+id = "filter"
+tier = 1
+label = "Tools: Filter conversations"
+
+[[contributions]]
+kind = "command"
+id = "resume"
+tier = 1
+label = "Tools: Resume a conversation"

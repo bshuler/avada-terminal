@@ -1,0 +1,91 @@
+# Manifest of the Avada marketplace module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# `marketplace.manage` is an escape hatch: the host never grants it by default, the
+# user accepts it at install. Without it every row explains that and nothing else.
+capabilities = [
+    "marketplace.manage",
+    "ui.rail",
+    "ui.pane",
+    "panes.spawn",
+    "ui.commands",
+    "ui.toast",
+]
+
+[module]
+id = "bshuler/avada-marketplace"
+name = "Marketplace"
+version = "0.2.0"
+description = "Find, install, enable, disable and remove Avada modules"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[[contributions]]
+kind = "rail"
+id = "marketplace"
+tier = 1
+label = "Marketplace"
+
+[[contributions]]
+kind = "pane"
+id = "marketplace"
+tier = 1
+label = "Marketplace"
+
+[[contributions]]
+kind = "command"
+id = "search"
+tier = 1
+label = "Marketplace: Search modules"
+
+[[contributions]]
+kind = "command"
+id = "install"
+tier = 1
+label = "Marketplace: Install module"
+
+[[contributions]]
+kind = "command"
+id = "enable"
+tier = 1
+label = "Marketplace: Enable module in this workspace"
+
+[[contributions]]
+kind = "command"
+id = "disable"
+tier = 1
+label = "Marketplace: Disable module in this workspace"
+
+[[contributions]]
+kind = "command"
+id = "uninstall"
+tier = 1
+label = "Marketplace: Uninstall module"
+
+[[contributions]]
+kind = "command"
+id = "job"
+tier = 1
+label = "Marketplace: Show install job"
+
+[[contributions]]
+kind = "command"
+id = "signin"
+tier = 1
+label = "Marketplace: Sign in to GitHub"
+
+[[contributions]]
+kind = "command"
+id = "refresh"
+tier = 1
+label = "Marketplace: Refresh"
+
+[[contributions]]
+kind = "command"
+id = "pane"
+tier = 1
+label = "Marketplace: Open pane"

@@ -1,0 +1,30 @@
+[package]
+name = "avada-files"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "The Files rail entry for Avada Terminal: a project tree and a fuzzy file finder"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "avada-files"
+path = "src/main.rs"
+
+[dependencies]
+# A path dep: this is a first-party default module living in-tree, so it and the SDK
+# it targets move together in one commit. Third-party modules pin the SDK by git rev
+# instead (they build from source at install time); a default module does not.
+avada-module-sdk = { path = "../../crates/module-sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+libc = "0.2"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
