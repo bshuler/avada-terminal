@@ -14,6 +14,7 @@ use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::{self, required_capability};
 use avada_module_sdk::contract::{ErrorCode, Notification, Request, Response, RpcError};
 use avada_module_sdk::descriptor::{validate_table, RouteDescriptor, Scope};
+use avada_module_sdk::doc::Doc;
 use avada_module_sdk::grid::{DeclareKeymap, GridFrame};
 use avada_module_sdk::rail::{validate_entry, RegisterRail, RowTarget, SetRows};
 use avada_module_sdk::ModuleId;
@@ -43,6 +44,7 @@ pub const SERVED: &[&str] = &[
     methods::HOST_WORKSPACE_OPEN,
     methods::HOST_WORKSPACE_SAVE,
     methods::HOST_GRID_SET,
+    methods::HOST_DOC_SET,
     methods::HOST_KEYMAP_DECLARE,
     HOST_GIT_STATUS,
     HOST_GIT_COMMIT,
@@ -398,6 +400,7 @@ impl Dispatcher {
             methods::HOST_WORKSPACE_OPEN => self.workspace_open(params),
             methods::HOST_WORKSPACE_SAVE => self.workspace_save(params),
             methods::HOST_GRID_SET => self.grid_set(params),
+            methods::HOST_DOC_SET => self.doc_set(params),
             methods::HOST_KEYMAP_DECLARE => self.keymap_declare(params),
             HOST_GIT_STATUS => self.git_status(params),
             HOST_GIT_COMMIT => self.git_commit(params),
@@ -526,6 +529,39 @@ impl Dispatcher {
         self.shared.events.send(HostEvent::Grid {
             module: self.module.clone(),
             frame,
+        });
+        Ok(Value::Null)
+    }
+
+    /// `host.doc.set { surface, blocks } -> null`. The reader half of tier 5 and the
+    /// one-directional twin of [`grid_set`](Self::grid_set): the module ships a parsed
+    /// document and the app typesets it.
+    ///
+    /// The same two guards a frame gets, and for the same reasons: the surface must be
+    /// named, and a pane must already be open for it — a document for a surface nobody is
+    /// showing is the shape a typo'd surface takes, and a silent accept would leave the
+    /// module watching a blank pane with nothing to debug. There is no third guard like the
+    /// frame's row-count check, because a document has no declared extent to overflow: the
+    /// block list *is* the whole of it.
+    fn doc_set(&self, params: &Value) -> Result<Value, RpcError> {
+        let doc: Doc = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if doc.surface.trim().is_empty() {
+            return Err(invalid_params("a document must name its surface"));
+        }
+        if !self
+            .panes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&doc.surface)
+        {
+            return Err(invalid_params(format!(
+                "no pane is open for surface `{}`",
+                doc.surface
+            )));
+        }
+        self.shared.events.send(HostEvent::Doc {
+            module: self.module.clone(),
+            doc,
         });
         Ok(Value::Null)
     }
@@ -1662,6 +1698,56 @@ pub(crate) mod tests {
         assert!(e.message.contains("2 lines"), "{}", e.message);
     }
 
+    /// The reader half of tier 5: a document needs an open pane the same way a frame does,
+    /// and reaches the app whole. Unlike a frame there is no extent to overflow, so the
+    /// only two doors are the named surface and the open pane.
+    #[test]
+    fn a_doc_needs_a_pane_and_then_reaches_the_app_whole() {
+        let rig = rig(&[Capability::UiPane, Capability::PanesSpawn]);
+        let doc = json!({
+            "surface": "preview",
+            "blocks": [
+                { "kind": "heading", "level": 1, "text": "Title" },
+                { "kind": "prose", "text": "a *paragraph*" },
+            ],
+        });
+        // No pane yet: refused, and the message names the surface so the module can debug it.
+        let e = rig.d.call(methods::HOST_DOC_SET, &doc).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("preview"), "{}", e.message);
+
+        rig.d
+            .call(
+                methods::HOST_PANES_SPAWN,
+                &json!({ "kind": "module", "surface": "preview" }),
+            )
+            .unwrap();
+        rig.d.call(methods::HOST_DOC_SET, &doc).unwrap();
+        loop {
+            match rig.events.recv().unwrap() {
+                HostEvent::Doc { doc, .. } => {
+                    assert_eq!(doc.surface, "preview");
+                    assert_eq!(doc.blocks.len(), 2);
+                    assert!(matches!(
+                        doc.blocks[0],
+                        avada_module_sdk::doc::Block::Heading { level: 1, .. }
+                    ));
+                    break;
+                }
+                HostEvent::PaneSpawn { .. } => continue,
+                other => panic!("{other:?}"),
+            }
+        }
+
+        // A surface with no name is the shape a bug takes; refused before it reaches the app.
+        let e = rig
+            .d
+            .call(methods::HOST_DOC_SET, &json!({ "surface": "  ", "blocks": [] }))
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("name its surface"), "{}", e.message);
+    }
+
     /// The keymap is the one grid method that does *not* need a pane: it is what the
     /// rebinding UI reads, and a human must be able to rebind an editor before opening it.
     #[test]
@@ -1725,12 +1811,16 @@ pub(crate) mod tests {
         assert!(rig.events.try_recv().is_err(), "nothing was announced");
     }
 
-    /// Both grid methods ride on `ui.pane` rather than a capability of their own: a grid
-    /// surface IS a pane the module owns. A module with no pane right cannot paint one.
+    /// Every tier-5 method rides on `ui.pane` rather than a capability of its own: a grid or
+    /// a doc surface IS a pane the module owns. A module with no pane right cannot paint one.
     #[test]
     fn the_grid_methods_are_gated_on_the_pane_right() {
         let rig = rig(&[Capability::PanesSpawn]);
-        for m in [methods::HOST_GRID_SET, methods::HOST_KEYMAP_DECLARE] {
+        for m in [
+            methods::HOST_GRID_SET,
+            methods::HOST_DOC_SET,
+            methods::HOST_KEYMAP_DECLARE,
+        ] {
             let e = rig.d.call(m, &Value::Null).unwrap_err();
             assert_eq!(e.kind(), ErrorCode::CapabilityDenied, "{m}");
             assert!(e.message.contains("ui.pane"), "{}", e.message);

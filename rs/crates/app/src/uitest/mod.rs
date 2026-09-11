@@ -15,6 +15,7 @@
 mod annotations;
 mod ctxmenu;
 mod datatree;
+mod docpane;
 mod files;
 mod git;
 mod goalbox;

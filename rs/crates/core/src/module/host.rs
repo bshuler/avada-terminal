@@ -21,6 +21,7 @@ use avada_module_sdk::contract::{
     CONTRACT_VERSION,
 };
 use avada_module_sdk::descriptor::RouteDescriptor;
+use avada_module_sdk::doc::Doc;
 use avada_module_sdk::grid::{DeclareKeymap, GridFrame, GridKey, GridResize};
 use avada_module_sdk::rail::RowActivate;
 use avada_module_sdk::rights::InstallRecord;
@@ -157,6 +158,16 @@ pub enum HostEvent {
         module: ModuleId,
         /// The whole frame, surface included.
         frame: GridFrame,
+    },
+    /// The module replaced a doc surface's document (`host.doc.set`). The reader half of
+    /// tier 5: the module ships parsed blocks and the app typesets them, keeping nothing of
+    /// what came before — a document replaces a document, the one-directional twin of
+    /// [`HostEvent::Grid`].
+    Doc {
+        /// Which module.
+        module: ModuleId,
+        /// The whole document, surface included.
+        doc: Doc,
     },
     /// The module declared a grid surface's actions and keymap presets
     /// (`host.keymap.declare`). The host resolves keystrokes to action ids before it

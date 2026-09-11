@@ -5057,6 +5057,7 @@ impl State {
             avada_core::module::RailEvent::Gone { module } => {
                 crate::module_ui::rows::forget(module);
                 crate::module_ui::grid::forget(module);
+                crate::module_ui::doc::forget(module);
             }
             _ => {}
         }

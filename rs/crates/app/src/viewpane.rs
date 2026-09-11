@@ -792,7 +792,7 @@ fn parse_markdown(text: &str) -> Vec<Block> {
 /// markdown *module* will send over `host.doc.set`, which is why the projection is
 /// a function of the blocks alone and reaches for nothing a module could not ship.
 #[tracing::instrument(level = "debug", ret)]
-fn project_doc(blocks: &[Block]) -> Vec<ViewRow> {
+pub(crate) fn project_doc(blocks: &[Block]) -> Vec<ViewRow> {
     let mut out: Vec<ViewRow> = Vec::new();
     for block in blocks {
         match block {
@@ -1559,11 +1559,12 @@ fn markdown_text(src: &str) -> slint::StyledText {
 #[tracing::instrument(level = "debug", ret)]
 fn revision(uid: &str, kind: &PaneKind) -> u64 {
     match kind {
-        // A module pane may be tier 2 (rows) or tier 5 (a grid), and the same pane can
-        // carry both stores over its life — the sum changes whichever side painted, and a
-        // sum cannot go backwards the way picking one of the two could.
+        // A module pane may be tier 2 (rows) or tier 5 (a grid, or a doc), and the same
+        // pane can carry more than one store over its life — the sum changes whichever side
+        // painted, and a sum cannot go backwards the way picking one of them could.
         PaneKind::Module(m) => crate::module_ui::rows::generation(&m.id, &m.surface)
-            .wrapping_add(crate::module_ui::grid::generation(&m.id, &m.surface)),
+            .wrapping_add(crate::module_ui::grid::generation(&m.id, &m.surface))
+            .wrapping_add(crate::module_ui::doc::generation(&m.id, &m.surface)),
         _ => crate::datatree::generation(uid),
     }
 }
@@ -1810,9 +1811,16 @@ fn rows_for_pane(uid: &str, kind: &PaneKind, target: Option<&str>, palette: usiz
         (PaneKind::Data, Some(t)) => {
             data_rows(Path::new(t), &crate::datatree::flipped(uid), palette)
         }
-        // Not the file — the module. Its rows arrive on `host.rows.set` and the pane is
-        // whatever the module last said, including nothing at all before it has spoken.
-        (PaneKind::Module(m), _) => crate::module_ui::rows::view_rows(&m.id, &m.surface),
+        // Not the file — the module. A tier-5 doc surface (`host.doc.set`) and a tier-2
+        // rows surface (`host.rows.set`) both project into this row model; a doc takes
+        // precedence once the module has typeset one, because the two are alternatives for
+        // one surface and the doc is the richer statement. Before either has spoken the
+        // pane is empty, which is the honest answer for a module that has not yet said
+        // anything.
+        (PaneKind::Module(m), _) => match crate::module_ui::doc::doc(&m.id, &m.surface) {
+            Some(doc) => project_doc(&doc.blocks),
+            None => crate::module_ui::rows::view_rows(&m.id, &m.surface),
+        },
         _ => rows_for(kind, target, palette),
     }
 }

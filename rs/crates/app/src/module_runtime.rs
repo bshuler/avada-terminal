@@ -572,6 +572,14 @@ impl ModuleRuntime {
                 crate::module_ui::grid::set_frame(&module, frame);
                 tick.grid = true;
             }
+            // A document is the reader half of the same tier-5 pane, and it projects into
+            // the row model the markdown preview already uses, so it rides the same `grid`
+            // tick — the projection cache watches one revision covering all of a module
+            // pane's surfaces.
+            HostEvent::Doc { module, doc } => {
+                crate::module_ui::doc::set(&module, doc);
+                tick.grid = true;
+            }
             HostEvent::Keymap { module, keymap } => {
                 crate::module_ui::grid::set_keymap(&module, keymap);
                 tick.grid = true;
