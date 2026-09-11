@@ -58,7 +58,12 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::session::build_id;
 use crate::session::claims::ConnId;
-use crate::session::proto::{read_frame, write_frame, ClientMsg, DaemonMsg, SpawnSpec, PROTO_VER};
+use crate::session::proto::{write_frame, ClientMsg, DaemonMsg, SpawnSpec, PROTO_VER};
+// The blocking `read_frame` is unix-only here: the reader loop peeks via `read_frame_deadline`
+// on Windows (so an idle read never holds the pipe's file-object lock), and the tests that
+// read frames directly stand up UnixStream fakes that don't compile on Windows.
+#[cfg(unix)]
+use crate::session::proto::read_frame;
 use crate::session::replay::Replay;
 use crate::session::transport::{self, Conn, Endpoint};
 use crate::session_manager::{SessionEvent, SpawnOptions};
@@ -989,9 +994,32 @@ fn reader_loop(
     replies: Sender<DaemonMsg>,
     connected: Arc<AtomicBool>,
 ) {
+    // Windows `Conn` is a *synchronous* named-pipe file object shared with the write half
+    // (`try_clone` == `DuplicateHandle` == the same FILE_OBJECT). A blocking `ReadFile` holds
+    // that object's I/O lock for its whole duration, so parking here in an unbounded read
+    // blocks every concurrent `WriteFile` on the write half (create/write/paste/resize/kill)
+    // until the pty-host happens to send something — a deadlock against a quiet host. Peek
+    // instead so the lock is released between tries. Unix streams don't serialize read vs
+    // write, so they keep the cheaper plain blocking read with no idle polling.
+    #[allow(unused_mut)]
     let mut r = read_half;
     loop {
-        match read_frame::<_, DaemonMsg>(&mut r) {
+        #[cfg(unix)]
+        let next = read_frame::<_, DaemonMsg>(&mut r);
+        #[cfg(windows)]
+        let next = loop {
+            // The 50ms budget only bounds one peek call before we re-loop; `peek_until`
+            // releases the file-object lock every 5ms within it, which is what unblocks a
+            // concurrent write. A clean EOF surfaces here as `Err` (PeekNamedPipe on a closed
+            // pipe), not `Ok(None)` — the `Err(e)` arm below handles it identically to the
+            // `Ok(None)` (EOF) arm, so disconnect detection is unchanged.
+            match transport::read_frame_deadline::<DaemonMsg>(&r, std::time::Duration::from_millis(50)) {
+                Ok(Some(m)) => break Ok(Some(m)),
+                Ok(None) => continue,
+                Err(e) => break Err(e),
+            }
+        };
+        match next {
             Ok(Some(DaemonMsg::Event(ev))) => {
                 apply_event_to_shadow(&shadows, &ev);
                 // Forward verbatim to the renderer. A send error means the GUI dropped its
