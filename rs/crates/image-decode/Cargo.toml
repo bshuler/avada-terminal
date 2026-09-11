@@ -1,0 +1,21 @@
+[package]
+name = "avada-image-decode"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+description = "The image sniff-and-decode-to-RGBA, shared by the app's built-in image view and the avada-image module."
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+tracing = "0.1"
+
+[dev-dependencies]
+png = "0.18"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

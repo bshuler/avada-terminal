@@ -588,6 +588,14 @@ impl ModuleRuntime {
                 crate::module_ui::doc::set(&module, doc);
                 tick.grid = true;
             }
+            // A picture is the other reader half of a tier-5 pane. It does not project into
+            // rows — a texture is not a list — but its store shares the same `grid` tick, so
+            // the pane's projection cache notices the new picture the same way it notices a
+            // new document (see `viewpane::revision`, which sums all of a surface's stores).
+            HostEvent::Image { module, image } => {
+                crate::module_ui::image::set(&module, image);
+                tick.grid = true;
+            }
             HostEvent::Keymap { module, keymap } => {
                 crate::module_ui::grid::set_keymap(&module, keymap);
                 tick.grid = true;

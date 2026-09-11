@@ -1023,7 +1023,8 @@ fn revision(uid: &str, kind: &PaneKind) -> u64 {
         // painted, and a sum cannot go backwards the way picking one of them could.
         PaneKind::Module(m) => crate::module_ui::rows::generation(&m.id, &m.surface)
             .wrapping_add(crate::module_ui::grid::generation(&m.id, &m.surface))
-            .wrapping_add(crate::module_ui::doc::generation(&m.id, &m.surface)),
+            .wrapping_add(crate::module_ui::doc::generation(&m.id, &m.surface))
+            .wrapping_add(crate::module_ui::image::generation(&m.id, &m.surface)),
         _ => crate::datatree::generation(uid),
     }
 }

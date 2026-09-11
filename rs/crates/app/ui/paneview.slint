@@ -720,7 +720,7 @@ export component PaneView inherits Rectangle {
                     // A module pane (kind 10, track H1): the slot stays in the grid and the
                     // placeholder draws in it while the module is crashed, disabled, not
                     // installed or broken; a running module's surface lands here in H4.
-                    if pane.kind == 10 : ModulePlaceholder { x: 4px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; pane-uid: pane.uid; }
+                    if pane.kind == 10 && !pane.has-image : ModulePlaceholder { x: 4px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; pane-uid: pane.uid; }
                     if pane.is-view : ViewPane {
                         x: 4px;
                         y: 2px;
@@ -750,11 +750,14 @@ export component PaneView inherits Rectangle {
                             root.pane-view-link(idx, l);
                         }
                     }
-                    // Track V3: `view:image` (kind 9) is a sibling branch, not a row role —
-                    // a picture is one texture with its own geometry, not a list. Drawn
-                    // after (so over) the empty `ViewPane` the arm above still creates for
-                    // it; `paneview::pane_item` hands that one no rows.
-                    if pane.is-view && pane.kind == 9 : ImagePane {
+                    // Track V3: an image is a sibling branch, not a row role — a picture is
+                    // one texture with its own geometry, not a list. Drawn after (so over)
+                    // the empty `ViewPane` the arm above still creates for it;
+                    // `paneview::pane_item` hands that one no rows. `has-image` unifies the
+                    // built-in image view (kind 9) and a module surface that shipped pixels
+                    // (kind 10) — both draw the one `ImagePane`, and both gate off the
+                    // placeholder/grid below so a picture never draws over its own scaffold.
+                    if pane.has-image : ImagePane {
                         x: 4px;
                         y: 2px;
                         width: parent.width - 4px;
@@ -767,8 +770,9 @@ export component PaneView inherits Rectangle {
                     // Track H4: a tier-5 module surface draws over its own placeholder.
                     // Both are instantiated for kind 10 and `GridPaneItem.present` picks:
                     // a module that has never painted, or has died, still owes the user the
-                    // placeholder's explanation of why there is nothing there.
-                    if pane.kind == 10 : GridPane {
+                    // placeholder's explanation of why there is nothing there. Gated off
+                    // when the module shipped a picture — that draws in `ImagePane` above.
+                    if pane.kind == 10 && !pane.has-image : GridPane {
                         x: 4px;
                         y: 2px;
                         width: parent.width - 4px;

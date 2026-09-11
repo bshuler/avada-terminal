@@ -42,6 +42,7 @@ pub mod contract;
 pub mod descriptor;
 pub mod doc;
 pub mod grid;
+pub mod image;
 pub mod install;
 pub mod license;
 pub mod manifest;

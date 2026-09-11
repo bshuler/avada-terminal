@@ -8,7 +8,7 @@
 //! name, which has no `data`.
 
 use super::gate::{CapabilityGate, Decision};
-use super::host::HostEvent;
+use super::host::{HostEvent, ImageData};
 use super::rail::{FanOut, RailEvent, RailState};
 use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::{self, required_capability};
@@ -16,6 +16,7 @@ use avada_module_sdk::contract::{ErrorCode, Notification, Request, Response, Rpc
 use avada_module_sdk::descriptor::{validate_table, RouteDescriptor, Scope};
 use avada_module_sdk::doc::Doc;
 use avada_module_sdk::grid::{DeclareKeymap, GridFrame};
+use avada_module_sdk::image::SetImage;
 use avada_module_sdk::rail::{validate_entry, RegisterRail, RowTarget, SetRows};
 use avada_module_sdk::ModuleId;
 use base64::Engine as _;
@@ -45,6 +46,7 @@ pub const SERVED: &[&str] = &[
     methods::HOST_WORKSPACE_SAVE,
     methods::HOST_GRID_SET,
     methods::HOST_DOC_SET,
+    methods::HOST_IMAGE_SET,
     methods::HOST_KEYMAP_DECLARE,
     HOST_GIT_STATUS,
     HOST_GIT_COMMIT,
@@ -401,6 +403,7 @@ impl Dispatcher {
             methods::HOST_WORKSPACE_SAVE => self.workspace_save(params),
             methods::HOST_GRID_SET => self.grid_set(params),
             methods::HOST_DOC_SET => self.doc_set(params),
+            methods::HOST_IMAGE_SET => self.image_set(params),
             methods::HOST_KEYMAP_DECLARE => self.keymap_declare(params),
             HOST_GIT_STATUS => self.git_status(params),
             HOST_GIT_COMMIT => self.git_commit(params),
@@ -562,6 +565,58 @@ impl Dispatcher {
         self.shared.events.send(HostEvent::Doc {
             module: self.module.clone(),
             doc,
+        });
+        Ok(Value::Null)
+    }
+
+    /// `host.image.set { surface, name, width, height, format, bytes, rgba_b64, error } ->
+    /// null`. The pixel-carrying tier-5 surface and the deliberate exception to
+    /// [`doc_set`](Self::doc_set)'s "never pixels": a picture has no source to re-render.
+    ///
+    /// The same two guards a document gets — the surface must be named and a pane must be
+    /// open for it — plus one this crate owns rather than the app: the base64 payload is
+    /// decoded *here*, at the boundary, so a malformed `rgba_b64` is a protocol fault the
+    /// module hears about (`invalid params`) rather than a panic deep in the app's texture
+    /// upload. A `SetImage` carrying an `error` skips the decode: its pixels are empty by
+    /// contract, and forwarding the caption is the whole point.
+    fn image_set(&self, params: &Value) -> Result<Value, RpcError> {
+        let img: SetImage = serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if img.surface.trim().is_empty() {
+            return Err(invalid_params("an image must name its surface"));
+        }
+        if !self
+            .panes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&img.surface)
+        {
+            return Err(invalid_params(format!(
+                "no pane is open for surface `{}`",
+                img.surface
+            )));
+        }
+        // A success carries pixels; an error carries none. Decode only when there is
+        // something to decode, and reject bytes that are not valid base64 rather than
+        // hand the app a half-buffer.
+        let rgba = if img.error.is_empty() {
+            base64::engine::general_purpose::STANDARD
+                .decode(img.rgba_b64.as_bytes())
+                .map_err(|e| invalid_params(format!("rgba_b64 is not valid base64: {e}")))?
+        } else {
+            Vec::new()
+        };
+        self.shared.events.send(HostEvent::Image {
+            module: self.module.clone(),
+            image: ImageData {
+                surface: img.surface,
+                name: img.name,
+                width: img.width,
+                height: img.height,
+                format: img.format,
+                bytes: img.bytes,
+                rgba,
+                error: img.error,
+            },
         });
         Ok(Value::Null)
     }
@@ -1746,6 +1801,92 @@ pub(crate) mod tests {
             .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::InvalidParams);
         assert!(e.message.contains("name its surface"), "{}", e.message);
+    }
+
+    /// The reader half of tier 5, drawn one step past the document: an image needs the same
+    /// open pane a doc does, its `rgba_b64` is base64 the host decodes at the boundary (so a
+    /// malformed payload is a protocol fault the module hears, not a texture-upload panic),
+    /// and a decode the module could not finish rides `error` with no pixels rather than
+    /// tearing anything down — the host will caption it.
+    #[test]
+    fn an_image_needs_a_pane_and_its_rgba_is_decoded_at_the_boundary() {
+        let rig = rig(&[Capability::UiPane, Capability::PanesSpawn]);
+        // A 1x1 opaque red pixel: four bytes of RGBA, base64.
+        let rgba_b64 = base64::engine::general_purpose::STANDARD.encode([255u8, 0, 0, 255]);
+        let img = json!({
+            "surface": "image",
+            "name": "red.png",
+            "width": 1,
+            "height": 1,
+            "format": "PNG",
+            "bytes": 70,
+            "rgba_b64": rgba_b64,
+        });
+
+        // No pane yet: refused, and the message names the surface so the module can debug it.
+        let e = rig.d.call(methods::HOST_IMAGE_SET, &img).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("image"), "{}", e.message);
+
+        rig.d
+            .call(
+                methods::HOST_PANES_SPAWN,
+                &json!({ "kind": "module", "surface": "image" }),
+            )
+            .unwrap();
+        rig.d.call(methods::HOST_IMAGE_SET, &img).unwrap();
+        loop {
+            match rig.events.recv().unwrap() {
+                HostEvent::Image { image, .. } => {
+                    assert_eq!(image.surface, "image");
+                    assert_eq!((image.width, image.height), (1, 1));
+                    assert_eq!(image.format, "PNG");
+                    // The base64 arrives at the app as raw pixels, not text.
+                    assert_eq!(image.rgba, vec![255u8, 0, 0, 255]);
+                    assert!(image.error.is_empty());
+                    break;
+                }
+                HostEvent::PaneSpawn { .. } => continue,
+                other => panic!("{other:?}"),
+            }
+        }
+
+        // A surface with no name is the shape a bug takes; refused before it reaches the app.
+        let e = rig
+            .d
+            .call(methods::HOST_IMAGE_SET, &json!({ "surface": "  ", "rgba_b64": "" }))
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("name its surface"), "{}", e.message);
+
+        // Malformed base64 is a protocol fault the module hears, not a panic downstream.
+        let e = rig
+            .d
+            .call(
+                methods::HOST_IMAGE_SET,
+                &json!({ "surface": "image", "width": 1, "height": 1, "rgba_b64": "not base64!!" }),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("base64"), "{}", e.message);
+
+        // A decode the module could not finish rides `error` with no pixels; it still needs a
+        // pane, but reaches the app whole so the host can caption it.
+        rig.d
+            .call(
+                methods::HOST_IMAGE_SET,
+                &json!({ "surface": "image", "error": "not a supported image format" }),
+            )
+            .unwrap();
+        // The pane was already spawned and drained above, so this `image.set` yields exactly
+        // one event — a single receive, not a loop.
+        match rig.events.recv().unwrap() {
+            HostEvent::Image { image, .. } => {
+                assert_eq!(image.error, "not a supported image format");
+                assert!(image.rgba.is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// An opener-routed pane is registered by the app, not by the module, so it reaches the

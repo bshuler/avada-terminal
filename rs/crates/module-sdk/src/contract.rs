@@ -451,6 +451,19 @@ pub mod methods {
     /// takes no keystrokes; a surface that needs input is a grid, not a doc.
     pub const HOST_DOC_SET: &str = "host.doc.set";
 
+    /// Host: replace an image surface's picture (UI tier 5). Params: [`crate::image::SetImage`].
+    ///
+    /// The **deliberate exception** to [`HOST_DOC_SET`]'s "never pixels" rule. A picture
+    /// is one texture, not a tree of blocks the host can re-render from source, so the
+    /// module that owns an image surface ships the already-decoded RGBA — sniffed and
+    /// decoded through the shared `avada-image-decode` crate — and the host only parks it
+    /// as a texture and keeps the fit/zoom/caption geometry. The RGBA rides base64 in
+    /// [`crate::image::SetImage::rgba_b64`]; a decode the module could not complete rides
+    /// [`crate::image::SetImage::error`] instead, so a broken file shows the reader a
+    /// caption rather than an empty pane. Like `host.doc.set` it has no reply: a rendered
+    /// picture takes no keystrokes.
+    pub const HOST_IMAGE_SET: &str = "host.image.set";
+
     /// Module: a keystroke landed in a focused grid surface (notification).
     /// Params: [`crate::grid::GridKey`].
     ///
@@ -515,6 +528,7 @@ pub mod methods {
         HOST_GRID_SET,
         HOST_KEYMAP_DECLARE,
         HOST_DOC_SET,
+        HOST_IMAGE_SET,
     ];
 
     /// Module methods that are **additive**, for the same reason [`HOST_OPTIONAL`] is.
@@ -551,8 +565,9 @@ pub mod methods {
             // palette, and an editor should not have to ask for the palette to be typed
             // into.
             // A doc surface is likewise a pane the module owns; it takes no keystrokes,
-            // so it needs only `ui.pane`, never the keymap's palette right.
-            HOST_GRID_SET | HOST_KEYMAP_DECLARE | HOST_DOC_SET => C::UiPane,
+            // so it needs only `ui.pane`, never the keymap's palette right. An image
+            // surface is the same shape — a pane the module fills, gated by `ui.pane`.
+            HOST_GRID_SET | HOST_KEYMAP_DECLARE | HOST_DOC_SET | HOST_IMAGE_SET => C::UiPane,
             HOST_WORKSPACE_LIST => C::WorkspaceRead,
             HOST_WORKSPACE_OPEN | HOST_WORKSPACE_SAVE => C::WorkspaceWrite,
             _ => return None,

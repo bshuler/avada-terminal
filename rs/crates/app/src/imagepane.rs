@@ -17,18 +17,14 @@ use std::time::UNIX_EPOCH;
 
 use slint::{ComponentHandle as _, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
+use avada_core::rights::ModuleId;
+
 use crate::{AppWindow, ImageFit, ImagePaneAdapter, ImagePaneItem};
 
-/// The extensions `viewpane::kind_for_file` routes to `PaneKind::Image`. The list is
-/// the `image` crate features enabled in Cargo.toml plus nothing: an `.svg` or `.ico`
-/// would decode to an error notice, which is worse than the text viewer's NUL heuristic.
-#[tracing::instrument(level = "debug", ret)]
-pub fn is_image_ext(ext: &str) -> bool {
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
-    )
-}
+/// The extensions `viewpane::kind_for_file` routes to `PaneKind::Image` — re-exported
+/// from the shared decoder so the routing and the decode agree by construction: a file
+/// that opens as an image is always one `avada_image_decode::decode` can actually read.
+pub use avada_image_decode::is_image_ext;
 
 /// One successfully decoded file.
 #[derive(Clone)]
@@ -53,51 +49,22 @@ impl std::fmt::Debug for Decoded {
     }
 }
 
-/// Decode `path` to an RGBA8 Slint texture. Every failure — missing file, unknown
-/// container, truncated data, a zero-sized image — is an `Err(String)` for the caption;
-/// nothing here panics on bad bytes, which is the whole reason the decode goes through
-/// the `image` crate's `Result`s rather than `Image::load_from_path`.
+/// Decode `path` to an RGBA8 Slint texture. The sniff, decode and error taxonomy belong
+/// to the shared [`avada_image_decode`] crate — the same decode the `avada-image` module
+/// runs — so this path only reads the file and wraps the neutral RGBA the crate returns
+/// in a Slint texture. Every failure is still an `Err(String)` for the caption.
 #[tracing::instrument(level = "debug", ret)]
 pub fn decode(path: &Path) -> Result<Decoded, String> {
     let data = fs::read(path).map_err(|e| e.to_string())?;
-    let bytes = data.len() as u64;
-    // Sniff the container from the bytes, never from the extension: a text file called
-    // `notes.png` is "not a supported image format", not "Invalid PNG signature", and
-    // `ImageReader::with_guessed_format` would fall back to the `.png` hint for it.
-    let Ok(fmt) = image::guess_format(&data) else {
-        return Err("not a supported image format".to_string());
-    };
-    let format = format_name(fmt);
-    let rgba = image::load_from_memory_with_format(&data, fmt)
-        .map_err(|e| e.to_string())?
-        .to_rgba8();
-    let (width, height) = rgba.dimensions();
-    if width == 0 || height == 0 {
-        return Err("the image has no pixels".to_string());
-    }
-    let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(rgba.as_raw(), width, height);
+    let d = avada_image_decode::decode(&data)?;
+    let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&d.rgba, d.width, d.height);
     Ok(Decoded {
         image: slint::Image::from_rgba8(buf),
-        width,
-        height,
-        bytes,
-        format,
+        width: d.width,
+        height: d.height,
+        bytes: d.bytes,
+        format: d.format,
     })
-}
-
-#[tracing::instrument(level = "debug", ret)]
-fn format_name(f: image::ImageFormat) -> &'static str {
-    use image::ImageFormat as F;
-    match f {
-        F::Png => "PNG",
-        F::Jpeg => "JPEG",
-        F::Gif => "GIF",
-        F::WebP => "WebP",
-        F::Bmp => "BMP",
-        F::Ico => "ICO",
-        F::Tiff => "TIFF",
-        _ => "image",
-    }
 }
 
 /// Where and how large the image is drawn inside an `avail_w × avail_h` stage, in
@@ -281,6 +248,23 @@ thread_local! {
     });
 }
 
+/// Put `item` in pane `uid`'s slot of the shared model, remembering `fp` as what it was
+/// built from. The one place a row is inserted or overwritten, shared by the file path
+/// ([`project`]) and the module path ([`project_module`]) so the two cannot drift on how a
+/// uid maps to a model row.
+fn put(c: &mut Cache, uid: &str, item: ImagePaneItem, fp: Fingerprint) {
+    match c.by_uid.get(uid).map(|(i, _)| *i) {
+        Some(i) => c.model.set_row_data(i, item),
+        None => c.model.push(item),
+    }
+    let i = c
+        .by_uid
+        .get(uid)
+        .map(|(i, _)| *i)
+        .unwrap_or(c.model.row_count() - 1);
+    c.by_uid.insert(uid.to_string(), (i, fp));
+}
+
 /// Keep pane `uid`'s row current for `target`. Called from `pane_item`, so it must be
 /// cheap when nothing changed: one `stat`, one lookup. Returns whether a decode ran —
 /// the tests assert on that rather than on timing.
@@ -295,18 +279,76 @@ pub fn project(uid: &str, target: Option<&str>) -> bool {
             }
         }
         let item = item_for(uid, target);
-        match c.by_uid.get(uid).map(|(i, _)| *i) {
-            Some(i) => c.model.set_row_data(i, item),
-            None => c.model.push(item),
-        }
-        let i = c
-            .by_uid
-            .get(uid)
-            .map(|(i, _)| *i)
-            .unwrap_or(c.model.row_count() - 1);
-        c.by_uid.insert(uid.to_string(), (i, fp));
+        put(&mut c, uid, item, fp);
         true
     })
+}
+
+/// The module twin of [`project`]: keep pane `uid`'s row current for a tier-5 module image
+/// surface. The pixels are already decoded — the module ran the shared decode and shipped
+/// RGBA — so this reads [`crate::module_ui::image`], not the disk, and its cache key is the
+/// store's revision rather than a file's mtime. Returns whether the row was rebuilt.
+#[tracing::instrument(level = "debug", ret)]
+pub fn project_module(uid: &str, module: &ModuleId, surface: &str) -> bool {
+    // The revision *is* the fingerprint: a module image is not a file, so there is no mtime,
+    // and the store bumps its revision on every replacement. `len: 0` keeps the tuple honest.
+    let fp = Fingerprint {
+        target: crate::leftpanel::entry_key(module, surface),
+        mtime: crate::module_ui::image::generation(module, surface),
+        len: 0,
+    };
+    IMAGES.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((_, have)) = c.by_uid.get(uid) {
+            if *have == fp {
+                return false;
+            }
+        }
+        let item = item_for_module(uid, module, surface);
+        put(&mut c, uid, item, fp);
+        true
+    })
+}
+
+/// Build the row for a module image surface: wrap the module's decoded RGBA in a texture, or
+/// carry its caption. The buffer length is checked against `width * height * 4` so a
+/// malformed frame is an error caption, never a panic in texture upload — the same defensive
+/// stance the core boundary takes on the base64 (see `avada_core::module::rpc`).
+#[tracing::instrument(level = "debug")]
+fn item_for_module(uid: &str, module: &ModuleId, surface: &str) -> ImagePaneItem {
+    let base = ImagePaneItem {
+        uid: uid.into(),
+        ..Default::default()
+    };
+    let Some(img) = crate::module_ui::image::image(module, surface) else {
+        return ImagePaneItem {
+            error: error_caption("this pane", "no picture").into(),
+            ..base
+        };
+    };
+    if !img.error.is_empty() {
+        return ImagePaneItem {
+            error: error_caption(&img.name, &img.error).into(),
+            ..base
+        };
+    }
+    let expected = img.width as usize * img.height as usize * 4;
+    if img.width == 0 || img.height == 0 || img.rgba.len() != expected {
+        return ImagePaneItem {
+            error: error_caption(&img.name, "the picture has no pixels").into(),
+            ..base
+        };
+    }
+    let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&img.rgba, img.width, img.height);
+    ImagePaneItem {
+        ok: true,
+        image: slint::Image::from_rgba8(buf),
+        w: img.width as i32,
+        h: img.height as i32,
+        label: label(&img.name, img.width, img.height).into(),
+        caption: caption(&img.name, img.width, img.height, img.bytes, &img.format).into(),
+        ..base
+    }
 }
 
 /// Drop pane `uid`'s decoded texture. Nothing calls this yet — the tick loop that would

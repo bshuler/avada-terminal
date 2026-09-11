@@ -170,6 +170,17 @@ pub enum HostEvent {
         /// The whole document, surface included.
         doc: Doc,
     },
+    /// The module replaced an image surface's picture (`host.image.set`). The deliberate
+    /// pixel-carrying exception to [`HostEvent::Doc`]: a picture has no source to re-render
+    /// from, so the module ships already-decoded RGBA and the app parks it as a texture,
+    /// keeping the fit/zoom/caption geometry. A decode the module could not complete rides
+    /// [`ImageData::error`] instead of the pixels.
+    Image {
+        /// Which module.
+        module: ModuleId,
+        /// The decoded picture (or the decode error), surface included.
+        image: ImageData,
+    },
     /// The module declared a grid surface's actions and keymap presets
     /// (`host.keymap.declare`). The host resolves keystrokes to action ids before it
     /// forwards them, so this is what that resolution — and the rebinding UI — reads.
@@ -200,6 +211,48 @@ pub enum HostEvent {
         /// Save the open windows as a *set* rather than as one workspace.
         as_set: bool,
     },
+}
+
+/// A decoded picture on its way from a module to the app, carried by [`HostEvent::Image`].
+///
+/// The host-side twin of the SDK's `avada_module_sdk::image::SetImage`, with the base64
+/// already decoded back to raw bytes: [`rgba`](Self::rgba) is `width * height * 4` bytes of
+/// row-major RGBA8, or empty when [`error`](Self::error) names why the file could not be
+/// shown. Exactly one of the two carries the payload. The `Debug` impl is hand-written to
+/// name the buffer's length rather than dump megabytes of pixels into a trace.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct ImageData {
+    /// The surface id — the pane the picture fills.
+    pub surface: String,
+    /// The file name for the caption ("cat.png"), not the full path.
+    pub name: String,
+    /// Decoded width in pixels. Zero on an error.
+    pub width: u32,
+    /// Decoded height in pixels. Zero on an error.
+    pub height: u32,
+    /// The sniffed container ("PNG", ...) for the caption. Empty on an error.
+    pub format: String,
+    /// The size of the encoded file in bytes, for the caption. Zero on an error.
+    pub bytes: u64,
+    /// The decoded pixels: `width * height * 4` bytes of row-major RGBA8. Empty on an error.
+    pub rgba: Vec<u8>,
+    /// The reason the file could not be shown, or empty on success.
+    pub error: String,
+}
+
+impl std::fmt::Debug for ImageData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageData")
+            .field("surface", &self.surface)
+            .field("name", &self.name)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("format", &self.format)
+            .field("bytes", &self.bytes)
+            .field("rgba_len", &self.rgba.len())
+            .field("error", &self.error)
+            .finish()
+    }
 }
 
 /// One file type an installed module's pane surface claims to open — the host's projection

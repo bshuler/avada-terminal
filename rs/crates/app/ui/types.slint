@@ -184,6 +184,12 @@ export struct PaneItem {
     // accident only because Browser happened to be 5 — the next view kind added would have
     // been drawn as a terminal with no way to see why.
     is-view: bool,
+    // Whether this pane draws a decoded texture (`ImagePane`) rather than rows or a grid —
+    // true for the built-in image view (`kind == 9`) AND for a module surface that shipped
+    // pixels through `host.image.set`. Decided Rust-side because a module pane is both
+    // `is-view` and `kind == 10`, and neither discriminator alone can tell "this module
+    // drew a picture" apart from "this module drew a grid".
+    has-image: bool,
     // Icon kind for the tool mark, allocated from `TOOL_ICON_BASE` and drawn by `Icon`.
     // 0 = no mark (a plain terminal, or a tool id this build does not know). Geometry, never
     // a font glyph — see the drawn-geometry rule at the top of this file.

@@ -4,5 +4,6 @@
 
 pub mod doc;
 pub mod grid;
+pub mod image;
 pub mod placeholder;
 pub mod rows;

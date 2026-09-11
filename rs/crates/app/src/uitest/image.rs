@@ -38,6 +38,10 @@ fn install_image_pane(
             focused: true,
             kind: 9,
             is_view: true,
+            // The built-in image view is a texture pane, exactly as `pane_item` marks it;
+            // the `ImagePane` branch keys off this, not the kind, since a module image is
+            // kind 10 yet draws the same way.
+            has_image: true,
             view_title: crate::imagepane::file_name(target).into(),
             font_px,
             ..Default::default()

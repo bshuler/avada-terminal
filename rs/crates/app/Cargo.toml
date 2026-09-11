@@ -29,6 +29,7 @@ avada-terminal-widget = { path = "../terminal-widget" }
 avada-markdown-parse = { path = "../markdown-parse" }
 avada-csv-parse = { path = "../csv-parse" }
 avada-json-parse = { path = "../json-parse" }
+avada-image-decode = { path = "../image-decode" }
 # `raw-window-handle-06` exposes the native HWND (for the frameless-window Win32 glue).
 # Pinned to upstream slint-ui/slint master rev 9463a107 — back on upstream now that every fix we
 # carried in the fork has landed there: `PopupWindow.is-open` (#12000, merged; fixed in the compiler

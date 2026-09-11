@@ -5074,6 +5074,7 @@ impl State {
                 crate::module_ui::rows::forget(module);
                 crate::module_ui::grid::forget(module);
                 crate::module_ui::doc::forget(module);
+                crate::module_ui::image::forget(module);
             }
             _ => {}
         }

@@ -1,0 +1,37 @@
+# Manifest of the Avada image module. `docs/module-contract.md` in bshuler/avada-terminal
+# explains every key. Top-level keys come before the first table header (TOML rule).
+#
+# This module is the panel *type* the built-in image view was, shipped as a module. It
+# claims the raster formats the shared `avada-image-decode` crate can read, reads the file
+# with its own `fs.read`, decodes it with that same crate — so the module and the host's
+# built-in path cannot sniff or decode differently — and hands the host the finished RGBA
+# over `host.image.set`. It asks for nothing it does not use: no write, no commands, no
+# keystrokes, because a picture is read, decoded once, and shown.
+capabilities = [
+  "fs.read",
+  "ui.pane",
+  "events.subscribe",
+]
+
+[module]
+id = "bshuler/avada-image"
+name = "Image"
+version = "0.1.0"
+description = "Show PNG, JPEG, GIF, WebP and BMP images"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+# One tier-5 pane, `image`, and the file types it claims. The `opens` list is the exact set
+# `avada_image_decode::is_image_ext` accepts — the module's own e2e test asserts the two
+# agree, so a file the host routes here is always one this module can decode. The host
+# projects `opens` into its opener table and routes a matching file to this surface instead
+# of the built-in viewer, cueing the module with a `doc.open` carrying the surface and path.
+[[contributions]]
+kind = "pane"
+id = "image"
+tier = 5
+label = "Image"
+opens = ["png", "jpg", "jpeg", "gif", "webp", "bmp"]

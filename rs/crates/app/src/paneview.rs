@@ -415,9 +415,21 @@ fn pane_item(
     // `gridpane`'s own models. Done *beside* the row projection below rather than instead of
     // it, because a module pane's tier is not knowable from its kind — the same pane is a
     // rows pane until the module sends its first frame.
+    // Track V3 × H4: a tier-5 module can ship a *picture* as well as cells or a document. An
+    // image is neither rows nor a grid — it is one texture with its own geometry — so a module
+    // surface that has shipped at least one picture goes through `imagepane`'s per-uid model,
+    // exactly as the built-in `PaneKind::Image` does, and skips the grid/placeholder step. The
+    // store's `generation` is the discriminator: a module pane is a grid pane until its first
+    // picture, the same way it is a rows pane until its first frame.
+    let mut has_image = matches!(kind, PaneKind::Image);
     if let PaneKind::Module(m) = kind {
-        let (cw, ch) = cell_px(ps);
-        crate::gridpane::project(&ps.uid, m, cw, ch, font_px);
+        if crate::module_ui::image::generation(&m.id, &m.surface) > 0 {
+            has_image = true;
+            crate::imagepane::project_module(&ps.uid, &m.id, &m.surface);
+        } else {
+            let (cw, ch) = cell_px(ps);
+            crate::gridpane::project(&ps.uid, m, cw, ch, font_px);
+        }
     }
     let (view_rows, view_title): (ModelRc<PaneViewRow>, SharedString) =
         if matches!(kind, PaneKind::Image) {
@@ -512,6 +524,9 @@ fn pane_item(
         // build does not know, so an unknown kind shows no mark rather than a wrong one.
         kind: kind.ui_kind(),
         is_view,
+        // A texture pane: the built-in image view, or a module surface that shipped a picture.
+        // Drives the `.slint` to draw `ImagePane` over the (empty) `ViewPane`/placeholder.
+        has_image,
         tool_icon: kind.ui_icon(),
         tool_name: kind.ui_name().into(),
         agent_live: live,
@@ -2360,6 +2375,85 @@ mod image_arm_tests {
         assert!(row.ok, "{}", row.error);
         assert_eq!((row.w, row.h), (6, 4));
         assert!(crate::imagepane::forget("img-arm"));
+    }
+
+    fn module_image_pane(uid: &str, surface: &str) -> DetachedPane {
+        DetachedPane {
+            uid: uid.into(),
+            title: "t".into(),
+            subtitle: None,
+            pinned_accent: None,
+            show_frame: None,
+            show_dot: None,
+            font_px: 14.0,
+            spawn_command: None,
+            spawn_args: None,
+            spawn_shell: None,
+            kind: PaneKind::Module(
+                ModulePaneRef::new("bshuler/avada-image", surface, None).expect("a valid pane ref"),
+            ),
+            tool_session: None,
+            cwd: None,
+        }
+    }
+
+    /// Track V3 × H4: a module surface that has shipped a picture draws as an image, not a
+    /// grid. The same `has_image` flag the built-in `PaneKind::Image` sets is set here, the
+    /// texture goes through `imagepane`'s per-uid model, and — the point of the whole split —
+    /// the grid/placeholder path is skipped so the picture never draws over its own scaffold.
+    #[test]
+    fn a_module_that_ships_a_picture_draws_it_and_not_a_grid() {
+        use avada_core::module::host::ImageData;
+        let module = avada_core::rights::ModuleId::new("bshuler/avada-image").expect("a valid id");
+        // The module hands over finished RGBA: a 2×2 all-red frame.
+        crate::module_ui::image::set(
+            &module,
+            ImageData {
+                surface: "image".into(),
+                name: "cat.png".into(),
+                width: 2,
+                height: 2,
+                format: "PNG".into(),
+                bytes: 64,
+                rgba: [255, 0, 0, 255].repeat(4),
+                error: String::new(),
+            },
+        );
+
+        let mut st = fresh();
+        st.adopt_pane(&mgr(), module_image_pane("mod-img", "image"));
+        let ps = &st.active_tab().panes[0];
+        let kind = ps.kind.clone();
+        let item = pane_item(ps, true, false, false, false, 14.0, &kind, 0, 0);
+
+        assert!(item.has_image, "a module that shipped pixels is a texture pane");
+        assert_eq!(
+            item.kind,
+            kind.ui_kind(),
+            "it is still a module pane (kind 10), not the built-in image kind"
+        );
+        assert_eq!(
+            item.view_rows.row_count(),
+            0,
+            "a picture is not a row list, and a module image has no grid rows either"
+        );
+        let row = crate::imagepane::row("mod-img").expect("the module image projected a texture");
+        assert!(row.ok, "{}", row.error);
+        assert_eq!((row.w, row.h), (2, 2));
+
+        // A surface that never shipped a picture is a grid pane, not a texture pane — the
+        // discriminator is the store's generation, exactly as documented in `pane_item`.
+        st.adopt_pane(&mgr(), module_image_pane("mod-grid", "blank"));
+        let ps2 = &st.active_tab().panes[1];
+        let kind2 = ps2.kind.clone();
+        let grid_item = pane_item(ps2, true, false, false, false, 14.0, &kind2, 0, 0);
+        assert!(
+            !grid_item.has_image,
+            "a module surface with no picture is a grid pane, never a texture pane"
+        );
+
+        crate::module_ui::image::forget(&module);
+        assert!(crate::imagepane::forget("mod-img"));
     }
 }
 

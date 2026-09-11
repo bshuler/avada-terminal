@@ -566,6 +566,7 @@ dependencies = [
  "arboard",
  "avada-core",
  "avada-csv-parse",
+ "avada-image-decode",
  "avada-json-parse",
  "avada-markdown-parse",
  "avada-terminal-widget",
@@ -635,6 +636,14 @@ name = "avada-csv-parse"
 version = "0.1.0"
 dependencies = [
  "avada-module-sdk",
+ "tracing",
+]
+
+[[package]]
+name = "avada-image-decode"
+version = "0.1.0"
+dependencies = [
+ "image",
  "tracing",
 ]
 

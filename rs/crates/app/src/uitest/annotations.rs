@@ -552,6 +552,7 @@ fn an_image_caption_is_reached_by_its_text() {
                 focused: true,
                 kind: 9,
                 is_view: true,
+                has_image: true,
                 view_title: crate::imagepane::file_name(f.path()).into(),
                 font_px: 14.0,
                 ..Default::default()
