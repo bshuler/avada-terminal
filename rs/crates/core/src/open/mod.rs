@@ -378,10 +378,14 @@ mod tests {
     fn generating_the_shim_yields_an_executable_script() {
         let p = ensure_browser_shim().expect("shim");
         let body = std::fs::read_to_string(&p).expect("read back");
-        assert!(body.contains("AvadaOpenURL"), "{body}");
+        // Only the unix shim emits the OSC marker; the Windows batch file opens the URL
+        // itself (see `WINDOWS_SHIM`), so it has no marker to look for.
+        #[cfg(windows)]
+        assert!(body.starts_with("@echo off"), "{body}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            assert!(body.contains("AvadaOpenURL"), "{body}");
             let mode = std::fs::metadata(&p).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755, "{mode:o}");
             assert!(body.starts_with("#!/bin/sh"), "{body}");

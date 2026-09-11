@@ -944,6 +944,25 @@ mod tests {
         false
     }
 
+    /// Poll `ListSessions` until `uid` is present. The daemon acks `Create` as soon as it has
+    /// forwarded the spawn to the pty-host, and the pty-host lists a session only once its
+    /// ConPTY is actually up, so a list sent right behind the ack may not show it yet.
+    fn wait_until_listed(conn: &mut Conn, uid: &str, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        while Instant::now() < deadline {
+            send(conn, &ClientMsg::ListSessions);
+            let listed = recv_until(conn, Duration::from_secs(2), |m| {
+                matches!(m, DaemonMsg::Sessions(_))
+            });
+            if let Some(DaemonMsg::Sessions(s)) = listed {
+                if s.iter().any(|m| m.uid == uid) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     // A host salt is recognizable, round-trips, and lands on a DIFFERENT pipe than the daemon
     // it serves — the two roles must never contend for one name.
     #[test]
@@ -1069,6 +1088,7 @@ mod tests {
             &ClientMsg::Create(SpawnSpec {
                 uid: Some("pane-survivor".into()),
                 shell: Some("cmd.exe".into()),
+                args: Some(vec!["/k".into(), "echo survivor-ready".into()]),
                 cols: Some(80),
                 rows: Some(24),
                 ..Default::default()
@@ -1081,6 +1101,20 @@ mod tests {
             ))
             .is_some(),
             "the daemon creates the session in the pty-host"
+        );
+        // `Created` is the daemon's word, given before the pty-host has finished spawning:
+        // the daemon forwards `Create` fire-and-forget and lists its own shadow of the
+        // session, while the host installs the session in its registry only after the
+        // synchronous ConPTY spawn returns. Wait for the terminal to be real before the
+        // takeover, or the "still there afterwards" check races the spawn itself.
+        assert!(
+            output_contains(&conn, Duration::from_secs(10), "survivor-ready"),
+            "the pty-host spawned the survivor"
+        );
+        let mut host_conn = client(&host);
+        assert!(
+            wait_until_listed(&mut host_conn, "pane-survivor", Duration::from_secs(10)),
+            "the pty-host lists the survivor before the takeover"
         );
 
         // A successor asks the incumbent to stand down.
@@ -1100,7 +1134,6 @@ mod tests {
         );
 
         // The crux: ask the PTY-HOST directly. The terminal is still there.
-        let mut host_conn = client(&host);
         send(&mut host_conn, &ClientMsg::ListSessions);
         let listed = recv_until(&host_conn, Duration::from_secs(5), |m| {
             matches!(m, DaemonMsg::Sessions(_))

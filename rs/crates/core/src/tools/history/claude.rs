@@ -183,9 +183,12 @@ mod tests {
         let dir = root.join(crate::claude_history::encode_path_str(project));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{id}.jsonl"));
+        // A real (Windows) temp path carries backslashes, which are escapes inside a JSON
+        // string; write the field the way a JSON writer would.
+        let project = serde_json::to_string(project).unwrap();
         let body = format!(
             "{{\"type\":\"summary\",\"summary\":\"a summary record with no cwd\",\"leafUuid\":\"x\"}}\n\
-             {{\"type\":\"user\",\"cwd\":\"{project}\",\"gitBranch\":\"{branch}\",\
+             {{\"type\":\"user\",\"cwd\":{project},\"gitBranch\":\"{branch}\",\
                \"message\":{{\"role\":\"user\",\"content\":\"{prompt}\"}}}}\n"
         );
         std::fs::write(&path, body).unwrap();

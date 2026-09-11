@@ -874,10 +874,12 @@ mod tests {
             .unwrap_or_default();
         std::fs::write(
             dir.join("meta.json"),
+            // JSON-encoded, not quoted by hand: a Windows path's backslashes would
+            // otherwise be read as escapes and the record would fail to parse.
             format!(
                 "{{\"schemaVersion\":1,\"createdAtMs\":1,{title}\"updatedAtMs\":2,\
-                  \"hasConversation\":{has},\"cwd\":\"{}\"}}",
-                cwd.to_string_lossy()
+                  \"hasConversation\":{has},\"cwd\":{}}}",
+                serde_json::to_string(cwd.to_string_lossy().as_ref()).unwrap()
             ),
         )
         .unwrap();

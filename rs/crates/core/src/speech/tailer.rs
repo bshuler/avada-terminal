@@ -682,7 +682,8 @@ mod tests {
             return; // no cursor install on this machine
         };
         assert_eq!(r.format, TranscriptFormat::CursorJsonl);
-        let s = r.path.to_string_lossy().to_string();
+        // Windows builds the path with backslashes; the shape is what is under test.
+        let s = r.path.to_string_lossy().replace('\\', "/");
         assert!(s.ends_with("agent-transcripts/sid-1/sid-1.jsonl"), "{s}");
         assert!(s.contains(&encode_path_str("/tmp/proj")), "{s}");
     }
@@ -698,7 +699,7 @@ mod tests {
             return; // no copilot install on this machine
         };
         assert_eq!(r.format, TranscriptFormat::CopilotEvents);
-        let s = r.path.to_string_lossy().to_string();
+        let s = r.path.to_string_lossy().replace('\\', "/");
         assert!(s.ends_with("session-state/sid-2/events.jsonl"), "{s}");
     }
 

@@ -355,8 +355,31 @@ mod tests {
     fn write_then_read_round_trips_on_disk_creating_the_dir() {
         let dir = temp_dir("write-read").join("sets"); // deliberately absent
         let p = dir.join("morning.json");
-        assert!(write_set(&p, &sample()), "atomic write creates sets/");
-        assert_eq!(read_set(&p).unwrap(), sample()); // absolute members kept verbatim
+        // `sample()` is pinned to the byte-exact file shape, so its `/ws/...` members stay
+        // as they are; this test needs members that are absolute on the OS running it, or
+        // `resolve_members` rewrites them against `dir` on Windows.
+        let abs = |tail: &str| {
+            if cfg!(windows) {
+                format!("C:/ws/{tail}")
+            } else {
+                format!("/ws/{tail}")
+            }
+        };
+        let set = WorkspaceSet {
+            name: "Morning".into(),
+            members: vec![
+                SetMember {
+                    path: abs("dev.avada"),
+                    name: Some("dev".into()),
+                },
+                SetMember {
+                    path: abs("ops.avada"),
+                    name: None,
+                },
+            ],
+        };
+        assert!(write_set(&p, &set), "atomic write creates sets/");
+        assert_eq!(read_set(&p).unwrap(), set); // absolute members kept verbatim
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 

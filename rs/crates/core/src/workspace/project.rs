@@ -986,7 +986,9 @@ mod tests {
         // against `.avada/`.
         assert_eq!(
             back.panes.as_ref().unwrap()[0].cwd.as_deref(),
-            Some(root.join("crates/core").to_string_lossy().as_ref())
+            // Joined component by component: `join("crates/core")` would keep the forward
+            // slash on Windows, where the resolver produces `crates\core`.
+            Some(root.join("crates").join("core").to_string_lossy().as_ref())
         );
 
         let _ = std::fs::remove_dir_all(&root);

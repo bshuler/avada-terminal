@@ -559,10 +559,17 @@ mod tests {
     fn scans_every_project_and_sorts_for_the_panel() {
         let root = temp_root("scan");
         let conn = make_store(&root);
+        // `project_for` keeps a cwd only when it is absolute, and `/w/alpha` is not
+        // absolute on Windows (no drive), so the fixture speaks each OS's dialect.
+        let (alpha, beta) = if cfg!(windows) {
+            (r"C:\w\alpha", r"C:\w\beta")
+        } else {
+            ("/w/alpha", "/w/beta")
+        };
         insert(
             &conn,
             "1111-2222-3333",
-            "/w/beta",
+            beta,
             "main",
             "2026-08-19T11:00:00.000Z",
             "beta one",
@@ -570,7 +577,7 @@ mod tests {
         insert(
             &conn,
             "4444-5555-6666",
-            "/w/alpha",
+            alpha,
             "dev",
             "2026-08-19T10:00:00.000Z",
             "alpha old",
@@ -578,7 +585,7 @@ mod tests {
         insert(
             &conn,
             "7777-8888-9999",
-            "/w/alpha",
+            alpha,
             "dev",
             "2026-08-19T12:00:00.000Z",
             "alpha new",
@@ -597,9 +604,9 @@ mod tests {
         assert_eq!(
             seen,
             vec![
-                ("/w/alpha", "7777-8888-9999"),
-                ("/w/alpha", "4444-5555-6666"),
-                ("/w/beta", "1111-2222-3333"),
+                (alpha, "7777-8888-9999"),
+                (alpha, "4444-5555-6666"),
+                (beta, "1111-2222-3333"),
             ]
         );
         assert!(rows.iter().all(|r| r.source == HistorySource::Copilot));
