@@ -77,6 +77,21 @@ mod tests {
     use super::*;
     use std::panic::{self, AssertUnwindSafe};
 
+    /// Serializes the tests that touch process-global state: the panic hook (swapped by
+    /// [`poison`]) and the process-wide [`reported`] set. Cargo runs a binary's tests on
+    /// several threads, so without this two of them interleave their hook swaps and their
+    /// before/after deltas on the shared set — a real race that went red on a Windows CI run
+    /// whose scheduling differed from a passing one. The guard makes the global-state
+    /// assertions deterministic without weakening what they check. It recovers from its own
+    /// poisoning (a failed assertion in one test must not cascade into the next).
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
+        SERIAL
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Poison `m` the way real code does — a panic with the guard held — without the
     /// panic message spraying the test output.
     fn poison<T>(m: &Mutex<T>) {
@@ -99,6 +114,7 @@ mod tests {
 
     #[test]
     fn a_poisoned_lock_hands_back_the_value_instead_of_panicking() {
+        let _serial = serial();
         let m = Mutex::new(String::from("half"));
         poison(&m);
         assert!(
@@ -117,6 +133,7 @@ mod tests {
 
     #[test]
     fn a_site_reports_its_poisoning_once_however_often_it_locks() {
+        let _serial = serial();
         let m = Mutex::new(0_u32);
         poison(&m);
 
@@ -133,6 +150,7 @@ mod tests {
 
     #[test]
     fn two_different_sites_each_get_their_own_report() {
+        let _serial = serial();
         let m = Mutex::new(());
         poison(&m);
         let before = reported().lock_recover().len();
