@@ -1021,6 +1021,22 @@ mod tests {
     where
         Fut: std::future::Future<Output = ()>,
     {
+        // windows-latest CI has 4 vCPUs. `cargo test --all` runs the two ConPTY tests
+        // concurrently (libtest defaults to a thread per CPU), and each builds its own
+        // 4-worker runtime while the Windows transport busy-waits on pipe reads with
+        // `thread::sleep`. That oversubscription starves the daemon's spawned `serve` task,
+        // so its accept + first-frame read can slip past even a 20s `recv_until(Created)`
+        // budget — a runner-load artifact, not a daemon bug: `Created` is written
+        // fire-and-forget after a local create, independent of the pty-host. Serialize the
+        // heavy tests so only one holds the CPUs at a time; the gate is held across
+        // `block_on` AND the `shutdown_timeout` below, so one runtime is fully torn down
+        // before the next spins up its workers. Poison-tolerant on purpose: these tests
+        // panic on assertion by design, which would otherwise poison the gate and fail every
+        // sibling with a spurious `PoisonError` instead of its real result (the guarded data
+        // is `()`, so there is nothing to corrupt).
+        static CONPTY_GATE: Mutex<()> = Mutex::new(());
+        let _gate = CONPTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
+
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()
