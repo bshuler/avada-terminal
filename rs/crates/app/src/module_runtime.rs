@@ -429,6 +429,14 @@ impl ModuleRuntime {
     /// Fold one drained tick into one window's panel state. Returns whether it changed.
     pub fn apply(&self, tick: &ModuleTick, st: &mut State) -> bool {
         let mut dirty = false;
+        // Keep the window's file-open claim table in step with what is installed. This is a
+        // pure read of the install records — no dispatch, no spawning — so refreshing it
+        // every tick costs a small Vec, and it means a module installed this frame can open
+        // its file type on the very next open without any separate wiring. It does not mark
+        // the window dirty: nothing on screen changed, only where the *next* open will route.
+        if let Some(host) = self.host.as_ref() {
+            st.set_module_openers(host.openers());
+        }
         for event in &tick.rail {
             st.apply_rail_event(event.clone());
             dirty = true;

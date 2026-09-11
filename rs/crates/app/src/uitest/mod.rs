@@ -24,6 +24,7 @@ mod image;
 mod links;
 mod matrix;
 mod modulepane;
+mod opener;
 mod panebody;
 mod panedrag;
 mod paneheader;

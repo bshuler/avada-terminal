@@ -95,7 +95,7 @@ pub use avada_module_sdk::grid;
 pub use avada_module_sdk::doc;
 
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
-pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
+pub use host::{Host, HostConfig, HostError, HostEvent, Licensing, Opener};
 pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate, RowTarget};
 pub use rpc::CommandSpec;
 pub use spawn::{HandshakeError, SpawnError};
@@ -1117,5 +1117,63 @@ mod host_tests {
             .unwrap();
         assert_eq!(r.host.workspace_root(), Some(other));
         r.host.shutdown(&id).unwrap();
+    }
+
+    /// The opener table is the host's projection of every installed pane's `opens` list —
+    /// what the app routes a file-open through without ever naming a `Contribution`. This
+    /// pins the three things the app leans on: one row per (extension, module, surface) so
+    /// a pane claiming two extensions is reachable by both; extensions lowered so matching
+    /// is case-insensitive; and a deterministic order whose tie, when two modules claim one
+    /// extension, is the lower module id — the winner the app keeps.
+    #[test]
+    fn openers_project_every_pane_opens_claim_in_a_stable_order() {
+        use super::host::{openers_from, Opener};
+        use avada_module_sdk::manifest::ContributionKind;
+
+        // Point a record's single pane contribution at `surface`, claiming `exts`.
+        fn claim(id: &str, surface: &str, exts: &[&str]) -> InstallRecord {
+            let mut rec = testkit::record(&[]);
+            rec.module_id = ModuleId::new(id).unwrap();
+            rec.manifest.module.id = rec.module_id.clone();
+            let pane = rec
+                .manifest
+                .contributions
+                .iter_mut()
+                .find(|c| c.kind == ContributionKind::Pane)
+                .expect("the fixture has a pane contribution");
+            pane.id = surface.into();
+            pane.opens = exts.iter().map(|e| (*e).to_string()).collect();
+            rec
+        }
+
+        // A markdown module whose preview opens `md` and `MARKDOWN` (mixed case on purpose).
+        let md = claim("bshuler/avada-markdown", "preview", &["md", "MARKDOWN"]);
+        // A second module also claims `md`; its higher id must sort after markdown's.
+        let notes = claim("zed/avada-notes", "notes", &["md"]);
+        // The untouched fixture pane has no `opens`, so it contributes nothing.
+        let plain = testkit::record(&[]);
+
+        let got = openers_from([&md, &notes, &plain].iter().copied());
+        let m = |id: &str| ModuleId::new(id).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                Opener {
+                    ext: "markdown".into(),
+                    module: m("bshuler/avada-markdown"),
+                    surface: "preview".into(),
+                },
+                Opener {
+                    ext: "md".into(),
+                    module: m("bshuler/avada-markdown"),
+                    surface: "preview".into(),
+                },
+                Opener {
+                    ext: "md".into(),
+                    module: m("zed/avada-notes"),
+                    surface: "notes".into(),
+                },
+            ],
+        );
     }
 }

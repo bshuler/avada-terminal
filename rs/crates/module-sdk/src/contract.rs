@@ -429,6 +429,11 @@ pub mod methods {
         /// Something asked for a path to be revealed in a file tree.
         /// Payload: `{ path: String, line?: u32, col?: u32 }`.
         pub const FILES_REVEAL: &str = "files.reveal";
+        /// A file was opened onto a module's document surface, because the module's pane
+        /// contribution claimed the file's extension in its `opens` list. The module reads
+        /// `path`, parses it, and ships blocks back over `host.doc.set` for `surface`.
+        /// Payload: `{ surface: String, path: String }`.
+        pub const DOC_OPEN: &str = "doc.open";
     }
 
     /// Host: replace a grid surface's frame (UI tier 5). Params: [`crate::grid::GridFrame`].

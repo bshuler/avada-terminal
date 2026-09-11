@@ -3945,6 +3945,10 @@ impl App {
                     );
                     return;
                 }
+                // An installed module that claimed this extension takes precedence over the
+                // built-in viewer; resolved under a read-only borrow dropped before dispatch
+                // (borrow rule #18). `kind_for_file` is the fallback when nothing claims it.
+                let opener = w.state.borrow().opener_for_path(&r.path);
                 let opts = NewPaneOpts {
                     // The file's own name is the pane label; the view draws the full
                     // location in its breadcrumb.
@@ -3962,13 +3966,30 @@ impl App {
                     show_dot: None,
                     env: None,
                     startup: None,
-                    // Markdown gets the preview, everything else the plain viewer —
-                    // decided by extension so the same click never means two things.
-                    kind: Some(crate::viewpane::kind_for_file(&r.path)),
+                    // A claiming module's pane, else: markdown gets the preview, everything
+                    // else the plain viewer — decided by extension so the same click never
+                    // means two things.
+                    kind: Some(match &opener {
+                        Some(m) => PaneKind::Module(m.clone()),
+                        None => crate::viewpane::kind_for_file(&r.path),
+                    }),
                     // A view pane holds a file, not a conversation.
                     session: None,
                 };
                 app.run_command(&w, Command::SubmitNewPane(Box::new(opts)));
+                // The module's pane is up but empty; tell it what to render. It reads the
+                // file through its own capability and pushes the parsed document back via
+                // `host.doc.set`. The built-in viewers read the file themselves and need no
+                // such nudge.
+                if let Some(m) = opener {
+                    w.state.borrow_mut().emit_module_event(
+                        avada_core::module::methods::events::DOC_OPEN,
+                        serde_json::json!({
+                            "surface": m.surface,
+                            "path": r.path.display().to_string(),
+                        }),
+                    );
+                }
             });
         }
 

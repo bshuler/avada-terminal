@@ -278,6 +278,12 @@ pub struct Contribution {
     /// Path to an SVG in the module repo, relative to its root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// File extensions this pane opens, lowercase and without the dot (`["md", "markdown"]`).
+    /// Meaningful only on a [`ContributionKind::Pane`]: the host routes a file with one of
+    /// these extensions to this pane's surface instead of a built-in viewer. Empty means the
+    /// pane claims no file type and is reached only by an explicit spawn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opens: Vec<String>,
 }
 
 /// The `[skills]` table.

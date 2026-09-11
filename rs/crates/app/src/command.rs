@@ -795,15 +795,23 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                 state.set_project_root(p);
                 return Effect::None;
             }
-            // `.md` gets the renderer, everything else the plain viewer — the same split the
-            // pane menu makes, so a file opens the same way however it was reached.
-            let md = p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")
-            });
-            let kind = if md {
-                avada_core::tools::kind::PaneKind::Markdown
-            } else {
-                avada_core::tools::kind::PaneKind::FileViewer
+            // An installed module that claimed this extension takes precedence: the file
+            // opens into its pane surface. Otherwise `.md` gets the built-in renderer and
+            // everything else the plain viewer — the same split the pane menu makes, so a
+            // file opens the same way however it was reached.
+            let opener = state.opener_for_path(&p);
+            let kind = match &opener {
+                Some(m) => avada_core::tools::kind::PaneKind::Module(m.clone()),
+                None => {
+                    let md = p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                        e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")
+                    });
+                    if md {
+                        avada_core::tools::kind::PaneKind::Markdown
+                    } else {
+                        avada_core::tools::kind::PaneKind::FileViewer
+                    }
+                }
             };
             let label = p
                 .file_name()
@@ -814,7 +822,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                 NewPaneOpts {
                     label,
                     // A view pane's target IS its cwd — see `State::view_navigate`.
-                    cwd: Some(path),
+                    cwd: Some(path.clone()),
                     command: None,
                     shell: None,
                     accent: None,
@@ -827,6 +835,16 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     session: None,
                 },
             );
+            // The pane is up but empty; the module has not been told what to render. Hand it
+            // the surface and path — it reads the file through its own capability and pushes
+            // the parsed document back via `host.doc.set`. The built-in viewer needs no such
+            // nudge because it reads the file itself off the pane's cwd.
+            if let Some(m) = opener {
+                state.emit_module_event(
+                    avada_core::module::methods::events::DOC_OPEN,
+                    serde_json::json!({ "surface": m.surface, "path": path }),
+                );
+            }
         }
         Command::OpenPathInEditor { path, line, col } => {
             // The template is read here rather than baked into the row, so a preference

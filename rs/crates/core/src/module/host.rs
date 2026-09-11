@@ -23,6 +23,7 @@ use avada_module_sdk::contract::{
 use avada_module_sdk::descriptor::RouteDescriptor;
 use avada_module_sdk::doc::Doc;
 use avada_module_sdk::grid::{DeclareKeymap, GridFrame, GridKey, GridResize};
+use avada_module_sdk::manifest::ContributionKind;
 use avada_module_sdk::rail::RowActivate;
 use avada_module_sdk::rights::InstallRecord;
 use avada_module_sdk::ModuleId;
@@ -199,6 +200,61 @@ pub enum HostEvent {
         /// Save the open windows as a *set* rather than as one workspace.
         as_set: bool,
     },
+}
+
+/// One file type an installed module's pane surface claims to open — the host's projection
+/// of a [`ContributionKind::Pane`] contribution's `opens` list. The app routes a file whose
+/// extension matches `ext` to a module pane on `surface` instead of a built-in viewer.
+///
+/// This exists so the app can consult that routing table without naming a `Contribution`:
+/// the manifest vocabulary stays in the SDK and core, and the app is handed only the three
+/// strings it needs. One [`Opener`] is a single (extension, module, surface) claim, so a
+/// pane that opens `md` and `markdown` yields two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opener {
+    /// The extension claimed, lowercase and without the dot (`"md"`).
+    pub ext: String,
+    /// The module whose pane opens it.
+    pub module: ModuleId,
+    /// The pane surface to open — the contribution's id.
+    pub surface: String,
+}
+
+/// Project a set of install records into the file-open claims their pane contributions make.
+///
+/// One [`Opener`] per (extension, module, surface): a pane that opens `md` and `markdown`
+/// yields two, and extensions are lowercased so the table is matched case-insensitively. The
+/// result is sorted by extension, then module, then surface, so it is deterministic — and
+/// when two modules claim one extension, the lower module id sorts first, which is the tie
+/// the app breaks on. Records with no pane contributions, or panes with an empty `opens`,
+/// contribute nothing.
+pub fn openers_from<'a>(records: impl Iterator<Item = &'a InstallRecord>) -> Vec<Opener> {
+    let mut out: Vec<Opener> = records
+        .flat_map(|record| {
+            let module = record.module_id.clone();
+            record
+                .manifest
+                .contributions
+                .iter()
+                .filter(|c| c.kind == ContributionKind::Pane)
+                .flat_map(move |c| {
+                    let module = module.clone();
+                    let surface = c.id.clone();
+                    c.opens.iter().map(move |ext| Opener {
+                        ext: ext.to_ascii_lowercase(),
+                        module: module.clone(),
+                        surface: surface.clone(),
+                    })
+                })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.ext
+            .cmp(&b.ext)
+            .then_with(|| a.module.cmp(&b.module))
+            .then_with(|| a.surface.cmp(&b.surface))
+    });
+    out
 }
 
 /// Why a host operation failed.
@@ -492,6 +548,17 @@ impl Host {
             Some(slot) => slot.dispatcher.routes(),
             None => Vec::new(),
         }
+    }
+
+    /// Every file type any installed module's pane surface claims to open.
+    ///
+    /// Read from the install records' manifests, not from live dispatch: a claim is a
+    /// static fact about what is installed, so this holds whether or not the module is
+    /// running — the app can open the pane, and the module renders into it once it is up.
+    /// See [`openers_from`] for the projection and its ordering guarantees.
+    pub fn openers(&self) -> Vec<Opener> {
+        let slots = lock(&self.inner.slots);
+        openers_from(slots.values().map(|slot| &slot.record))
     }
 
     /// The module's stored preference values.

@@ -1581,6 +1581,12 @@ pub struct State {
     /// Queued rather than emitted for the same re-entrancy reason as
     /// [`State::rail_requests`], and drained beside it.
     pub module_events: Vec<(String, serde_json::Value)>,
+    /// The file types installed modules claim to open, refreshed from
+    /// `avada_core::module::Host::openers` each module tick. A file-open consults this before
+    /// it falls back to a built-in viewer, so a module that claimed the extension gets the
+    /// pane. Sorted by the host (extension, then module), so the first match on an extension
+    /// is the tie-break winner — see [`State::opener_for_path`].
+    pub module_openers: Vec<avada_core::module::Opener>,
     /// Capability rights for every installed module — the truth the Preferences rights
     /// page projects and the ask toast answers against (track H2). Constructed empty and
     /// rooted at the real app-support dir; nothing is read or written until a module is
@@ -1815,6 +1821,7 @@ impl State {
             rail_requests: Vec::new(),
             rail_scroll_hold: None,
             module_events: Vec::new(),
+            module_openers: Vec::new(),
             rights: crate::prefs::rights::shared().clone(),
             rights_selected: None,
             rights_effects: Vec::new(),
@@ -5305,6 +5312,30 @@ impl State {
     /// Take everything queued for `Host::emit` since the last drain.
     pub fn take_module_events(&mut self) -> Vec<(String, serde_json::Value)> {
         std::mem::take(&mut self.module_events)
+    }
+
+    /// Replace the file-open claim table with the host's current projection.
+    ///
+    /// Called each module tick from whoever owns the `Host` (see
+    /// `ModuleRuntime::apply`). The table changes only when a module is installed or
+    /// removed, so re-storing an identical `Vec` most ticks is cheap and keeps the state
+    /// layer free of any dependency on the live host.
+    pub fn set_module_openers(&mut self, openers: Vec<avada_core::module::Opener>) {
+        self.module_openers = openers;
+    }
+
+    /// Which module pane, if any, an installed module claims for `path`'s extension.
+    ///
+    /// The extension is matched lowercase against [`State::module_openers`], which the host
+    /// already sorted by (extension, module, surface). The first entry on the extension is
+    /// therefore the tie-break winner — the lowest module id — so a linear scan for the
+    /// first match is the whole resolution. `None` when the path has no extension, no module
+    /// claims it, or the winning claim names a surface that no longer validates; every such
+    /// case falls back to the caller's built-in viewer.
+    pub fn opener_for_path(&self, path: &Path) -> Option<avada_core::tools::kind::ModulePaneRef> {
+        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+        let hit = self.module_openers.iter().find(|o| o.ext == ext)?;
+        avada_core::tools::kind::ModulePaneRef::new(hit.module.as_str(), &hit.surface, None)
     }
 
     /// Show `path` in whichever module owns the `files` rail entry: open the panel on that
