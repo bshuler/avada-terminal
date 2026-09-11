@@ -565,18 +565,12 @@ claim stops being true, run on this date.
 | Every module repo builds and passes its own tests | `scripts/check-modules.sh` printed `MODULES_CHECK_GREEN` for all seven topic repos plus `avada-commercial` and `avada-license`. |
 | Licence: offline install, revoke stops the module after grace | `license` tests against the stub issuer; the app installs the service, builds the `CachedGate` and runs `checkin_all` (docs/licensing.md follow-ups corrected in `bac98a0`). |
 | Three-OS matrix | `scripts/check-windows.sh` and `scripts/check-linux-docker.sh` now also cover the terminal-widget workspace, which is where the last release run's Windows job died. |
+| Tag a release (W2 exit): a full release run goes green and publishes assets | Release run [`34567933787`](https://github.com/bshuler/avada-terminal/actions/runs/34567933787) for tag `v0.2.12` is green end to end — every test cell (both workspaces × three OS), `test-mobile`, `release`, and all five build jobs — and [published seven assets](https://github.com/bshuler/avada-terminal/releases/tag/v0.2.12): `.dmg`, `.deb`, `.rpm`, `.AppImage`, setup `.exe`, `.apk`, and the unsigned iOS `.zip`. The Windows probe / JSON-escape fixture bugs that sank `v0.2.0`–`v0.2.11` are fixed (`2e34a00`, `c969751`); the app crate reports `0.2.12`, so a `v0.2.x` build no longer misstates its version and the updater stops nagging. |
 
 ### Not met
 
-1. **"Tag a release" (W2 exit).** Tag `v0.2.0` exists but its release run failed
-   (Windows compile errors, two ubuntu test failures) and `bshuler/avada-terminal`
-   has no release at all. Every one of those failures is fixed at HEAD
-   (`3ed5449`, `bac98a0`), but only a new tag proves it on the runners, and the
-   app crate still says `version = "0.0.36"`, so a `v0.2.x` build would report
-   the wrong version and the updater would nag forever. A release needs a version
-   bump and a tag together, and publishing on a public repo is the owner's call.
-2. **Live start/stop on enable/disable** stays the documented deviation in §10.
-3. **Windows signature check** is still the stub; minisign is what ships.
+1. **Live start/stop on enable/disable** stays the documented deviation in §10.
+2. **Windows signature check** is still the stub; minisign is what ships.
 
 ### Carried backlog
 
