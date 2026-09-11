@@ -36,19 +36,53 @@ fn temp_dir(tag: &str) -> PathBuf {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&d).unwrap();
-    d
+    // Return the exact normal form the filesystem probe walks back to. Two platform traps make
+    // the raw temp path the wrong shape for a fixture the probe has to re-encode and match:
+    //   * on Windows `std::env::temp_dir()` hands back an 8.3 short name (`RUNNER~1\...`), while
+    //     `read_dir` during the probe yields the long name (`runneradmin\...`); the encoder maps
+    //     each char literally, so a short-name fixture never matches the long-name walk;
+    //   * on macOS the temp path runs through the `/var -> /private/var` symlink.
+    // `canonicalize` resolves both (and on Windows adds a `\\?\` prefix, stripped below).
+    canonical_dir(&d)
+}
+
+/// `canonicalize`, reduced to the form the filesystem probe actually returns. Panics on a real
+/// canonicalize error, since the fixtures depend on the directory existing.
+fn canonical_dir(dir: &Path) -> PathBuf {
+    let c = std::fs::canonicalize(dir).unwrap();
+    #[cfg(windows)]
+    {
+        // Strip the extended-length `\\?\` prefix `canonicalize` adds on Windows:
+        // `\\?\C:\x` -> `C:\x`, `\\?\UNC\srv\share` -> `\\srv\share`. These fixtures create
+        // paths far under MAX_PATH, so the non-verbatim form is always representable.
+        let s = c.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest.to_owned());
+        }
+    }
+    c
 }
 
 /// A transcript shaped like the real thing: line 1 is a `summary` record with **no** `cwd`
 /// (that is what Claude Code actually writes), and the `cwd`/`gitBranch` pair rides on a
 /// later record.
 fn transcript(cwd: &str, branch: &str, prompt: &str) -> String {
+    // Escape every embedded value as JSON. A Windows `cwd` is `C:\Users\...`; interpolated raw
+    // it produces invalid escapes (`\U`, `\h`) and the whole record fails to parse — silently
+    // dropping `cwd` and `gitBranch`. `serde_json::to_string` yields the quoted, escaped literal
+    // (a no-op for the forward-slash `/w/...` cwds the other fixtures use).
+    let cwd = serde_json::to_string(cwd).unwrap();
+    let branch = serde_json::to_string(branch).unwrap();
+    let prompt = serde_json::to_string(prompt).unwrap();
     format!(
         "{{\"type\":\"summary\",\"summary\":\"an earlier conversation\",\"leafUuid\":\"x\"}}\n\
          {{\"type\":\"mode\",\"mode\":\"normal\"}}\n\
-         {{\"type\":\"user\",\"cwd\":\"{cwd}\",\"gitBranch\":\"{branch}\",\
-           \"message\":{{\"role\":\"user\",\"content\":\"{prompt}\"}}}}\n\
-         {{\"type\":\"assistant\",\"cwd\":\"{cwd}\",\"gitBranch\":\"{branch}\",\
+         {{\"type\":\"user\",\"cwd\":{cwd},\"gitBranch\":{branch},\
+           \"message\":{{\"role\":\"user\",\"content\":{prompt}}}}}\n\
+         {{\"type\":\"assistant\",\"cwd\":{cwd},\"gitBranch\":{branch},\
            \"message\":{{\"role\":\"assistant\",\"content\":\"on it\"}}}}\n"
     )
 }
