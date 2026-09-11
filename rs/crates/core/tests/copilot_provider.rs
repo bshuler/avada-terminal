@@ -81,6 +81,17 @@ fn turn(conn: &Connection, id: &str, index: i64, user: &str, assistant: &str, at
     .unwrap();
 }
 
+/// `project_for` keeps a cwd only when it is absolute, and `/w/…` has no drive letter, so it
+/// is absolute on Unix but not on Windows. Speak each OS's dialect so a fixture path meant to
+/// be an absolute, exactly-recorded cwd is genuinely absolute on the machine running the test.
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_string()
+    }
+}
+
 const T0: &str = "2026-08-19T10:00:00.000Z";
 const T1: &str = "2026-08-19T11:00:00.000Z";
 const T2: &str = "2026-08-19T12:00:00.000Z";
@@ -91,14 +102,14 @@ const T2: &str = "2026-08-19T12:00:00.000Z";
 fn an_absolute_cwd_off_the_row_is_a_record_not_a_reconstruction() {
     let root = temp_dir("origin-exact");
     let conn = store(&root);
-    session(&conn, "aaaa-1111", "/w/repo", "me/repo", T0);
+    session(&conn, "aaaa-1111", &abs("/w/repo"), "me/repo", T0);
     turn(&conn, "aaaa-1111", 0, "make it faster", "on it", T0);
     drop(conn);
 
     let mut p = CopilotProvider::with_root(&root);
     let rows = p.scan();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].project, PathBuf::from("/w/repo"));
+    assert_eq!(rows[0].project, PathBuf::from(abs("/w/repo")));
     assert_eq!(rows[0].project_origin, ProjectOrigin::TranscriptExact);
     assert!(rows[0].project_origin.is_exact());
     assert_eq!(rows[0].source, HistorySource::Copilot);
@@ -168,10 +179,11 @@ fn a_row_with_no_cwd_and_no_repository_is_dropped_not_guessed_at() {
 fn projects_ascend_sessions_descend_and_no_heading_repeats() {
     let root = temp_dir("order");
     let conn = store(&root);
-    session(&conn, "1111-aaaa", "/w/beta", "me/beta", T1);
-    session(&conn, "2222-bbbb", "/w/alpha", "me/alpha", T0);
-    session(&conn, "3333-cccc", "/w/beta", "me/beta", T2);
-    session(&conn, "4444-dddd", "/w/alpha", "me/alpha", T2);
+    let (alpha, beta) = (abs("/w/alpha"), abs("/w/beta"));
+    session(&conn, "1111-aaaa", &beta, "me/beta", T1);
+    session(&conn, "2222-bbbb", &alpha, "me/alpha", T0);
+    session(&conn, "3333-cccc", &beta, "me/beta", T2);
+    session(&conn, "4444-dddd", &alpha, "me/alpha", T2);
     for id in ["1111-aaaa", "2222-bbbb", "3333-cccc", "4444-dddd"] {
         turn(&conn, id, 0, "hello", "hi", T0);
     }
@@ -199,10 +211,10 @@ fn projects_ascend_sessions_descend_and_no_heading_repeats() {
     assert_eq!(
         seen,
         vec![
-            ("/w/alpha", "4444-dddd"),
-            ("/w/alpha", "2222-bbbb"),
-            ("/w/beta", "3333-cccc"),
-            ("/w/beta", "1111-aaaa"),
+            (alpha.as_str(), "4444-dddd"),
+            (alpha.as_str(), "2222-bbbb"),
+            (beta.as_str(), "3333-cccc"),
+            (beta.as_str(), "1111-aaaa"),
         ]
     );
 
