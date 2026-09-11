@@ -31,10 +31,12 @@ pub mod keyring_windows;
 pub mod lock;
 pub mod record;
 pub mod resolver;
+pub mod seed;
 pub mod store;
 
 pub use artifact::{hash_file, hash_skills, verify_artifact, verify_skills};
 pub use dirs::InstallPaths;
+pub use seed::{ledger_path, seed_bundled, seed_modules_dir, SeedOutcome};
 pub use keyring::{FileKeyStore, KeyError, KeyStore, MemoryKeyStore, SecretKey, DEFAULT_KEY_ID};
 pub use store::{InstallStore, Installed, RecordStatus};
 

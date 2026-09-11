@@ -53,7 +53,7 @@ use avada_core::control::modules::attach_host;
 use avada_core::control::server::Shared;
 use avada_core::install::dirs::InstallPaths;
 use avada_core::install::store::{InstallStore, Installed, RecordStatus};
-use avada_core::install::{FileKeyStore, KeyStore};
+use avada_core::install::{ledger_path, seed_bundled, seed_modules_dir, FileKeyStore, KeyStore};
 use avada_core::license::{CachedGate, Gate, LicenseService};
 use avada_core::marketplace::state_dir_beside;
 use avada_core::marketplace::workspace::WorkspaceStates;
@@ -289,6 +289,24 @@ impl ModuleRuntime {
                 };
             }
         };
+
+        // Seed the first-party modules the bundle ships before deciding what to start:
+        // the seam is `InstallStore::install`, the same one the marketplace uses, so a
+        // seeded module is indistinguishable from one the user installed by hand and is
+        // picked up by `start_installed` below like any other. Offline and idempotent (a
+        // per-`id@version` ledger beside the store), and never fatal — a build with no
+        // seed directory seeds nothing, a broken module is logged and the rest still land.
+        if let Some(seed_dir) = seed_modules_dir() {
+            let outcome = seed_bundled(&store, &seed_dir, &ledger_path(modules_root));
+            if !outcome.seeded.is_empty() || !outcome.failures.is_empty() {
+                tracing::info!(
+                    seeded = outcome.seeded.len(),
+                    skipped = outcome.skipped,
+                    failed = outcome.failures.len(),
+                    "seeded bundled modules"
+                );
+            }
+        }
 
         // A sibling of the modules root, never inside it: `InstallStore::records` walks
         // every child of the root expecting `<owner>__<repo>`, and a `data` directory in

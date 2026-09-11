@@ -86,6 +86,14 @@ done
 rm -rf "$APPDIR/usr/bin/resources/claude/hyperpane"
 cp -R "$ROOT/resources/claude/hyperpane" "$APPDIR/usr/bin/resources/claude/hyperpane"
 
+# First-party modules, precompiled for offline first-run seeding (requirement #2).
+# AppRun launches usr/bin/avada, so the seed resolver's exe_dir/resources/seed-modules
+# rule lands here. stage_seed_modules builds each in-tree module and lays out
+# seed-modules/<owner>__<repo>/{avada.toml,bin/<name>,skills...}; seed copies each binary
+# into the user's store and chmods it there, so the staged copy needs only to be readable.
+source "$SCRIPT_DIR/seed-modules.sh"
+stage_seed_modules "$APPDIR/usr/bin/resources/seed-modules"
+
 # Desktop entry + MIME info (registered by appimaged/AppImageLauncher or a
 # package manager hook via update-mime-database on integration).
 install -m 644 "$LINUX_DIR/avada.desktop" "$APPDIR/usr/share/applications/avada.desktop"

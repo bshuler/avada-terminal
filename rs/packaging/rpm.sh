@@ -43,6 +43,14 @@ fi
 echo "==> cargo build --release (rs/crates/app)"
 cargo build --release --manifest-path "$APP_MANIFEST"
 
+# First-party modules, precompiled for offline first-run seeding (requirement #2). They
+# live in the ROOT workspace, which the app-crate build above never touches, so build+stage
+# them here into the fixed dir the asset list points at with ../../packaging/out/seed-stage/… .
+# seed copies each binary into the user's store and chmods it there, so the packaged copies
+# ship read-only (0644) under /usr/share.
+source "$SCRIPT_DIR/seed-modules.sh"
+stage_seed_modules "$OUT_DIR/seed-stage/seed-modules"
+
 ARTIFACT="$OUT_DIR/avada-${VERSION}-1.x86_64.rpm"
 echo "==> cargo generate-rpm → $ARTIFACT"
 rm -f "$ARTIFACT"

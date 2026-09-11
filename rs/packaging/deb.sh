@@ -38,6 +38,14 @@ if ! cargo deb --version >/dev/null 2>&1; then
   cargo install cargo-deb
 fi
 
+# First-party modules, precompiled for offline first-run seeding (requirement #2). The
+# module binaries live in the ROOT workspace, which cargo-deb (building only the app crate)
+# never touches, so build+stage them here into a fixed dir the asset list points at with
+# ../../packaging/out/seed-stage/… . seed copies each binary into the user's store and
+# chmods it there, so the packaged copies are shipped read-only (0644) under /usr/share.
+source "$SCRIPT_DIR/seed-modules.sh"
+stage_seed_modules "$OUT_DIR/seed-stage/seed-modules"
+
 ARTIFACT="$OUT_DIR/avada_${VERSION}_amd64.deb"
 echo "==> cargo deb → $ARTIFACT"
 rm -f "$ARTIFACT"

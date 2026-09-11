@@ -116,6 +116,15 @@ for h in claude/hp-claude-session-hook.sh cursor/hp-cursor-session-hook.sh copil
   install -m 755 "$ROOT/resources/$h" "$APP/Contents/Resources/$h"
 done
 
+# First-party modules, shipped precompiled so first run seeds them offline (requirement
+# #2). stage_seed_modules builds each in-tree module and lays out
+# Contents/Resources/seed-modules/<owner>__<repo>/{avada.toml,bin/<name>,skills...},
+# which core::install::seed::seed_modules_dir() finds via the ../Resources rule.
+# Reached through the MacOS/resources symlink like the other bundled resources; the
+# binaries it drops in are nested Mach-O and are signed inside-out below.
+source "$SCRIPT_DIR/../seed-modules.sh"
+stage_seed_modules "$APP/Contents/Resources/seed-modules"
+
 ln -s ../Resources "$APP/Contents/MacOS/resources"
 
 echo "==> generating avada.icns from build/icon.png"
@@ -260,8 +269,16 @@ else
 fi
 
 echo "==> signing Avada.app (hardened runtime)"
-# No nested Mach-O to sign first: the binary is statically linked and everything
-# else under Contents is scripts, markdown and an icns. Hence no --deep.
+# Nested Mach-O must be signed inside-out: the seeded module binaries under
+# Contents/Resources/seed-modules/*/bin/* are separate executables, and a signature on
+# the app that finds an unsigned one nested inside fails --verify --strict. So sign each
+# module binary first (hardened runtime, no entitlements — they are headless RPC helpers
+# that render nothing and need none of the app's exceptions), then seal the app over them.
+# We avoid --deep (deprecated, signs blindly) in favour of signing the known set.
+while IFS= read -r -d '' modbin; do
+    codesign --force --options runtime "${SIGN_TIMESTAMP[@]}" --sign "$SIGN_ID" "$modbin"
+done < <(find "$APP/Contents/Resources/seed-modules" -type f -path '*/bin/*' -perm -u+x -print0 2>/dev/null)
+
 codesign --force --options runtime "${SIGN_TIMESTAMP[@]}" \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_ID" "$APP"

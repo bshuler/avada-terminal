@@ -183,6 +183,24 @@ assets = [
     ["../../packaging/linux/icons/hicolor/128x128/apps/avada.png", "/usr/share/icons/hicolor/128x128/apps/avada.png", "644"],
     ["../../packaging/linux/icons/hicolor/256x256/apps/avada.png", "/usr/share/icons/hicolor/256x256/apps/avada.png", "644"],
     ["../../packaging/linux/icons/hicolor/512x512/apps/avada.png", "/usr/share/icons/hicolor/512x512/apps/avada.png", "644"],
+    # First-party modules, precompiled for offline first-run seeding (requirement #2).
+    # deb.sh stages these under packaging/out/seed-stage before cargo-deb runs. Add a
+    # line pair here when a module joins rs/modules/ (mirror in generate-rpm below).
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-editor/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-editor/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-editor/bin/avada-editor", "/usr/share/avada/resources/seed-modules/bshuler__avada-editor/bin/avada-editor", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-files/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-files/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-files/bin/avada-files", "/usr/share/avada/resources/seed-modules/bshuler__avada-files/bin/avada-files", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-git/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/bin/avada-git", "/usr/share/avada/resources/seed-modules/bshuler__avada-git/bin/avada-git", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/bin/avada-tools", "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/bin/avada-tools", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/bin/avada-workspace", "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/bin/avada-workspace", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -213,6 +231,24 @@ assets = [
     { source = "../../packaging/linux/icons/hicolor/128x128/apps/avada.png", dest = "/usr/share/icons/hicolor/128x128/apps/avada.png", mode = "0644" },
     { source = "../../packaging/linux/icons/hicolor/256x256/apps/avada.png", dest = "/usr/share/icons/hicolor/256x256/apps/avada.png", mode = "0644" },
     { source = "../../packaging/linux/icons/hicolor/512x512/apps/avada.png", dest = "/usr/share/icons/hicolor/512x512/apps/avada.png", mode = "0644" },
+    # First-party modules, precompiled for offline first-run seeding (requirement #2).
+    # rpm.sh stages these under packaging/out/seed-stage before cargo-generate-rpm runs.
+    # Add a line pair here when a module joins rs/modules/ (mirror in deb above).
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-editor/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-editor/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-editor/bin/avada-editor", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-editor/bin/avada-editor", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-files/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-files/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-files/bin/avada-files", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-files/bin/avada-files", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-git/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/bin/avada-git", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-git/bin/avada-git", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/bin/avada-tools", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/bin/avada-tools", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/bin/avada-workspace", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/bin/avada-workspace", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", mode = "0644" },
 ]
 
 # Headless Slint driver for the UI-layer end-to-end tests: builds the real component tree,
