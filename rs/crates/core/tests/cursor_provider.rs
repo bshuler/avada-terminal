@@ -45,15 +45,39 @@ fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-/// A real directory to point sessions at, under a *canonicalised* temp root. Canonical
-/// because probing walks the filesystem from `/` down, and on macOS the uncanonicalised
-/// temp path runs through the `/var -> /private/var` symlink — the probe resolves it either
-/// way, but only the canonical form compares equal to what it returns.
+/// A real directory to point sessions at, under a *canonicalised* temp root. The fixture path
+/// has to be the exact normal form the filesystem probe returns:
+///   * on macOS the uncanonicalised temp path runs through the `/var -> /private/var` symlink,
+///     and only the canonical form compares equal to what the probe returns;
+///   * on Windows `canonicalize` returns a `\\?\`-verbatim path, but the probe walks from a
+///     plain `C:\` root (and Cursor's own recorded `cwd` is non-verbatim too), so the verbatim
+///     prefix has to come back off — otherwise the encoded name gains leading dashes and the
+///     probe misroutes to the Unix-root branch.
 fn real_project(tag: &str, leaf: &str) -> PathBuf {
-    let base = std::fs::canonicalize(temp_dir(tag)).unwrap();
+    let base = canonical_dir(&temp_dir(tag));
     let p = base.join(leaf);
     std::fs::create_dir_all(&p).unwrap();
     p
+}
+
+/// `canonicalize`, reduced to the form the filesystem probe actually returns. Panics on a real
+/// canonicalize error, since the fixtures depend on the directory existing.
+fn canonical_dir(dir: &Path) -> PathBuf {
+    let c = std::fs::canonicalize(dir).unwrap();
+    #[cfg(windows)]
+    {
+        // Strip the extended-length `\\?\` prefix `canonicalize` adds on Windows:
+        // `\\?\C:\x` -> `C:\x`, `\\?\UNC\srv\share` -> `\\srv\share`. These fixtures create
+        // paths far under MAX_PATH, so the non-verbatim form is always representable.
+        let s = c.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest.to_owned());
+        }
+    }
+    c
 }
 
 /// A transcript shaped like the real thing: Cursor wraps the human's prompt in
@@ -97,8 +121,8 @@ fn write_meta(store: &Path, id: &str, cwd: &Path, title: Option<&str>, updated: 
         d.join("meta.json"),
         format!(
             "{{\"schemaVersion\":1,\"createdAtMs\":1,{title}\"updatedAtMs\":{updated},\
-              \"hasConversation\":true,\"cwd\":\"{}\"}}",
-            cwd.to_string_lossy()
+              \"hasConversation\":true,\"cwd\":{}}}",
+            serde_json::to_string(cwd.to_string_lossy().as_ref()).unwrap()
         ),
     )
     .unwrap();
