@@ -2,10 +2,15 @@
 //! tree of rows. Owned by the V1 track.
 //!
 //! Two halves. [`tree_rows`] is the pure projection: text in, one [`ViewRow`] per visible
-//! node out, in document order. The rest is the one thing in a view pane that is *not* a
-//! function of the file — which containers the human has folded. That lives here, keyed by
-//! pane uid, and is folded into `viewpane::Fingerprint` through [`generation`] so a toggle
-//! is a cache miss rather than a stale tree.
+//! node out, in document order. It is a thin skin over [`avada_json_parse::flatten`] — the
+//! same crate the `bshuler/avada-datatree` module calls — so the built-in view and the
+//! module cannot disagree about a document's shape; the crate owns the fold arithmetic,
+//! the child counts, the value classification and the row cap, and this file owns only the
+//! paint: the [`ViewRow`] each [`avada_json_parse::TreeLine`] becomes, inked by the palette.
+//! The other half is the one thing in a view pane that is *not* a function of the file —
+//! which containers the human has folded. That lives here, keyed by pane uid, and is folded
+//! into `viewpane::Fingerprint` through [`generation`] so a toggle is a cache miss rather
+//! than a stale tree.
 //!
 //! **Row contract (role 18, [`viewpane::role::DATA_NODE`]).** `text` is what a copy yields:
 //! the key alone on a container (`deps`), `key: value` on a scalar (`name: "serde"`); the
@@ -18,183 +23,48 @@
 //! the value inked by type from the palette. A container is activatable (its `path` is the
 //! file) so a click reaches `pane-view-activate`; a scalar is inert and selects.
 //!
-//! **JSON only.** `serde_json` is in the tree; YAML and TOML parsers are not, and the wave
-//! adds no dependencies. A `.yaml`/`.toml` file keeps the plain viewer until they land.
-//!
-//! **Order.** `serde_json::Value` sorts object keys unless the `preserve_order` feature is
-//! on, and it is not. A viewer that reorders a document misquotes it, so the tree has its
-//! own [`Node`] with a hand-written visitor: `visit_map` hands entries over in document
-//! order whatever the feature says, and the error still names a line and column.
+//! **JSON only.** `serde_json` is the whole of `avada-json-parse`; YAML and TOML parsers are
+//! not, and the wave adds no dependencies. A `.yaml`/`.toml` file keeps the plain viewer
+//! until they land.
 //!
 //! **Collapse state does not persist across restarts.** It is view state; the file may have
 //! changed underneath it, and a stale path set is a bug for no proportionate gain.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use std::fmt;
 use std::path::Path;
 
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use avada_json_parse::{Flattened, LineKind, ValueType};
 
 use crate::theme::UiPalette;
 use crate::viewpane::{role, ViewRow, MAX_LINES};
 
-/// Containers at this depth and deeper start collapsed, so a large file opens instantly and
-/// the first screen is its shape rather than its leaves. The top level and its direct
-/// children open; `package.json`'s `dependencies` is readable without a click, a lockfile's
-/// per-package detail is one click away.
-pub const EXPAND_DEPTH: i32 = 2;
+// The crate caps a flatten at its own MAX_LINES; the pane's NOTICE text and projection cache
+// assume that number. A static assert keeps the two from drifting apart silently.
+const _: () = assert!(MAX_LINES == avada_json_parse::MAX_LINES);
 
-/// One parsed value, in document order.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Node {
-    Null,
-    Bool(bool),
-    /// Kept as text: the viewer prints numbers, it never computes with them.
-    Number(String),
-    Str(String),
-    Array(Vec<Node>),
-    /// `Vec`, not a map, so two reads print the keys in the order the author wrote them.
-    Object(Vec<(String, Node)>),
-}
-
-impl Node {
-    fn is_container(&self) -> bool {
-        matches!(self, Node::Array(_) | Node::Object(_))
-    }
-
-    /// The child count a collapsed container shows beside its key.
-    fn kids_label(&self) -> String {
-        match self {
-            Node::Object(kv) => plural(kv.len(), "key"),
-            Node::Array(items) => plural(items.len(), "item"),
-            _ => String::new(),
-        }
-    }
-
-    /// A scalar as the viewer prints it — quoted for a string, bare otherwise.
-    fn scalar_text(&self) -> String {
-        match self {
-            Node::Null => "null".into(),
-            Node::Bool(b) => b.to_string(),
-            Node::Number(n) => n.clone(),
-            Node::Str(s) => format!("{s:?}"),
-            Node::Array(_) | Node::Object(_) => String::new(),
-        }
-    }
-
-    /// The palette token a scalar is inked with. Strings borrow the string colour a source
-    /// pane uses, numbers its number colour, so a JSON file and the code that reads it agree.
-    fn ink(&self, p: &UiPalette) -> Option<u32> {
-        match self {
-            Node::Str(_) => Some(p.ok),
-            Node::Number(_) => Some(p.warn),
-            Node::Bool(_) => Some(p.accent),
-            Node::Null => Some(p.faint),
-            Node::Array(_) | Node::Object(_) => None,
-        }
-    }
-}
-
-fn plural(n: usize, noun: &str) -> String {
-    if n == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{n} {noun}s")
-    }
-}
-
-impl<'de> Deserialize<'de> for Node {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V;
-        impl<'de> Visitor<'de> for V {
-            type Value = Node;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a JSON value")
-            }
-            fn visit_unit<E: de::Error>(self) -> Result<Node, E> {
-                Ok(Node::Null)
-            }
-            fn visit_none<E: de::Error>(self) -> Result<Node, E> {
-                Ok(Node::Null)
-            }
-            fn visit_bool<E: de::Error>(self, b: bool) -> Result<Node, E> {
-                Ok(Node::Bool(b))
-            }
-            fn visit_i64<E: de::Error>(self, n: i64) -> Result<Node, E> {
-                Ok(Node::Number(n.to_string()))
-            }
-            fn visit_u64<E: de::Error>(self, n: u64) -> Result<Node, E> {
-                Ok(Node::Number(n.to_string()))
-            }
-            fn visit_f64<E: de::Error>(self, n: f64) -> Result<Node, E> {
-                Ok(Node::Number(n.to_string()))
-            }
-            fn visit_str<E: de::Error>(self, s: &str) -> Result<Node, E> {
-                Ok(Node::Str(s.to_string()))
-            }
-            fn visit_string<E: de::Error>(self, s: String) -> Result<Node, E> {
-                Ok(Node::Str(s))
-            }
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Node, A::Error> {
-                let mut items = Vec::new();
-                while let Some(item) = seq.next_element()? {
-                    items.push(item);
-                }
-                Ok(Node::Array(items))
-            }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
-                let mut kv = Vec::new();
-                while let Some((k, v)) = map.next_entry::<String, Node>()? {
-                    kv.push((k, v));
-                }
-                Ok(Node::Object(kv))
-            }
-        }
-        d.deserialize_any(V)
-    }
-}
-
-/// Parses one document. The error names the line and column the way a compiler would,
-/// with `line_base` added so a JSONL record's error points into the file, not the record.
-fn parse(text: &str, line_base: usize) -> Result<Node, String> {
-    serde_json::from_str::<Node>(text).map_err(|e| {
-        // serde_json's Display appends ` at line L column C`; the position is reported
-        // in the file's own numbering, so the suffix is split off and rebuilt.
-        let full = e.to_string();
-        let msg = full.split(" at line ").next().unwrap_or(&full).to_string();
-        format!(
-            "Not valid JSON: {msg} (line {}, column {})",
-            line_base + e.line(),
-            e.column()
-        )
-    })
-}
-
-/// The path of `key` under `parent`. A key that reads as a bare word is joined with a dot,
-/// anything else — a dot, a bracket, a space, an empty string — is bracketed and quoted so
-/// `$.a.b` and `$["a.b"]` never collide.
-fn child_path(parent: &str, key: &str) -> String {
-    let bare = !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-');
-    if bare {
-        format!("{parent}.{key}")
-    } else {
-        format!("{parent}[{key:?}]")
+/// The palette token a scalar of type `ty` is inked with. Strings borrow the string colour a
+/// source pane uses, numbers its number colour, so a JSON file and the code that reads it
+/// agree. Lives here, not in the parse crate, because a colour is a function of the theme.
+fn ink(ty: ValueType, p: &UiPalette) -> u32 {
+    match ty {
+        ValueType::Str => p.ok,
+        ValueType::Number => p.warn,
+        ValueType::Bool => p.accent,
+        ValueType::Null => p.faint,
     }
 }
 
 /// The projection. `text` is the file; `jsonl` reads one document per non-blank line;
 /// `file` is what a container row activates; `flipped` is the set of nodes whose disclosure
-/// differs from the depth default (see [`EXPAND_DEPTH`]); the palette inks the values.
+/// differs from the depth default (see [`avada_json_parse::EXPAND_DEPTH`]); the palette inks the values.
 ///
 /// `Err` is the parse failure as the NOTICE the pane should show in place of a tree. An
 /// empty file is an `Err` too — "Empty file" — the same words the plain viewer uses.
 ///
-/// At most [`MAX_LINES`] node rows come back, plus one NOTICE saying how many were cut;
-/// the walk counts what it skips rather than building it.
+/// At most [`MAX_LINES`] node rows come back, plus one NOTICE saying how many were cut; the
+/// flatten counts what it skips rather than building it. [`MAX_LINES`] here and the crate's
+/// own cap are the same number, so no row is ever silently dropped between the two.
 pub fn tree_rows(
     text: &str,
     jsonl: bool,
@@ -202,132 +72,49 @@ pub fn tree_rows(
     flipped: &BTreeSet<String>,
     palette: &UiPalette,
 ) -> Result<Vec<ViewRow>, String> {
-    if text.trim().is_empty() {
-        return Err("Empty file".into());
-    }
-    let mut w = Walk {
-        rows: Vec::new(),
-        cut: 0,
-        file,
-        flipped,
-        palette,
-    };
-    if jsonl {
-        for (i, line) in text.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let n = i + 1;
-            let node = parse(line, i)?;
-            w.visit(&n.to_string(), &node, 0, &format!("${n}"));
-        }
-    } else {
-        let root = parse(text, 0)?;
-        match &root {
-            // The document's own braces are not a node anyone folds: its members are
-            // the top level, so the first row is the first key, not a lone `{`.
-            Node::Object(kv) => {
-                for (k, v) in kv {
-                    w.visit(k, v, 0, &child_path("$", k));
+    let Flattened { lines, cut } = avada_json_parse::flatten(text, jsonl, flipped)?;
+    let esc = |s: &str| crate::highlight::plain_markup(s, palette);
+    let mut rows: Vec<ViewRow> = lines
+        .into_iter()
+        .map(|line| match line.kind {
+            LineKind::Container { open, kids } => ViewRow {
+                role: role::DATA_NODE,
+                text: line.key.clone(),
+                detail: kids,
+                // Activatable: the click has to reach Rust to become a toggle.
+                path: file.to_path_buf(),
+                indent: line.depth,
+                check: i32::from(open),
+                node: line.path,
+                markup: esc(&line.key),
+                ..ViewRow::default()
+            },
+            LineKind::Scalar { value, ty } => {
+                let inked = format!(
+                    "<font color=\"#{:06x}\">{}</font>",
+                    ink(ty, palette) & 0x00ff_ffff,
+                    esc(&value)
+                );
+                ViewRow {
+                    role: role::DATA_NODE,
+                    text: format!("{}: {value}", line.key),
+                    indent: line.depth,
+                    check: -1,
+                    node: line.path,
+                    markup: format!("{}: {inked}", esc(&line.key)),
+                    ..ViewRow::default()
                 }
             }
-            Node::Array(items) => {
-                for (i, v) in items.iter().enumerate() {
-                    w.visit(&i.to_string(), v, 0, &format!("$[{i}]"));
-                }
-            }
-            scalar => w.visit("$", scalar, 0, "$"),
-        }
-    }
-    let mut rows = w.rows;
-    if w.cut > 0 {
+        })
+        .collect();
+    if cut > 0 {
         rows.push(ViewRow {
             role: role::NOTICE,
-            text: format!("… {} more rows not shown", w.cut),
+            text: format!("… {cut} more rows not shown"),
             ..ViewRow::default()
         });
     }
     Ok(rows)
-}
-
-struct Walk<'a> {
-    rows: Vec<ViewRow>,
-    /// Visible rows past the cap, counted rather than built.
-    cut: usize,
-    file: &'a Path,
-    flipped: &'a BTreeSet<String>,
-    palette: &'a UiPalette,
-}
-
-impl Walk<'_> {
-    /// Whether a container at `depth` with path `node` is open: the depth default, flipped
-    /// once per toggle. An XOR set rather than a collapsed set so the state of a file with
-    /// 40,000 deep containers is the handful the human touched, not the 40,000 they did not.
-    fn expanded(&self, depth: i32, node: &str) -> bool {
-        (depth < EXPAND_DEPTH) != self.flipped.contains(node)
-    }
-
-    fn push(&mut self, row: ViewRow) {
-        if self.rows.len() >= MAX_LINES {
-            self.cut += 1;
-        } else {
-            self.rows.push(row);
-        }
-    }
-
-    fn visit(&mut self, key: &str, node: &Node, depth: i32, path: &str) {
-        let esc = |s: &str| crate::highlight::plain_markup(s, self.palette);
-        if node.is_container() {
-            let open = self.expanded(depth, path);
-            self.push(ViewRow {
-                role: role::DATA_NODE,
-                text: key.to_string(),
-                detail: node.kids_label(),
-                // Activatable: the click has to reach Rust to become a toggle.
-                path: self.file.to_path_buf(),
-                indent: depth,
-                check: i32::from(open),
-                node: path.to_string(),
-                markup: esc(key),
-                ..ViewRow::default()
-            });
-            if !open {
-                return;
-            }
-            match node {
-                Node::Object(kv) => {
-                    for (k, v) in kv {
-                        self.visit(k, v, depth + 1, &child_path(path, k));
-                    }
-                }
-                Node::Array(items) => {
-                    for (i, v) in items.iter().enumerate() {
-                        self.visit(&i.to_string(), v, depth + 1, &format!("{path}[{i}]"));
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-        let value = node.scalar_text();
-        let inked = match node.ink(self.palette) {
-            Some(argb) => format!(
-                "<font color=\"#{:06x}\">{}</font>",
-                argb & 0x00ff_ffff,
-                esc(&value)
-            ),
-            None => esc(&value),
-        };
-        self.push(ViewRow {
-            role: role::DATA_NODE,
-            text: format!("{key}: {value}"),
-            indent: depth,
-            check: -1,
-            node: path.to_string(),
-            markup: format!("{}: {inked}", esc(key)),
-            ..ViewRow::default()
-        });
-    }
 }
 
 // ---- Per-pane disclosure state.

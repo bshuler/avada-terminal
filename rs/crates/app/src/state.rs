@@ -1581,6 +1581,14 @@ pub struct State {
     /// Queued rather than emitted for the same re-entrancy reason as
     /// [`State::rail_requests`], and drained beside it.
     pub module_events: Vec<(String, serde_json::Value)>,
+    /// Opener-routed module panes awaiting registration with the host's per-module pane
+    /// guard, as `(module, surface)`. When the app opens a file into a module pane (see
+    /// [`Command::FilesOpen`](crate::command)) the surface never went through
+    /// `host.panes.spawn`, so `avada_core::module::Host`'s dispatcher has no record of it and
+    /// would reject the module's first `host.doc.set` / `host.rows.set`. This queue is drained
+    /// beside [`State::module_events`] — but strictly *before* it — so the surface is
+    /// registered before the `DOC_OPEN` event that provokes the module to push its document.
+    pub opener_panes: Vec<(avada_core::rights::ModuleId, String)>,
     /// The file types installed modules claim to open, refreshed from
     /// `avada_core::module::Host::openers` each module tick. A file-open consults this before
     /// it falls back to a built-in viewer, so a module that claimed the extension gets the
@@ -1821,6 +1829,7 @@ impl State {
             rail_requests: Vec::new(),
             rail_scroll_hold: None,
             module_events: Vec::new(),
+            opener_panes: Vec::new(),
             module_openers: Vec::new(),
             rights: crate::prefs::rights::shared().clone(),
             rights_selected: None,
@@ -5312,6 +5321,22 @@ impl State {
     /// Take everything queued for `Host::emit` since the last drain.
     pub fn take_module_events(&mut self) -> Vec<(String, serde_json::Value)> {
         std::mem::take(&mut self.module_events)
+    }
+
+    /// Record that `surface` (a pane of `module`) was opened by the app, not by
+    /// `host.panes.spawn`, so the host must be told before the module tries to render into it.
+    ///
+    /// Queued for the same re-entrancy reason as [`State::emit_module_event`]; the drain
+    /// hands it to `avada_core::module::Host::note_opener_pane`, which registers the surface
+    /// with the per-module pane guard. Must be queued before the matching `DOC_OPEN` event.
+    pub fn note_opener_pane(&mut self, module: avada_core::rights::ModuleId, surface: String) {
+        self.opener_panes.push((module, surface));
+        self.dirty = true;
+    }
+
+    /// Take the opener-routed pane registrations queued since the last drain.
+    pub fn take_opener_panes(&mut self) -> Vec<(avada_core::rights::ModuleId, String)> {
+        std::mem::take(&mut self.opener_panes)
     }
 
     /// Replace the file-open claim table with the host's current projection.

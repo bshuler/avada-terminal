@@ -5,6 +5,7 @@ members = [
     "crates/module-sdk",
     "crates/markdown-parse",
     "crates/csv-parse",
+    "crates/json-parse",
     "modules/files",
     "modules/git",
     "modules/tools",
@@ -14,6 +15,7 @@ members = [
     "modules/markdown",
     "modules/marketplace",
     "modules/table",
+    "modules/datatree",
 ]
 # The spikes are throwaway, heavy-dependency (Slint/wgpu) crates owned entirely by
 # their own fan-out track. Each declares its own `[workspace]` so it never drags

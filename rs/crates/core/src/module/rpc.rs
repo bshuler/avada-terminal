@@ -1748,6 +1748,53 @@ pub(crate) mod tests {
         assert!(e.message.contains("name its surface"), "{}", e.message);
     }
 
+    /// An opener-routed pane is registered by the app, not by the module, so it reaches the
+    /// guard through [`Dispatcher::panes`] directly rather than through `panes.spawn` — the
+    /// insert `avada_core::module::Host::note_opener_pane` performs. Once registered, the same
+    /// surface passes `doc.set` and `rows.set{target:pane}` with no `PanesSpawn` capability at
+    /// all, because the module never asked to spawn anything: the app already did. This is the
+    /// contract the opener seam leans on — the surface exists before the module renders into it.
+    #[test]
+    fn an_opener_registered_pane_needs_no_spawn_capability() {
+        // Deliberately *without* `PanesSpawn`: the opener path never spawns, so a pane opened
+        // that way must work on `UiPane` alone.
+        let rig = rig(&[Capability::UiPane]);
+        let doc = json!({
+            "surface": "table",
+            "blocks": [{ "kind": "prose", "text": "a,b\n1,2" }],
+        });
+        let rows = json!({
+            "entry": "table", "target": "pane",
+            "rows": [{ "id": "r0", "label": "1,2" }],
+        });
+
+        // Before registration both are refused, and the message names the surface.
+        let e = rig.d.call(methods::HOST_DOC_SET, &doc).unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(e.message.contains("table"), "{}", e.message);
+        assert_eq!(
+            rig.d.call(methods::HOST_ROWS_SET, &rows).unwrap_err().kind(),
+            ErrorCode::InvalidParams
+        );
+
+        // The app registers the surface exactly as `Host::note_opener_pane` does.
+        rig.d.panes.lock().unwrap().insert("table".to_string());
+
+        // Now both reach the app whole: the doc on the events channel, the rows on the rail.
+        rig.d.call(methods::HOST_DOC_SET, &doc).unwrap();
+        match rig.events.recv().unwrap() {
+            HostEvent::Doc { doc, .. } => assert_eq!(doc.surface, "table"),
+            other => panic!("{other:?}"),
+        }
+        rig.d.call(methods::HOST_ROWS_SET, &rows).unwrap();
+        match rig.rail.recv().unwrap() {
+            RailEvent::Rows { entry, target, .. } => {
+                assert_eq!((entry.as_str(), target), ("table", RowTarget::Pane));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// The keymap is the one grid method that does *not* need a pane: it is what the
     /// rebinding UI reads, and a human must be able to rebind an editor before opening it.
     #[test]

@@ -204,7 +204,21 @@ impl<R: Read, W: Write> Connection<R, W> {
     /// Send a request and block for its response. Requests and notifications from the
     /// peer that arrive meanwhile are queued for [`Connection::next`].
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, ClientError> {
-        if let Some(cap) = contract::methods::required_capability(method) {
+        // `host.rows.set` is the one dual-target host method: it fills the left rail
+        // (`target:"rail"`, gated by `ui.rail`) or a pane the module owns
+        // (`target:"pane"`, gated by `ui.pane`). This client gate is name-only and cannot
+        // see the target, so it accepts *either* right and lets the host — which does see
+        // the target — reject the wrong one via its per-target check and pane guard. The
+        // gate must never be stricter than the host, or it silently forbids calls the host
+        // would allow.
+        if method == contract::methods::HOST_ROWS_SET {
+            if !self.has(Capability::UiRail) && !self.has(Capability::UiPane) {
+                return Err(ClientError::Rpc(RpcError::new(
+                    ErrorCode::CapabilityDenied,
+                    "neither `ui.rail` nor `ui.pane` was granted at install".to_string(),
+                )));
+            }
+        } else if let Some(cap) = contract::methods::required_capability(method) {
             if !self.has(cap) {
                 return Err(ClientError::Rpc(RpcError::new(
                     ErrorCode::CapabilityDenied,

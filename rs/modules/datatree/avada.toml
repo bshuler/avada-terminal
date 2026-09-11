@@ -1,0 +1,38 @@
+# Manifest of the Avada data-tree module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# This module is the panel *type* the built-in JSON view was, but interactive: it claims
+# `.json` and its kin, reads the file with its own `fs.read`, flattens it with the shared
+# `avada-json-parse` crate, and fills its pane with a tree of foldable rows over
+# `host.rows.set`. Folding is the module's own: the host echoes a click back as
+# `module.row.activate`, the module flips that node and re-ships the rows. It asks for
+# nothing it does not use — no write, no commands — because a viewer only reads a file,
+# draws it, and folds it.
+capabilities = [
+  "fs.read",
+  "ui.pane",
+  "events.subscribe",
+]
+
+[module]
+id = "bshuler/avada-datatree"
+name = "Data tree"
+version = "0.1.0"
+description = "Browse JSON and JSONL files as a foldable tree"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+# One tier-5 pane, `datatree`, and the file types it claims. The host projects `opens` into
+# its opener table (core's `openers_project_every_pane_opens_claim_in_a_stable_order`); the
+# app routes a matching file to this surface instead of the built-in viewer and cues the
+# module with a `doc.open` carrying the surface and the path.
+[[contributions]]
+kind = "pane"
+id = "datatree"
+tier = 5
+label = "Data"
+opens = ["json", "jsonl", "ndjson"]

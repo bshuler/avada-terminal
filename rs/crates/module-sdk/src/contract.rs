@@ -525,6 +525,12 @@ pub mod methods {
     pub const MODULE_OPTIONAL: &[&str] = &[MODULE_GRID_KEY, MODULE_GRID_RESIZE];
 
     /// The capability a `host.*` method needs, or `None` for the always-allowed ones.
+    ///
+    /// This is name-only, so it names one right per method. [`HOST_ROWS_SET`] is the
+    /// exception: it is dual-target — `ui.rail` fills the left rail, `ui.pane` fills a pane
+    /// the module owns — and the caller's `Connection::call` accepts *either* right for it,
+    /// leaving the host to reject the wrong target. The `ui.rail` named here is only its
+    /// rail face, kept so every host method still maps to a right.
     pub fn required_capability(method: &str) -> Option<crate::caps::Capability> {
         use crate::caps::Capability as C;
         Some(match method {

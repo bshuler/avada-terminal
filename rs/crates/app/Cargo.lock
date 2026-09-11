@@ -566,6 +566,7 @@ dependencies = [
  "arboard",
  "avada-core",
  "avada-csv-parse",
+ "avada-json-parse",
  "avada-markdown-parse",
  "avada-terminal-widget",
  "i-slint-backend-testing",
@@ -634,6 +635,15 @@ name = "avada-csv-parse"
 version = "0.1.0"
 dependencies = [
  "avada-module-sdk",
+ "tracing",
+]
+
+[[package]]
+name = "avada-json-parse"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

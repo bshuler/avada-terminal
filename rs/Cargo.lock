@@ -189,6 +189,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "avada-datatree"
+version = "0.1.0"
+dependencies = [
+ "avada-json-parse",
+ "avada-module-sdk",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "avada-editor"
 version = "0.1.0"
 dependencies = [
@@ -227,6 +237,15 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "avada-json-parse"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

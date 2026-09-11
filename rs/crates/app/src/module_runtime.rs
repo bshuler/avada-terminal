@@ -628,6 +628,16 @@ impl ModuleRuntime {
                 }),
             }
         }
+        // Register opener-routed panes with the host *before* draining the events that make
+        // modules render into them. `note_opener_pane` mutates the per-module pane guard
+        // synchronously on this thread, so the surface is known before the `DOC_OPEN` job is
+        // even queued — closing the race where a module's first `doc.set` / `rows.set` would
+        // be rejected for an unregistered surface. See `command::FilesOpen`.
+        for (module, surface) in st.take_opener_panes() {
+            if let Some(host) = self.host.as_ref() {
+                host.note_opener_pane(&module, &surface);
+            }
+        }
         for (kind, payload) in st.take_module_events() {
             self.post(Job::Emit { kind, payload });
         }

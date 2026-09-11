@@ -695,6 +695,18 @@ impl Host {
         }
     }
 
+    /// The app opened a module pane for `surface` without going through `host.panes.spawn`
+    /// — an opener-routed file, where the app resolves a `ContributionKind::Pane` and creates
+    /// the pane itself before the module has said anything. Register the surface so its
+    /// `doc`/`rows`/`grid` guards pass, exactly as a module-initiated spawn would, but emit no
+    /// `PaneSpawn`: the pane already exists. A no-op for an unknown module or a re-registered
+    /// surface, since the guard's set is presence-only ([`Dispatcher::panes`]).
+    pub fn note_opener_pane(&self, id: &ModuleId, surface: &str) {
+        if let Some(slot) = lock(&self.inner.slots).get(id) {
+            lock(&slot.dispatcher.panes).insert(surface.to_string());
+        }
+    }
+
     /// `module.grid.key` — one keystroke that landed in a focused grid surface.
     ///
     /// A notification, deliberately. A request would put the module's scheduling latency

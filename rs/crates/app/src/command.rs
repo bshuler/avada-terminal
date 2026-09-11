@@ -840,6 +840,11 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             // the parsed document back via `host.doc.set`. The built-in viewer needs no such
             // nudge because it reads the file itself off the pane's cwd.
             if let Some(m) = opener {
+                // The app created this pane directly, so the host's per-module pane guard has
+                // no record of the surface and would reject the module's first `doc.set` /
+                // `rows.set`. Register it *before* the event that provokes the module to push,
+                // so the drain (see `module_runtime::drain_requests`) tells the host first.
+                state.note_opener_pane(m.id.clone(), m.surface.clone());
                 state.emit_module_event(
                     avada_core::module::methods::events::DOC_OPEN,
                     serde_json::json!({ "surface": m.surface, "path": path }),
