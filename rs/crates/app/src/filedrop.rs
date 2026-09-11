@@ -280,12 +280,17 @@ mod tests {
 
     // ---- batching ----
 
-    fn at(secs_ago: u64) -> Dropped {
+    // Age an entry relative to a caller-supplied `now`, never a fresh `Instant::now()`.
+    // The queue timestamps and the time `split_settled` compares them against must come from
+    // the *same* clock read, or the test silently depends on how many milliseconds of real
+    // wall-clock pass between building the queue and the assertion — which a loaded machine
+    // can stretch past SETTLE, flipping a held batch to a released one.
+    fn at(now: Instant, ms_ago: u64) -> Dropped {
         Dropped {
             win: 1,
             at: Some((0, 0)),
             path: PathBuf::from("/x"),
-            when: Instant::now() - Duration::from_millis(secs_ago),
+            when: now - Duration::from_millis(ms_ago),
         }
     }
 
@@ -293,15 +298,17 @@ mod tests {
     fn a_batch_still_arriving_is_held_whole() {
         // One drag reports one event per file. Delivering the first three because a tick
         // boundary fell mid-burst would type the path list twice.
-        let mut q = vec![at(500), at(500), at(0)];
-        assert!(split_settled(&mut q, Instant::now(), SETTLE).is_empty());
+        let now = Instant::now();
+        let mut q = vec![at(now, 500), at(now, 500), at(now, 0)];
+        assert!(split_settled(&mut q, now, SETTLE).is_empty());
         assert_eq!(q.len(), 3, "nothing is consumed while it is still growing");
     }
 
     #[test]
     fn a_settled_batch_is_released_in_one_piece() {
-        let mut q = vec![at(500), at(490), at(480)];
-        assert_eq!(split_settled(&mut q, Instant::now(), SETTLE).len(), 3);
+        let now = Instant::now();
+        let mut q = vec![at(now, 500), at(now, 490), at(now, 480)];
+        assert_eq!(split_settled(&mut q, now, SETTLE).len(), 3);
         assert!(q.is_empty());
     }
 
