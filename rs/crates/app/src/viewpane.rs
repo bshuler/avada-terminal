@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use avada_core::module::doc::{Block, Cell};
 use avada_core::tools::PaneKind;
 use slint::{ModelRc, VecModel};
 
@@ -540,34 +541,50 @@ pub fn highlight_lines(file: &Path, palette: usize) -> Vec<ViewRow> {
     rows
 }
 
-/// A markdown file as styled blocks. The block level is parsed here — headings,
-/// lists, quotes, tables, fences, rules — and only the block level: each row's
-/// *inline* markup is handed to Slint's `StyledText` with its markers intact.
+/// A markdown file as styled view rows — [`read_text`] then [`parse_markdown`]
+/// then [`project_doc`], the pipeline the tier-5 *document* surface split into a
+/// parse a module owns and a projection the host owns.
 ///
+/// The block level is parsed by [`parse_markdown`] and only the block level: each
+/// row's *inline* markup is handed to Slint's `StyledText` with its markers intact.
 /// That split is the whole design. Inline markup is the half that has to wrap
 /// mid-sentence, and only the renderer that measures the glyphs can decide where
 /// a line breaks; nothing on this side can, because the UI font is proportional
 /// and the only metrics Rust has here are the terminal's monospace cell. So Rust
 /// keeps every decision a parser makes and the framework keeps the one decision a
 /// typesetter makes.
-///
-/// Fences win over every other rule while open, so a `# comment` inside a shell
-/// snippet stays code.
 #[tracing::instrument(level = "debug", ret)]
 pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
-    let text = match read_text(file) {
-        Ok(t) => t,
-        Err(row) => return vec![*row],
-    };
+    match read_text(file) {
+        Ok(text) => project_doc(&parse_markdown(&text)),
+        Err(row) => vec![*row],
+    }
+}
+
+/// Parse markdown into the tier-5 [`Block`] document IR — the block level and no
+/// more, every block's text left **raw** (only its `\r` dropped, inline markers
+/// intact). This is the half a module owns: it runs with no palette, no glyph
+/// metrics and no line-width budget, because clipping a line to a width and
+/// mapping a block to a paint role are the host's to do when it projects. The two
+/// were one function until the document surface split the parse a module ships
+/// from the render only the host can perform; [`project_doc`] is that render.
+///
+/// Fences win over every other rule while open, so a `# comment` inside a shell
+/// snippet stays code. A blank line closes what was open and a run collapses to
+/// one [`Block::Space`]. The line cap and the empty-file note ride along as
+/// [`Block::Notice`]s: "5000 lines is all a preview reads" is a fact about the
+/// document, not about any pixel, so it belongs to the parse.
+#[tracing::instrument(level = "debug", ret)]
+fn parse_markdown(text: &str) -> Vec<Block> {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
     let cap = total.min(MAX_LINES);
-    let mut rows: Vec<ViewRow> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
     // The leading column of every open list level, innermost last. Self-correcting
     // — a shallower item pops back to its own level — so it never needs clearing
     // at a block boundary.
     let mut stack: Vec<usize> = Vec::new();
-    // The row a following line may flow into: an open paragraph, list item or
+    // The block a following line may flow into: an open paragraph, list item or
     // quote. `None` after anything that closed one.
     let mut open: Option<usize> = None;
     let mut i = 0usize;
@@ -585,15 +602,19 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
             while j < cap && !fence_closes(lines[j], mark) {
                 j += 1;
             }
-            let body: Vec<String> = lines[i + 1..j.min(cap)]
+            let body = lines[i + 1..j.min(cap)]
                 .iter()
-                .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
-                .collect();
-            if is_mermaid(info) {
-                rows.append(&mut diagram_rows(&body));
+                .map(|l| l.strip_suffix('\r').unwrap_or(l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            blocks.push(if is_mermaid(info) {
+                Block::Mermaid { source: body }
             } else {
-                rows.extend(body.iter().map(|l| ViewRow::inert(role::CODE, clip(l))));
-            }
+                Block::Code {
+                    lang: info.split_whitespace().next().unwrap_or("").to_string(),
+                    text: body,
+                }
+            });
             open = None;
             i = j + 1;
             continue;
@@ -603,35 +624,40 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
         // collapse to one: five blank lines are a typing habit, not five gaps.
         if trimmed.is_empty() {
             open = None;
-            if !rows.is_empty() && rows.last().map(|r| r.role) != Some(role::SPACE) {
-                rows.push(ViewRow::inert(role::SPACE, ""));
+            if !blocks.is_empty() && !matches!(blocks.last(), Some(Block::Space)) {
+                blocks.push(Block::Space);
             }
             i += 1;
             continue;
         }
 
-        // A table, header and delimiter together. Checked before the paragraph
-        // rules so the header line is never swallowed as prose.
+        // A table, header and delimiter together, folded into one block. Checked
+        // before the paragraph rules so the header line is never swallowed as prose.
         if i + 1 < cap {
             if let Some(aligns) = table_at(raw, lines[i + 1]) {
-                rows.push(table_row(role::TABLE_HEAD, &split_cells(raw), &aligns));
+                let headers = table_cells(&split_cells(raw), &aligns);
+                let mut body_rows: Vec<Vec<Cell>> = Vec::new();
                 let mut j = i + 2;
                 while j < cap {
                     let body = lines[j].strip_suffix('\r').unwrap_or(lines[j]);
                     if !body.contains('|') || body.trim().is_empty() {
                         break;
                     }
-                    rows.push(table_row(role::TABLE_ROW, &split_cells(body), &aligns));
+                    body_rows.push(table_cells(&split_cells(body), &aligns));
                     j += 1;
                 }
+                blocks.push(Block::Table {
+                    headers,
+                    rows: body_rows,
+                });
                 open = None;
                 i = j;
                 continue;
             }
         }
 
-        if let Some(row) = heading(trimmed) {
-            rows.push(row);
+        if let Some(block) = heading(trimmed) {
+            blocks.push(block);
             open = None;
             i += 1;
             continue;
@@ -639,10 +665,18 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
 
         // A setext underline retitles the paragraph above it, and beats the rule
         // below because `---` under prose is a heading in every dialect.
-        if let Some(k) = open.filter(|k| rows[*k].role == role::PROSE) {
+        if let Some(k) = open.filter(|k| matches!(blocks[*k], Block::Prose { .. })) {
             if let Some(level) = setext(trimmed) {
-                rows[k].role = level;
-                rows[k].text = strip_inline(&rows[k].text);
+                // The filter already proved this is prose; take its text without
+                // holding the borrow into the reassignment below.
+                let text = match &blocks[k] {
+                    Block::Prose { text } => strip_inline(text),
+                    _ => String::new(),
+                };
+                blocks[k] = Block::Heading {
+                    level: if level == role::H1 { 1 } else { 2 },
+                    text,
+                };
                 open = None;
                 i += 1;
                 continue;
@@ -650,7 +684,7 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
         }
 
         if is_rule(trimmed) {
-            rows.push(ViewRow::inert(role::RULE, ""));
+            blocks.push(Block::Rule);
             open = None;
             i += 1;
             continue;
@@ -658,11 +692,17 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
 
         if let Some(rest) = trimmed.strip_prefix('>') {
             let body = rest.strip_prefix(' ').unwrap_or(rest);
-            match open.filter(|k| rows[*k].role == role::QUOTE) {
-                Some(k) => flow_into(&mut rows[k], body),
+            match open.filter(|k| matches!(blocks[*k], Block::Quote { .. })) {
+                Some(k) => {
+                    if let Some(t) = block_text_mut(&mut blocks[k]) {
+                        flow_into_block(t, body);
+                    }
+                }
                 None => {
-                    rows.push(ViewRow::inert(role::QUOTE, clip(body)));
-                    open = Some(rows.len() - 1);
+                    blocks.push(Block::Quote {
+                        text: body.to_string(),
+                    });
+                    open = Some(blocks.len() - 1);
                 }
             }
             if hard_break(raw) {
@@ -673,15 +713,17 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
         }
 
         if let Some(item) = list_item(trimmed) {
-            let mut row = ViewRow::inert(role::BULLET, clip(item.body));
-            row.indent = nest(column_of(raw), &mut stack);
-            row.marker = item.marker;
-            row.check = item.check;
-            rows.push(row);
+            let depth = nest(column_of(raw), &mut stack);
+            blocks.push(Block::Bullet {
+                depth: depth as u8,
+                marker: item.marker,
+                check: item.check as i8,
+                text: item.body.to_string(),
+            });
             open = if hard_break(raw) {
                 None
             } else {
-                Some(rows.len() - 1)
+                Some(blocks.len() - 1)
             };
             i += 1;
             continue;
@@ -692,13 +734,18 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
         // the same item".
         if open.is_none() && stack.is_empty() && (raw.starts_with("    ") || raw.starts_with('\t'))
         {
-            rows.push(ViewRow::inert(role::CODE, clip(raw.trim_end())));
+            blocks.push(Block::Code {
+                lang: String::new(),
+                text: raw.trim_end().to_string(),
+            });
             i += 1;
             continue;
         }
 
         if let Some(k) = open {
-            flow_into(&mut rows[k], trimmed);
+            if let Some(t) = block_text_mut(&mut blocks[k]) {
+                flow_into_block(t, trimmed);
+            }
             if hard_break(raw) {
                 open = None;
             }
@@ -711,28 +758,98 @@ pub fn markdown_blocks(file: &Path) -> Vec<ViewRow> {
         if column_of(raw) == 0 {
             stack.clear();
         }
-        rows.push(ViewRow::inert(role::PROSE, clip(trimmed)));
+        blocks.push(Block::Prose {
+            text: trimmed.to_string(),
+        });
         open = if hard_break(raw) {
             None
         } else {
-            Some(rows.len() - 1)
+            Some(blocks.len() - 1)
         };
         i += 1;
     }
 
     // Trailing air is the file's final newlines, not a block.
-    while rows.last().map(|r| r.role) == Some(role::SPACE) {
-        rows.pop();
+    while matches!(blocks.last(), Some(Block::Space)) {
+        blocks.pop();
     }
-    if rows.is_empty() {
-        rows.push(ViewRow::inert(role::NOTICE, "Empty file"));
+    if blocks.is_empty() {
+        blocks.push(Block::Notice {
+            text: "Empty file".to_string(),
+        });
     } else if total > MAX_LINES {
-        rows.push(ViewRow::inert(
-            role::NOTICE,
-            format!("… {} more lines not shown", total - MAX_LINES),
-        ));
+        blocks.push(Block::Notice {
+            text: format!("… {} more lines not shown", total - MAX_LINES),
+        });
     }
-    rows
+    blocks
+}
+
+/// Project a [`Block`] document into the [`ViewRow`]s the pane paints — the host's
+/// half of the split [`parse_markdown`] began. It applies what needs the host: the
+/// per-line [`clip`] to a width, the paint role each block maps to, the mermaid
+/// render, a table's column padding. The blocks it consumes are exactly what a
+/// markdown *module* will send over `host.doc.set`, which is why the projection is
+/// a function of the blocks alone and reaches for nothing a module could not ship.
+#[tracing::instrument(level = "debug", ret)]
+fn project_doc(blocks: &[Block]) -> Vec<ViewRow> {
+    let mut out: Vec<ViewRow> = Vec::new();
+    for block in blocks {
+        match block {
+            Block::Heading { level, text } => {
+                let role = match level {
+                    1 => role::H1,
+                    2 => role::H2,
+                    // `####` and deeper share H3's styling rather than disappearing.
+                    _ => role::H3,
+                };
+                out.push(ViewRow::inert(role, clip(text)));
+            }
+            Block::Prose { text } => out.push(ViewRow::inert(role::PROSE, clip(text))),
+            Block::Bullet {
+                depth,
+                marker,
+                check,
+                text,
+            } => {
+                let mut row = ViewRow::inert(role::BULLET, clip(text));
+                row.indent = *depth as i32;
+                row.marker = marker.clone();
+                row.check = *check as i32;
+                out.push(row);
+            }
+            Block::Quote { text } => out.push(ViewRow::inert(role::QUOTE, clip(text))),
+            Block::Rule => out.push(ViewRow::inert(role::RULE, "")),
+            Block::Table { headers, rows } => {
+                let aligns: Vec<i32> = headers.iter().map(|c| c.align as i32).collect();
+                out.push(table_row(role::TABLE_HEAD, &cell_texts(headers), &aligns));
+                for r in rows {
+                    out.push(table_row(role::TABLE_ROW, &cell_texts(r), &aligns));
+                }
+            }
+            // A fenced block's `text` splits back into the per-line rows the viewer
+            // draws; an empty body is no rows, the way the fence gave none.
+            Block::Code { text, .. } => {
+                if !text.is_empty() {
+                    out.extend(
+                        text.split('\n')
+                            .map(|l| ViewRow::inert(role::CODE, clip(l))),
+                    );
+                }
+            }
+            Block::Mermaid { source } => {
+                let src: Vec<String> = if source.is_empty() {
+                    Vec::new()
+                } else {
+                    source.split('\n').map(str::to_string).collect()
+                };
+                out.append(&mut diagram_rows(&src));
+            }
+            Block::Space => out.push(ViewRow::inert(role::SPACE, "")),
+            Block::Notice { text } => out.push(ViewRow::inert(role::NOTICE, text.clone())),
+        }
+    }
+    out
 }
 
 /// Whether a fence's info string opens a mermaid block. Mermaid is only ever the
@@ -800,14 +917,15 @@ fn diagram_rows(src: &[String]) -> Vec<ViewRow> {
     }
 }
 
-/// `#`/`##`/`###+` → the matching heading row. `None` when the line is not a
-/// heading — including `#hashtag`, which needs the space ATX requires.
+/// `#`/`##`/`###+` → the matching [`Block::Heading`]. `None` when the line is not
+/// a heading — including `#hashtag`, which needs the space ATX requires.
 ///
-/// A heading's inline markers are stripped rather than kept, because a heading is
-/// drawn with a plain `Text`: it needs a font weight, and `StyledText` has no
-/// property for one.
+/// `level` is the raw hash count (1..=6); [`project_doc`] clamps `####` and deeper
+/// to H3. A heading's inline markers are stripped here rather than kept, because a
+/// heading is drawn with a plain `Text`: it needs a font weight, and `StyledText`
+/// has no property for one — the one place the block level resolves inline markup.
 #[tracing::instrument(level = "debug", ret)]
-fn heading(trimmed: &str) -> Option<ViewRow> {
+fn heading(trimmed: &str) -> Option<Block> {
     let hashes = trimmed.chars().take_while(|c| *c == '#').count();
     if hashes == 0 || hashes > 6 {
         return None;
@@ -824,13 +942,10 @@ fn heading(trimmed: &str) -> Option<ViewRow> {
             body
         }
     };
-    let r = match hashes {
-        1 => role::H1,
-        2 => role::H2,
-        // `####` and deeper share H3's styling rather than disappearing.
-        _ => role::H3,
-    };
-    Some(ViewRow::inert(r, clip(&strip_inline(body))))
+    Some(Block::Heading {
+        level: hashes as u8,
+        text: strip_inline(body),
+    })
 }
 
 /// A setext underline → the level it makes the paragraph above it. `=` is H1 and
@@ -935,21 +1050,52 @@ fn hard_break(raw: &str) -> bool {
     raw.ends_with("  ") || raw.ends_with('\\')
 }
 
-/// Append a continuation line to an open block. Joined with a space, not a
-/// newline, because the row is one wrapped paragraph and the renderer decides
-/// where it breaks.
+/// Append a continuation line to an open block's raw text. Joined with a space,
+/// not a newline, because the block is one wrapped paragraph and the host decides
+/// where it breaks. Unlike the old view-row `flow_into` this neither clips nor
+/// drops: the text stays raw for [`project_doc`] to clip, the same raw a module
+/// would ship.
 #[tracing::instrument(level = "debug", ret)]
-fn flow_into(row: &mut ViewRow, more: &str) {
-    if row.text.chars().count() >= MAX_LINE_CHARS {
-        return;
+fn flow_into_block(text: &mut String, more: &str) {
+    if !text.is_empty() {
+        text.push(' ');
     }
-    if !row.text.is_empty() {
-        row.text.push(' ');
+    text.push_str(more.trim_end());
+}
+
+/// The text a continuation flows into — the three block kinds `open` ever points
+/// at. `None` for anything else, so a stray continuation is dropped, not
+/// mis-attached.
+//
+// Not `#[instrument(ret)]`: logging the return would borrow the `&mut String` out
+// past the generated closure, which the borrow checker rejects.
+fn block_text_mut(block: &mut Block) -> Option<&mut String> {
+    match block {
+        Block::Prose { text } | Block::Quote { text } | Block::Bullet { text, .. } => Some(text),
+        _ => None,
     }
-    row.text.push_str(more.trim_end());
-    if row.text.chars().count() > MAX_LINE_CHARS {
-        row.text = clip(&row.text);
-    }
+}
+
+/// One markdown table line as [`Cell`]s: padded or clipped to the column count the
+/// delimiter row fixed and tagged with each column's alignment, but keeping the
+/// cell text raw. The block-level twin of [`table_row`].
+#[tracing::instrument(level = "debug", ret)]
+fn table_cells(cells: &[String], aligns: &[i32]) -> Vec<Cell> {
+    aligns
+        .iter()
+        .enumerate()
+        .map(|(i, &align)| Cell {
+            text: cells.get(i).map(String::as_str).unwrap_or("").to_string(),
+            align: align as i8,
+        })
+        .collect()
+}
+
+/// The raw text of each [`Cell`], for handing a [`Block::Table`] row back to
+/// [`table_row`] to clip and paint.
+#[tracing::instrument(level = "debug", ret)]
+fn cell_texts(cells: &[Cell]) -> Vec<String> {
+    cells.iter().map(|c| c.text.clone()).collect()
 }
 
 /// `| a | b |` over `|---|:--:|` → one alignment per column, or `None`.

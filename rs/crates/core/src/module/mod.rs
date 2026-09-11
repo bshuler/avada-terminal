@@ -89,6 +89,11 @@ pub use avada_module_sdk::contract::WorkspaceInfo;
 /// this crate.
 pub use avada_module_sdk::grid;
 
+/// The tier-5 *document* vocabulary — the grid's one-directional twin, blocks a module ships
+/// and the host typesets. Re-exported for the same reason as [`grid`]: the app projects these
+/// blocks into its own view rows and reaches the SDK only through this crate.
+pub use avada_module_sdk::doc;
+
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, Licensing};
 pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate, RowTarget};
