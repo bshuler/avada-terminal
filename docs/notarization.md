@@ -164,8 +164,11 @@ workspace's existing `ed25519-dalek` and `base64`. Both signatures in the file a
 checked: the signature over the file, and the global signature over
 `signature ++ trusted_comment` — so the trusted comment cannot be edited either.
 
-**Prehashed signatures (algorithm `ED`, BLAKE2b) are refused** with a clear error
-rather than guessed at. See the follow-ups.
+**Prehashed signatures (algorithm `ED`) are also checked.** Minisign's `-H` mode signs
+a BLAKE2b-512 hash of the file rather than its bytes; since no BLAKE2b crate is
+available offline either, `policy::minisign` carries a small RFC 7693 implementation
+(cross-checked in tests against independent vectors) and verifies the Ed25519 signature
+over that hash. The global trusted-comment signature is unchanged between the two modes.
 
 ---
 

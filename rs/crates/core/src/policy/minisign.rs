@@ -30,14 +30,16 @@
 //! implementation checks it and why [`Verdict::Trusted`](super::Verdict::Trusted)
 //! quotes it as the authority.
 //!
-//! # `ED` (prehashed) is refused, on purpose
+//! # `ED` (prehashed) signatures
 //!
 //! Minisign's `-H` mode signs a BLAKE2b-512 hash of the file instead of the file and
-//! writes `ED` as the algorithm. No BLAKE2b implementation is available offline here,
-//! so rather than guess, [`MinisignError::Prehashed`] is returned and the caller turns
-//! it into [`Verdict::Invalid`](super::Verdict::Invalid) — never into a pass. Signing
-//! without `-H` produces a signature this build can check. See the follow-up in
-//! `docs/notarization.md`.
+//! writes `ED` as the algorithm. It is the mode minisign itself falls back to for large
+//! files, so a real publisher's signature may well be prehashed. There is no BLAKE2b
+//! crate in the offline registry either, so — as with the signature format itself —
+//! [`blake2b_512`] is implemented here (RFC 7693, ~50 lines) and [`verify`] checks the
+//! Ed25519 signature over that hash. The only difference from a plain `Ed` signature is
+//! what the first signature covers: the file's bytes, or their BLAKE2b-512 hash. The
+//! global signature over the trusted comment is identical in both.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -47,8 +49,7 @@ use std::path::{Path, PathBuf};
 
 /// The algorithm bytes of a plain (not prehashed) minisign signature.
 pub const ALG_ED25519: [u8; 2] = *b"Ed";
-/// The algorithm bytes of a prehashed (BLAKE2b) minisign signature, which this build
-/// refuses.
+/// The algorithm bytes of a prehashed (BLAKE2b-512) minisign signature.
 pub const ALG_PREHASHED: [u8; 2] = *b"ED";
 /// The extension minisign appends for a detached signature.
 pub const SIG_SUFFIX: &str = ".minisig";
@@ -113,7 +114,7 @@ impl fmt::Debug for PublicKey {
 /// A parsed `.minisig`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Signature {
-    /// `Ed` or `ED`; only `Ed` can be checked here.
+    /// `Ed` (signs the file) or `ED` (signs its BLAKE2b-512 hash); both are checked.
     pub algorithm: [u8; 2],
     /// The key id the signer claims.
     pub key_id: [u8; KEY_ID_LEN],
@@ -131,7 +132,8 @@ impl Signature {
         format!("{:016X}", u64::from_le_bytes(self.key_id))
     }
 
-    /// Whether this is a prehashed (`-H`) signature, which this build cannot check.
+    /// Whether this is a prehashed (`-H`) signature, i.e. one over the file's
+    /// BLAKE2b-512 hash rather than its bytes.
     pub fn is_prehashed(&self) -> bool {
         self.algorithm == ALG_PREHASHED
     }
@@ -165,8 +167,6 @@ pub enum MinisignError {
     },
     /// The 32 bytes are not a valid Ed25519 point.
     BadPublicKey,
-    /// The signature is minisign's prehashed (`-H`) form, which needs BLAKE2b.
-    Prehashed,
     /// The algorithm field is neither `Ed` nor `ED`.
     UnsupportedAlgorithm(String),
     /// The `trusted comment:` line is missing or malformed.
@@ -200,10 +200,6 @@ impl fmt::Display for MinisignError {
                 actual,
             } => write!(f, "{what} is {actual} bytes, expected {expected}"),
             MinisignError::BadPublicKey => f.write_str("not a valid ed25519 public key"),
-            MinisignError::Prehashed => f.write_str(
-                "prehashed (minisign -H) signatures use BLAKE2b, which this build cannot check; \
-                 re-sign without -H",
-            ),
             MinisignError::UnsupportedAlgorithm(alg) => {
                 write!(f, "unsupported signature algorithm {alg:?}")
             }
@@ -336,10 +332,7 @@ pub fn verify(
     sig: &Signature,
     keys: &[PublicKey],
 ) -> Result<PublicKey, MinisignError> {
-    if sig.is_prehashed() {
-        return Err(MinisignError::Prehashed);
-    }
-    if sig.algorithm != ALG_ED25519 {
+    if sig.algorithm != ALG_ED25519 && sig.algorithm != ALG_PREHASHED {
         return Err(MinisignError::UnsupportedAlgorithm(
             String::from_utf8_lossy(&sig.algorithm).into_owned(),
         ));
@@ -355,9 +348,18 @@ pub fn verify(
             configured: keys.iter().map(PublicKey::key_id_hex).collect(),
         })?;
 
+    // A plain `Ed` signature covers the file; a prehashed `ED` one covers the file's
+    // BLAKE2b-512 hash. `hash` outlives the borrow only when it is actually taken.
+    let hash;
+    let signed_message: &[u8] = if sig.is_prehashed() {
+        hash = blake2b_512(data);
+        &hash
+    } else {
+        data
+    };
     let signature = EdSignature::from_bytes(&sig.signature);
     key.key
-        .verify_strict(data, &signature)
+        .verify_strict(signed_message, &signature)
         .map_err(|_| MinisignError::BadSignature)?;
 
     // The trusted comment is only worth quoting once its own signature holds.
@@ -370,6 +372,111 @@ pub fn verify(
         .map_err(|_| MinisignError::BadTrustedComment)?;
 
     Ok(*key)
+}
+
+/// BLAKE2b-512 (RFC 7693), unkeyed, 64-byte digest — the hash minisign's `-H` mode
+/// signs. Implemented here for the same reason the format is: nothing in the offline
+/// registry provides it. Verified in tests against independent `hashlib.blake2b`
+/// vectors, including inputs longer than one 128-byte block.
+fn blake2b_512(data: &[u8]) -> [u8; 64] {
+    /// The BLAKE2b initialization vector (the first 64 bits of the fractional parts of
+    /// the square roots of the first eight primes), shared with SHA-512.
+    const IV: [u64; 8] = [
+        0x6a09e667f3bcc908,
+        0xbb67ae8584caa73b,
+        0x3c6ef372fe94f82b,
+        0xa54ff53a5f1d36f1,
+        0x510e527fade682d1,
+        0x9b05688c2b3e6c1f,
+        0x1f83d9abfb41bd6b,
+        0x5be0cd19137e2179,
+    ];
+    /// The message-word schedule: which of the 16 words each round mixes, in order.
+    /// Rounds 10 and 11 repeat rounds 0 and 1, as BLAKE2b uses 12 rounds over a
+    /// 10-entry table.
+    const SIGMA: [[usize; 16]; 12] = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+        [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+        [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+        [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+        [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+        [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+        [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+        [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+        [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+    ];
+
+    // The G mixing function, operating on four words of the working vector.
+    fn g(v: &mut [u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
+        v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
+        v[d] = (v[d] ^ v[a]).rotate_right(32);
+        v[c] = v[c].wrapping_add(v[d]);
+        v[b] = (v[b] ^ v[c]).rotate_right(24);
+        v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
+        v[d] = (v[d] ^ v[a]).rotate_right(16);
+        v[c] = v[c].wrapping_add(v[d]);
+        v[b] = (v[b] ^ v[c]).rotate_right(63);
+    }
+
+    // The compression function F: fold one 128-byte block into the state `h`. `t` is
+    // the byte count hashed so far (through this block); `last` sets the finalization
+    // flag, which only the final block carries.
+    fn compress(h: &mut [u64; 8], block: &[u8; 128], t: u128, last: bool) {
+        let mut m = [0u64; 16];
+        for (i, word) in m.iter_mut().enumerate() {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&block[i * 8..i * 8 + 8]);
+            *word = u64::from_le_bytes(b);
+        }
+        let mut v = [0u64; 16];
+        v[..8].copy_from_slice(h);
+        v[8..].copy_from_slice(&IV);
+        v[12] ^= t as u64;
+        v[13] ^= (t >> 64) as u64;
+        if last {
+            v[14] ^= 0xFFFF_FFFF_FFFF_FFFF;
+        }
+        for s in SIGMA {
+            g(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
+            g(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
+            g(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
+            g(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
+            g(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
+            g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
+            g(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
+            g(&mut v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+        }
+        for i in 0..8 {
+            h[i] ^= v[i] ^ v[i + 8];
+        }
+    }
+
+    let mut h = IV;
+    // Parameter block for an unkeyed 64-byte digest: fanout 1, depth 1, digest 64.
+    h[0] ^= 0x0101_0040;
+    if data.is_empty() {
+        // The empty message still hashes one all-zero final block.
+        compress(&mut h, &[0u8; 128], 0, true);
+    } else {
+        let mut t: u128 = 0;
+        let mut chunks = data.chunks(128).peekable();
+        while let Some(chunk) = chunks.next() {
+            let last = chunks.peek().is_none();
+            let mut block = [0u8; 128];
+            block[..chunk.len()].copy_from_slice(chunk);
+            t += chunk.len() as u128;
+            compress(&mut h, &block, t, last);
+        }
+    }
+
+    let mut out = [0u8; 64];
+    for (i, word) in h.iter().enumerate() {
+        out[i * 8..i * 8 + 8].copy_from_slice(&word.to_le_bytes());
+    }
+    out
 }
 
 fn lines(text: &str) -> Vec<&str> {
@@ -426,8 +533,21 @@ pub(crate) mod testkit {
             self.assemble(ALG_ED25519, &sig, trusted_comment, &global)
         }
 
-        /// A `.minisig` whose algorithm byte pair is `alg` — used to build the `ED`
-        /// (prehashed) case that must be refused.
+        /// A prehashed (`ED`) `.minisig`: the file signature covers `data`'s
+        /// BLAKE2b-512 hash, the way minisign's `-H` mode signs.
+        pub(crate) fn sign_prehashed(&self, data: &[u8], trusted_comment: &str) -> String {
+            let sig = self.signing.sign(&blake2b_512(data)).to_bytes();
+            let mut global_message = Vec::new();
+            global_message.extend_from_slice(&sig);
+            global_message.extend_from_slice(trusted_comment.as_bytes());
+            let global = self.signing.sign(&global_message).to_bytes();
+            self.assemble(ALG_PREHASHED, &sig, trusted_comment, &global)
+        }
+
+        /// A `.minisig` whose algorithm byte pair is `alg` but whose file signature
+        /// still covers `data`'s raw bytes. With `alg = ALG_PREHASHED` this is a
+        /// malformed prehashed signature — it claims to be over a hash but is not — and
+        /// exists to prove verification actually hashes rather than trusting the label.
         pub(crate) fn sign_with_alg(
             &self,
             alg: [u8; 2],
@@ -552,19 +672,75 @@ mod tests {
     }
 
     #[test]
-    fn prehashed_signatures_are_refused_rather_than_guessed_at() {
+    fn blake2b_512_matches_independent_vectors() {
+        // Cross-checked against Python's hashlib.blake2b (RFC 7693). The 300-byte case
+        // spans three 128-byte blocks, exercising the counter and the final-block flag
+        // that the short inputs never reach.
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(
+            hex(&blake2b_512(b"")),
+            "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419\
+             d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
+        );
+        assert_eq!(
+            hex(&blake2b_512(b"abc")),
+            "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d1\
+             7d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"
+        );
+        assert_eq!(
+            hex(&blake2b_512(&[b'a'; 300])),
+            "a2ff3040eda405b929c2fc2fd93e8add6ac3bb5369b679bae170ac6956863ca0\
+             06285f132a868000fc3fae5bc696e5d17fe3fddfb4a342876c40451184742986"
+        );
+    }
+
+    #[test]
+    fn a_prehashed_signature_verifies_and_names_the_key() {
+        let s = signer();
+        let sig = parse_signature(&s.sign_prehashed(DATA, COMMENT)).expect("parses");
+        assert!(sig.is_prehashed());
+        let who = verify(DATA, &sig, &[s.public()]).expect("verifies");
+        assert_eq!(who, s.public());
+        assert_eq!(sig.trusted_comment, COMMENT);
+    }
+
+    #[test]
+    fn a_tampered_file_fails_a_prehashed_signature() {
+        let s = signer();
+        let sig = parse_signature(&s.sign_prehashed(DATA, COMMENT)).expect("parses");
+        let mut tampered = DATA.to_vec();
+        tampered.push(b'!');
+        assert_eq!(
+            verify(&tampered, &sig, &[s.public()]),
+            Err(MinisignError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn a_prehashed_signature_that_signed_raw_bytes_is_rejected() {
+        // The label says `ED` but the signature covers DATA itself, not its hash.
+        // Verification must hash before checking, so this must fail — proving the
+        // prehashed path is not merely trusting the algorithm byte.
         let s = signer();
         let text = s.sign_with_alg(ALG_PREHASHED, DATA, COMMENT);
         let sig = parse_signature(&text).expect("parses");
         assert!(sig.is_prehashed());
         assert_eq!(
             verify(DATA, &sig, &[s.public()]),
-            Err(MinisignError::Prehashed)
+            Err(MinisignError::BadSignature)
         );
-        assert!(verify(DATA, &sig, &[s.public()])
-            .unwrap_err()
-            .to_string()
-            .contains("BLAKE2b"));
+    }
+
+    #[test]
+    fn a_prehashed_trusted_comment_is_still_globally_signed() {
+        let s = signer();
+        let text = s.sign_prehashed(DATA, COMMENT);
+        let forged = text.replace(COMMENT, "timestamp:1757000000\tfile:something-else");
+        let sig = parse_signature(&forged).expect("parses");
+        assert_eq!(
+            verify(DATA, &sig, &[s.public()]),
+            Err(MinisignError::BadTrustedComment)
+        );
     }
 
     #[test]
