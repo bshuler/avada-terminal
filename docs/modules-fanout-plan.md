@@ -575,7 +575,7 @@ claim stops being true, run on this date.
 ### Carried backlog
 
 marketplace detail rendering · pins/defaults UI · real `WinVerifyTrust` ·
-keyring `TokenStore` · dictation never run live · `multi = true` fan-out ·
+keyring `TokenStore` · dictation never run live ·
 deb/rpm assets on R2 · the SDK is pinned at five different revisions across the
 module repos (all still handshake, the wire format has not changed, but a bump
 sweep is due).
@@ -583,4 +583,7 @@ sweep is due).
 Landed since this audit: lossy `host.panes.spawn` params (the spawn descriptor
 now carries argv/cwd/env, `module::rpc` tests); prehashed `ED`/BLAKE2b-512 minisign
 signatures are verified rather than refused (`policy::minisign` tests, BLAKE2b
-cross-checked against independent vectors).
+cross-checked against independent vectors); `multi = true` shape requirements
+fan out in the resolver — every matching provider is chosen, ordered, and
+installed, not just the first (`install::resolver` tests). The rail-runtime
+side of additive points rides on per-module handshake registration.
