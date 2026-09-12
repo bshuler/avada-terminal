@@ -2690,7 +2690,14 @@ async fn marketplace_set_enabled(
     };
     let module = format!("{owner}/{repo}");
     match mp.set_enabled(&workspace, &module, enabled) {
-        Ok(map) => ok_json(json!({ "module": module, "enabled": map })),
+        Ok(map) => {
+            // The registry write succeeded off the UI thread; flag it so the GUI host
+            // reconciles the running module set on its next tick (start the freshly enabled
+            // module and project its rail entry, or stop a disabled one so its entry
+            // vanishes) instead of deferring the change to the next launch.
+            shared.mark_modules_dirty();
+            ok_json(json!({ "module": module, "enabled": map }))
+        }
         Err(e) => marketplace_error(e),
     }
 }

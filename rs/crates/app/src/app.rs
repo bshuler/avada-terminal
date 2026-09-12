@@ -804,7 +804,16 @@ impl App {
         // calls are cheap latch flips; the server can be stopped and restarted from
         // Preferences, and a restart builds a fresh `Shared` that needs mounting again.
         match self.control.shared_handle() {
-            Some(shared) => self.modules.attach_control(&shared),
+            Some(shared) => {
+                self.modules.attach_control(&shared);
+                // A module enable/disable through the marketplace routes runs off the UI
+                // thread and only flips a flag (`Shared::mark_modules_dirty`); this is
+                // where it takes effect in the running window. Drained once per tick,
+                // exactly like the projects-dirty sidebar reload in `ControlHost::sync`.
+                if shared.take_modules_dirty() {
+                    self.modules.reconcile();
+                }
+            }
             None => self.modules.detach_control(),
         }
 

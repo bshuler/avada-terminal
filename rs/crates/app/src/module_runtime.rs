@@ -128,6 +128,11 @@ enum Job {
     },
     /// `module.event` fan-out to every subscriber of `kind`.
     Emit { kind: String, payload: Value },
+    /// Stop one module and forget it — the human disabled it in this workspace, so its
+    /// rail entry must vanish now rather than at the next launch. `host.remove` shuts the
+    /// child down (a blocking grace wait, which is why this is worker-thread work) and
+    /// emits `RailEvent::Gone`, so the panel drops the entry on the next tick.
+    Remove(ModuleId),
     /// Stop every module and end the worker.
     Stop,
 }
@@ -234,6 +239,12 @@ pub struct ModuleRuntime {
     /// `module.grid.resize` at the pump's cadence and spend its life repainting the same
     /// picture.
     grid_sizes: RefCell<std::collections::HashMap<String, (u16, u16)>>,
+    /// The modules root and workspace key this runtime launched under, kept so
+    /// [`ModuleRuntime::reconcile`] can recompute the desired running set from exactly the
+    /// same inputs `start_installed` read at launch. Without them a live enable/disable
+    /// would have to guess which workspace's opt-outs to honour.
+    modules_root: PathBuf,
+    workspace: Option<String>,
 }
 
 impl ModuleRuntime {
@@ -288,6 +299,8 @@ impl ModuleRuntime {
                     workspaces: RefCell::new(Vec::new()),
                     pane_uids: RefCell::new(std::collections::HashMap::new()),
                     grid_sizes: RefCell::new(std::collections::HashMap::new()),
+                    modules_root: modules_root.to_path_buf(),
+                    workspace: workspace.map(str::to_owned),
                 };
             }
         };
@@ -370,6 +383,8 @@ impl ModuleRuntime {
             workspaces: RefCell::new(Vec::new()),
             pane_uids: RefCell::new(std::collections::HashMap::new()),
             grid_sizes: RefCell::new(std::collections::HashMap::new()),
+            modules_root: modules_root.to_path_buf(),
+            workspace: workspace.map(str::to_owned),
         };
         rt.start_installed(modules_root, workspace);
         rt
@@ -387,6 +402,47 @@ impl ModuleRuntime {
                 record: Box::new(record),
                 binary: installed.binary.clone(),
             });
+        }
+    }
+
+    /// Reconcile the running module set with the store's current enable state, live.
+    ///
+    /// Called when the control server flags a module enable/disable off the UI thread (see
+    /// `Shared::take_modules_dirty`). It recomputes the desired set exactly as launch did —
+    /// same `installs_to_start`, same workspace opt-outs — diffs it against what is actually
+    /// live, and posts the difference: a `Job::Start` for a module the human just enabled
+    /// (so it spawns and projects its rail entry) and a `Job::Remove` for one they disabled
+    /// (so its child is stopped and the panel drops its entry on the next `RailEvent::Gone`).
+    /// A module that is both desired and already live is left untouched, so an unrelated
+    /// enable never restarts a running module.
+    pub fn reconcile(&self) {
+        let (Some(store), Some(host)) = (self.store.as_ref(), self.host.as_ref()) else {
+            return;
+        };
+        let desired = installs_to_start(store, &self.modules_root, self.workspace.as_deref());
+        let live: std::collections::HashSet<ModuleId> = host
+            .statuses()
+            .into_iter()
+            .filter(|(_, status)| status.is_live())
+            .map(|(id, _)| id)
+            .collect();
+        let desired_ids: Vec<ModuleId> = desired.iter().map(|i| i.id.clone()).collect();
+        let plan = reconcile_plan(&desired_ids, &live);
+        // Stop first: the human's disable is the change they are most likely watching for,
+        // and freeing the gate entry before any re-add keeps the accepted set honest.
+        for id in &plan.to_stop {
+            self.gate.remove(id);
+            self.post(Job::Remove(id.clone()));
+        }
+        for installed in &desired {
+            if plan.to_start.contains(&installed.id) {
+                let record = installed.rights().clone();
+                self.gate.insert(&record);
+                self.post(Job::Start {
+                    record: Box::new(record),
+                    binary: installed.binary.clone(),
+                });
+            }
         }
     }
 
@@ -809,6 +865,44 @@ fn installs_to_start(
     out
 }
 
+/// What a live reconcile decided to do: modules to spawn, modules to stop.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ReconcilePlan {
+    /// Desired modules that are not currently live — spawn each and project its rail.
+    to_start: Vec<ModuleId>,
+    /// Live modules that are no longer desired — stop each so its rail entry vanishes.
+    to_stop: Vec<ModuleId>,
+}
+
+/// The live-reconcile decision: given the modules that *should* be running (`desired`, in
+/// the order [`installs_to_start`] produced) and those that *are* (`live`), which to start
+/// and which to stop.
+///
+/// Split out from [`ModuleRuntime::reconcile`], and set-based over ids alone, so the whole
+/// of the "what changes when enable state changes" policy can be checked without a host —
+/// the same reason `installs_to_start` is a pure function. A module present in both sets is
+/// in neither result: an enable of one module must never restart another that was happily
+/// running. `to_start` keeps `desired`'s order so a caller can pair each id back to its
+/// install; `to_stop`'s order is unspecified (it comes from a set).
+fn reconcile_plan(
+    desired: &[ModuleId],
+    live: &std::collections::HashSet<ModuleId>,
+) -> ReconcilePlan {
+    let want: std::collections::HashSet<&ModuleId> = desired.iter().collect();
+    ReconcilePlan {
+        to_start: desired
+            .iter()
+            .filter(|id| !live.contains(*id))
+            .cloned()
+            .collect(),
+        to_stop: live
+            .iter()
+            .filter(|id| !want.contains(id))
+            .cloned()
+            .collect(),
+    }
+}
+
 /// The app's panel-side gesture as the contract spells it.
 fn wire_gesture(g: RailGesture) -> Gesture {
     match g {
@@ -957,6 +1051,12 @@ fn run_worker(host: Host, licenses: Arc<Licenses>, rx: Receiver<Job>) {
             Job::Emit { kind, payload } => {
                 host.emit(&kind, payload);
             }
+            Job::Remove(id) => {
+                // Blocks for the module's shutdown grace, then emits `RailEvent::Gone`;
+                // the slot is dropped so a later `statuses()` no longer lists it and a
+                // re-enable spawns cleanly.
+                host.remove(&id);
+            }
             Job::Stop => {
                 host.shutdown_all();
                 return;
@@ -1067,6 +1167,8 @@ label = "Tree"
             workspaces: RefCell::new(Vec::new()),
             pane_uids: RefCell::new(HashMap::new()),
             grid_sizes: RefCell::new(HashMap::new()),
+            modules_root: PathBuf::new(),
+            workspace: None,
         }
     }
 
@@ -1144,6 +1246,69 @@ label = "Tree"
         assert_eq!(starting, ["acme/avada-one"]);
     }
 
+    /// A small helper: the reconcile plan over string ids, with `to_stop` sorted so the
+    /// set-ordered result is comparable.
+    fn plan(desired: &[&str], live: &[&str]) -> (Vec<String>, Vec<String>) {
+        let desired: Vec<ModuleId> = desired.iter().map(|s| id(s)).collect();
+        let live: std::collections::HashSet<ModuleId> = live.iter().map(|s| id(s)).collect();
+        let out = reconcile_plan(&desired, &live);
+        let start: Vec<String> = out
+            .to_start
+            .iter()
+            .map(|i| i.as_str().to_string())
+            .collect();
+        let mut stop: Vec<String> = out.to_stop.iter().map(|i| i.as_str().to_string()).collect();
+        stop.sort();
+        (start, stop)
+    }
+
+    /// Nothing desired and nothing live is a no-op — the reconcile after an unrelated
+    /// dirty flag must not churn the module set.
+    #[test]
+    fn reconcile_of_an_empty_world_does_nothing() {
+        assert_eq!(plan(&[], &[]), (vec![], vec![]));
+    }
+
+    /// A module that is desired but not yet live is started — the freshly enabled case,
+    /// and the cold-launch case, are the same diff.
+    #[test]
+    fn reconcile_starts_a_desired_module_that_is_not_live() {
+        assert_eq!(
+            plan(&["acme/one", "acme/two"], &[]),
+            (vec!["acme/one".to_string(), "acme/two".to_string()], vec![])
+        );
+    }
+
+    /// A module that is live but no longer desired is stopped — the disable case.
+    #[test]
+    fn reconcile_stops_a_live_module_that_is_no_longer_desired() {
+        assert_eq!(
+            plan(&[], &["acme/one"]),
+            (vec![], vec!["acme/one".to_string()])
+        );
+    }
+
+    /// A module that is both desired and live is left exactly as it is: enabling one
+    /// module must never restart another that was already running.
+    #[test]
+    fn reconcile_leaves_an_unchanged_module_alone() {
+        // Enable `two` while `one` is already running: only `two` starts, `one` untouched.
+        assert_eq!(
+            plan(&["acme/one", "acme/two"], &["acme/one"]),
+            (vec!["acme/two".to_string()], vec![])
+        );
+        // Disable `two` while `one` stays: only `two` stops.
+        assert_eq!(
+            plan(&["acme/one"], &["acme/one", "acme/two"]),
+            (vec![], vec!["acme/two".to_string()])
+        );
+        // Steady state: nothing to do.
+        assert_eq!(
+            plan(&["acme/one", "acme/two"], &["acme/one", "acme/two"]),
+            (vec![], vec![])
+        );
+    }
+
     /// A store that will not open leaves a runtime that does nothing rather than a GUI
     /// that will not start.
     #[test]
@@ -1155,6 +1320,9 @@ label = "Tree"
         assert!(rt.take_workspace_ops().is_empty());
         // Neither control-plane call panics without a host.
         rt.detach_control();
+        // A dirty flag draining into `reconcile` before the store ever opened must be a
+        // no-op, not a panic — the early return on `store`/`host` being `None`.
+        rt.reconcile();
     }
 
     #[test]

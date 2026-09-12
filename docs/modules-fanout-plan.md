@@ -533,13 +533,18 @@ URL.
   this.
 - **First-party modules in separate repos** means the free edition cannot ship them
   prebuilt; that is the decision, not an oversight.
-- **Modules are chosen at launch, not live.** The app reads the workspace's module state
-  once, when it starts (`ModuleRuntime::installs_to_start`), keyed by the stem of the
-  workspace file it was launched with (`dev.avada` → `dev`; a launch with no positional
-  file, or a stem the marketplace refuses as a key, uses the lockfile defaults). An enable
-  or disable made through `/marketplace/modules/{o}/{r}/enable|disable` is therefore
-  honoured at the NEXT launch: the rail entry does not appear or vanish in the running
-  window. Live start/stop on enable/disable is a backlog item, not a bug in the state.
+- **Modules are chosen at launch, then reconciled live.** The app reads the workspace's
+  module state once, when it starts (`ModuleRuntime::installs_to_start`), keyed by the stem
+  of the workspace file it was launched with (`dev.avada` → `dev`; a launch with no
+  positional file, or a stem the marketplace refuses as a key, uses the lockfile defaults).
+  An enable or disable made through `/marketplace/modules/{o}/{r}/enable|disable` now takes
+  effect in the running window: the route flips `Shared::modules_dirty` off the UI thread,
+  the GUI drains it each tick (`App::service_modules`) and calls `ModuleRuntime::reconcile`,
+  which re-runs `installs_to_start` with the same workspace key, diffs the result against
+  the live set (`reconcile_plan`), and spawns a freshly enabled module (projecting its rail
+  entry) or removes a disabled one (`host.remove` → `RailEvent::Gone`, so the panel drops
+  the entry). A module that is both desired and already live is left untouched. This mirrors
+  the `projects_dirty` sidebar-reload seam exactly.
 - The `permissions/` directory name collides with the rights concept; the new code is
   `rights/` and the OS-probing directory keeps its name until the rename wave, where it
   becomes `os_permissions/`.
@@ -560,6 +565,7 @@ claim stops being true, run on this date.
 | Host and shell (W1): spawn, handshake, rail entry, tier-1 rows, crash cap, hash refusal, descriptor-table routes, `GET /schema` | `module::host_tests`, `control::routes` tests, `uitest::rail`, `uitest::modulepane` (mac, green). |
 | First module (W2): free build installs `avada-files` from GitHub by topic, compiles it, enables it | `marketplace::live` ignored test run against the real repo (green, 13 s); `scripts/module-roundtrip-demo.sh` prints `ROUNDTRIP_DEMO_GREEN` at HEAD; ptah GUI round trip 9 printed `ROUNDTRIP_SHOT_GREEN` with real file rows on screen. |
 | W2: disable → rail entry gone, pane becomes the placeholder | ptah round trip shots `rt-3-disabled*.png`; `uitest::placeholder`. |
+| Live start/stop on enable/disable in the running window | `module_runtime::reconcile_plan` set-diff tests (start-not-live, stop-no-longer-desired, leave-unchanged, empty-world); the route flips `Shared::modules_dirty` (`control::server`), the GUI drains it and calls `reconcile` (`App::service_modules`). |
 | W2: reveal-in-files from a link | Three layers, not one live run: `command.rs` asserts a link resolves to `files.reveal`; `uitest::files` proves the revealed row scrolls on screen; `avada-files` handles the reveal event in its own tests. |
 | §7.4 uitests: rail click, placeholder buttons, rights rows, marketplace install | `uitest::rail`, `uitest::placeholder` (install-from-marketplace click reaches Rust), `uitest::modulepane` (a marketplace row activation is the install gesture, since the marketplace is itself a module pane). |
 | Every module repo builds and passes its own tests | `scripts/check-modules.sh` printed `MODULES_CHECK_GREEN` for all seven topic repos plus `avada-commercial` and `avada-license`. |
@@ -569,8 +575,7 @@ claim stops being true, run on this date.
 
 ### Not met
 
-1. **Live start/stop on enable/disable** stays the documented deviation in §10.
-2. **Windows signature check** is still the stub; minisign is what ships.
+1. **Windows signature check** is still the stub; minisign is what ships.
 
 ### Carried backlog
 
@@ -587,3 +592,10 @@ cross-checked against independent vectors); `multi = true` shape requirements
 fan out in the resolver — every matching provider is chosen, ordered, and
 installed, not just the first (`install::resolver` tests). The rail-runtime
 side of additive points rides on per-module handshake registration.
+Live start/stop on enable/disable now lands in the running window: the
+`/marketplace/modules/{o}/{r}/enable|disable` route sets `Shared::modules_dirty`
+off the UI thread, the GUI drains it each tick (`App::service_modules`) and calls
+`ModuleRuntime::reconcile`, which diffs the desired set (`installs_to_start`,
+same workspace key as launch) against the live set and spawns the newcomer or
+`host.remove`s the departed one — the same off-thread-flag → UI-thread-drain seam
+as `projects_dirty`.

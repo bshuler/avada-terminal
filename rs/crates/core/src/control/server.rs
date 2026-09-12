@@ -89,6 +89,13 @@ pub struct Shared {
     /// `ControlHost::sync`) to reload the sidebar rail live; in the headless bin it is simply
     /// never read. A plain flag, not coalesced — the UI tick polls it cheaply.
     projects_dirty: AtomicBool,
+    /// Set by the `/marketplace/modules/{o}/{r}/enable|disable` routes when they flip a
+    /// module's workspace enable state off the UI thread. The GUI host clears it each tick
+    /// (see `App::service_modules`) and reconciles the running module set live — spawning a
+    /// freshly enabled module and projecting its rail entry, or stopping a disabled one so
+    /// its rail entry vanishes. Never read in the headless bin. Same plain-flag shape as
+    /// `projects_dirty`: not coalesced, polled cheaply once per tick.
+    modules_dirty: AtomicBool,
     /// App-restart request from the `restartApp` command: 0 = none, 1 = gui (relaunch the GUI,
     /// panes survive via daemon re-attach), 2 = full (also shut the session daemon down —
     /// every pane dies and the restore path resurrects the workspace + Claude conversations
@@ -187,6 +194,7 @@ impl Shared {
             control_file,
             state_scheduled: AtomicBool::new(false),
             projects_dirty: AtomicBool::new(false),
+            modules_dirty: AtomicBool::new(false),
             restart_app: AtomicU8::new(0),
             bind: Mutex::new(("127.0.0.1".to_string(), 0)),
             runtime: OnceLock::new(),
@@ -274,6 +282,22 @@ impl Shared {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn take_projects_dirty(&self) -> bool {
         self.projects_dirty.swap(false, Ordering::SeqCst)
+    }
+
+    /// Flag that a module's workspace enable state changed off-thread (a
+    /// `/marketplace/modules/{o}/{r}/enable|disable` write), so the GUI host reconciles the
+    /// running module set next tick — starting a newly enabled module or stopping a disabled
+    /// one live, instead of deferring the change to the next launch.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn mark_modules_dirty(&self) {
+        self.modules_dirty.store(true, Ordering::SeqCst);
+    }
+
+    /// Atomically read-and-clear the module enable-state dirty flag. The GUI host calls this
+    /// once per UI tick; returns `true` exactly once per batch of changes.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn take_modules_dirty(&self) -> bool {
+        self.modules_dirty.swap(false, Ordering::SeqCst)
     }
 
     /// Bind background-task spawns (the `notify_state` coalescer) to an explicit runtime handle.
