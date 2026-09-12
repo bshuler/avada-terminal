@@ -29,7 +29,8 @@ pub enum Capability {
     /// Write files anywhere the user can.
     #[serde(rename = "fs.write_any")]
     FsWriteAny,
-    /// Open new panes (terminal or module surfaces) through the host.
+    /// Open new panes through the host — a file in the viewer, or the module's own surface.
+    /// A subprocess (`kind: "terminal"`) pane needs [`Capability::ProcessSpawn`] on top of this.
     #[serde(rename = "panes.spawn")]
     PanesSpawn,
     /// Send input to panes in scope.

@@ -95,7 +95,7 @@ pub use avada_module_sdk::grid;
 pub use avada_module_sdk::doc;
 
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
-pub use host::{Host, HostConfig, HostError, HostEvent, Licensing, Opener};
+pub use host::{Host, HostConfig, HostError, HostEvent, LaunchSpec, Licensing, Opener};
 pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate, RowTarget};
 pub use rpc::CommandSpec;
 pub use spawn::{HandshakeError, SpawnError};

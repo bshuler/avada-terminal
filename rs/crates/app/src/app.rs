@@ -878,6 +878,7 @@ impl App {
                 kind,
                 path,
                 surface,
+                terminal,
             } => {
                 let uid = match (kind.as_str(), path) {
                     // The same door "Open" in a file module's row menu goes through, so a
@@ -918,6 +919,39 @@ impl App {
                                 module = %module.as_str(),
                                 surface = ?surface,
                                 "module pane with no usable surface"
+                            );
+                            None
+                        }
+                    },
+                    // A subprocess pane, gated at the RPC layer by `process.spawn`. The core
+                    // handler only ever sets `terminal` for this kind and only after that
+                    // check, so a `Some(spec)` here is an already-authorised launch. Command
+                    // and args flow straight into `NewPaneOpts` as argv — the same door a New
+                    // Pane dialog uses — so the pane spawns exactly like any other pty pane,
+                    // just with a program the module named instead of an interactive shell.
+                    ("terminal", _) => match terminal {
+                        Some(spec) => {
+                            crate::command::dispatch(
+                                st,
+                                crate::command::Command::SubmitNewPane(Box::new(NewPaneOpts {
+                                    label: Some(spec.command.clone()),
+                                    command: Some(spec.command),
+                                    args: Some(spec.args),
+                                    cwd: spec.cwd,
+                                    env: spec.env,
+                                    ..Default::default()
+                                })),
+                                &self.mgr,
+                            );
+                            st.active_tab().panes.last().map(|p| p.uid.clone())
+                        }
+                        // The core layer never sends `kind: "terminal"` without a spec, so
+                        // this is unreachable in practice; drop it the way an unknown kind is
+                        // dropped rather than fabricate an empty shell the module didn't ask for.
+                        None => {
+                            tracing::debug!(
+                                module = %module.as_str(),
+                                "terminal pane with no launch spec"
                             );
                             None
                         }
@@ -3530,6 +3564,7 @@ impl App {
                             label: Some(label.to_string()),
                             cwd: Some(cwd.to_string()),
                             command: Some(command.to_string()),
+                            args: None,
                             shell: Some(shell),
                             accent: Some(color),
                             show_frame: Some(frame),
@@ -3960,6 +3995,7 @@ impl App {
                     // A view pane's target IS its cwd — see `State::view_navigate`.
                     cwd: Some(r.path.display().to_string()),
                     command: None,
+                    args: None,
                     shell: None,
                     accent: None,
                     show_frame: None,
@@ -4679,6 +4715,7 @@ impl App {
                     label: Some("claude".to_string()),
                     cwd: Some(cwd),
                     command: Some(crate::sidebar::claude_resume_command(&sid)),
+                    args: None,
                     shell: None,
                     accent: Some(crate::state::parse_hex(&color)),
                     show_frame: None,

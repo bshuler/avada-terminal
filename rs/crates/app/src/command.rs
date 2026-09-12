@@ -699,6 +699,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     // A view pane's target IS its cwd — see `State::view_navigate`.
                     cwd: start,
                     command: None,
+                    args: None,
                     shell: None,
                     accent: None,
                     show_frame: None,
@@ -824,6 +825,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     // A view pane's target IS its cwd — see `State::view_navigate`.
                     cwd: Some(path.clone()),
                     command: None,
+                    args: None,
                     shell: None,
                     accent: None,
                     show_frame: None,
@@ -898,6 +900,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                     label,
                     cwd,
                     command: Some(format!("{} {}", quote_arg(&bin), quote_arg(&path))),
+                    args: None,
                     shell: None,
                     accent: None,
                     show_frame: None,

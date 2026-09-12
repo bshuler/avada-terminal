@@ -716,6 +716,11 @@ pub struct NewPaneOpts {
     pub cwd: Option<String>,
     /// A command to run instead of an interactive shell (empty → interactive).
     pub command: Option<String>,
+    /// Argv for `command`, passed straight to the pty with no shell parsing. `Some` turns the
+    /// spawn into a direct exec (`command` + these args, no `sh -c`); `None`/empty keeps the
+    /// shell-wrapped behaviour. The path a module's `panes.spawn { kind: "terminal" }` takes,
+    /// so an untrusted argument can never be read as a shell metacharacter.
+    pub args: Option<Vec<String>>,
     /// Shell token override ("" / `None` → the default-shell preference).
     pub shell: Option<String>,
     /// The chosen accent (the swatch). `None` = the by-slot palette color (a plain new pane).
@@ -2212,6 +2217,10 @@ impl State {
                     // the relaunch snapshot.
                     shell: shell.clone(),
                     command: command.clone(),
+                    // Argv for a direct exec: a caller (a module's terminal pane) that gave an
+                    // arg vector runs `command` + these with no shell in between. Cloned so the
+                    // same spec is kept on the PaneState below for the relaunch snapshot.
+                    args: opts.args.clone(),
                     // `BROWSER` points at our shim so a link a tool in this pane wants to
                     // show goes back through `App::route_event` → `Command::OpenLink` (and
                     // thus Preferences → Browser) instead of straight to the OS. Wrapped
@@ -2297,10 +2306,12 @@ impl State {
                 String::new()
             },
             // Remember the spawn spec so the relaunch snapshot can re-run this program. A New
-            // Pane dialog carries no argv, so `spawn_args` stays None. A view pane never ran a
-            // program, so it records none — the snapshot restores it from its `kind` alone.
+            // Pane dialog carries no argv, so `spawn_args` stays None there; a module's terminal
+            // pane does carry one, and it round-trips so a relaunch re-execs the same argv. A
+            // view pane never ran a program, so it records none — the snapshot restores it from
+            // its `kind` alone.
             spawn_command: kind.is_pty().then_some(command).flatten(),
-            spawn_args: None,
+            spawn_args: kind.is_pty().then_some(opts.args).flatten(),
             spawn_shell: kind.is_pty().then_some(shell).flatten(),
             kind,
             tool_session,
@@ -9573,6 +9584,68 @@ mod session_file_tests {
         assert_eq!(st.tabs.len(), 1);
         assert_eq!(st.active, 0);
         assert_eq!(st.active_tab().panes.len(), 1);
+    }
+
+    /// The `host.panes.spawn { kind: "terminal" }` landing: a module's launch spec reaches
+    /// `apply_pane_op`, which submits exactly this `NewPaneOpts` (command + argv + cwd + env).
+    /// `make_pane` must carry the argv onto the live pane as `spawn_args` — not drop it — so the
+    /// program the module named runs with its arguments AND a relaunch re-execs the same argv.
+    /// A pty pane learns its live cwd from OSC-7, so `cwd` rides the pty spawn but is not seeded
+    /// onto the pane; `env`, by contrast, is kept verbatim on the pane.
+    #[test]
+    fn a_module_terminal_pane_keeps_its_argv_and_env() {
+        // `add_pane_opts` fires the async pty spawn on the current Tokio handle (as in the
+        // running app), so hold a runtime for the call.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut st = fresh();
+        let m = mgr();
+        let uid = st
+            .add_pane_opts(
+                &m,
+                NewPaneOpts {
+                    label: Some("git".into()),
+                    command: Some("git".into()),
+                    args: Some(vec!["status".into(), "--porcelain".into()]),
+                    cwd: Some("/work/repo".into()),
+                    env: Some(
+                        [("GIT_PAGER".to_string(), "cat".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .expect("a command pane spawns");
+        let pane = st
+            .active_tab()
+            .panes
+            .iter()
+            .find(|p| p.uid == uid)
+            .expect("the spawned pane is in the active tab");
+        assert_eq!(
+            pane.spawn_command.as_deref(),
+            Some("git"),
+            "the module's program is what the pane runs"
+        );
+        assert_eq!(
+            pane.spawn_args.as_deref(),
+            Some(&["status".into(), "--porcelain".into()][..]),
+            "the module's argv rides onto the pane so the program runs with its args and a \
+             relaunch re-execs it — not the plain-shell None a New Pane dialog leaves"
+        );
+        assert_eq!(
+            pane.env.as_ref().and_then(|e| e.get("GIT_PAGER")).map(String::as_str),
+            Some("cat"),
+            "the module's env is kept on the pane verbatim"
+        );
+        assert!(
+            pane.cwd.is_none(),
+            "a pty pane is seeded with no cwd — it learns its live one from the shell's OSC-7; \
+             the requested cwd rode the pty spawn instead"
+        );
     }
 }
 

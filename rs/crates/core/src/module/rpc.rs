@@ -8,7 +8,7 @@
 //! name, which has no `data`.
 
 use super::gate::{CapabilityGate, Decision};
-use super::host::{HostEvent, ImageData};
+use super::host::{HostEvent, ImageData, LaunchSpec};
 use super::rail::{FanOut, RailEvent, RailState};
 use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::{self, required_capability};
@@ -248,6 +248,18 @@ struct SpawnPane {
     path: Option<String>,
     #[serde(default)]
     surface: Option<String>,
+    /// The program to run, for `kind: "terminal"`. Passed as argv, never through a shell.
+    #[serde(default)]
+    command: Option<String>,
+    /// Its arguments, for `kind: "terminal"`, one per element and never shell-parsed.
+    #[serde(default)]
+    args: Vec<String>,
+    /// Working directory, for `kind: "terminal"`.
+    #[serde(default)]
+    cwd: Option<String>,
+    /// Extra environment, for `kind: "terminal"`.
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
 }
 
 /// `host.workspace.list` params. Absent `what` means both drawers.
@@ -1082,16 +1094,27 @@ impl Dispatcher {
         }))
     }
 
-    /// `host.panes.spawn { kind, path?, surface? } -> { pane_id }`.
+    /// `host.panes.spawn { kind, path?, surface?, command?, args?, cwd?, env? } -> { pane_id }`.
     ///
     /// The id is minted here and returned at once; opening the pane is the app's job and
     /// happens off the event stream. A module that had to wait for a window to exist
     /// would block its own request loop on the UI thread's next frame.
+    ///
+    /// `kind: "terminal"` is the one kind that needs a second capability: the route table
+    /// only requires `panes.spawn` (which every pane-spawning module holds), but starting a
+    /// subprocess is `process.spawn` — "the one capability that escapes the host". So the
+    /// arm checks it here, the same way the git arms check `git.read`, rather than at the
+    /// central gate that cannot see the params. Command and args go into the [`LaunchSpec`]
+    /// as argv, never a shell line, so a module cannot dress an argument up as a shell command.
     fn panes_spawn(&self, params: &Value) -> Result<Value, RpcError> {
         let SpawnPane {
             kind,
             path,
             surface,
+            command,
+            args,
+            cwd,
+            env,
         } = serde_json::from_value(params.clone()).map_err(invalid_params)?;
         if kind.trim().is_empty() {
             return Err(invalid_params("pane kind must not be empty"));
@@ -1107,6 +1130,22 @@ impl Dispatcher {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(s.to_string());
         }
+        // A subprocess pane is the only kind that forks a process, so it — and only it —
+        // must hold `process.spawn` on top of the `panes.spawn` the route already required.
+        let terminal = if kind == "terminal" {
+            self.require(Capability::ProcessSpawn)?;
+            let Some(command) = command.filter(|c| !c.trim().is_empty()) else {
+                return Err(invalid_params("a terminal pane needs a `command`"));
+            };
+            Some(LaunchSpec {
+                command,
+                args,
+                cwd,
+                env,
+            })
+        } else {
+            None
+        };
         let pane_id = uuid::Uuid::new_v4().to_string();
         self.shared.events.send(HostEvent::PaneSpawn {
             module: self.module.clone(),
@@ -1114,6 +1153,7 @@ impl Dispatcher {
             kind,
             path,
             surface,
+            terminal,
         });
         Ok(json!({ "pane_id": pane_id }))
     }
@@ -2633,6 +2673,7 @@ pub(crate) mod tests {
                 kind,
                 path,
                 surface,
+                terminal,
             } => {
                 assert_eq!(module, testkit::module_id());
                 assert_eq!(
@@ -2642,6 +2683,7 @@ pub(crate) mod tests {
                 assert_eq!(kind, "file");
                 assert_eq!(path.as_deref(), Some("/w/a.rs"));
                 assert_eq!(surface, None);
+                assert_eq!(terminal, None, "a file pane carries no launch spec");
             }
             other => panic!("{other:?}"),
         }
@@ -2663,6 +2705,91 @@ pub(crate) mod tests {
                 .kind(),
             ErrorCode::CapabilityDenied
         );
+    }
+
+    #[test]
+    fn a_terminal_pane_carries_its_launch_spec_when_process_spawn_is_held() {
+        // `panes.spawn` alone opens files and module surfaces; a subprocess pane needs
+        // `process.spawn` on top, and when it is held the whole argv/cwd/env reaches the app.
+        let rig = rig(&[Capability::PanesSpawn, Capability::ProcessSpawn]);
+        let v = rig
+            .d
+            .call(
+                methods::HOST_PANES_SPAWN,
+                &json!({
+                    "kind": "terminal",
+                    "command": "htop",
+                    "args": ["-d", "10"],
+                    "cwd": "/w",
+                    "env": { "TERM": "xterm-256color" },
+                }),
+            )
+            .unwrap();
+        let id = v["pane_id"].as_str().unwrap().to_string();
+        match rig.events.recv().unwrap() {
+            HostEvent::PaneSpawn {
+                pane_id,
+                kind,
+                path,
+                surface,
+                terminal,
+                ..
+            } => {
+                assert_eq!(pane_id, id);
+                assert_eq!(kind, "terminal");
+                assert_eq!(path, None);
+                assert_eq!(surface, None);
+                let spec = terminal.expect("a terminal pane announces a launch spec");
+                assert_eq!(spec.command, "htop");
+                assert_eq!(spec.args, ["-d", "10"]);
+                assert_eq!(spec.cwd.as_deref(), Some("/w"));
+                assert_eq!(
+                    spec.env.as_ref().and_then(|e| e.get("TERM")).map(String::as_str),
+                    Some("xterm-256color"),
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_terminal_pane_needs_process_spawn_on_top_of_panes_spawn() {
+        // `panes.spawn` gets the module past the central gate — the route only asks for that.
+        // The subprocess is the extra reach, so the arm denies it in-handler, and nothing is
+        // announced: a denied fork must not leak an event the app would act on.
+        let rig = rig(&[Capability::PanesSpawn]);
+        assert_eq!(
+            rig.d
+                .call(
+                    methods::HOST_PANES_SPAWN,
+                    &json!({ "kind": "terminal", "command": "htop" }),
+                )
+                .unwrap_err()
+                .kind(),
+            ErrorCode::CapabilityDenied,
+        );
+        assert!(
+            rig.events.try_recv().is_err(),
+            "a denied terminal pane announces nothing",
+        );
+    }
+
+    #[test]
+    fn a_terminal_pane_with_no_command_is_refused() {
+        // The capability is held, so this is the params check, not the gate: a subprocess
+        // pane with nothing to run is a mistake the module can read back and fix.
+        let rig = rig(&[Capability::PanesSpawn, Capability::ProcessSpawn]);
+        assert_eq!(
+            rig.d
+                .call(
+                    methods::HOST_PANES_SPAWN,
+                    &json!({ "kind": "terminal", "command": "  " }),
+                )
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams,
+        );
+        assert!(rig.events.try_recv().is_err());
     }
 
     #[test]

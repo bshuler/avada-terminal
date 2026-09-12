@@ -60,7 +60,7 @@ use avada_core::marketplace::workspace::WorkspaceStates;
 use avada_core::module::grid::{GridKey, GridResize};
 use avada_core::module::WorkspaceInfo;
 use avada_core::module::{
-    DeclaredOnly, Gesture, Host, HostConfig, HostEvent, RailEvent, RowActivate,
+    DeclaredOnly, Gesture, Host, HostConfig, HostEvent, LaunchSpec, RailEvent, RowActivate,
 };
 use avada_core::rights::{InstallRecord, ModuleId};
 
@@ -144,12 +144,14 @@ pub enum PaneOp {
         module: ModuleId,
         /// The id the host already handed the module.
         pane_id: String,
-        /// `file` or `module`.
+        /// `file`, `module`, or `terminal`.
         kind: String,
         /// The file to open, for `kind: "file"`.
         path: Option<String>,
         /// The module surface to show, for `kind: "module"`.
         surface: Option<String>,
+        /// How to start the subprocess, for `kind: "terminal"`. Already capability-checked.
+        terminal: Option<LaunchSpec>,
     },
     /// Feed bytes to a pane's input (`host.panes.input`).
     Input {
@@ -548,12 +550,14 @@ impl ModuleRuntime {
                 kind,
                 path,
                 surface,
+                terminal,
             } => self.panes.borrow_mut().push(PaneOp::Spawn {
                 module,
                 pane_id,
                 kind,
                 path,
                 surface,
+                terminal,
             }),
             HostEvent::PaneInput { pane_id, text, .. } => self
                 .panes
@@ -1172,6 +1176,7 @@ label = "Tree"
                 kind: "file".into(),
                 path: Some("/tmp/README.md".into()),
                 surface: None,
+                terminal: None,
             },
             &mut tick,
         );
@@ -1203,6 +1208,7 @@ label = "Tree"
                     kind: "file".into(),
                     path: Some("/tmp/README.md".into()),
                     surface: None,
+                    terminal: None,
                 },
                 PaneOp::Input {
                     pane_id: "p1".into(),
@@ -1212,6 +1218,47 @@ label = "Tree"
         );
         // Drained, not copied.
         assert!(rt.take_pane_ops().is_empty());
+    }
+
+    /// A terminal pane's launch spec is the one payload the fold must not drop: the RPC
+    /// layer has already minted and capability-checked it, and `apply_pane_op` on the far
+    /// side reads it back to spawn the subprocess. The fold sits between the two and only
+    /// copies the field, so this pins that the copy actually happens — a mutation that let
+    /// `terminal` fall to `None` here would strand an authorised spawn with no other test
+    /// (the RPC tests stop before the fold; the state tests start after it) to catch it.
+    #[test]
+    fn a_terminal_pane_spawn_carries_its_launch_spec_through_the_fold() {
+        let rt = hostless();
+        let mut tick = ModuleTick::default();
+        let spec = LaunchSpec {
+            command: "git".into(),
+            args: vec!["status".into()],
+            cwd: Some("/work/repo".into()),
+            env: Some([("GIT_PAGER".to_string(), "cat".to_string())].into_iter().collect()),
+        };
+        rt.fold_event(
+            HostEvent::PaneSpawn {
+                module: id("acme/avada-one"),
+                pane_id: "t1".into(),
+                kind: "terminal".into(),
+                path: None,
+                surface: None,
+                terminal: Some(spec.clone()),
+            },
+            &mut tick,
+        );
+        assert_eq!(
+            rt.take_pane_ops(),
+            vec![PaneOp::Spawn {
+                module: id("acme/avada-one"),
+                pane_id: "t1".into(),
+                kind: "terminal".into(),
+                path: None,
+                surface: None,
+                terminal: Some(spec),
+            }],
+            "the launch spec must reach the pane op intact, or the subprocess never starts"
+        );
     }
 
     /// Opening and saving are announcements too, and they drain on their own queue: a

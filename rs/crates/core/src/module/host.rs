@@ -79,6 +79,26 @@ impl HostConfig {
     }
 }
 
+/// How to start a subprocess pane, for `host.panes.spawn { kind: "terminal" }`.
+///
+/// `command` and `args` are passed to the pty *directly* — argv, never a shell line — so
+/// nothing a module puts in `args` can be read as a shell metacharacter. That is the whole
+/// reason the terminal kind carries an explicit arg vector rather than one command string:
+/// an untrusted module can name a program and its arguments, but cannot smuggle in a `;`,
+/// a `$(…)`, or a redirection. `cwd` and `env` are the working directory and the extra
+/// environment to overlay; both `None` means "inherit the app's".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchSpec {
+    /// The program to run — a path or a bare name resolved on `PATH`. Never empty.
+    pub command: String,
+    /// Its arguments, one per element, passed through untouched with no shell parsing.
+    pub args: Vec<String>,
+    /// Working directory, or `None` to inherit the app's.
+    pub cwd: Option<String>,
+    /// Environment to overlay on the app's, or `None` for none.
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
 /// What the host tells the application. Delivered through [`Host::events`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostEvent {
@@ -125,8 +145,10 @@ pub enum HostEvent {
     },
     /// The module asked for a pane (`host.panes.spawn`). The host has already minted
     /// `pane_id` and answered the module; opening the pane is the app's job. `kind` is
-    /// `file` (open `path` in the viewer) or `module` (a pane owned by the module,
-    /// showing `surface`); anything else the app does not know is a toast, not a pane.
+    /// `file` (open `path` in the viewer), `module` (a pane owned by the module, showing
+    /// `surface`), or `terminal` (a subprocess pane started from `terminal`, gated at the
+    /// RPC layer by the `process.spawn` capability); anything else the app does not know is
+    /// a toast, not a pane.
     PaneSpawn {
         /// Which module.
         module: ModuleId,
@@ -138,6 +160,9 @@ pub enum HostEvent {
         path: Option<String>,
         /// The module surface, for `kind: "module"`.
         surface: Option<String>,
+        /// How to start the subprocess, for `kind: "terminal"`. `Some` only for that kind;
+        /// the RPC layer has already checked the `process.spawn` capability before setting it.
+        terminal: Option<LaunchSpec>,
     },
     /// The module wrote to a pane's input (`host.panes.input`). The host has already
     /// answered the module; delivering the bytes is the app's job, and a `pane_id` the
