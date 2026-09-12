@@ -4,6 +4,7 @@
 //! socket or reads the wall clock, so the whole life of a license takes microseconds and
 //! the outcome does not depend on when the suite runs.
 
+use super::store::test_vaults::UnavailableVault;
 use super::store::write_private;
 use super::stub_issuer::{Grant, StubIssuer, DEVICE_CODE_TTL};
 use super::*;
@@ -691,8 +692,12 @@ async fn a_license_stored_on_disk_survives_a_restart() {
     let dial = Dial::new(T0);
     let issuer = Arc::new(StubIssuer::with_clock("https://issuer.test", dial.clock()));
     let http: Arc<dyn LicenseHttp> = issuer.clone();
+    // No keychain here: this test is about the on-disk record surviving a restart.
     let first = LicenseService::new(
-        Arc::new(FileLicenseStore::under(&dir)),
+        Arc::new(FileLicenseStore::with_vault(
+            &dir,
+            Box::new(UnavailableVault),
+        )),
         http.clone(),
         dial.clock(),
     );
@@ -706,7 +711,14 @@ async fn a_license_stored_on_disk_survives_a_restart() {
     drop(first);
 
     // A new process, same directory.
-    let second = LicenseService::new(Arc::new(FileLicenseStore::under(&dir)), http, dial.clock());
+    let second = LicenseService::new(
+        Arc::new(FileLicenseStore::with_vault(
+            &dir,
+            Box::new(UnavailableVault),
+        )),
+        http,
+        dial.clock(),
+    );
     assert_eq!(second.gate("acme/pro").await, Gate::Run);
     let summary = second.show("acme/pro").await.unwrap();
     assert_eq!(summary.issuer, "https://issuer.test");

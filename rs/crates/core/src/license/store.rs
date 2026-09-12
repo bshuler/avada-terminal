@@ -4,13 +4,18 @@
 //! ```text
 //! <modules root>/licenses/                 0700
 //!   keys/<issuer-slug>.json                the issuer's JWKS   (0600)
-//!   <owner>__<repo>/license.jwt            the token           (0600; a bearer credential)
-//!   <owner>__<repo>/meta.json              { "product", "issuer" }
+//!   <owner>__<repo>/meta.json              { "product", "issuer" } — the presence marker
 //!   <owner>__<repo>/checkin.json           CheckinRecord
+//!   <owner>__<repo>/license.jwt            the token — only as a fallback (see below)
 //! ```
 //!
-//! Every file is written owner-only through a private temp file and a rename; the token
-//! file never goes through anything that logs its arguments.
+//! The bearer **token** is a credential, so its home is the OS keychain (the [`TokenVault`]
+//! seam), not a file: `meta.json` is what marks a product as licensed. The `license.jwt`
+//! file is written only where no keychain backend is reachable, and a legacy one left by an
+//! older build is migrated into the keychain and deleted on first read.
+//!
+//! Every file is written owner-only through a private temp file and a rename; neither the
+//! token file nor the keychain call goes through anything that logs its arguments.
 
 use super::{Jwks, LicenseToken};
 use crate::install::InstallPaths;
@@ -274,9 +279,81 @@ struct Meta {
     issuer: String,
 }
 
-/// The file-backed store.
+/// A place to keep a product's bearer token *off the filesystem* — the OS keychain in
+/// production. It is deliberately small: three verbs over an opaque string.
+///
+/// The `get`/`set`/`delete` return type separates two facts the store must act on
+/// differently:
+///
+/// * `Ok(None)` from `get` — the backend answered and holds no entry for this product.
+/// * `Err(_)` — the backend itself is unavailable (a headless Linux box with no Secret
+///   Service, a locked login keychain, or a platform with no backend compiled in). This
+///   is the signal to fall back to the owner-only `license.jwt` file, which is exactly
+///   the pre-keychain behaviour, so nothing regresses where there is no keychain.
+///
+/// The token never appears in an error or a log line: [`VaultError`] carries only the
+/// backend's own message, and the backend never echoes the secret.
+pub(crate) trait TokenVault: Send + Sync {
+    /// The token stored for this product, if the backend holds one.
+    fn get(&self, product: &str) -> Result<Option<String>, VaultError>;
+    /// Store (replace) this product's token.
+    fn set(&self, product: &str, token: &str) -> Result<(), VaultError>;
+    /// Forget this product's token. Absent is success.
+    fn delete(&self, product: &str) -> Result<(), VaultError>;
+}
+
+/// The keychain backend was unreachable. Message only — never the secret.
+#[derive(Debug)]
+pub(crate) struct VaultError(String);
+
+impl fmt::Display for VaultError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The keychain service name every license entry is filed under. The per-product key is
+/// the `owner/repo` id, so one entry maps to one installed license.
+const KEYRING_SERVICE: &str = "avada-terminal-license";
+
+/// The production [`TokenVault`]: the platform keychain via the `keyring` crate.
+struct KeyringVault;
+
+impl KeyringVault {
+    fn entry(product: &str) -> Result<::keyring::Entry, VaultError> {
+        ::keyring::Entry::new(KEYRING_SERVICE, product).map_err(|e| VaultError(e.to_string()))
+    }
+}
+
+impl TokenVault for KeyringVault {
+    fn get(&self, product: &str) -> Result<Option<String>, VaultError> {
+        match Self::entry(product)?.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(::keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(VaultError(e.to_string())),
+        }
+    }
+
+    fn set(&self, product: &str, token: &str) -> Result<(), VaultError> {
+        Self::entry(product)?
+            .set_password(token)
+            .map_err(|e| VaultError(e.to_string()))
+    }
+
+    fn delete(&self, product: &str) -> Result<(), VaultError> {
+        match Self::entry(product)?.delete_credential() {
+            Ok(()) | Err(::keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(VaultError(e.to_string())),
+        }
+    }
+}
+
+/// The file-backed store. Bearer tokens live in the OS keychain (`vault`); the directory
+/// keeps only the non-secret record — `meta.json` and `checkin.json` — plus, as a
+/// fallback where there is no keychain, the owner-only `license.jwt`.
 pub struct FileLicenseStore {
     dir: PathBuf,
+    vault: Box<dyn TokenVault>,
 }
 
 impl FileLicenseStore {
@@ -289,6 +366,17 @@ impl FileLicenseStore {
     pub fn under(root: impl AsRef<Path>) -> Self {
         FileLicenseStore {
             dir: root.as_ref().join(LICENSES_DIR),
+            vault: Box::new(KeyringVault),
+        }
+    }
+
+    /// A store under this modules root with an explicit token vault — tests inject a
+    /// fake so they never touch (or depend on) the real OS keychain.
+    #[cfg(test)]
+    pub(crate) fn with_vault(root: impl AsRef<Path>, vault: Box<dyn TokenVault>) -> Self {
+        FileLicenseStore {
+            dir: root.as_ref().join(LICENSES_DIR),
+            vault,
         }
     }
 
@@ -308,11 +396,22 @@ impl FileLicenseStore {
             .join(KEYS_DIR)
             .join(format!("{}.json", issuer_slug(issuer)))
     }
-}
 
-impl LicenseStore for FileLicenseStore {
-    fn load(&self, product: &str) -> Result<Option<StoredLicense>, StoreError> {
-        let dir = self.product_dir(product)?;
+    /// The token for a product: the keychain first, then the on-disk fallback. When a
+    /// legacy token is found on disk and the keychain is reachable, it is migrated into
+    /// the keychain and the plaintext file removed — so simply upgrading and running the
+    /// app moves secrets off disk on first read. `None` means no token anywhere.
+    fn read_token(&self, product: &str, dir: &Path) -> Result<Option<LicenseToken>, StoreError> {
+        match self.vault.get(product) {
+            Ok(Some(secret)) => {
+                let token = LicenseToken::new(secret);
+                return Ok((!token.expose_secret().is_empty()).then_some(token));
+            }
+            Ok(None) => {} // reachable, no entry — a legacy or fallback file may hold it
+            Err(e) => {
+                tracing::debug!(error = %e, "license keychain unavailable; reading the token file");
+            }
+        }
         let Some(bytes) = read_optional(&dir.join(TOKEN_FILE))? else {
             return Ok(None);
         };
@@ -320,10 +419,28 @@ impl LicenseStore for FileLicenseStore {
         if token.expose_secret().is_empty() {
             return Ok(None);
         }
-        let meta: Meta = read_json(&dir.join(META_FILE))?.ok_or_else(|| StoreError::Corrupt {
-            path: dir.join(META_FILE),
-            reason: "missing".into(),
-        })?;
+        // Opportunistic migration: put the secret in the keychain, then drop the file.
+        if self.vault.set(product, token.expose_secret()).is_ok() {
+            let _ = std::fs::remove_file(dir.join(TOKEN_FILE));
+            tracing::info!(
+                product,
+                "migrated license token from disk into the OS keychain"
+            );
+        }
+        Ok(Some(token))
+    }
+}
+
+impl LicenseStore for FileLicenseStore {
+    fn load(&self, product: &str) -> Result<Option<StoredLicense>, StoreError> {
+        let dir = self.product_dir(product)?;
+        // `meta.json` is the presence marker now that the token may live off-disk.
+        let Some(meta) = read_json::<Meta>(&dir.join(META_FILE))? else {
+            return Ok(None);
+        };
+        let Some(token) = self.read_token(product, &dir)? else {
+            return Ok(None);
+        };
         let checkin: CheckinRecord = read_json(&dir.join(CHECKIN_FILE))?.unwrap_or(CheckinRecord {
             last_ok: 0,
             revoked: false,
@@ -348,21 +465,37 @@ impl LicenseStore for FileLicenseStore {
             },
         )?;
         write_json(&dir.join(CHECKIN_FILE), &license.checkin)?;
-        write_private(
-            &dir.join(TOKEN_FILE),
-            license.token.expose_secret().as_bytes(),
-        )
+        match self
+            .vault
+            .set(&license.product, license.token.expose_secret())
+        {
+            Ok(()) => {
+                // The secret is in the keychain now; never leave a plaintext copy behind.
+                let _ = std::fs::remove_file(dir.join(TOKEN_FILE));
+                Ok(())
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "license keychain unavailable; writing the owner-only token file");
+                write_private(
+                    &dir.join(TOKEN_FILE),
+                    license.token.expose_secret().as_bytes(),
+                )
+            }
+        }
     }
 
     fn save_checkin(&self, product: &str, record: &CheckinRecord) -> Result<(), StoreError> {
         let dir = self.product_dir(product)?;
-        if !dir.join(TOKEN_FILE).exists() {
+        if !dir.join(META_FILE).exists() {
             return Ok(());
         }
         write_json(&dir.join(CHECKIN_FILE), record)
     }
 
     fn remove(&self, product: &str) -> Result<bool, StoreError> {
+        // Best-effort: a `NoEntry` backend already reads as success, and a keychain that
+        // is merely unreachable must not block forgetting the on-disk record.
+        let _ = self.vault.delete(product);
         let dir = self.product_dir(product)?;
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => Ok(true),
@@ -381,7 +514,7 @@ impl LicenseStore for FileLicenseStore {
         for entry in entries {
             let entry = entry.map_err(|e| io_at(&self.dir, e))?;
             let dir = entry.path();
-            if !dir.is_dir() || !dir.join(TOKEN_FILE).exists() {
+            if !dir.is_dir() || !dir.join(META_FILE).exists() {
                 continue;
             }
             if let Some(meta) = read_json::<Meta>(&dir.join(META_FILE))? {
@@ -403,8 +536,72 @@ impl LicenseStore for FileLicenseStore {
     }
 }
 
+/// Test doubles for [`TokenVault`], shared with the license integration tests so neither
+/// suite ever touches (or depends on) the real OS keychain.
+#[cfg(test)]
+#[allow(dead_code)] // each double is used by one suite or the other, not both
+pub(crate) mod test_vaults {
+    use super::{TokenVault, VaultError};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// A keychain that works, backed by an in-process map. `Clone` shares one map, so a
+    /// value set through one handle is visible through another — the way the real
+    /// keychain outlives a single `FileLicenseStore` and survives a "restart".
+    #[derive(Clone, Default)]
+    pub(crate) struct MemVault(Arc<Mutex<HashMap<String, String>>>);
+
+    impl MemVault {
+        pub(crate) fn new() -> Self {
+            Self::default()
+        }
+        /// A fresh boxed handle onto the same map.
+        pub(crate) fn boxed(&self) -> Box<dyn TokenVault> {
+            Box::new(self.clone())
+        }
+        /// How many tokens the keychain holds — for asserting migration and removal.
+        pub(crate) fn count(&self) -> usize {
+            self.0.lock().unwrap().len()
+        }
+    }
+
+    impl TokenVault for MemVault {
+        fn get(&self, product: &str) -> Result<Option<String>, VaultError> {
+            Ok(self.0.lock().unwrap().get(product).cloned())
+        }
+        fn set(&self, product: &str, token: &str) -> Result<(), VaultError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(product.to_string(), token.to_string());
+            Ok(())
+        }
+        fn delete(&self, product: &str) -> Result<(), VaultError> {
+            self.0.lock().unwrap().remove(product);
+            Ok(())
+        }
+    }
+
+    /// A keychain that is not there — every call fails, exactly as on a headless box with
+    /// no Secret Service. Drives the store onto its owner-only-file fallback.
+    pub(crate) struct UnavailableVault;
+
+    impl TokenVault for UnavailableVault {
+        fn get(&self, _: &str) -> Result<Option<String>, VaultError> {
+            Err(VaultError("no keychain backend".into()))
+        }
+        fn set(&self, _: &str, _: &str) -> Result<(), VaultError> {
+            Err(VaultError("no keychain backend".into()))
+        }
+        fn delete(&self, _: &str) -> Result<(), VaultError> {
+            Err(VaultError("no keychain backend".into()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_vaults::{MemVault, UnavailableVault};
     use super::*;
     use crate::license::verify::SigningKey;
 
@@ -474,34 +671,31 @@ mod tests {
     }
 
     #[test]
-    fn file_store_writes_owner_only_files_and_round_trips() {
-        let root = scratch("file");
-        let s = FileLicenseStore::under(&root);
+    fn file_store_keeps_the_token_in_the_keychain_and_off_disk() {
+        let root = scratch("keychain");
+        let vault = MemVault::new();
+        let s = FileLicenseStore::with_vault(&root, vault.boxed());
         assert!(s.load("acme/widget").unwrap().is_none());
         assert!(s.products().unwrap().is_empty());
         let l = sample("acme/widget");
         s.save(&l).unwrap();
         let dir = s.product_dir("acme/widget").unwrap();
         assert_eq!(dir, root.join("licenses").join("acme__widget"));
-        for f in [TOKEN_FILE, META_FILE, CHECKIN_FILE] {
-            assert!(dir.join(f).exists(), "{f}");
-        }
+        // The non-secret record is on disk; the token is in the keychain, not on disk.
+        assert!(dir.join(META_FILE).exists());
+        assert!(dir.join(CHECKIN_FILE).exists());
+        assert!(!dir.join(TOKEN_FILE).exists(), "token must not be on disk");
+        assert_eq!(vault.count(), 1, "the token is in the keychain");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode(&dir.join(TOKEN_FILE)), 0o600);
             assert_eq!(mode(&dir.join(META_FILE)), 0o600);
+            assert_eq!(mode(&dir.join(CHECKIN_FILE)), 0o600);
             assert_eq!(mode(&dir), 0o700);
             assert_eq!(mode(s.dir()), 0o700);
         }
-        // No temp file left behind.
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty());
+        // The full license, token and all, round-trips out of the keychain.
         let back = s.load("acme/widget").unwrap().unwrap();
         assert_eq!(back, l);
         assert_eq!(s.products().unwrap(), ["acme/widget"]);
@@ -524,16 +718,98 @@ mod tests {
         )
         .unwrap();
         assert!(!s.product_dir("acme/none").unwrap().exists());
+        // Remove clears the keychain entry as well as the on-disk record.
         assert!(s.remove("acme/widget").unwrap());
         assert!(!s.remove("acme/widget").unwrap());
         assert!(s.load("acme/widget").unwrap().is_none());
+        assert_eq!(vault.count(), 0, "remove forgets the keychain entry");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_store_falls_back_to_owner_only_files_with_no_keychain() {
+        // No keychain backend (a headless box, a locked keychain): the token lands in the
+        // owner-only file, exactly the pre-keychain behaviour, and everything still works.
+        let root = scratch("fallback");
+        let s = FileLicenseStore::with_vault(&root, Box::new(UnavailableVault));
+        let l = sample("acme/widget");
+        s.save(&l).unwrap();
+        let dir = s.product_dir("acme/widget").unwrap();
+        for f in [TOKEN_FILE, META_FILE, CHECKIN_FILE] {
+            assert!(dir.join(f).exists(), "{f}");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir.join(TOKEN_FILE)), 0o600);
+            assert_eq!(mode(&dir.join(META_FILE)), 0o600);
+            assert_eq!(mode(&dir), 0o700);
+            assert_eq!(mode(s.dir()), 0o700);
+        }
+        // No temp file left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+        let back = s.load("acme/widget").unwrap().unwrap();
+        assert_eq!(back, l);
+        assert_eq!(s.products().unwrap(), ["acme/widget"]);
+        assert!(s.remove("acme/widget").unwrap());
+        assert!(s.load("acme/widget").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_legacy_on_disk_token_migrates_into_the_keychain_on_first_read() {
+        // A store upgraded from the file-only era: the token is on disk. The first read
+        // with a reachable keychain moves it in and deletes the plaintext file.
+        let root = scratch("migrate");
+        let l = sample("acme/widget");
+        // Write the legacy on-disk layout via the no-keychain path.
+        let legacy = FileLicenseStore::with_vault(&root, Box::new(UnavailableVault));
+        legacy.save(&l).unwrap();
+        let dir = legacy.product_dir("acme/widget").unwrap();
+        assert!(dir.join(TOKEN_FILE).exists());
+
+        let vault = MemVault::new();
+        let s = FileLicenseStore::with_vault(&root, vault.boxed());
+        let back = s.load("acme/widget").unwrap().unwrap();
+        assert_eq!(back, l);
+        assert_eq!(vault.count(), 1, "token migrated into the keychain");
+        assert!(
+            !dir.join(TOKEN_FILE).exists(),
+            "plaintext token file removed after migration"
+        );
+        // A second read now comes straight from the keychain.
+        assert_eq!(s.load("acme/widget").unwrap().unwrap(), l);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_token_survives_a_new_store_instance_via_the_shared_keychain() {
+        // The keychain outlives any one store: save through one handle, and a second
+        // store built later (a "restart") reads the token back with nothing on disk.
+        let root = scratch("restart-keychain");
+        let vault = MemVault::new();
+        let l = sample("acme/widget");
+        {
+            let s1 = FileLicenseStore::with_vault(&root, vault.boxed());
+            s1.save(&l).unwrap();
+        }
+        let dir = root.join("licenses").join("acme__widget");
+        assert!(!dir.join(TOKEN_FILE).exists());
+        let s2 = FileLicenseStore::with_vault(&root, vault.boxed());
+        assert_eq!(s2.load("acme/widget").unwrap().unwrap(), l);
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn file_store_caches_keys_per_issuer_owner_only() {
         let root = scratch("keys");
-        let s = FileLicenseStore::under(&root);
+        let s = FileLicenseStore::with_vault(&root, Box::new(UnavailableVault));
         assert!(s.load_keys("https://issuer.test").unwrap().is_none());
         let keys = Jwks {
             keys: vec![SigningKey::generate_with_kid("k1").jwk()],
@@ -568,7 +844,9 @@ mod tests {
     #[test]
     fn a_corrupt_meta_file_is_reported_not_swallowed() {
         let root = scratch("corrupt");
-        let s = FileLicenseStore::under(&root);
+        // The no-keychain path so the token lives on disk — the empty-token-file case
+        // below is exactly about reading that file.
+        let s = FileLicenseStore::with_vault(&root, Box::new(UnavailableVault));
         s.save(&sample("acme/widget")).unwrap();
         let dir = s.product_dir("acme/widget").unwrap();
         std::fs::write(dir.join(META_FILE), b"{not json").unwrap();

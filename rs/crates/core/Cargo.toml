@@ -105,6 +105,16 @@ jsonwebtoken = "9"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 base64 = "0.22"
 
+# --- license token store: the OS keychain (license/store.rs) ---
+# A license bearer token is a credential; its home is the platform keychain, not a 0600
+# file. `keyring` is the seam. `default-features = false` because the backend is chosen
+# per target below: `apple-native` (Keychain), `windows-native` (Credential Manager) and
+# `async-secret-service` + `crypto-rust` (D-Bus Secret Service, persistent across reboot —
+# NOT keyutils, whose session scope loses the token). On a headless box with no Secret
+# Service, or any platform with no backend compiled in, every keychain call errors and
+# the store falls back to the existing owner-only file, so nothing regresses in CI.
+keyring = { version = "3", default-features = false }
+
 # platform: single-instance (named mutex + named-pipe argv handoff)
 # 0.58 -> 0.62 to unify with the app + wgpu-hal 29 (avoids two `windows` crate versions).
 # Target-gated so Linux/macOS builds never pull the Win32 bindings.
@@ -117,6 +127,26 @@ windows = { version = "0.62", features = [
   "Win32_Security",
   "Win32_System_IO",
   "Win32_Security_Credentials",
+] }
+# License token store backend: Windows Credential Manager.
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+# License token store backend: macOS Keychain.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+# License token store backend: the freedesktop Secret Service over D-Bus (persistent).
+# Pure-Rust all the way down so a Linux build needs no extra system library: zbus
+# (`async-secret-service`) instead of the C `libdbus` (`sync-secret-service` would need
+# `libdbus-1-dev`, which the CI image does not carry), and `crypto-rust` for the session
+# AES so no OpenSSL either. `async-io` pins zbus's own reactor thread as the runtime;
+# keyring's `Entry` API stays synchronous over it, and it sidesteps the documented
+# deadlock of driving `async-secret-service` from this crate's tokio runtime threads.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = [
+  "async-secret-service",
+  "crypto-rust",
+  "async-io",
 ] }
 
 # platform: SCM_RIGHTS descriptor passing for the daemon live-upgrade handoff

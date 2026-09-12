@@ -113,6 +113,17 @@ contract type.
     on sign-in; corporate-configured URL serving a signed license.
   - Binding is bearer plus displayed licensee name. Issuance is third-party, the verifier is
     ours, and the state at the end of this refactor is a **stub issuer**.
+  - The bearer token is a credential, so it lives in the **OS keychain**, not a file:
+    Keychain on macOS (`apple-native`), Credential Manager on Windows (`windows-native`),
+    the freedesktop Secret Service over pure-Rust zbus on Linux (`async-secret-service` +
+    `crypto-rust` --- no `libdbus` to build, no OpenSSL). `license/store.rs` isolates
+    `keyring` behind a `TokenVault` seam so both the keychain and its fallback are
+    deterministically faked in tests. `meta.json` (never secret) is the "this product is
+    licensed" marker, so the token file no longer has to exist. A legacy `license.jwt`
+    found on disk is migrated into the keychain and deleted on first read. Where no
+    keychain backend is compiled in or reachable (a headless CI box with no Secret
+    Service), every call errors and the store falls back to the previous owner-only `0600`
+    file --- nothing regresses.
 
 ### Trust chain and rights
 - Rights come **only** from the install record: module id, repo, tag, commit, accepted
@@ -580,7 +591,7 @@ claim stops being true, run on this date.
 ### Carried backlog
 
 marketplace detail rendering · pins/defaults UI · real `WinVerifyTrust` ·
-keyring `TokenStore` · dictation never run live ·
+dictation never run live ·
 deb/rpm assets on R2 · the SDK is pinned at five different revisions across the
 module repos (all still handshake, the wire format has not changed, but a bump
 sweep is due).
