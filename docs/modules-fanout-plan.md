@@ -574,8 +574,13 @@ claim stops being true, run on this date.
 
 ### Carried backlog
 
-Lossy `host.panes.spawn` params · marketplace detail rendering · pins/defaults
-UI · real `WinVerifyTrust` · keyring `TokenStore` · dictation never run live ·
-`multi = true` fan-out · prehashed minisign · deb/rpm assets on R2 · the SDK is
-pinned at five different revisions across the module repos (all still handshake,
-the wire format has not changed, but a bump sweep is due).
+marketplace detail rendering · pins/defaults UI · real `WinVerifyTrust` ·
+keyring `TokenStore` · dictation never run live · `multi = true` fan-out ·
+deb/rpm assets on R2 · the SDK is pinned at five different revisions across the
+module repos (all still handshake, the wire format has not changed, but a bump
+sweep is due).
+
+Landed since this audit: lossy `host.panes.spawn` params (the spawn descriptor
+now carries argv/cwd/env, `module::rpc` tests); prehashed `ED`/BLAKE2b-512 minisign
+signatures are verified rather than refused (`policy::minisign` tests, BLAKE2b
+cross-checked against independent vectors).
