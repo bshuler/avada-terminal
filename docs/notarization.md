@@ -188,9 +188,9 @@ Publish the contents of `avada-publisher.pub`'s key line (the `RW…` base64 blo
 comment line above it) and have hosts add it to `publishers` in `policy.json` under the
 module's `owner/repo` id.
 
-`minisign -S` defaults to the prehashed algorithm in recent versions; pass the flag your
-minisign build uses for the legacy `Ed` algorithm, or sign with a tool that emits `Ed`,
-until the follow-up below lands.
+`minisign -S` defaults to the prehashed algorithm (`ED`) in recent versions; older builds
+emit the legacy `Ed` (sign-the-bytes) algorithm. Both are verified, so either signing tool
+works — there is no longer any need to force one algorithm over the other.
 
 ---
 
@@ -241,16 +241,12 @@ SDK and cannot grow a verdict field; the proper home is listed below.
    present. The direct call needs the `windows` crate's `Win32_Security_WinTrust`
    feature enabled in `rs/crates/core/Cargo.toml`. The parser and its captured-output
    tests stay; only `Authenticode::verify` changes.
-2. **Prehashed (`ED` / BLAKE2b) minisign signatures.** Modern `minisign -S` produces
-   these by default. Supporting them needs a BLAKE2b-512 implementation, which the
-   workspace does not currently have. Until then they are refused explicitly, with an
-   error that says so, rather than silently mis-verified.
-3. **A `keys` field in the manifest's `[distribution]` section**, so a module can
+2. **A `keys` field in the manifest's `[distribution]` section**, so a module can
    declare its own signing keys and `publisher_keys_source: manifest-or-defaults` means
    what its name says. Needs an SDK change and a contract bump.
-4. **The verdict inside the signed install record.** Moves the refusal under the same
+3. **The verdict inside the signed install record.** Moves the refusal under the same
    HMAC as the rights, and retires the unsigned sidecar and its limitation above.
-5. **`Prebuilt` is unreachable in the free tier today.** `check_free_build` refuses
+4. **`Prebuilt` is unreachable in the free tier today.** `check_free_build` refuses
    `distribution.kind = "binary"` before the gate is reached, so `prebuilt:
    require-signature` currently guards a path only the commercial pipeline will open.
    The mapping is written and tested so that path arrives already gated.
