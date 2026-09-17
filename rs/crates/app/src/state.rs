@@ -6923,9 +6923,12 @@ impl State {
                 p.tool_session.clone(),
             )
         };
+        // The user's Preferences → Tools override, when they set one, so a wrapper script
+        // is what the loop puts back — not the bare binary it wraps. See
+        // `detect::launcher` for why this is not the full path resolution.
         let bin = avada_core::tools::by_id(&tool)
-            .map(|t| t.bin)
-            .unwrap_or(tool.as_str());
+            .map(|t| avada_core::tools::detect::launcher(t, &self.settings.tool_paths))
+            .unwrap_or_else(|| tool.clone());
         let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
         let (session, resume_cwd, prefix) = match (marker, &mark) {
             (Some(m), _) => (
@@ -6945,7 +6948,7 @@ impl State {
         };
         let line = crate::loops::restart_line(
             &tool,
-            bin,
+            &bin,
             resume_cwd.as_deref(),
             &prefix,
             session.as_deref(),
@@ -8419,12 +8422,14 @@ impl State {
                     // (the same shape the Claude shell-pane arm uses).
                     (None, None) => {
                         let bin = avada_core::tools::by_id(&tool)
-                            .map(|t| t.bin)
-                            .unwrap_or(tool.as_str());
+                            .map(|t| {
+                                avada_core::tools::detect::launcher(t, &self.settings.tool_paths)
+                            })
+                            .unwrap_or_else(|| tool.clone());
                         startup = Some(resume_startup_line(
                             Some(&mark.cwd),
                             "",
-                            bin,
+                            &bin,
                             &extra.join(" "),
                         ));
                     }

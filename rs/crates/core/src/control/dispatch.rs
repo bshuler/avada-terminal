@@ -1286,13 +1286,39 @@ fn window_id_field(cmd: &Value) -> Option<i64> {
 fn resume_command(base: Option<&str>, session_id: &str) -> Option<String> {
     let base = base?.trim();
     // Only rewrite a direct claude invocation; never append flags to a plain shell.
-    let launches_claude = base
-        .split_whitespace()
-        .any(|tok| tok == "claude" || tok.rsplit('/').next() == Some("claude"));
+    let launches_claude = base.split_whitespace().any(launches_claude_token);
     if !launches_claude || base.contains("--resume ") {
         return launches_claude.then(|| base.to_string());
     }
     Some(format!("{base} --resume {session_id}"))
+}
+
+/// Whether one token of a command line is claude itself or a wrapper around it.
+///
+/// A wrapper is the supported way to pin an environment onto every launch — a
+/// `claude_auto` that unsets the gateway variables and execs the real binary, a
+/// `claude-yolo` that adds `--dangerously-skip-permissions`. Because it `exec`s, the
+/// process the session hook later observes IS claude, and the pane is a direct claude
+/// pane in every way that matters here; refusing to append `--resume` to it would drop
+/// exactly the flags the wrapper exists to supply.
+///
+/// So: the basename, unquoted and with a Windows suffix stripped, is `claude` or begins
+/// `claude` followed by a separator. The separator is what keeps this honest — an
+/// unrelated program that merely starts with those letters (`claudette`) is not a
+/// wrapper, and `declaude` was never a match to begin with.
+#[tracing::instrument(level = "debug", ret)]
+fn launches_claude_token(tok: &str) -> bool {
+    let tok = tok.trim_matches(['"', '\'']);
+    let base = tok.rsplit(['/', '\\']).next().unwrap_or(tok);
+    let base = base
+        .strip_suffix(".exe")
+        .or_else(|| base.strip_suffix(".cmd"))
+        .or_else(|| base.strip_suffix(".bat"))
+        .unwrap_or(base);
+    let Some(rest) = base.strip_prefix("claude") else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with(['_', '-', '.'])
 }
 
 #[tracing::instrument(level = "debug", ret)]
@@ -1705,6 +1731,23 @@ mod tests {
         assert_eq!(resume_command(None, "id"), None);
         // A word merely containing "claude" must not trip the direct-launch check.
         assert_eq!(resume_command(Some("echo declaude"), "id"), None);
+    }
+
+    #[test]
+    fn resume_command_treats_a_claude_wrapper_as_a_direct_claude_launch() {
+        // The whole point of the wrapper is that it supplies flags; a resume that refused
+        // to append `--resume` would come back as a brand-new conversation instead.
+        let got = resume_command(Some("claude_auto --model m"), "abc-123").unwrap();
+        assert_eq!(got, "claude_auto --model m --resume abc-123");
+        let got = resume_command(Some("/Users/b/.local/bin/claude_auto"), "id9").unwrap();
+        assert_eq!(got, "/Users/b/.local/bin/claude_auto --resume id9");
+        assert!(launches_claude_token("claude-yolo"));
+        assert!(launches_claude_token("'/opt/my tools/claude_auto'"));
+        assert!(launches_claude_token("claude.cmd"));
+        // A separator is required, so a merely similar name is still not claude.
+        assert!(!launches_claude_token("claudette"));
+        assert!(!launches_claude_token("declaude"));
+        assert_eq!(resume_command(Some("claudette --go"), "id"), None);
     }
 
     #[test]

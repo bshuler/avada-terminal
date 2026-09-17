@@ -196,10 +196,66 @@ pub fn resolve_all(overrides: &BTreeMap<String, String>) -> BTreeMap<&'static st
         .collect()
 }
 
+/// The program to TYPE into a shell to launch `tool`: the user's Preferences → Tools
+/// override when they set one, else the registry's bare binary name.
+///
+/// Deliberately not [`resolve`]. The typed-line launch paths (a restart-loop respawn, a
+/// restored pane's startup line) hand their command to the user's own interactive shell,
+/// so a bare `claude` there picks up the user's alias, function, or shim for it — which is
+/// the behaviour those paths were built to preserve. Substituting a resolved absolute path
+/// would silently defeat all three.
+///
+/// An override is the one case where that reasoning inverts: the human named a specific
+/// program in settings, so it outranks PATH *and* any alias. That is what makes a wrapper
+/// script (a `claude_auto` that fixes up the environment and execs the real binary) the
+/// thing EVERY relaunch starts, not just the ones that happen to go through [`resolve`].
+///
+/// Shell-quoted, because an override is a path the user picked from a file dialog and may
+/// well contain spaces; the bare registry name never needs it and is returned unchanged.
+#[tracing::instrument(level = "debug", ret)]
+pub fn launcher(tool: &ToolDef, overrides: &BTreeMap<String, String>) -> String {
+    match overrides.get(tool.id).map(|s| s.trim()) {
+        Some(p) if !p.is_empty() => shell_quote(p),
+        _ => tool.bin.to_string(),
+    }
+}
+
+/// Single-quote `s` for a POSIX shell, but only when it needs it — an unquoted word is
+/// what every existing caller and test expects to see for a plain binary name.
+fn shell_quote(s: &str) -> String {
+    let safe = |c: char| c.is_ascii_alphanumeric() || "._-+/=:@%".contains(c);
+    if !s.is_empty() && s.chars().all(safe) {
+        return s.to_string();
+    }
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tools::registry;
+
+    #[test]
+    fn the_launcher_is_the_bare_bin_until_the_user_overrides_it() {
+        let t = registry::by_id("claude").unwrap();
+        // No override: a bare name, so the user's own shell alias still applies.
+        assert_eq!(launcher(t, &BTreeMap::new()), "claude");
+        // An empty or whitespace override is the same as none — clearing the field in
+        // settings must not start typing `''` at a shell prompt.
+        let mut ov = BTreeMap::new();
+        ov.insert("claude".to_string(), "   ".to_string());
+        assert_eq!(launcher(t, &ov), "claude");
+        // Set: the wrapper is what every typed-line relaunch starts.
+        ov.insert(
+            "claude".to_string(),
+            "/Users/b/.local/bin/claude_auto".to_string(),
+        );
+        assert_eq!(launcher(t, &ov), "/Users/b/.local/bin/claude_auto");
+        // A path with a space is quoted; one without is left alone.
+        ov.insert("claude".to_string(), "/opt/my tools/claude_auto".to_string());
+        assert_eq!(launcher(t, &ov), "'/opt/my tools/claude_auto'");
+    }
 
     #[test]
     fn user_override_wins_and_is_taken_at_face_value() {
