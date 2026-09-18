@@ -378,6 +378,33 @@ pub fn build_env(inputs: &EnvInputs<'_>) -> EnvMap {
     env.insert("TERM".into(), "xterm-256color".into());
     env.insert("COLORTERM".into(), "truecolor".into());
 
+    // `TERM_PROGRAM` names the terminal the shell is talking to, and shell startup keys off
+    // it: macOS `/etc/zshrc` sources `/etc/zshrc_$TERM_PROGRAM`, and Apple's
+    // `/etc/zshrc_Apple_Terminal` then puts its per-session history under
+    // `${ZDOTDIR:-$HOME}/.zsh_sessions`. Our zsh integration points ZDOTDIR at the BUNDLED
+    // zdotdir for the span of the global rc files, so an inherited
+    // `TERM_PROGRAM=Apple_Terminal` — which is what Avada gets whenever it is launched from
+    // a Terminal.app window — aims that mkdir inside the installed app bundle. That bundle
+    // is read-only (and `chflags uchg` under scripts/install-macos.sh), so the pane greets
+    // the user with `mkdir: Operation not permitted` before their prompt.
+    //
+    // Forcing it is right independently of that: a pane is talking to Avada, not to whatever
+    // terminal happened to launch the app, and a tool that branches on TERM_PROGRAM should
+    // see the truth. Same standing as the TERM force above.
+    env.insert("TERM_PROGRAM".into(), "Avada".into());
+
+    // The launching terminal's per-window session id and version string describe IT, and we
+    // have nothing true to put in their place — every pane inheriting one window's id is
+    // worse than no id at all. Dropped inherited-only, like HARNESS_MARKERS below: a caller
+    // that set one deliberately is saying something about this pane and keeps it.
+    for key in ["TERM_SESSION_ID", "TERM_PROGRAM_VERSION"] {
+        let explicit = inputs.opts_env.is_some_and(|o| o.contains_key(key))
+            || inputs.integration_env.contains_key(key);
+        if !explicit && inputs.process_env.contains_key(key) {
+            env.remove(key);
+        }
+    }
+
     // Electron injects a default GOOGLE_API_KEY; don't leak it to the shell.
     if let (Some(cur), Some(base)) = (
         env.get("GOOGLE_API_KEY").cloned(),
@@ -820,6 +847,51 @@ mod tests {
         assert_eq!(env.get("AVADA_PANE_ID").map(String::as_str), Some("pane-7"));
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
         assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+    }
+
+    /// Launching Avada from a Terminal.app window used to hand every pane
+    /// `TERM_PROGRAM=Apple_Terminal`, which makes `/etc/zshrc` source Apple's session
+    /// machinery, which mkdirs `$ZDOTDIR/.zsh_sessions` — and our zsh integration points
+    /// ZDOTDIR at the read-only app bundle. The pane opened on `Operation not permitted`.
+    #[test]
+    fn build_env_states_our_own_terminal_identity_instead_of_the_launching_terminals() {
+        let proc_env = map(&[
+            ("TERM_PROGRAM", "Apple_Terminal"),
+            ("TERM_PROGRAM_VERSION", "455"),
+            ("TERM_SESSION_ID", "010C8EE4-714D-4F2D-B970-EB2DD6224694"),
+        ]);
+        let integ = map(&[]);
+        let env = build_env(&EnvInputs {
+            process_env: &proc_env,
+            opts_env: None,
+            integration_env: &integ,
+            pane_id: None,
+            control_file: None,
+            browser_shim: None,
+        });
+        assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("Avada"));
+        assert!(!env.contains_key("TERM_SESSION_ID"));
+        assert!(!env.contains_key("TERM_PROGRAM_VERSION"));
+    }
+
+    /// ...but a caller that sets one for THIS pane is stating a fact about it, not leaking
+    /// one, so the inherited-only scrub leaves it alone.
+    #[test]
+    fn build_env_keeps_a_session_id_a_caller_set_on_purpose() {
+        let proc_env = map(&[("TERM_SESSION_ID", "inherited")]);
+        let integ = map(&[("TERM_SESSION_ID", "chosen-for-this-pane")]);
+        let env = build_env(&EnvInputs {
+            process_env: &proc_env,
+            opts_env: None,
+            integration_env: &integ,
+            pane_id: None,
+            control_file: None,
+            browser_shim: None,
+        });
+        assert_eq!(
+            env.get("TERM_SESSION_ID").map(String::as_str),
+            Some("chosen-for-this-pane")
+        );
     }
 
     /// compat: every `AVADA_*` we inject gets a `HYPERPANES_*` twin, so a hook script
