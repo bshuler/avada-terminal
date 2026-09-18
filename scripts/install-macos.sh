@@ -179,9 +179,19 @@ cat <<EOF
 Done. $VERSION is installed and locked.
 
 The running session daemon still executes the PREVIOUS build from the attic, and
-your panes are untouched. It picks up this build only when it is deliberately
-restarted — and restarting it kills every program running in a pane, so that is
-your call, not this script's:
+your panes are untouched. To move them onto this build, just quit and relaunch
+the GUI:
 
-  pkill -f -- '--session-daemon'    # deliberate: ends every running pane process
+  Avada ▸ Quit, then open /Applications/Avada.app
+
+The new GUI sees a daemon of a different build, spawns a successor from this
+bundle, and the incumbent hands every session over — snapshot and pty master
+descriptor together, over SCM_RIGHTS — then exits WITHOUT killing anything. The
+shells never notice; they are reparented to init and keep running under the new
+daemon (rs/crates/core/src/session/daemon_client.rs, "Build handshake").
+
+Nothing here needs `pkill`. Killing the daemon closes the pty masters and every
+program in every pane dies with them — the exact loss the handoff exists to
+prevent. If the daemon is genuinely wedged and will not hand over, that is a bug
+worth a log, not a routine step.
 EOF
