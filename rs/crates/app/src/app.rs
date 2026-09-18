@@ -620,7 +620,11 @@ impl App {
             }
         }
         self.last_prompt_delivery.set(Some(now));
-        if resume_queue::is_empty() {
+        // One read of the queue for the whole pass. The loop below runs over every marker
+        // this machine has ever written — markers outlive their panes — so anything
+        // per-marker that touches the queue file is paid dozens of times a second.
+        let waiting = resume_queue::pending_sessions();
+        if waiting.is_empty() {
             return;
         }
         let dir = avada_core::persistence::paths::claude_sessions_dir();
@@ -635,6 +639,9 @@ impl App {
             let Some(marker) = avada_core::claude_panes::read_pane_session(pane_id) else {
                 continue;
             };
+            if !waiting.contains(&marker.session_id) {
+                continue;
+            }
             let ready = entry
                 .metadata()
                 .ok()
@@ -650,26 +657,55 @@ impl App {
                 .control
                 .uid_for_pane_id(pane_id)
                 .unwrap_or_else(|| pane_id.to_string());
-            // Hold while an interactive selector (trust prompt, model picker…) is on screen —
-            // typed text would land in the form and be swallowed. The queue keeps the prompt.
-            if self
-                .mgr
-                .render_screen(&uid)
-                .as_deref()
-                .is_some_and(screen_shows_option_form)
-            {
+            // A dead pane's marker is not deleted when the pane goes, so this directory
+            // accumulates markers naming sessions that are still very much alive elsewhere.
+            // Such a marker must not so much as touch the queue: taking the prompts here and
+            // putting them back is a full rewrite of the queue file per prompt, every pass,
+            // for as long as the marker exists — and the pane that could actually take
+            // delivery never gets a turn. Liveness first, and nothing to put back.
+            if !self.mgr.has(&uid) {
+                tracing::debug!(
+                    pane = %pane_id,
+                    session = %marker.session_id,
+                    "queued prompts held: this marker's pane is not live"
+                );
                 continue;
             }
-            // A marker outlives its pane (several dead panes can claim one resumed session), so
-            // only a live pane may take. Checked before the take, not after: taking and putting
-            // back rewrote the queue every tick for each dead marker, restamping every prompt.
-            if !self.mgr.has(&uid) {
-                continue;
+            // One render, both gates: rendering a pane's grid is not free and this runs
+            // every two seconds. Either hold keeps the prompt in the queue, and the next
+            // pass is two seconds away, so waiting costs nothing but delivering early
+            // costs the prompt.
+            if let Some(screen) = self.mgr.render_screen(&uid) {
+                // An interactive selector (trust prompt, model picker…): typed text would
+                // land in the form and be swallowed on the human's next pick.
+                if screen_shows_option_form(&screen) {
+                    tracing::debug!(
+                        uid = %uid,
+                        session = %marker.session_id,
+                        "queued prompts held: an option form is up"
+                    );
+                    continue;
+                }
+                // Mid-turn: there is no prompt to submit into yet.
+                if screen_shows_busy(&screen) {
+                    tracing::debug!(
+                        uid = %uid,
+                        session = %marker.session_id,
+                        "queued prompts held: claude is still working"
+                    );
+                    continue;
+                }
             }
             let pending = resume_queue::take_for(&marker.session_id);
             if pending.is_empty() {
                 continue;
             }
+            tracing::info!(
+                uid = %uid,
+                session = %marker.session_id,
+                count = pending.len(),
+                "delivering queued prompts to the pane"
+            );
             // Drive the writes off the UI thread: a freshly-resumed claude needs a generous
             // gap between the text and the submitting Enter (bracketed-paste TUIs read
             // text+CR in one read as a paste, the CR landing in the box instead of
@@ -1066,6 +1102,16 @@ impl App {
             .pane_id_for_uid(&uid)
             .unwrap_or_else(|| uid.clone());
         if let Some(s) = avada_core::claude_panes::read_pane_session(&pane_id) {
+            // Still holding the last round's prompt means delivery is not happening — the
+            // pane is gone, or wedged behind a form. The queue collapses the repeat, so
+            // nothing piles up; this line is the only place that failure becomes visible.
+            if avada_core::resume_queue::count_for(&s.session_id) > 0 {
+                tracing::warn!(
+                    uid = %uid,
+                    session = %s.session_id,
+                    "status loop: the previous prompt has not been delivered yet"
+                );
+            }
             match avada_core::resume_queue::enqueue(&s.session_id, prompt) {
                 Ok(()) => {
                     tracing::info!(uid = %uid, session = %s.session_id, "status loop: prompt queued for the Hyperpane agent")
@@ -1078,14 +1124,18 @@ impl App {
             tracing::warn!(uid = %uid, "status loop: Hyperpane pane has no live session");
             return;
         }
-        if self
-            .mgr
-            .render_screen(&uid)
-            .as_deref()
-            .is_some_and(screen_shows_option_form)
-        {
-            tracing::warn!(uid = %uid, "status loop: Hyperpane pane is showing a form; this round is skipped");
-            return;
+        if let Some(screen) = self.mgr.render_screen(&uid) {
+            if screen_shows_option_form(&screen) {
+                tracing::warn!(uid = %uid, "status loop: Hyperpane pane is showing a form; this round is skipped");
+                return;
+            }
+            // Typing at a working claude loses the text. Returning here is not a dropped
+            // round: the same prompt was queued a few lines above, and the delivery pass
+            // will type it the moment the pane is idle.
+            if screen_shows_busy(&screen) {
+                tracing::info!(uid = %uid, "status loop: pane is busy; the queued prompt will be delivered when it is idle");
+                return;
+            }
         }
         tracing::info!(uid = %uid, "status loop: typing the prompt into the Hyperpane pane");
         let mgr = self.mgr.clone();
@@ -5158,6 +5208,17 @@ fn screen_shows_option_form(screen: &str) -> bool {
     pointer && numbered >= 2
 }
 
+/// Is claude mid-turn in this pane (thinking, running a tool, compacting)?
+///
+/// A busy TUI has no prompt to submit into. Text typed at it joins the composer behind
+/// the running turn and the Enter does nothing, so the prompt is silently lost — which is
+/// exactly how sixty-seven status checks went into one pane and none came out. The TUI
+/// offers the same way out the whole time it is working and says so on screen, which
+/// makes that line the one reliable "not now" signal available from outside the process.
+fn screen_shows_busy(screen: &str) -> bool {
+    screen.contains("esc to interrupt")
+}
+
 /// Decode an image file (any of the goal picker's formats) to RGBA8 and place it on the OS
 /// clipboard, so a following Ctrl+V into a Claude pane pastes the actual image. Returns `false`
 /// (a no-op) on a read/decode/clipboard error — the goal's text already carries the file path,
@@ -5230,7 +5291,25 @@ fn control_status_line(enabled: bool, allow_input: bool, port: Option<u16>) -> S
 
 #[cfg(test)]
 mod option_form_tests {
-    use super::screen_shows_option_form;
+    use super::{screen_shows_busy, screen_shows_option_form};
+
+    #[test]
+    fn detects_a_working_claude_by_its_offer_to_interrupt() {
+        // Any of the TUI's working lines: the wording around it changes, the way out
+        // does not.
+        assert!(screen_shows_busy(
+            "✻ Compacting conversation… (esc to interrupt)\n"
+        ));
+        assert!(screen_shows_busy(
+            "· Thinking… (12s · ↓ 1.2k tokens · esc to interrupt)\n"
+        ));
+        // An idle input box offers no interrupt.
+        assert!(!screen_shows_busy(
+            "╭─────────────────╮\n│ > Try \"help\"    │\n╰─────────────────╯\n  ? for shortcuts\n"
+        ));
+        // Ordinary output that merely mentions esc is not a working indicator.
+        assert!(!screen_shows_busy("press esc to go back\n"));
+    }
 
     #[test]
     fn detects_claude_style_selectors() {

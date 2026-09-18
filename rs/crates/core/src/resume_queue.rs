@@ -8,6 +8,9 @@
 //!
 //! Deliver-once, file-backed (survives GUI relaunch, daemon death, reboot — the whole
 //! point: "after the restart, continue X" outlives every process involved).
+//!
+//! Deliver-once also means *say-once*: queuing a sentence that is already waiting for the
+//! same session is a no-op, so a caller on a timer cannot pile up copies of one message.
 
 use std::fs;
 use std::path::PathBuf;
@@ -85,6 +88,27 @@ pub fn enqueue(session_id: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Every session id that has at least one prompt waiting.
+///
+/// A delivery pass walks every marker this machine has ever written, so asking the queue
+/// about them one at a time costs a full read of the file per marker, several times a
+/// second. One read answers the whole pass instead, and the answer is the only thing it
+/// needs: which markers are worth looking at.
+#[tracing::instrument(level = "debug", ret)]
+pub fn pending_sessions() -> std::collections::HashSet<String> {
+    load().into_iter().map(|p| p.session_id).collect()
+}
+
+/// How many prompts are waiting for `session_id`, without taking them.
+///
+/// A peek, so a delivery pass can tell "nothing to say" from "something to say but the
+/// pane is not ready for it" and say so in the log, instead of draining the queue to
+/// find out.
+#[tracing::instrument(level = "debug", ret)]
+pub fn count_for(session_id: &str) -> usize {
+    load().iter().filter(|p| p.session_id == session_id).count()
+}
+
 /// Remove and return every queued prompt for `session_id`, oldest first.
 #[tracing::instrument(level = "debug", ret)]
 pub fn take_for(session_id: &str) -> Vec<QueuedPrompt> {
@@ -93,7 +117,10 @@ pub fn take_for(session_id: &str) -> Vec<QueuedPrompt> {
     if !taken.is_empty() {
         persist(&kept);
     }
-    taken
+    // Same collapse as [`enqueue`], applied on the way out so a backlog written before that
+    // guard existed is healed rather than typed into the pane one identical copy at a time.
+    let mut seen = std::collections::HashSet::new();
+    taken.into_iter().filter(|p| seen.insert(p.text.clone())).collect()
 }
 
 /// Does anything wait for any session? Cheap gate for the delivery tick (one stat).
@@ -176,6 +203,54 @@ mod tests {
         assert_eq!(take_for("deadbeef-0000").len(), 2);
         enqueue("deadbeef-0000", "status?").unwrap();
         assert_eq!(take_for("deadbeef-0000").len(), 1);
+    }
+
+    #[test]
+    fn pending_sessions_names_each_waiting_session_once() {
+        let _g = lock();
+        use_scratch_queue();
+        assert!(pending_sessions().is_empty());
+        enqueue("deadbeef-0000", "one").unwrap();
+        enqueue("deadbeef-0000", "two").unwrap();
+        enqueue("cafecafe-1111", "three").unwrap();
+        assert_eq!(
+            pending_sessions(),
+            ["deadbeef-0000".to_string(), "cafecafe-1111".to_string()]
+                .into_iter()
+                .collect()
+        );
+        // Taking a session's prompts takes it out of the set; the other one stays.
+        take_for("deadbeef-0000");
+        assert_eq!(
+            pending_sessions(),
+            ["cafecafe-1111".to_string()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn a_backlog_of_identical_prompts_is_collapsed_on_the_way_out() {
+        let _g = lock();
+        use_scratch_queue();
+        // A file written before the enqueue-side guard existed: the same sentence, over and
+        // over. Delivery must type it once, not once per copy.
+        let repeated = QueuedPrompt {
+            session_id: "deadbeef-0000".into(),
+            text: "Status check: review every pane.".into(),
+            queued_at: 0,
+        };
+        let mut backlog = vec![repeated.clone(); 66];
+        backlog.push(QueuedPrompt {
+            text: "then stop".into(),
+            ..repeated
+        });
+        persist(&backlog);
+
+        let taken = take_for("deadbeef-0000");
+        assert_eq!(
+            taken.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(),
+            vec!["Status check: review every pane.", "then stop"]
+        );
+        assert!(is_empty());
     }
 
     #[test]
