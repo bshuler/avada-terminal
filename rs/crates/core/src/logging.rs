@@ -15,6 +15,8 @@
 //! emits span `new`/`close` events, and `ret` records the value on the way out. At `info`
 //! the spans cost one disabled-callsite check each and emit nothing.
 //!
+//! Nothing on the sink path may be instrumented — see [`RotatingWriter`].
+//!
 //! The file lives under [`crate::persistence::paths::logs_dir`] as `avada-<role>.log`
 //! and rolls at [`MAX_LOG_BYTES`] into `.1` … `.N` ([`KEEP_ROTATED`]). Warnings and errors are
 //! mirrored to stderr so a terminal launch still shows what went wrong.
@@ -129,6 +131,16 @@ pub fn init(role: &str, default_level: &str) {
 /// oldest), then reopens `file` empty. The size is tracked in-process from the opened
 /// length, so a file another process is also appending to may overshoot by that
 /// process's share — a bounded, accepted imprecision for per-role files.
+///
+/// **Nothing from here down emits a tracing event — no `#[tracing::instrument]`, no
+/// `tracing::` macro, ever.** This type is the subscriber's output, which puts it
+/// *beneath* tracing rather than inside it: a span opened here has to be written, and
+/// writing it opens a span. These methods were once instrumented at `debug`, which was
+/// invisible at `info` (the callsite is disabled, so no span is built) and hung the
+/// process outright at `debug`, before the first line ever reached the file. It does not
+/// even fault: tracing allocates per span, so the recursion spins and grows without bound
+/// rather than overflowing the stack — the shipped app sat in uninterruptible sleep past a
+/// gigabyte. Failures report to stderr with `writeln!` for the same reason.
 #[derive(Clone)]
 pub struct RotatingWriter {
     inner: Arc<Mutex<Rotating>>,
@@ -146,7 +158,6 @@ struct Rotating {
 
 impl RotatingWriter {
     /// A writer for `path`, rolling at `max_bytes` and keeping `keep` rolled files.
-    #[tracing::instrument(level = "debug")]
     pub fn new(path: PathBuf, max_bytes: u64, keep: usize) -> Self {
         RotatingWriter {
             inner: Arc::new(Mutex::new(Rotating {
@@ -161,7 +172,6 @@ impl RotatingWriter {
     }
 
     /// The live file's path.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn path(&self) -> PathBuf {
         self.inner
             .lock()
@@ -172,7 +182,6 @@ impl RotatingWriter {
 }
 
 impl Rotating {
-    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn open(&mut self) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -186,14 +195,12 @@ impl Rotating {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn rotate(&mut self) {
         self.file = None;
         rotate_files(&self.path, self.keep);
         self.written = 0;
     }
 
-    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         if self.file.is_none() {
             if let Err(e) = self.open() {
@@ -220,7 +227,6 @@ impl Rotating {
 }
 
 /// Shift `path.{keep-1}` → `path.{keep}` … `path` → `path.1`, dropping the oldest.
-#[tracing::instrument(level = "debug", ret)]
 fn rotate_files(path: &Path, keep: usize) {
     if keep == 0 {
         let _ = std::fs::remove_file(path);
@@ -244,13 +250,11 @@ pub struct RotatingHandle {
 }
 
 impl Write for RotatingHandle {
-    #[tracing::instrument(level = "debug", ret, skip(self))]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         g.write_all(buf)?;
         Ok(buf.len())
     }
-    #[tracing::instrument(level = "debug", ret, skip_all)]
     fn flush(&mut self) -> io::Result<()> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match g.file.as_mut() {
@@ -287,6 +291,104 @@ mod tests {
         assert_eq!(resolve_from(None, false, "WARN"), "warn");
         assert_eq!(resolve_from(None, false, "loud"), "info");
         assert_eq!(resolve_from(None, false, ""), "info");
+    }
+
+    /// Env var that turns the child half of the recursion test on. Without it the
+    /// `#[ignore]`d child is inert, so a bare `cargo test -- --ignored` cannot install a
+    /// global subscriber over the developer's real log directory.
+    const RECURSION_CHILD: &str = "AVADA_LOGGING_RECURSION_CHILD";
+    const RECURSION_ROLE: &str = "recursiontest";
+
+    /// The sink must not be instrumented: at `debug` a span opened inside the writer has to
+    /// be written, and writing it opens a span.
+    ///
+    /// This has to run in a child process. `init` installs a **global** subscriber, and
+    /// `dispatcher::get_default` only consults tracing-core's re-entrancy guard when a
+    /// *scoped* dispatcher exists — with just a global one it takes the unguarded fast path.
+    /// A `with_default` version of this test passes even with the bug present, and a global
+    /// subscriber cannot be installed inside a shared test binary.
+    ///
+    /// A regression does not crash the child: tracing allocates per span, so it spins and
+    /// grows without bound (the shipped app sat in uninterruptible sleep past a gigabyte
+    /// rather than faulting). So the child gets a deadline and is killed on it — waiting
+    /// on it would hang the suite the same way.
+    #[test]
+    fn debug_level_logging_does_not_recurse_through_the_writer() {
+        let home = std::env::temp_dir().join(format!("hp-logging-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("temp home");
+
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "logging::tests::child_logs_at_debug_through_a_global_subscriber",
+            ])
+            .env(RECURSION_CHILD, "1")
+            .env("HOME", &home)
+            .env("APPDATA", &home)
+            // The child resolves its level from the setting, not from this process's env.
+            .env_remove(ENV_LOG)
+            .env_remove(ENV_DEBUG)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn child");
+
+        // Writing a handful of lines takes milliseconds; anything near this is the runaway.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let status = loop {
+            match child.try_wait().expect("wait on child") {
+                Some(status) => break Some(status),
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        };
+        let out = child.wait_with_output().expect("child output");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+
+        let status = status.unwrap_or_else(|| {
+            panic!("child never finished logging at debug — the writer is feeding itself\n{stdout}\n{stderr}")
+        });
+        assert!(
+            status.success(),
+            "child failed logging at debug ({status})\n{stdout}\n{stderr}"
+        );
+
+        let path = stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("LOGPATH="))
+            .expect("child printed its log path");
+        let body = std::fs::read_to_string(path).expect("child log file");
+        assert!(
+            body.contains("sentinel"),
+            "event never reached the file: {body}"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Child half of [`debug_level_logging_does_not_recurse_through_the_writer`]: installs the
+    /// real global subscriber at `debug` under a throwaway `HOME` and logs one line.
+    #[test]
+    #[ignore = "spawned by debug_level_logging_does_not_recurse_through_the_writer"]
+    fn child_logs_at_debug_through_a_global_subscriber() {
+        if std::env::var_os(RECURSION_CHILD).is_none() {
+            return;
+        }
+        let path = log_path(RECURSION_ROLE);
+        println!("LOGPATH={}", path.display());
+        init(RECURSION_ROLE, "debug");
+        tracing::info!(marker = "sentinel", "writing at debug");
+        // Spans too: `new`/`close` take the same path through the writer as a bare event.
+        let _s = tracing::debug_span!("outer").entered();
+        tracing::debug!("inside a span");
     }
 
     #[test]
