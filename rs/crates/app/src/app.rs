@@ -660,15 +660,14 @@ impl App {
             {
                 continue;
             }
-            let pending = resume_queue::take_for(&marker.session_id);
-            if pending.is_empty() {
+            // A marker outlives its pane (several dead panes can claim one resumed session), so
+            // only a live pane may take. Checked before the take, not after: taking and putting
+            // back rewrote the queue every tick for each dead marker, restamping every prompt.
+            if !self.mgr.has(&uid) {
                 continue;
             }
-            if !self.mgr.has(&uid) {
-                // Session gone between marker and delivery — requeue rather than drop.
-                for p in &pending {
-                    let _ = resume_queue::enqueue(&p.session_id, &p.text);
-                }
+            let pending = resume_queue::take_for(&marker.session_id);
+            if pending.is_empty() {
                 continue;
             }
             // Drive the writes off the UI thread: a freshly-resumed claude needs a generous

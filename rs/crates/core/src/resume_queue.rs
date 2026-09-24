@@ -56,6 +56,11 @@ fn persist(all: &[QueuedPrompt]) {
 
 /// Append a prompt for `session_id`. The id must be marker-shaped
 /// ([`crate::claude_panes::valid_session_id`]) and the text non-empty.
+///
+/// A prompt identical to one already waiting for the same session is not added again: the
+/// session has not read the first copy yet, so a second is the same request twice (the
+/// status loop re-firing every interval while its last prompt is still undelivered stacked
+/// them up). The waiting copy keeps its place and its `queued_at`.
 #[tracing::instrument(level = "debug", ret)]
 pub fn enqueue(session_id: &str, text: &str) -> Result<(), String> {
     if !crate::claude_panes::valid_session_id(session_id) {
@@ -65,6 +70,9 @@ pub fn enqueue(session_id: &str, text: &str) -> Result<(), String> {
         return Err("empty prompt".into());
     }
     let mut all = load();
+    if all.iter().any(|p| p.session_id == session_id && p.text == text) {
+        return Ok(());
+    }
     all.push(QueuedPrompt {
         session_id: session_id.to_string(),
         text: text.to_string(),
@@ -149,6 +157,25 @@ mod tests {
         assert!(take_for("deadbeef-0000").is_empty());
         assert_eq!(take_for("cafecafe-1111").len(), 1);
         assert!(is_empty());
+    }
+
+    #[test]
+    fn an_identical_waiting_prompt_is_not_queued_twice() {
+        let _g = lock();
+        use_scratch_queue();
+        enqueue("deadbeef-0000", "status?").unwrap();
+        let first = list();
+        enqueue("deadbeef-0000", "status?").unwrap();
+        // Same session, same text: coalesced, and the waiting copy is untouched.
+        assert_eq!(list(), first);
+        // A different text, or the same text for another session, is a different request.
+        enqueue("deadbeef-0000", "something else").unwrap();
+        enqueue("cafecafe-1111", "status?").unwrap();
+        assert_eq!(list().len(), 3);
+        // Once delivered, the same prompt may be queued again.
+        assert_eq!(take_for("deadbeef-0000").len(), 2);
+        enqueue("deadbeef-0000", "status?").unwrap();
+        assert_eq!(take_for("deadbeef-0000").len(), 1);
     }
 
     #[test]
