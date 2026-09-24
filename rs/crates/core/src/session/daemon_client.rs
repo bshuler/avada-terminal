@@ -1407,7 +1407,7 @@ fn hand_over_stale_daemon(salt: &str, endpoint: &Endpoint) -> bool {
         // Only a version MATCH proves the successor won: while the incumbent still holds the
         // endpoint, connecting succeeds and reports the stale version.
         if let Ok(stream) = transport::connect(endpoint) {
-            if matches!(probe_daemon_identity(&stream), Ok((ProtoCheck::Match, _))) {
+            if successor_is_serving(probe_daemon_identity(&stream)) {
                 return true;
             }
         }
@@ -1417,6 +1417,21 @@ fn hand_over_stale_daemon(salt: &str, endpoint: &Endpoint) -> bool {
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(Duration::from_millis(200));
     }
+}
+
+/// Whether a probe taken mid-takeover proves the successor is the one answering.
+///
+/// Stricter than the launch gate: [`probe_daemon_identity`] reads an unanswered handshake as
+/// a `Match` so a slow daemon never blocks launch, but here an unanswered handshake is the
+/// INCUMBENT dying — it accepted our connect, then closed it on its way out after handing
+/// the sessions over. Taking that for success sends the caller back to `connect_or_spawn`
+/// in the gap before the successor binds; it finds nothing listening and spawns a SECOND
+/// daemon, which takes the sessions off the first and drops the connection the GUI has
+/// just built its manager on. Every pane of the restored workspace then fails to spawn
+/// with a broken pipe. Only a real `Hello` reply of our build counts.
+#[tracing::instrument(level = "debug", skip_all, ret)]
+fn successor_is_serving(probe: io::Result<(ProtoCheck, Option<HelloAnswer>)>) -> bool {
+    matches!(probe, Ok((ProtoCheck::Match, Some(_))))
 }
 
 /// Oldest daemon proto version a client of THIS build can still drive rather than replace.
@@ -2924,6 +2939,53 @@ mod tests {
         );
         drop(stream);
         let _ = server.join();
+    }
+
+    // The takeover race behind "none of my tabs came back": mid-handoff the incumbent still
+    // accepts a connect, then closes it without answering. The launch gate reads that as a
+    // Match (never block launch); the takeover poll must NOT, or it declares victory in the
+    // gap before the successor binds and a second daemon gets spawned into it.
+    #[test]
+    fn a_dying_incumbent_is_not_a_successor() {
+        let socket = temp_socket("dying-incumbent");
+        let _ = std::fs::remove_file(&socket);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("fake bind");
+
+        // Fake incumbent: accept, then hang up without a Hello — what a daemon that has just
+        // handed its sessions over does to every connection on its way out.
+        let server = std::thread::spawn(move || {
+            if let Ok((conn, _)) = listener.accept() {
+                drop(conn);
+            }
+        });
+
+        let stream = std::os::unix::net::UnixStream::connect(&socket).expect("connect fake");
+        let probe = probe_daemon_identity(&stream);
+        assert!(
+            matches!(probe, Ok((ProtoCheck::Match, None))),
+            "the launch gate still proceeds past an unanswered handshake"
+        );
+        assert!(
+            !successor_is_serving(probe),
+            "an unanswered handshake must never count as the successor serving"
+        );
+        drop(stream);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn a_real_hello_of_our_build_is_a_successor() {
+        let hello = HelloAnswer {
+            conn_id: 1,
+            proto_ver: PROTO_VER,
+        };
+        assert!(successor_is_serving(Ok((ProtoCheck::Match, Some(hello)))));
+        assert!(!successor_is_serving(Ok((
+            ProtoCheck::BuildMismatch {
+                daemon_build: "0.0.0+deadbeefdeadbeef".into()
+            },
+            Some(hello)
+        ))));
     }
 
     // The other half of the additive-field promise: a daemon built BEFORE `build_id` existed
