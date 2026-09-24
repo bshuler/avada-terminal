@@ -162,8 +162,20 @@ impl InstallStore {
             }
         };
 
-        let signed = sign_record(record, self.keys.as_ref(), &self.key_id)?;
-        write_record(&self.paths.record_path(&id, &version), &signed)?;
+        // The record is what makes the directory an install. Signing or writing it can
+        // fail too (a missing key, a full disk), and a populated directory with no
+        // record is the same wreck as a failed copy.
+        let signed = sign_record(record, self.keys.as_ref(), &self.key_id).and_then(|signed| {
+            write_record(&self.paths.record_path(&id, &version), &signed)?;
+            Ok(signed)
+        });
+        let signed = match signed {
+            Ok(signed) => signed,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&version_dir);
+                return Err(e);
+            }
+        };
 
         let mut lockfile = self.lockfile()?;
         let active = match lock::active_version(&lockfile, &id) {
@@ -577,7 +589,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::install::keyring::MemoryKeyStore;
+    use crate::install::keyring::{KeyError, MemoryKeyStore, SecretKey};
     use crate::install::record::fixtures::{manifest, manifest_at, record};
     use crate::persistence::lockfile::{
         read_workspace_state, workspace_modules_path, write_workspace_state,
@@ -981,6 +993,35 @@ mod tests {
         assert_eq!(broken.len(), 3, "{broken:?}");
         assert!(broken.iter().any(|r| r.contains("directory name")));
         assert!(broken.iter().any(|r| r.contains("sits in the directory")));
+    }
+
+    #[test]
+    fn an_install_that_cannot_be_signed_leaves_no_version_directory() {
+        /// A key store with nothing in it and no way to make anything.
+        struct NoKeys;
+        impl KeyStore for NoKeys {
+            fn get_or_create(&self, key_id: &str) -> Result<SecretKey, KeyError> {
+                Err(KeyError::BadKeyId(key_id.to_string()))
+            }
+        }
+        let s = Scratch::new("unsigned");
+        let store = InstallStore::open(
+            s.store.paths().clone(),
+            Arc::new(NoKeys) as Arc<dyn KeyStore>,
+        )
+        .unwrap();
+        let err = store
+            .install(
+                record(manifest_at(v("1.2.0")), &[]),
+                &s.artifact(b"bin"),
+                Some(&s.source()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, InstallError::Key(_)), "{err:?}");
+        assert!(
+            !s.store.paths().version_dir(&id(), &v("1.2.0")).exists(),
+            "everything up to the record was written, and the record could not be"
+        );
     }
 
     #[test]
