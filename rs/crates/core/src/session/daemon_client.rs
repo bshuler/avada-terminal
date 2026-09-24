@@ -1434,6 +1434,19 @@ fn successor_is_serving(probe: io::Result<(ProtoCheck, Option<HelloAnswer>)>) ->
     matches!(probe, Ok((ProtoCheck::Match, Some(_))))
 }
 
+/// Whether the daemon on the far end of `stream` answers a `Hello` as THIS build — the same
+/// judgement [`hand_over_stale_daemon`] makes, offered to the daemon itself. A freshly
+/// spawned daemon that finds the salt held asks this before taking anything over: a daemon
+/// of its own build is not stale, so no client asked for its sessions to move, and taking
+/// them anyway would drop every connection that daemon is serving (see [`run`]).
+///
+/// [`run`]: crate::session::daemon::run
+#[cfg(unix)]
+#[tracing::instrument(level = "debug", skip_all, ret)]
+pub(crate) fn our_build_answers(stream: &Conn) -> bool {
+    successor_is_serving(probe_daemon_identity(stream))
+}
+
 /// Oldest daemon proto version a client of THIS build can still drive rather than replace.
 ///
 /// Version 2 added `ClientMsg::Takeover` and nothing else: `DaemonMsg` is byte-identical to

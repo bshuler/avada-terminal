@@ -171,6 +171,19 @@ pub fn run(salt: &str) -> io::Result<()> {
     match lock.try_lock() {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
+            // A takeover exists to replace a STALE daemon — the client spawns us for one only
+            // after the incumbent answered as another build or protocol. An incumbent of our
+            // own build is not stale: we were spawned redundantly (a client that found nothing
+            // listening in the instant between an old daemon's exit and its successor's bind),
+            // and taking its sessions would drop every connection it serves — the GUI that
+            // just connected to it then fails every pane it spawns with a broken pipe.
+            if incumbent_is_our_build(&names.socket) {
+                tracing::info!("a daemon of this build already serves this salt; standing down");
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "a daemon of this build already holds this salt",
+                ));
+            }
             took_over = true;
             // Another daemon already serves this salt. Historically we bailed out here and
             // the client tore that daemon down — killing every session. Instead, TAKE IT
@@ -386,6 +399,19 @@ fn take_over(socket: &Path) -> io::Result<Vec<(SessionSnapshot, OwnedFd)>> {
     }
     tracing::debug!("takeover: adopted {} session(s)", out.len());
     Ok(out)
+}
+
+/// Whether the daemon listening on `socket` is a live daemon of THIS build. Anything short of
+/// a real `Hello` reply naming our build — nothing listening, a silent or dying incumbent,
+/// another build or protocol — answers `false`, which leaves [`run`] on its takeover path
+/// exactly as before: only a daemon that is demonstrably us is left alone.
+#[cfg(unix)]
+#[tracing::instrument(level = "debug", ret)]
+fn incumbent_is_our_build(socket: &Path) -> bool {
+    match std::os::unix::net::UnixStream::connect(socket) {
+        Ok(stream) => crate::session::daemon_client::our_build_answers(&stream),
+        Err(_) => false,
+    }
 }
 
 /// Poll `lock` until the flock is ours or `budget` elapses. The incumbent's lock is released
@@ -2373,6 +2399,38 @@ mod tests {
     // process exits), racing for the shell's output. Production has that same window but
     // closes it in microseconds by exiting; a FlagOnly test daemon never exits. So the
     // transfer is proved here and the re-creation in `session_manager`'s `adopt` test.
+    // The redundant-spawn half of "none of my tabs came back": a daemon spawned while a
+    // daemon of its OWN build serves the salt must stand down, not take the sessions and
+    // drop the GUI that just connected. Anything that is not demonstrably us — nothing
+    // listening, or a peer that accepts and never answers — still reads as takeover-worthy.
+    #[test]
+    fn only_a_live_daemon_of_our_build_is_left_alone() {
+        let socket = temp_socket("our-build");
+        let _daemon = spawn_in_process(&socket).expect("binds");
+        assert!(
+            incumbent_is_our_build(&socket),
+            "an in-process daemon is this build and answers — a spawn must stand down"
+        );
+
+        let silent = temp_socket("silent-incumbent");
+        let _ = std::fs::remove_file(&silent);
+        let listener = std::os::unix::net::UnixListener::bind(&silent).expect("fake bind");
+        let hangup = std::thread::spawn(move || {
+            if let Ok((conn, _)) = listener.accept() {
+                drop(conn);
+            }
+        });
+        assert!(
+            !incumbent_is_our_build(&silent),
+            "a peer that never answers is not proof of our build"
+        );
+        let _ = hangup.join();
+
+        let nobody = temp_socket("nobody-home");
+        let _ = std::fs::remove_file(&nobody);
+        assert!(!incumbent_is_our_build(&nobody), "nothing listening is not us");
+    }
+
     #[test]
     fn takeover_transfers_live_sessions_and_stands_the_incumbent_down() {
         use std::os::fd::AsRawFd;
