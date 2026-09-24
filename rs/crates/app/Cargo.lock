@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "avada"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "arboard",
  "avada-core",

@@ -148,49 +148,19 @@ impl InstallStore {
         }
         ensure_private_dir(self.paths.module_dir(&id).as_path())?;
         ensure_private_dir(&version_dir)?;
-        let data_dir = self.paths.data_dir(&id, &version);
-        ensure_private_dir(&data_dir)?;
-        let binary = self.paths.binary_path(&id, &version, &record.manifest);
-        let bin_dir = binary.parent().unwrap_or(&version_dir).to_path_buf();
-        ensure_private_dir(&bin_dir)?;
-        std::fs::copy(artifact, &binary).map_err(|e| io_at(artifact, e))?;
-        make_executable(&binary)?;
-        if let Err(e) = stage_skills(&record, &version_dir, source) {
-            // A half-staged version directory is worse than none: `records()` would find
-            // a directory with no record in it and call the module broken.
-            let _ = std::fs::remove_dir_all(&version_dir);
-            return Err(e);
-        }
-
-        // The skills are hashed from the *staged* tree rather than the checkout, so the
-        // digest describes what an agent will actually be handed rather than what the
-        // repository happened to contain: `stage_skills` skips symlinks and anything that
-        // is neither file nor directory, and the pinned hash has to agree with that.
-        let staged = hash_skills(&version_dir, &record.manifest.skills.paths)?;
-        if record.skills_sha256.is_empty() {
-            record.skills_sha256 = staged;
-        } else if !record.skills_sha256.eq_ignore_ascii_case(&staged) {
-            let expected = record.skills_sha256.clone();
-            let _ = std::fs::remove_dir_all(&version_dir);
-            return Err(InstallError::HashMismatch {
-                path: version_dir,
-                expected,
-                actual: staged,
-            });
-        }
-
-        let actual = hash_file(&binary)?;
-        if record.artifact_sha256.is_empty() {
-            record.artifact_sha256 = actual;
-        } else if !record.artifact_sha256.eq_ignore_ascii_case(&actual) {
-            let expected = record.artifact_sha256.clone();
-            let _ = std::fs::remove_dir_all(&version_dir);
-            return Err(InstallError::HashMismatch {
-                path: artifact.to_path_buf(),
-                expected,
-                actual,
-            });
-        }
+        // From here on the version directory exists, and a failure anywhere below must
+        // take it away again: `records()` finds a directory with no record in it and
+        // calls the module broken, and the seeder would then adopt the wreck as an
+        // install and never try again. A half-written version directory is worse than
+        // none.
+        let staged = self.populate(&mut record, &version_dir, artifact, source);
+        let (binary, data_dir) = match staged {
+            Ok(paths) => paths,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&version_dir);
+                return Err(e);
+            }
+        };
 
         let signed = sign_record(record, self.keys.as_ref(), &self.key_id)?;
         write_record(&self.paths.record_path(&id, &version), &signed)?;
@@ -214,6 +184,55 @@ impl InstallStore {
             version_dir,
             active,
         })
+    }
+
+    /// Everything `install` writes *inside* a fresh version directory: the data dir, the
+    /// artifact, the staged skills, and the two hash checks. Answers the binary and data
+    /// paths; on any error the caller removes the whole directory.
+    fn populate(
+        &self,
+        record: &mut InstallRecord,
+        version_dir: &Path,
+        artifact: &Path,
+        source: Option<&Path>,
+    ) -> Result<(PathBuf, PathBuf), InstallError> {
+        let id = &record.module_id;
+        let version = &record.version;
+        let data_dir = self.paths.data_dir(id, version);
+        ensure_private_dir(&data_dir)?;
+        let binary = self.paths.binary_path(id, version, &record.manifest);
+        let bin_dir = binary.parent().unwrap_or(version_dir).to_path_buf();
+        ensure_private_dir(&bin_dir)?;
+        copy_bytes(artifact, &binary)?;
+        make_executable(&binary)?;
+        stage_skills(record, version_dir, source)?;
+
+        // The skills are hashed from the *staged* tree rather than the checkout, so the
+        // digest describes what an agent will actually be handed rather than what the
+        // repository happened to contain: `stage_skills` skips symlinks and anything that
+        // is neither file nor directory, and the pinned hash has to agree with that.
+        let staged = hash_skills(version_dir, &record.manifest.skills.paths)?;
+        if record.skills_sha256.is_empty() {
+            record.skills_sha256 = staged;
+        } else if !record.skills_sha256.eq_ignore_ascii_case(&staged) {
+            return Err(InstallError::HashMismatch {
+                path: version_dir.to_path_buf(),
+                expected: record.skills_sha256.clone(),
+                actual: staged,
+            });
+        }
+
+        let actual = hash_file(&binary)?;
+        if record.artifact_sha256.is_empty() {
+            record.artifact_sha256 = actual;
+        } else if !record.artifact_sha256.eq_ignore_ascii_case(&actual) {
+            return Err(InstallError::HashMismatch {
+                path: artifact.to_path_buf(),
+                expected: record.artifact_sha256.clone(),
+                actual,
+            });
+        }
+        Ok((binary, data_dir))
     }
 
     /// Every version directory under the root, verified or reported broken. Sorted by
@@ -451,6 +470,27 @@ fn read_dir_sorted(dir: &Path) -> Result<Vec<std::fs::DirEntry>, InstallError> {
         .map_err(|e| io_at(dir, e))?;
     entries.sort_by_key(|e| e.file_name());
     Ok(entries)
+}
+
+/// Copy the artifact's *bytes* into a brand-new owner-only file. Deliberately not
+/// `std::fs::copy`: on macOS that is a `clonefile`, and a clone inherits the source's
+/// BSD flags. The installer locks the app bundle with `uchg`, so a seed binary cloned
+/// out of it arrived immutable and the `chmod` that followed failed with EPERM, leaving
+/// a version directory with a binary and no record — the exact shape the store reports
+/// as a broken install. Reading and writing the bytes inherits nothing: no flags, no
+/// extended attributes, no mode.
+fn copy_bytes(from: &Path, to: &Path) -> Result<(), InstallError> {
+    let mut src = std::fs::File::open(from).map_err(|e| io_at(from, e))?;
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.mode(0o700);
+    }
+    let mut dst = open.open(to).map_err(|e| io_at(to, e))?;
+    std::io::copy(&mut src, &mut dst).map_err(|e| io_at(from, e))?;
+    dst.sync_all().map_err(|e| io_at(to, e))
 }
 
 /// Copy the manifest's `[skills] paths` out of the checkout and into the version
@@ -941,6 +981,68 @@ mod tests {
         assert_eq!(broken.len(), 3, "{broken:?}");
         assert!(broken.iter().any(|r| r.contains("directory name")));
         assert!(broken.iter().any(|r| r.contains("sits in the directory")));
+    }
+
+    #[test]
+    fn a_failed_install_leaves_no_version_directory() {
+        let s = Scratch::new("cleanup");
+        // An artifact that cannot be read as a file: the copy fails after the version
+        // directory has been created.
+        let artifact = s.work.join("not-a-file");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let rec = record(manifest_at(v("1.2.0")), &[]);
+        let err = s
+            .store
+            .install(rec, &artifact, Some(&s.source()))
+            .unwrap_err();
+        assert!(matches!(err, InstallError::Io { .. }), "{err:?}");
+        assert!(
+            !s.store.paths().version_dir(&id(), &v("1.2.0")).exists(),
+            "a half-written version directory would read back as a broken install"
+        );
+        assert!(s.store.installed_versions(&id()).unwrap().is_empty());
+    }
+
+    /// The installer locks the app bundle with the BSD `uchg` flag. `std::fs::copy` is a
+    /// `clonefile` on macOS and the clone inherits that flag, so the `chmod` that follows
+    /// fails with EPERM — which is how every bundled module of 0.2.13 ended up as a
+    /// version directory with a binary and no record. The bytes must be copied, not
+    /// the file.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_immutable_artifact_installs_as_a_plain_owner_only_binary() {
+        use std::os::unix::fs::PermissionsExt;
+        let s = Scratch::new("uchg");
+        let artifact = s.artifact(b"locked");
+        let chflags = |flag: &str, p: &Path| {
+            let ok = std::process::Command::new("/usr/bin/chflags")
+                .arg(flag)
+                .arg(p)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "chflags {flag} {}", p.display());
+        };
+        chflags("uchg", &artifact);
+        let installed = s.store.install(
+            record(manifest_at(v("1.2.0")), &[]),
+            &artifact,
+            Some(&s.source()),
+        );
+        // Unlock before any assertion can fail, or the scratch dir cannot be removed.
+        chflags("nouchg", &artifact);
+        let installed = installed.unwrap();
+        assert_eq!(
+            std::fs::metadata(&installed.binary)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(std::fs::read(&installed.binary).unwrap(), b"locked");
+        // The copy carries no flags: it can be replaced, which a reinstall relies on.
+        std::fs::remove_file(&installed.binary).expect("no uchg on the copy");
     }
 
     #[test]

@@ -130,7 +130,9 @@ pub fn seed_bundled(store: &InstallStore, seed_dir: &Path, ledger: &Path) -> See
             Ok(None) => outcome.skipped += 1,
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), error = %e, "could not seed a bundled module");
-                outcome.failures.push((dir.display().to_string(), e.to_string()));
+                outcome
+                    .failures
+                    .push((dir.display().to_string(), e.to_string()));
             }
         }
     }
@@ -169,15 +171,31 @@ fn seed_one(
     let version = manifest.module.version.clone();
     let key = ledger_key(&id, &manifest);
 
-    // Offered before — even if the user has since uninstalled it. This is what makes an
-    // uninstall stick across launches.
-    if ledger.contains(&key) {
-        return Ok(None);
-    }
-    // Defensive against a lost ledger: if this exact version is already installed, adopt
-    // it into the ledger rather than reinstalling over a live module.
+    // What is on disk is looked at before what the ledger remembers. A version directory
+    // that verifies is a live install: adopt it into the ledger (defensive against a
+    // lost ledger) rather than reinstalling over it. A version directory that does *not*
+    // verify — a binary with no record, the wreck of an install that died halfway — is
+    // reinstalled even when the ledger says this version was offered before: the ledger
+    // records an offer, and a broken install is not one the user could have accepted or
+    // uninstalled. Without this, one failed seed was permanent.
     if store.installed_versions(&id)?.contains(&version) {
-        ledger.insert(key);
+        match store.record_at(&id, &version) {
+            Ok(_) => {
+                ledger.insert(key);
+                return Ok(None);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    id = %id.as_str(),
+                    %version,
+                    error = %e,
+                    "bundled module is installed but broken; reinstalling it from the bundle"
+                );
+            }
+        }
+    } else if ledger.contains(&key) {
+        // Offered before and no longer on disk: the user uninstalled it. This is what
+        // makes an uninstall stick across launches.
         return Ok(None);
     }
 
@@ -260,8 +278,7 @@ impl Ledger {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text =
-            serde_json::to_string_pretty(&self.seen).unwrap_or_else(|_| String::from("[]"));
+        let text = serde_json::to_string_pretty(&self.seen).unwrap_or_else(|_| String::from("[]"));
         std::fs::write(path, text)
     }
 }
@@ -458,6 +475,31 @@ mod tests {
         assert_eq!(out.skipped, 1);
         // And the ledger is rebuilt, so the next launch is a clean skip too.
         assert!(b.ledger().exists());
+    }
+
+    #[test]
+    fn a_broken_install_is_reseeded_even_when_the_ledger_remembers_it() {
+        let b = Bench::new("reseed");
+        let m = manifest();
+        b.stage(&m, b"x");
+        assert_eq!(b.seed().seeded, vec![m.id().clone()]);
+
+        // The shape a seed that died halfway leaves behind: the version directory with
+        // its binary but no record. The ledger still says the version was offered.
+        let record = b.store.paths().record_path(m.id(), &m.module.version);
+        std::fs::remove_file(&record).unwrap();
+        assert!(b.store.record_at(m.id(), &m.module.version).is_err());
+        assert!(b.ledger().exists());
+
+        let out = b.seed();
+        assert_eq!(out.seeded, vec![m.id().clone()], "{:?}", out.failures);
+        assert!(record.is_file(), "the reinstall wrote a record");
+        assert!(b.store.record_at(m.id(), &m.module.version).is_ok());
+
+        // And having been repaired it is skipped again, not reinstalled every launch.
+        let out = b.seed();
+        assert!(out.seeded.is_empty());
+        assert_eq!(out.skipped, 1);
     }
 
     #[test]
