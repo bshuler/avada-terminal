@@ -152,8 +152,9 @@ impl Shadow {
 /// maintains the shadow/mirror and forwards events to the GUI channel.
 pub struct DaemonSessionManager {
     /// The write half of the socket, serialized so concurrent `write`/`resize`/… frames
-    /// from different threads never interleave on the wire.
-    write_half: Mutex<Conn>,
+    /// from different threads never interleave on the wire. Shared with the reader thread,
+    /// which swaps a fresh connection in here when it reconnects.
+    write_half: Arc<Mutex<Conn>>,
     /// The per-uid shadow + replay mirror — read by every hot-path accessor, written by the
     /// reader thread (events) and `create` (immediate insert).
     shadows: Arc<Mutex<HashMap<String, Shadow>>>,
@@ -172,8 +173,8 @@ pub struct DaemonSessionManager {
     /// `0` until the handshake completes (and, against a pre-M7 daemon, forever) — the
     /// sentinel the registry never mints, so a `0` self-id makes every claim read as
     /// somebody else's. That is the safe direction: we decline to adopt rather than
-    /// double-adopt.
-    conn_id: AtomicU64,
+    /// double-adopt. Re-minted on every reconnect, so the reader thread holds it too.
+    conn_id: Arc<AtomicU64>,
     /// **M7 × the stale-daemon rule.** The `proto_ver` the daemon reported in its `Hello`,
     /// or `0` if it never answered. The client is allowed to be talking to an OLDER daemon
     /// than itself — [`stale_daemon_fallback`] deliberately keeps driving a stale daemon
@@ -181,18 +182,29 @@ pub struct DaemonSessionManager {
     /// below [`MIN_CLAIM_DAEMON_VER`] cannot deserialize `Claim`/`Release`/`ListClaims`.
     /// An unknown frame makes the daemon **drop the connection**, so sending claim traffic
     /// at one would take the user's terminals off screen. Every claim send is therefore
-    /// gated on this; see [`claims_supported`](Self::claims_supported).
-    daemon_ver: AtomicU64,
+    /// gated on this; see [`claims_supported`](Self::claims_supported). Re-read on every
+    /// reconnect: the daemon that answers may not be the one that left.
+    daemon_ver: Arc<AtomicU64>,
     /// Whether the socket to the daemon is still good. The reader thread is the only thing
     /// that ever learns the daemon has gone — it is the end that sees EOF — and before this
     /// flag existed it learned it and told nobody: it broke out of its loop and every
     /// accessor went on answering out of a shadow map that could no longer change. A pane
     /// stayed `running` forever and a `write` reported success into a closed socket.
     ///
-    /// So the reader publishes what it saw. `false` is terminal: this manager owns exactly
-    /// one connection and never reconnects, so once the daemon is gone the honest answer to
-    /// "is this session live" and "did this input land" is `no` until a new manager is built.
+    /// So the reader publishes what it saw. While it is `false` the honest answer to "is
+    /// this session live" and "did this input land" is `no`. A manager built by
+    /// [`new`](Self::new) does not stay there: its reader dials the daemon again (spawning
+    /// one if none is left) and sets this back once the shadow is resynced — the daemon going
+    /// away under a running GUI is a takeover or a crash, and neither should leave every pane
+    /// dead until the user relaunches. A manager over a bare stream
+    /// ([`from_stream`](Self::from_stream)) has no way to dial, so for it `false` is terminal.
     connected: Arc<AtomicBool>,
+    /// Set when this manager is done with the daemon on purpose — [`shutdown_daemon`] or
+    /// drop — so the EOF that follows is not mistaken for a daemon to go and find again.
+    /// Reconnecting after our own `Shutdown` would spawn the very daemon we just stopped.
+    ///
+    /// [`shutdown_daemon`]: Self::shutdown_daemon
+    closing: Arc<AtomicBool>,
     _reader: std::thread::JoinHandle<()>,
 }
 
@@ -259,7 +271,7 @@ impl DaemonSessionManager {
             let stream = connect_or_spawn(&endpoint, salt)?;
             let (check, hello) = probe_daemon_identity(&stream)?;
             match check {
-                ProtoCheck::Match => return Self::from_stream_with_hello(stream, events, hello),
+                ProtoCheck::Match => return Self::from_stream_with_hello(stream, events, hello, Some(redial(&endpoint, salt))),
                 ProtoCheck::BuildMismatch { daemon_build } if policy == VersionPolicy::Tolerant => {
                     // The pty-host being an older build is the whole point of `Tolerant`:
                     // it holds live ConPTYs that Windows gives us no way to move. A build
@@ -269,7 +281,7 @@ impl DaemonSessionManager {
                          the host surface is version-stable by contract",
                         build_id::build_id()
                     );
-                    return Self::from_stream_with_hello(stream, events, hello);
+                    return Self::from_stream_with_hello(stream, events, hello, Some(redial(&endpoint, salt)));
                 }
                 ProtoCheck::BuildMismatch { daemon_build } if forced_build_upgrade => {
                     tracing::info!(
@@ -278,7 +290,7 @@ impl DaemonSessionManager {
                          it rather than starting a takeover fight",
                         build_id::build_id()
                     );
-                    return Self::from_stream_with_hello(stream, events, hello);
+                    return Self::from_stream_with_hello(stream, events, hello, Some(redial(&endpoint, salt)));
                 }
                 ProtoCheck::BuildMismatch { daemon_build } => {
                     // Same protocol, different binary: a rebuild, a new install, or the
@@ -304,7 +316,7 @@ impl DaemonSessionManager {
                              as-is — the terminals matter more than the upgrade"
                         );
                         let stream = connect_or_spawn(&endpoint, salt)?;
-                        return Self::from_stream(stream, events);
+                        return Self::from_stream_with_hello(stream, events, None, Some(redial(&endpoint, salt)));
                     }
                 }
                 ProtoCheck::Mismatch { daemon_ver } if policy == VersionPolicy::Tolerant => {
@@ -316,7 +328,7 @@ impl DaemonSessionManager {
                         "pty-host proto skew (client {PROTO_VER}, host {daemon_ver}); \
                          proceeding — the host surface is version-stable by contract"
                     );
-                    return Self::from_stream_with_hello(stream, events, hello);
+                    return Self::from_stream_with_hello(stream, events, hello, Some(redial(&endpoint, salt)));
                 }
                 ProtoCheck::Mismatch { daemon_ver } => {
                     // The daemon is a stale version of our own binary. Prefer the LIVE UPGRADE
@@ -350,7 +362,7 @@ impl DaemonSessionManager {
                                      as-is — the terminals matter more than the upgrade"
                                 );
                                 let stream = connect_or_spawn(&endpoint, salt)?;
-                                return Self::from_stream(stream, events);
+                                return Self::from_stream_with_hello(stream, events, None, Some(redial(&endpoint, salt)));
                             }
                             StaleFallback::Refuse => {
                                 tracing::info!(
@@ -374,7 +386,7 @@ impl DaemonSessionManager {
         // a transient mismatch never hard-blocks launch (the GUI still falls back to in-process
         // upstream if even this errors).
         let stream = connect_or_spawn(&endpoint, salt)?;
-        Self::from_stream(stream, events)
+        Self::from_stream_with_hello(stream, events, None, Some(redial(&endpoint, salt)))
     }
 
     /// Build a manager over an already-connected socket — the seam tests use with an
@@ -385,9 +397,12 @@ impl DaemonSessionManager {
     /// always pays for its own round-trip; [`new_with_policy`](Self::new_with_policy) is the
     /// caller that has one, and uses [`from_stream_with_hello`](Self::from_stream_with_hello)
     /// directly instead.
+    ///
+    /// A stream is all this is given, so there is nothing to dial when it drops: the
+    /// disconnect is terminal (see [`connected`](Self::connected)).
     #[tracing::instrument(level = "debug")]
     pub fn from_stream(stream: Conn, events: UnboundedSender<SessionEvent>) -> io::Result<Self> {
-        Self::from_stream_with_hello(stream, events, None)
+        Self::from_stream_with_hello(stream, events, None, None)
     }
 
     /// The real body of [`from_stream`](Self::from_stream). `hello` is the answer
@@ -396,46 +411,54 @@ impl DaemonSessionManager {
     /// the daemon re-broadcast its claim table and full session snapshot to every open
     /// connection (see [`HelloAnswer`]), so a launch that used to send up to three of these
     /// on one socket (probe, a fire-and-forget, then a round-trip) now sends at most one.
-    #[tracing::instrument(level = "debug", skip(hello))]
+    ///
+    /// `redial` is how the reader gets a new connection when this one drops; `None` makes
+    /// the drop terminal.
+    #[tracing::instrument(level = "debug", skip(hello, redial))]
     fn from_stream_with_hello(
         stream: Conn,
         events: UnboundedSender<SessionEvent>,
         hello: Option<HelloAnswer>,
+        redial: Option<Redial>,
     ) -> io::Result<Self> {
         let read_half = transport::try_clone(&stream)?;
-        let write_half = stream;
+        let write_half = Arc::new(Mutex::new(stream));
 
         let shadows: Arc<Mutex<HashMap<String, Shadow>>> = Arc::default();
         let claims: Arc<Mutex<HashMap<String, ConnId>>> = Arc::default();
+        let conn_id: Arc<AtomicU64> = Arc::default();
+        let daemon_ver: Arc<AtomicU64> = Arc::default();
+        let connected = Arc::new(AtomicBool::new(true));
+        let closing: Arc<AtomicBool> = Arc::default();
         let (reply_tx, replies) = std::sync::mpsc::channel::<DaemonMsg>();
 
         // Reader thread: demux inbound frames. Events maintain the shadow + mirror and are
         // forwarded to the GUI channel; replies go to the reply channel.
-        let shadows_r = Arc::clone(&shadows);
-        let claims_r = Arc::clone(&claims);
-        let connected = Arc::new(AtomicBool::new(true));
-        let connected_r = Arc::clone(&connected);
+        let link = Link {
+            shadows: Arc::clone(&shadows),
+            claims: Arc::clone(&claims),
+            events,
+            replies: reply_tx,
+            connected: Arc::clone(&connected),
+            write_half: Arc::clone(&write_half),
+            conn_id: Arc::clone(&conn_id),
+            daemon_ver: Arc::clone(&daemon_ver),
+            closing: Arc::clone(&closing),
+            redial,
+        };
         let reader = std::thread::Builder::new()
             .name("hp-daemon-sm-reader".into())
-            .spawn(move || {
-                reader_loop(
-                    read_half,
-                    shadows_r,
-                    claims_r,
-                    events,
-                    reply_tx,
-                    connected_r,
-                )
-            })?;
+            .spawn(move || reader_loop(read_half, link))?;
 
         let mgr = DaemonSessionManager {
-            write_half: Mutex::new(write_half),
+            write_half,
             shadows,
             replies: Mutex::new(replies),
             claims,
-            conn_id: AtomicU64::new(0),
-            daemon_ver: AtomicU64::new(0),
+            conn_id,
+            daemon_ver,
             connected,
+            closing,
             _reader: reader,
         };
 
@@ -584,7 +607,15 @@ impl DaemonSessionManager {
             .entry(uid.clone())
             .or_insert_with(Shadow::new_pending);
         let spec = spawn_spec_from(opts);
-        self.send(&ClientMsg::Create(spec))?;
+        // A create that never reached the daemon must not leave its pending shadow behind:
+        // `pending` exempts it from every snapshot's reconcile, so it would outlive a
+        // reconnect as a session nothing will ever answer for.
+        self.send(&ClientMsg::Create(spec)).inspect_err(|_| {
+            let mut shadows = self.shadows.lock().unwrap();
+            if shadows.get(&uid).is_some_and(|s| s.pending) {
+                shadows.remove(&uid);
+            }
+        })?;
         Ok(())
     }
 
@@ -602,7 +633,8 @@ impl DaemonSessionManager {
     }
 
     /// Whether this manager's socket to the daemon is still good. See the
-    /// [`connected`](Self::connected) field: `false` is terminal for this manager.
+    /// [`connected`](Self::connected) field for when `false` is terminal and when the
+    /// reader is off finding the daemon again.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
@@ -854,6 +886,8 @@ impl DaemonSessionManager {
     /// is already gone the send simply fails and is ignored.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn shutdown_daemon(&self) {
+        // Before the send: the EOF it earns must find the reader already told not to redial.
+        self.closing.store(true, Ordering::SeqCst);
         self.shadows.lock().unwrap().clear();
         let _ = self.send(&ClientMsg::Shutdown);
     }
@@ -982,18 +1016,152 @@ impl DaemonSessionManager {
     }
 }
 
-/// The reader thread body: decode inbound frames forever, demuxing events (which update the
-/// shadow/mirror and forward to the GUI channel) from replies (which go to the reply
-/// channel). Exits on EOF, a socket error, or a dropped GUI channel.
-#[tracing::instrument(level = "debug", skip_all)]
-fn reader_loop(
-    read_half: Conn,
+impl Drop for DaemonSessionManager {
+    /// The reader thread outlives the manager (nothing joins it), so tell it the connection
+    /// is no longer wanted: a daemon that exits after we are gone must not be redialled, or
+    /// respawned, on behalf of nobody.
+    fn drop(&mut self) {
+        self.closing.store(true, Ordering::SeqCst);
+    }
+}
+
+/// How the reader thread gets a new connection when the daemon's socket drops. Production
+/// dials (and if need be spawns) the daemon for the salt; tests dial a temp socket.
+type Redial = Box<dyn Fn() -> io::Result<Conn> + Send>;
+
+/// The production [`Redial`]: the same [`connect_or_spawn`] a launch uses. No build check
+/// and no takeover — whoever holds the salt now is who we talk to. The GUI that caused the
+/// drop is the one that picked that daemon, and fighting it here would be a takeover loop.
+fn redial(endpoint: &Endpoint, salt: &str) -> Redial {
+    let (endpoint, salt) = (endpoint.clone(), salt.to_string());
+    Box::new(move || connect_or_spawn(&endpoint, &salt))
+}
+
+/// First and longest wait between redials. The first is short because the common drop is a
+/// takeover, whose successor is already listening; the cap keeps a daemon that cannot be
+/// started from turning the reader into a spawn loop.
+const REDIAL_FIRST: Duration = Duration::from_millis(250);
+const REDIAL_MAX: Duration = Duration::from_secs(5);
+
+/// Everything the reader thread shares with its manager.
+struct Link {
     shadows: Arc<Mutex<HashMap<String, Shadow>>>,
     claims: Arc<Mutex<HashMap<String, ConnId>>>,
     events: UnboundedSender<SessionEvent>,
     replies: Sender<DaemonMsg>,
     connected: Arc<AtomicBool>,
-) {
+    write_half: Arc<Mutex<Conn>>,
+    conn_id: Arc<AtomicU64>,
+    daemon_ver: Arc<AtomicU64>,
+    closing: Arc<AtomicBool>,
+    redial: Option<Redial>,
+}
+
+impl Link {
+    /// Whether anyone still wants this connection. After a deliberate shutdown, a dropped
+    /// manager, or a GUI that has closed its event receiver, a lost daemon stays lost.
+    fn wanted(&self) -> bool {
+        !self.closing.load(Ordering::SeqCst) && !self.events.is_closed()
+    }
+
+    /// The daemon's socket is gone: dial again until a daemon answers, backing off, and
+    /// return the new read half with the uids we held claims on. `None` means give up — no
+    /// way to dial, or nobody wants the connection any more.
+    ///
+    /// The new connection is live for writes when this returns, and a `ListSessions` is
+    /// already on it; the reader finishes the job when that answer arrives
+    /// ([`resync`](Self::resync)). Until then `connected` stays false.
+    fn reconnect(&self) -> Option<(Conn, Vec<String>)> {
+        let redial = self.redial.as_ref()?;
+        // The claims we owned, read under the OLD conn id before the Hello below re-mints
+        // it. The daemon drops a connection's claims with its socket, so these are the
+        // panes this window has to claim again once it is back.
+        let old = self.conn_id.load(Ordering::SeqCst);
+        let owned: Vec<String> = if old == 0 {
+            Vec::new()
+        } else {
+            let claims = self.claims.lock().unwrap();
+            claims
+                .iter()
+                .filter(|(_, &owner)| owner == old)
+                .map(|(uid, _)| uid.clone())
+                .collect()
+        };
+        let mut wait = REDIAL_FIRST;
+        let mut attempt = 0u32;
+        while self.wanted() {
+            attempt += 1;
+            match redial().and_then(|stream| self.adopt(stream)) {
+                Ok(read) => {
+                    tracing::info!(attempt, "session daemon answered again; resyncing");
+                    return Some((read, owned));
+                }
+                Err(e) => tracing::debug!(attempt, error = %e, "session daemon redial failed"),
+            }
+            std::thread::sleep(wait);
+            wait = (wait * 2).min(REDIAL_MAX);
+        }
+        None
+    }
+
+    /// Make `stream` this manager's connection: learn who we are to the daemon on it, put it
+    /// under the write lock, and ask for the session list the resync needs.
+    fn adopt(&self, stream: Conn) -> io::Result<Conn> {
+        let read = transport::try_clone(&stream)?;
+        let (_, hello) = probe_daemon_identity(&stream)?;
+        // An unanswered Hello is `0` for both, as at connect: every claim reads as somebody
+        // else's and claim traffic stays off the wire. The safe direction, again.
+        let (conn_id, ver) = hello.map_or((0, 0), |h| (h.conn_id, h.proto_ver as u64));
+        self.conn_id.store(conn_id, Ordering::SeqCst);
+        self.daemon_ver.store(ver, Ordering::SeqCst);
+        let mut w = self.write_half.lock().unwrap();
+        *w = stream;
+        write_frame(&mut *w, &ClientMsg::ListSessions)?;
+        Ok(read)
+    }
+
+    /// Bring the shadow back in line with the daemon we reconnected to, from its answer to
+    /// the `ListSessions` [`adopt`](Self::adopt) sent, then mark the connection good.
+    ///
+    /// A session that vanished while we were away gets an `Exit`, because nothing else will
+    /// ever say so: its death happened on a connection we no longer have. Every survivor is
+    /// re-attached (the subscription died with the old socket, and the `Replay` it earns
+    /// re-seeds the mirror), and the ones this window owned are claimed again.
+    fn resync(&self, metas: &[crate::session::proto::SessionMeta], owned: &[String]) {
+        let before: HashSet<String> = self.shadows.lock().unwrap().keys().cloned().collect();
+        reconcile_snapshot(&self.shadows, metas);
+        let after: HashSet<String> = self.shadows.lock().unwrap().keys().cloned().collect();
+        for uid in before.difference(&after) {
+            let _ = self.events.send(SessionEvent::Exit {
+                uid: uid.clone(),
+                code: -1,
+            });
+        }
+        let reclaim = self.daemon_ver.load(Ordering::SeqCst) >= MIN_CLAIM_DAEMON_VER as u64;
+        {
+            let mut w = self.write_half.lock().unwrap();
+            for meta in metas {
+                let _ = write_frame(&mut *w, &ClientMsg::Attach {
+                    uid: meta.uid.clone(),
+                });
+            }
+            if reclaim {
+                for uid in owned.iter().filter(|u| after.contains(*u)) {
+                    let _ = write_frame(&mut *w, &ClientMsg::Claim { uid: uid.clone() });
+                }
+            }
+        }
+        self.connected.store(true, Ordering::SeqCst);
+        tracing::info!(sessions = metas.len(), "session daemon connection restored");
+    }
+}
+
+/// The reader thread body: decode inbound frames forever, demuxing events (which update the
+/// shadow/mirror and forward to the GUI channel) from replies (which go to the reply
+/// channel). Exits on a dropped GUI channel or manager, or on EOF/a socket error it cannot
+/// [reconnect](Link::reconnect) from.
+#[tracing::instrument(level = "debug", skip_all)]
+fn reader_loop(read_half: Conn, link: Link) {
     // Windows `Conn` is a *synchronous* named-pipe file object shared with the write half
     // (`try_clone` == `DuplicateHandle` == the same FILE_OBJECT). A blocking `ReadFile` holds
     // that object's I/O lock for its whole duration, so parking here in an unbounded read
@@ -1003,6 +1171,9 @@ fn reader_loop(
     // write, so they keep the cheaper plain blocking read with no idle polling.
     #[allow(unused_mut)]
     let mut r = read_half;
+    // Set by a reconnect: the next `Sessions` frame is the answer to the reader's own
+    // `ListSessions`, holding the uids we owned claims on before the drop.
+    let mut resync: Option<Vec<String>> = None;
     loop {
         #[cfg(unix)]
         let next = read_frame::<_, DaemonMsg>(&mut r);
@@ -1021,10 +1192,10 @@ fn reader_loop(
         };
         match next {
             Ok(Some(DaemonMsg::Event(ev))) => {
-                apply_event_to_shadow(&shadows, &ev);
+                apply_event_to_shadow(&link.shadows, &ev);
                 // Forward verbatim to the renderer. A send error means the GUI dropped its
                 // receiver (shutting down) — stop reading.
-                if events.send(ev).is_err() {
+                if link.events.send(ev).is_err() {
                     break;
                 }
             }
@@ -1038,7 +1209,7 @@ fn reader_loop(
                 // the buffer), so the splice keeps whatever the mirror appended past
                 // `cursor` and puts the replay in front of it.
                 if !data.is_empty() {
-                    let mut shadows = shadows.lock().unwrap();
+                    let mut shadows = link.shadows.lock().unwrap();
                     let shadow = shadows.entry(uid).or_insert_with(Shadow::new);
                     splice_replay(shadow, cursor, &data);
                 }
@@ -1049,36 +1220,46 @@ fn reader_loop(
             // forwarded to `replies`: an unsolicited frame landing in the reply channel
             // would sit in front of the next round-trip's answer.
             Ok(Some(DaemonMsg::Claims(list))) => {
-                let mut claims = claims.lock().unwrap();
+                let mut claims = link.claims.lock().unwrap();
                 *claims = list.into_iter().map(|c| (c.uid, c.owner)).collect();
             }
             Ok(Some(DaemonMsg::SessionsChanged(metas))) => {
-                reconcile_snapshot(&shadows, &metas);
+                reconcile_snapshot(&link.shadows, &metas);
+            }
+            // The reader's own post-reconnect `ListSessions`: consumed here, not forwarded.
+            // Nobody on the reply channel asked for it.
+            Ok(Some(DaemonMsg::Sessions(metas))) if resync.is_some() => {
+                let owned = resync.take().unwrap_or_default();
+                link.resync(&metas, &owned);
             }
             // Other replies (Sessions/Screen/Hello/Pong/Created/ClaimResult) → the request
             // channel.
             Ok(Some(reply)) => {
-                if replies.send(reply).is_err() {
+                if link.replies.send(reply).is_err() {
                     break; // the manager was dropped
                 }
             }
-            // Clean EOF (daemon closed) or a malformed-frame/socket error → done, and this
-            // is the ONLY place the process learns the daemon is gone. Publish it before
-            // leaving: `has`, `uids` and `write` all read this flag, and without it they go
-            // on answering out of a shadow map that nothing can ever update again.
+            // Clean EOF (daemon closed) or a malformed-frame/socket error, and this is the
+            // ONLY place the process learns the daemon is gone. Publish it first: `has`,
+            // `uids` and `write` all read this flag, and without it they go on answering out
+            // of a shadow map that nothing is updating. Then go and find the daemon again.
             //
-            // Deliberately not set on the two breaks above: those mean OUR end went away
-            // (the GUI dropped the event receiver, the manager was dropped), which says
+            // Deliberately not reached from the two breaks above: those mean OUR end went
+            // away (the GUI dropped the event receiver, the manager was dropped), which says
             // nothing about the daemon.
-            Ok(None) => {
-                tracing::warn!("session daemon connection closed");
-                connected.store(false, Ordering::SeqCst);
-                break;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "session daemon connection lost");
-                connected.store(false, Ordering::SeqCst);
-                break;
+            Ok(None) | Err(_) => {
+                match &next {
+                    Err(e) => tracing::warn!(error = %e, "session daemon connection lost"),
+                    _ => tracing::warn!("session daemon connection closed"),
+                }
+                link.connected.store(false, Ordering::SeqCst);
+                match link.reconnect() {
+                    Some((read, owned)) => {
+                        r = read;
+                        resync = Some(owned);
+                    }
+                    None => break,
+                }
             }
         }
     }
@@ -2859,7 +3040,7 @@ mod tests {
         // reads restored (the reader thread must not time out) even when the manager sends
         // no `Hello` of its own on this socket.
         let (etx, mut rx) = unbounded_channel::<SessionEvent>();
-        let mgr = DaemonSessionManager::from_stream_with_hello(stream, etx, hello)
+        let mgr = DaemonSessionManager::from_stream_with_hello(stream, etx, hello, None)
             .expect("manager after probe");
         mgr.create(SpawnOptions {
             uid: "pm".into(),
@@ -3092,7 +3273,7 @@ mod tests {
         // Mirrors `new_with_policy`'s Match arm exactly: build the manager on the SAME
         // stream, handing in the probe's answer instead of asking again.
         let (etx, _erx) = unbounded_channel::<SessionEvent>();
-        let mgr = DaemonSessionManager::from_stream_with_hello(stream, etx, Some(hello))
+        let mgr = DaemonSessionManager::from_stream_with_hello(stream, etx, Some(hello), None)
             .expect("manager");
 
         assert_eq!(
@@ -3402,13 +3583,14 @@ mod tests {
 
         let (_reply_tx, replies) = std::sync::mpsc::channel::<DaemonMsg>();
         let mgr = DaemonSessionManager {
-            write_half: Mutex::new(write_half),
+            write_half: Arc::new(Mutex::new(write_half)),
             shadows: Arc::default(),
             replies: Mutex::new(replies),
             claims: Arc::default(),
-            conn_id: AtomicU64::new(0),
-            daemon_ver: AtomicU64::new(0),
+            conn_id: Arc::default(),
+            daemon_ver: Arc::default(),
             connected: Arc::new(AtomicBool::new(true)),
+            closing: Arc::default(),
             // No reader thread is exercised by this test — `send()`'s own disconnect
             // bookkeeping is what's under test, so the field just needs a live handle.
             _reader: std::thread::spawn(|| {}),
@@ -3424,6 +3606,102 @@ mod tests {
             !mgr.is_connected(),
             "create()'s failed send must mark the connection disconnected, the same as              write()'s always has"
         );
+    }
+
+    /// A manager over `socket` whose reader redials it when the connection drops, plus a
+    /// second descriptor on the first connection (to kill it with) and a count of redials.
+    fn redialing_manager(
+        socket: &Path,
+    ) -> (
+        DaemonSessionManager,
+        UnboundedReceiver<SessionEvent>,
+        std::os::unix::net::UnixStream,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let stream = std::os::unix::net::UnixStream::connect(socket).expect("connect");
+        let handle = stream.try_clone().expect("a second descriptor");
+        let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (dials_r, socket_r) = (Arc::clone(&dials), socket.to_path_buf());
+        let redial: Redial = Box::new(move || {
+            dials_r.fetch_add(1, Ordering::SeqCst);
+            std::os::unix::net::UnixStream::connect(&socket_r)
+        });
+        let (etx, erx) = unbounded_channel::<SessionEvent>();
+        let mgr = DaemonSessionManager::from_stream_with_hello(stream, etx, None, Some(redial))
+            .expect("manager");
+        (mgr, erx, handle, dials)
+    }
+
+    // The connection dropping under a running GUI (a takeover, a crash) used to be terminal:
+    // every pane read as dead until the user relaunched, though the daemon — or its successor —
+    // still held every shell. A manager that can dial finds the daemon again, and the session
+    // it left behind is live, writable, and streaming to it once more.
+    #[test]
+    fn a_dropped_connection_is_redialled_and_its_sessions_come_back() {
+        let socket = temp_socket("redial");
+        let _daemon = spawn_in_process(&socket).expect("daemon binds");
+        let (mgr, mut rx, handle, dials) = redialing_manager(&socket);
+
+        mgr.create(SpawnOptions {
+            uid: "r".into(),
+            shell: Some("/bin/sh".into()),
+            args: Some(vec!["-i".into()]),
+            ..Default::default()
+        })
+        .expect("create");
+        mgr.write("r", "echo BEFORE_DROP\n").expect("write");
+        assert!(
+            recv_event_until(&mut rx, Dur::from_secs(10), |e| {
+                matches!(e, SessionEvent::Data { uid, data, .. } if uid == "r" && data.contains("BEFORE_DROP"))
+            })
+            .is_some(),
+            "the session is live before the drop"
+        );
+        let first = mgr.conn_id();
+        assert_ne!(first, 0, "the in-process daemon mints a conn id");
+
+        handle
+            .shutdown(std::net::Shutdown::Both)
+            .expect("drop the connection under the manager");
+
+        assert!(
+            wait_until(Dur::from_secs(10), || mgr.is_connected() && mgr.conn_id() != first),
+            "the reader dials again and reports the connection good once resynced"
+        );
+        assert!(dials.load(Ordering::SeqCst) >= 1, "by redialling");
+        assert!(mgr.has("r"), "the daemon still holds the session, so we do again");
+        mgr.write("r", "echo AFTER_DROP\n")
+            .expect("input reaches the session over the new connection");
+        assert!(
+            recv_event_until(&mut rx, Dur::from_secs(10), |e| {
+                matches!(e, SessionEvent::Data { uid, data, .. } if uid == "r" && data.contains("AFTER_DROP"))
+            })
+            .is_some(),
+            "and its output streams back: the resync re-attached it"
+        );
+        mgr.kill("r");
+    }
+
+    // Reconnecting after our own `Shutdown` would bring back the daemon we just stopped (in
+    // production the redial is `connect_or_spawn`). The EOF a deliberate shutdown earns is the
+    // end of the connection, not a daemon to go and find.
+    #[test]
+    fn a_deliberate_shutdown_is_never_redialled() {
+        let socket = temp_socket("no-redial");
+        let _daemon = spawn_in_process(&socket).expect("daemon binds");
+        let (mgr, _rx, handle, dials) = redialing_manager(&socket);
+
+        mgr.shutdown_daemon();
+        // Deliver the EOF ourselves, so the test does not hang on how the in-process daemon
+        // winds its connections down.
+        let _ = handle.shutdown(std::net::Shutdown::Both);
+        assert!(
+            wait_until(Dur::from_secs(5), || !mgr.is_connected()),
+            "the reader sees the connection end"
+        );
+        std::thread::sleep(REDIAL_FIRST * 4);
+        assert_eq!(dials.load(Ordering::SeqCst), 0, "and does not dial again");
+        assert!(!mgr.is_connected());
     }
 
     #[test]
