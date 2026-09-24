@@ -2,8 +2,10 @@
 # bshuler/avada-terminal explains every key. Top-level keys come before the first
 # table header (TOML rule).
 #
-# `marketplace.manage` is an escape hatch: the host never grants it by default, the
-# user accepts it at install. Without it every row explains that and nothing else.
+# `marketplace.manage` is an escape hatch: a marketplace install never grants it by
+# default, the user accepts it by hand. The bundled copy is first-party and is seeded
+# with its whole request, this included (`install/seed.rs` in the app). Without it
+# every row explains that and nothing else.
 capabilities = [
     "marketplace.manage",
     "ui.rail",

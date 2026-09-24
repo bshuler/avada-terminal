@@ -7,7 +7,9 @@ reads the install store and the workspace state and starts what is enabled.
 ## Routes
 
 All twelve `/marketplace/...` routes need the `marketplace.manage` capability (an
-escape hatch: never granted by default, master token or explicit grant only) and
+escape hatch: never granted to a marketplace install by default — master token,
+explicit grant, or a **bundled** first-party module, which `install::seed` grants
+its whole manifest request) and
 answer **503 `marketplace unavailable`** until the app calls
 `Shared::install_marketplace(Arc<Marketplace>)` (`control/server.rs`, same pattern
 as `install_route_invoker`). The routes are listed in `descriptor_table::core_routes`

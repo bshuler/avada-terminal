@@ -22,6 +22,17 @@
 //! * a module the user later uninstalls stays gone (its `id@version` is in the ledger),
 //! * an app update that bumps a module's version seeds the new version (a new key).
 //!
+//! **Grant policy.** A bundled module is first-party: the edition that ships it vouches
+//! for it, so its install record accepts *every* capability its manifest requests,
+//! escape hatches included (`marketplace.manage`, `fs.read_any`, ...). This is the one
+//! place that differs from a marketplace install, whose default is the request minus
+//! the escape hatches and whose escape hatches the user accepts by hand. Without it the
+//! bundled Marketplace could never manage modules and Tools could never read a transcript
+//! outside the workspace — and nothing in the app widens a signed record after the fact.
+//! An already-installed bundled version whose record is narrower than the bundle's
+//! manifest (one seeded by an older app that stripped the hatches) is re-signed to the
+//! full set on the next launch.
+//!
 //! Nothing here is fatal: a missing seed directory, an unreadable manifest or a failed
 //! install is logged and counted, never propagated. A machine that cannot be seeded
 //! behaves exactly like one with no modules installed, which is a far better failure than
@@ -32,7 +43,7 @@ use super::{dirs::binary_name, InstallError};
 use crate::marketplace::cache::now_secs;
 use avada_module_sdk::manifest::ManifestError;
 use avada_module_sdk::rights::{InstallKind, InstallRecord};
-use avada_module_sdk::{Manifest, ModuleId};
+use avada_module_sdk::{Capability, Manifest, ModuleId};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -51,7 +62,8 @@ pub struct SeedOutcome {
     /// Modules installed by this pass.
     pub seeded: Vec<ModuleId>,
     /// Subdirectories skipped because their `id@version` was already in the ledger (or
-    /// already installed).
+    /// already installed). A live install whose grant was widened counts here too: it
+    /// was not seeded, only re-signed.
     pub skipped: usize,
     /// `(subdirectory, reason)` for every module that could not be seeded.
     pub failures: Vec<(String, String)>,
@@ -171,16 +183,36 @@ fn seed_one(
     let version = manifest.module.version.clone();
     let key = ledger_key(&id, &manifest);
 
+    // First-party modules are trusted by the edition that ships them: the whole request,
+    // escape hatches included (see the module docs — this is the one place the policy
+    // differs from a marketplace install).
+    let accepted: BTreeSet<Capability> = manifest.capabilities.iter().copied().collect();
+
     // What is on disk is looked at before what the ledger remembers. A version directory
     // that verifies is a live install: adopt it into the ledger (defensive against a
-    // lost ledger) rather than reinstalling over it. A version directory that does *not*
-    // verify — a binary with no record, the wreck of an install that died halfway — is
-    // reinstalled even when the ledger says this version was offered before: the ledger
-    // records an offer, and a broken install is not one the user could have accepted or
+    // lost ledger) rather than reinstalling over it — but widen its grant first if an
+    // older app seeded it narrower than the bundle's manifest, since no other path in
+    // the app can grow a signed record. A version directory that does *not* verify — a
+    // binary with no record, the wreck of an install that died halfway — is reinstalled
+    // even when the ledger says this version was offered before: the ledger records an
+    // offer, and a broken install is not one the user could have accepted or
     // uninstalled. Without this, one failed seed was permanent.
     if store.installed_versions(&id)?.contains(&version) {
         match store.record_at(&id, &version) {
-            Ok(_) => {
+            Ok(installed) => {
+                let missing: Vec<&str> = accepted
+                    .difference(&installed.rights().accepted)
+                    .map(|c| c.name())
+                    .collect();
+                if !missing.is_empty() {
+                    tracing::info!(
+                        id = %id.as_str(),
+                        %version,
+                        ?missing,
+                        "widening a bundled module's grant to its manifest"
+                    );
+                    store.re_sign(&id, &version, accepted)?;
+                }
                 ledger.insert(key);
                 return Ok(None);
             }
@@ -203,16 +235,6 @@ fn seed_one(
     if !binary.is_file() {
         return Err(SeedError::MissingBinary(binary));
     }
-
-    // First-party modules are trusted by the edition that ships them, so we accept every
-    // capability the manifest requests except the escape hatches — mirroring the
-    // marketplace's default when the caller named no narrower set.
-    let accepted = manifest
-        .capabilities
-        .iter()
-        .copied()
-        .filter(|c| !c.is_escape_hatch())
-        .collect();
 
     let record = InstallRecord {
         module_id: id.clone(),
@@ -399,6 +421,61 @@ mod tests {
         let second = b.seed();
         assert!(second.seeded.is_empty());
         assert_eq!(second.skipped, 1);
+    }
+
+    #[test]
+    fn a_bundled_module_is_granted_its_whole_request_escape_hatches_included() {
+        let b = Bench::new("hatches");
+        let mut m = manifest();
+        m.capabilities.push(Capability::MarketplaceManage);
+        m.capabilities.push(Capability::FsReadAny);
+        b.stage(&m, b"x");
+        let out = b.seed();
+        assert_eq!(out.seeded, vec![m.id().clone()], "{:?}", out.failures);
+
+        let installed = b.store.record(m.id()).unwrap().expect("installed");
+        let want: BTreeSet<Capability> = m.capabilities.iter().copied().collect();
+        assert_eq!(installed.rights().accepted, want);
+        assert!(installed
+            .rights()
+            .accepted
+            .contains(&Capability::MarketplaceManage));
+    }
+
+    #[test]
+    fn a_narrow_record_from_an_older_app_is_widened_on_the_next_launch() {
+        let b = Bench::new("widen");
+        let mut m = manifest();
+        m.capabilities.push(Capability::MarketplaceManage);
+        b.stage(&m, b"x");
+        b.seed();
+
+        // The shape an app that stripped escape hatches at seed time left behind.
+        let narrow: BTreeSet<Capability> = m
+            .capabilities
+            .iter()
+            .copied()
+            .filter(|c| !c.is_escape_hatch())
+            .collect();
+        b.store
+            .re_sign(m.id(), &m.module.version, narrow.clone())
+            .unwrap();
+        assert_eq!(
+            b.store.record(m.id()).unwrap().unwrap().rights().accepted,
+            narrow
+        );
+
+        // Next launch: adopted, not reinstalled — but re-signed to the full request.
+        let out = b.seed();
+        assert!(out.seeded.is_empty(), "a live install is never reinstalled");
+        assert_eq!(out.skipped, 1);
+        assert!(out.failures.is_empty(), "{:?}", out.failures);
+        let installed = b.store.record(m.id()).unwrap().unwrap();
+        let want: BTreeSet<Capability> = m.capabilities.iter().copied().collect();
+        assert_eq!(installed.rights().accepted, want);
+        // The record still verifies (re_sign signed it) and the binary is untouched.
+        assert!(b.store.record_at(m.id(), &m.module.version).is_ok());
+        assert_eq!(std::fs::read(&installed.binary).unwrap(), b"x");
     }
 
     #[test]
