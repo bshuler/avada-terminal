@@ -155,3 +155,18 @@ keyring = { version = "3", default-features = false, features = [
 # Already in the tree via portable-pty; declared here because we call it directly.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Two cfgs the mutation sweep sets through RUSTFLAGS to drop tests that cannot run under
+# cargo-mutants (see rs/.cargo/mutants.toml). Declared here so `cargo clippy -- -D warnings`
+# does not reject the `#[cfg(not(...))]` gates as `unexpected_cfgs`. Neither is ever set in
+# a normal build, so every gated test compiles and runs as usual outside a sweep.
+#   avada_mutants          — excludes tests that read the real repo layout, absent from the
+#                            `.git`-less tree copy cargo-mutants builds each mutant in.
+#   avada_mutants_parallel — additionally excludes wall-clock timing tests that a parallel
+#                            (`-j`) sweep's build load can flake into a false CAUGHT; unset
+#                            for the serial (`-j1`) module sweep that owns their coverage.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(avada_mutants)',
+    'cfg(avada_mutants_parallel)',
+] }

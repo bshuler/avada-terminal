@@ -56,3 +56,7 @@ worktrees/
 # "pane", "panel" and "tab" than `ctl panes` does. Keeping it untracked keeps
 # the two products from being confused with each other.
 AGENTS.md
+
+# cargo-mutants working trees and reports (core crate sweep)
+/rs/mutants.out
+/rs/mutants.out.old

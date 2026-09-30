@@ -1,0 +1,206 @@
+# cargo-mutants configuration for the `core` crate sweep.
+#
+# cargo-mutants reads this from the workspace root (`rs/.cargo/mutants.toml`), not the
+# package directory: it operates on the whole workspace, copies the tree rooted here, and
+# runs `--package=avada-core`.
+#
+# `exclude_re` lists mutants that no *sound* test can catch --- the mutated program behaves
+# identically to the original through every observation a well-defined Rust program is
+# allowed to make --- so they are excluded from the report rather than left as permanent
+# false-positive survivors. Each entry is pinned to a `file.rs:LINE:COL:` location so it can
+# only ever match the one mutant it was written for.
+
+# `--offline` forbids a network fetch mid-sweep: a registry stall would otherwise be scored
+# as a mutant timeout. All dependencies are already vendored in the lockfile. This is a
+# cargo-level arg (before `--`), so the config key carries it; it applies to both the build
+# and the test invocation.
+additional_cargo_args = ["--offline"]
+
+# --- Skipping tests that cannot run under a sweep ------------------------------------------
+#
+# Five tests must be excluded from mutation runs. cargo-mutants v27.1.0 has no working way to
+# forward `--skip` to the test binary --- its trailing `[CARGO_TEST_ARGS]` positional does not
+# insert the `--` separator, so the flag lands in cargo position and aborts the baseline. The
+# tests are therefore gated in source on two cfgs the sweep sets through RUSTFLAGS. The cfgs
+# are declared in `crates/core/Cargo.toml` under `[lints.rust]` so clippy accepts the gates;
+# neither is ever set in a normal build.
+#
+#   --cfg avada_mutants   (always) --- drops three tests that read the real repository layout
+#       off disk (shipped resource tree, packaging manifests), anchored at a git root that is
+#       absent from cargo-mutants' `.git`-less tree copy. They panic in the unmutated baseline
+#       otherwise and abort the run. No sound mutation of an in-scope subsystem changes what
+#       files exist on disk, so excluding them is coverage-neutral. Tests:
+#           hyperpane::tests::the_shipped_tree_still_holds_what_build_rs_watches
+#           hyperpane::tests::the_host_ships_no_module_skills_of_its_own
+#           hyperpane::tests::materialize_into_copies_the_tree_and_leaves_local_files_be
+#           session::env::unix::unix_tests::provider_uses_dollar_shell_and_falls_back_on_failure
+#           tools::session_hook::tests::every_hook_ships_in_every_packaging_manifest
+#
+#   --cfg avada_mutants_parallel   (parallel -j sweeps only) --- additionally drops
+#       wall-clock timing tests that spawn a subprocess or assert on elapsed time. cargo-mutants
+#       runs the whole suite per mutant, so under a `-j` sweep's concurrent build load they can
+#       fail from scheduler starvation while an unrelated line is mutated --- falsely scoring
+#       that mutant CAUGHT (or, in the baseline, aborting the whole run) and hiding a real gap.
+#       They still run in every normal `cargo test` and in the serial (`-j1`) module sweep,
+#       which owns `module/`'s timeout coverage; every other subsystem runs `-j4` WITH this
+#       cfg. Tests:
+#           module::host_tests::a_module_that_never_says_hello_is_cut_off_at_the_timeout
+#           module::host_tests::crash_restarts_with_toasts_then_disables_after_the_cap
+#
+# Reproducible invocations (from rs/):
+#   parallel subsystems (license, policy, install, skills, marketplace, control):
+#       RUSTFLAGS='--cfg avada_mutants --cfg avada_mutants_parallel' \
+#           cargo mutants -f '**/<subsys>/**/*.rs' -j4
+#   the module subsystem (serial, timing tests live):
+#       RUSTFLAGS='--cfg avada_mutants' cargo mutants -f '**/module/**/*.rs' -j1
+
+exclude_re = [
+    # --- PENDING RE-DERIVATION (upstream drift) --------------------------------------------
+    # The excludes for the DIVERGED files below were pinned to file:LINE:COL at c0cf80e.
+    # origin/main has since moved ~7.5k lines across these subsystems, so those anchors are
+    # stale AND their rationales may no longer hold on the rewritten code (a rewritten function
+    # can make an "unreachable re-guard"/"dead arm" claim simply false --- the same way the
+    # `products()` presence-marker reversal did). They are removed here rather than re-anchored
+    # blind; each resurfaces as MISSED in the re-sweep at the pushed HEAD, is re-read at its
+    # current location, and is re-pinned WITH evidence. Removed pending that pass:
+    #   license/mod.rs                LicenseToken::drop volatile-wipe
+    #   license/verify.rs             Verifier::decode dead InvalidAlgorithm arm
+    #   install/keyring_windows.rs    vault_tests Scratch Drop (windows-only test support)
+    #   control/server.rs             do_restart body
+    #   marketplace/mod.rs            run_install / note_defaults re-guards
+    #   module/host.rs                Slot::shutdown (8) + generation guard (2)
+    #   module/mod.rs                 host_tests::wait_status helper (3)
+    # -----------------------------------------------------------------------------------------
+
+    # control/discovery_guard.rs: pid_alive / process_name have three separate bodies ---
+    # `#[cfg(target_os = "linux")]`, `#[cfg(all(unix, not(target_os = "linux")))]` (macOS),
+    # and `#[cfg(windows)]`. The sweep host is macOS, so ONLY the macOS body compiles here;
+    # the mutant at 186:30 lives in it and is killed by a real test. Every entry below is in
+    # a Linux- or Windows-only body that this target never compiles: cargo-mutants still emits
+    # the mutant because it mutates parsed source across all cfg arms, but the mutated line is
+    # cfg'd out of the macOS build, so the binary is byte-identical to the baseline and the
+    # suite passes --- a MISSED score that reflects the platform, not a coverage gap. Two
+    # sub-groups:
+    #
+    #  (a) Covered by platform-agnostic tests in the file (pid_alive_true_for_self...,
+    #      process_name_reads_our_binary...) that exercise whichever body the target compiled;
+    #      they kill these mutants when the suite runs natively on Linux/Windows CI, and cannot
+    #      be observed from macOS at all. Excluded here so the macOS sweep reaches finality.
+    'discovery_guard\.rs:159:5: replace pid_alive',           # Linux pid_alive whole body
+    'discovery_guard\.rs:195:5: replace pid_alive',           # Windows pid_alive whole body
+    'discovery_guard\.rs:203:25: replace == with != in pid_alive',   # Windows STILL_ACTIVE check
+    'discovery_guard\.rs:217:5: replace process_name',        # Linux process_name whole body
+    'discovery_guard\.rs:254:5: replace process_name',        # Windows process_name whole body
+    #
+    #  (b) Not killable by any sound unit test even on the native platform: each requires an
+    #      exotic, nondeterministic OS process state that cannot be constructed deterministically
+    #      (a handle that opens but reports a non-STILL_ACTIVE exit code; a pid that exists but
+    #      denies access; a process with exactly one of comm/cmdline readable), or is masked
+    #      because process_name already carries `avada_core` via /proc/PID/comm regardless.
+    'discovery_guard\.rs:203:17: replace && with \|\| in pid_alive',       # Windows exited-but-open handle
+    'discovery_guard\.rs:208:28: replace == with != in pid_alive',        # Windows access-denied branch
+    'discovery_guard\.rs:222:31: replace == with != in process_name',     # Linux cmdline NUL split (masked)
+    'discovery_guard\.rs:226:23: replace && with \|\| in process_name',    # Linux comm/argv0 both-or-neither
+
+    # control/output.rs: bounded_contains walks `s[start..]` with `start = idx + 1`, which is
+    # always <= s.len(). The `>` at 188:18 therefore only ever discriminates at
+    # start == s.len(), where `s[start..]` is empty, `find` returns None, and the loop ends
+    # anyway --- so `>` vs `==` and `>` vs `>=` are unobservable. The `>` vs `<` variant of the
+    # same line IS behaviour-changing and is killed by a test, so it is deliberately NOT listed.
+    'output\.rs:188:18: replace > with ==',
+    'output\.rs:188:18: replace > with >=',
+
+    # control/dispatch.rs (handle_command): two log-only branches. 277:17 gates whether a
+    # tracing event is emitted; 283:21 chooses error! vs warn! severity for one. Neither changes
+    # any program-observable state (return value, persisted data, response) --- only log output,
+    # which no sound test asserts on. Equivalent.
+    'dispatch\.rs:277:17: replace != with ==',
+    'dispatch\.rs:283:21: replace >= with <',
+
+    # control/dispatch.rs (resolve_recover_target / resolve_project_into_spec): these three
+    # ARE reachable and behaviour-affecting --- not equivalent. But every observation of the
+    # flipped branch routes through process-global, $HOME-derived stores:
+    #   769:36 / 782:27  via claude_recovery::resolve_session_candidates,
+    #                    crate::claude_panes::read_pane_session, and ~/.claude/projects;
+    #   1196:12          via persistence::projects::{resolve, upsert_project_by_root}, which
+    #                    hardcode paths::projects_json() (HOME-derived; the pure `_in` seams
+    #                    that tests use elsewhere are not on this path).
+    # The crate has no serialization harness (no serial_test, no HOME mutex) and its test
+    # convention never mutates $HOME. A killing unit test would have to set process-wide $HOME,
+    # racing the parallel suite (cargo-mutants runs the whole suite per mutant) and risking the
+    # real user's live data under the live-session guardrail --- the same reason server.rs:951:5
+    # is excluded below. Correct coverage is a fully HOME-isolated integration test on native CI.
+    'dispatch\.rs:769:36: replace == with !=',
+    'dispatch\.rs:782:27: delete !',
+    'dispatch\.rs:1196:12: delete !',
+
+    # control/dictation_service.rs: open_microphone_settings's body is a single
+    # permissions::request(Right::Microphone) call; under test the spawn succeeds so there is no
+    # Err path, making `-> Result<(), String>` replaced with `Ok(())` unobservable. Exercising
+    # the real body launches macOS System Settings --- a focus steal that violates the
+    # live-session guardrail --- so it cannot be driven to its Err branch in-suite either.
+    'dictation_service\.rs:136:9:',
+
+    # control/work.rs (WorkQueue::init): SCHEMA_VERSION == 2, so `current` is only ever 1 or 2 on
+    # every path the public API produces. 420:24 `if current < 2` is reached only when current==1
+    # (1<2 == 1<=2). 417:27 differs from real only at current==2, where the inner 420 guard then
+    # skips the ALTER and leaves an idempotent UPDATE on the single already-v2 row --- observable
+    # only via a hand-crafted multi-row schema_version table no code path creates. Both
+    # reachable-equivalent; empirically leave all work tests green.
+    'work\.rs:420:24: replace < with <=',
+    'work\.rs:417:27: replace < with <=',
+
+    # control/inbox.rs: a fixed-capacity ring (cap 500), checked after every push so len never
+    # exceeds 501. 67:23 `>` vs `>=`: at len==500 the eviction computes overflow 500-500==0 ->
+    # drain(0..0), a no-op, so the sole differing input is unobservable. 68:39 `-` vs `/`: the
+    # only reachable eviction has len==501, and 501-500 == 501/500 == 1. 83:22 `>` vs `>=` in
+    # read(): after_seq is u64 (>=0 always) and seqs start at 1, so both branches agree for every
+    # after_seq. All three equivalent.
+    'inbox\.rs:67:23: replace > with >=',
+    'inbox\.rs:68:39: replace - with /',
+    'inbox\.rs:83:22: replace > with >=',
+
+    # === module subsystem (swept serially, -j1, so its wall-clock timing tests stay live) =====
+    # (host.rs Slot::shutdown/generation and module/mod.rs host_tests::wait_status excludes are
+    #  removed pending re-derivation --- see the PENDING block at the top of this list.)
+
+    # module/transport/mod.rs pair(): three cfg-selected bodies. The macOS sweep compiles only
+    # the `#[cfg(unix)]` body at line 43 (covered by pair_yields_connected_usable_endpoints);
+    # 50:5 is the `#[cfg(windows)]` body and 56:5 the `#[cfg(not(any(unix, windows)))]` body,
+    # neither compiled here, so each mutant yields a byte-identical binary --- a platform
+    # blind-spot, not a coverage gap. (Both are also unviable where they DO compile: HostEnd /
+    # ChildEnd implement no Default, so the injected `Default::default()` would not type-check.)
+    'transport/mod\.rs:50:5:',
+    'transport/mod\.rs:56:5:',
+
+    # module/transport/unix.rs set_cloexec (57:57): `fcntl(F_SETFD, ...) < 0` vs `> 0`. F_SETFD
+    # returns only 0 (ok) or -1 (err), so `<0` and `>0` diverge only at -1; but reaching line 57
+    # means the line-47 F_GETFD already succeeded on a valid fd, and F_SETFD(FD_CLOEXEC) on such
+    # a descriptor cannot fail (its only error is EBADF, which the line-48 guard has already
+    # returned Err on). No reachable input distinguishes the two comparisons. Equivalent.
+    'transport/unix\.rs:57:57: replace < with > in set_cloexec',
+
+    # module/transport/windows.rs: the entire Win32 half lives in `#[cfg(windows)] mod win`
+    # (lines 78-477) and is never compiled on the macOS sweep host, so every mutant inside it
+    # scores MISSED from a byte-identical binary --- the same platform blind-spot as
+    # keyring_windows above. All such survivors sit on 3-digit source lines (105-473); the one
+    # cross-platform survivor, is_module_pipe_name at 66:44, is a real gap killed by a test and is
+    # deliberately NOT matched here (its 2-digit line falls outside `\d{3,}`). The `transport/`
+    # path segment keeps this from ever touching keyring_windows.rs.
+    'transport/windows\.rs:\d{3,}:',
+    # KNOWN, ACCEPTED steady-state survivors --- three MISSED that this rule CANNOT drop.
+    # cargo-mutants 27.1.0 silently does not apply exclude_re to "delete field <f> from struct
+    # <S> expression" mutants (verified: `\d{3,}:`, `OVERLAPPED`, `hEvent`, `windows.rs:238:17`
+    # and `delete field` all fail to filter them, while a normal `replace`/`with ()` mutant on
+    # the same lines filters fine). The three are:
+    #   windows.rs:238:17  delete field hEvent from OVERLAPPED in win::Shared::ensure_connected
+    #   windows.rs:406:17  delete field hEvent from OVERLAPPED in win::PipeReader::read
+    #   windows.rs:441:17  delete field hEvent from OVERLAPPED in win::PipeWriter::write
+    # Each is Win32-only code (uncompiled here -> byte-identical binary -> unkillable on macOS)
+    # AND unreachable by exclude_re, so a macOS sweep of transport/windows.rs reports exactly
+    # `3 missed`. That is the expected, accounted-for result --- not a coverage gap. A refactor
+    # from the `OVERLAPPED { hEvent, ..default }` literal to field assignment would convert them
+    # to excludable statement mutants, but the windows-gnu baseline does not cross-compile on
+    # this host (whisper-rs-sys bindgen), so such an edit cannot be locally validated and is not
+    # worth the risk to satisfy a tool quirk.
+]
