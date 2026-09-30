@@ -242,4 +242,51 @@ mod tests {
         l.drop_pane("p1");
         assert_eq!(l.poll("p1", false, 0), Step::Stop);
     }
+
+    #[test]
+    fn max_wait_is_thirty_minutes() {
+        // Kills `*`→`+` at nudge.rs:39 (`30 * 60_000`): the product is 1_800_000, the sum
+        // would be 60_030. The behavioural tests use the constant symbolically, so only an
+        // exact-value assertion pins it.
+        assert_eq!(MAX_WAIT_MS, 1_800_000);
+        assert_eq!(MAX_WAIT_MS, 30 * MIN_INTERVAL_MS);
+    }
+
+    #[test]
+    fn rate_limit_measures_elapsed_time_not_a_sum() {
+        // Kills `-`→`+` in the rate-limit compare at nudge.rs:143 (`now_ms - t`).
+        // last_sent = 1_000; at now = 60_000 the elapsed 59_000 < 60_000 is rate-limited
+        // (Wait), but the mutant's sum 61_000 < 60_000 is false, so it would Send.
+        let mut l = NudgeLedger::new();
+        l.arm("p1", 1, 0);
+        assert!(matches!(l.poll("p1", false, 1_000), Step::Send(_))); // last_sent_ms = 1_000
+        l.arm("p1", 2, 59_500); // armed_at_ms = 59_500, well short of MAX_WAIT_MS
+        assert_eq!(l.poll("p1", false, 60_000), Step::Wait);
+    }
+
+    #[test]
+    fn rate_limit_boundary_is_exclusive_at_the_interval() {
+        // Kills `<`→`<=` at nudge.rs:143. last_sent = 0; at now = MIN_INTERVAL_MS the
+        // elapsed exactly equals the interval. `<` (real) is false → the interval has
+        // passed → Send; `<=` (mutant) is true → still rate-limited → Wait.
+        let mut l = NudgeLedger::new();
+        l.arm("p1", 1, 0);
+        assert!(matches!(l.poll("p1", false, 0), Step::Send(_))); // last_sent_ms = 0
+        l.arm("p1", 2, 10);
+        assert!(matches!(
+            l.poll("p1", false, MIN_INTERVAL_MS),
+            Step::Send(_)
+        ));
+    }
+
+    #[test]
+    fn give_up_measures_age_from_a_nonzero_arm_time() {
+        // Kills `-`→`+` in the give-up compare at nudge.rs:145 (`now_ms - armed_at_ms`).
+        // Armed at 100_000; at now = MAX_WAIT_MS the true age 1_700_000 < MAX_WAIT keeps
+        // waiting, but the mutant's sum 1_900_000 >= MAX_WAIT gives up (Stop). A nonzero
+        // arm time is required — the existing test arms at 0, where `-` and `+` agree.
+        let mut l = NudgeLedger::new();
+        l.arm("p1", 1, 100_000); // armed_at_ms = 100_000
+        assert_eq!(l.poll("p1", true, MAX_WAIT_MS), Step::Wait);
+    }
 }

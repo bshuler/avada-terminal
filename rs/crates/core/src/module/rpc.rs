@@ -2887,4 +2887,129 @@ pub(crate) mod tests {
             ErrorCode::CapabilityDenied
         );
     }
+
+    #[test]
+    fn max_read_is_eight_mebibytes() {
+        // `8 * 1024 * 1024`. `+` for either `*` gives 9216 or 1048584; `/` gives 8.
+        assert_eq!(MAX_READ, 8_388_608);
+    }
+
+    #[test]
+    fn notification_logs_a_debug_event() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // A subscriber that only counts events: the body is log-only, so the observable
+        // effect of `notification` is exactly that one debug event. A `()` body emits none.
+        struct Counter(Arc<AtomicUsize>);
+        impl tracing::Subscriber for Counter {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+        let rig = rig(&[]);
+        let count = Arc::new(AtomicUsize::new(0));
+        tracing::subscriber::with_default(Counter(count.clone()), || {
+            rig.d
+                .notification(&Notification::new("module.ping", Value::Null));
+        });
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "the body logs one debug event; a `()` body would log none"
+        );
+    }
+
+    #[test]
+    fn rail_register_accepts_an_entry_that_names_its_own_module() {
+        let rig = rig(&[Capability::UiRail]);
+        // The entry spells out this module's own id: the identity guard is satisfied, so
+        // the `_` arm stamps and registers it. A guard forced to `true` would reject it.
+        let own = json!({ "entries": [
+            { "id": "files", "label": "Files", "tier": 1, "module": "acme/avada-files" },
+        ]});
+        rig.d.call(methods::HOST_RAIL_REGISTER, &own).unwrap();
+        match rig.rail.recv().unwrap() {
+            RailEvent::Registered { entries, .. } => {
+                assert_eq!(entries[0].module.as_ref(), Some(&testkit::module_id()));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_register_refuses_an_empty_label_even_with_a_good_id() {
+        let rig = rig(&[Capability::UiCommands]);
+        // id non-empty, label empty: `||` refuses. `&&` would need *both* empty, so it
+        // would wrongly accept this and emit the command.
+        let e = rig
+            .d
+            .call(
+                methods::HOST_COMMAND_REGISTER,
+                &json!({ "commands": [{ "id": "reveal", "label": "  " }] }),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorCode::InvalidParams);
+        assert!(rig.events.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_list_labels_a_non_file_non_dir_entry_other_not_file() {
+        let dir = tempdir::Dir::new("fs-other");
+        let root = &dir.0;
+        std::fs::write(root.join("real.txt"), "x").unwrap();
+        // A bound unix socket is a filesystem entry that is neither file, dir, nor
+        // symlink, so it falls to the `_ => "other"` arm. With `is_file()` forced to
+        // `true` it would be mislabelled `file`.
+        let _listener = std::os::unix::net::UnixListener::bind(root.join("sock")).unwrap();
+        let rig = fs_rig(&[Capability::FsRead], root);
+        let v = rig
+            .d
+            .call(
+                methods::HOST_FS_LIST,
+                &json!({ "path": root.to_string_lossy() }),
+            )
+            .unwrap();
+        let kind = |n: &str| {
+            v["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["name"] == n)
+                .map(|e| e["kind"].as_str().unwrap().to_string())
+                .unwrap()
+        };
+        assert_eq!(kind("real.txt"), "file");
+        assert_eq!(
+            kind("sock"),
+            "other",
+            "a socket is neither file/dir/symlink; `is_file()`→`true` would call it `file`"
+        );
+    }
+
+    #[test]
+    fn fs_read_allows_a_file_of_exactly_the_limit() {
+        let dir = tempdir::Dir::new("fs-exact");
+        // Exactly MAX_READ bytes: `len > MAX_READ` is false, so it reads. `>=` would
+        // reject the boundary case.
+        std::fs::write(dir.0.join("exact"), vec![b'a'; MAX_READ as usize]).unwrap();
+        let rig = fs_rig(&[Capability::FsRead], &dir.0);
+        let v = rig
+            .d
+            .call(
+                methods::HOST_FS_READ,
+                &json!({ "path": dir.0.join("exact").to_string_lossy() }),
+            )
+            .unwrap();
+        assert_eq!(v["text"].as_str().unwrap().len(), MAX_READ as usize);
+    }
 }

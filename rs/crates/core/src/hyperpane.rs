@@ -152,6 +152,11 @@ mod tests {
 
     /// `build.rs` (frozen) names these five paths in `rerun-if-changed`; a rename that left
     /// them behind would silently stop re-staging the resources.
+    //
+    // Reads the shipped resource tree off disk, anchored at the repo root. cargo-mutants
+    // tests each mutant in a `.git`-less copy where that path does not resolve, so this is
+    // excluded from mutation builds via `RUSTFLAGS='--cfg avada_mutants'` (see rs/.cargo/mutants.toml).
+    #[cfg(not(avada_mutants))]
     #[test]
     fn the_shipped_tree_still_holds_what_build_rs_watches() {
         for rel in [
@@ -170,6 +175,11 @@ mod tests {
     /// tree may claim module ownership any more: a stray `skills/` directory here would be
     /// content the host ships and no registry knows about, which is exactly the confusion the
     /// extraction removed.
+    //
+    // Materializes the shipped resource tree, anchored at the repo root; unavailable in
+    // cargo-mutants' `.git`-less tree copy. Excluded from mutation builds via
+    // `RUSTFLAGS='--cfg avada_mutants'` (see rs/.cargo/mutants.toml).
+    #[cfg(not(avada_mutants))]
     #[test]
     fn the_host_ships_no_module_skills_of_its_own() {
         assert!(
@@ -178,6 +188,10 @@ mod tests {
         );
     }
 
+    // Materializes the shipped resource tree, anchored at the repo root; that path does not
+    // resolve in cargo-mutants' `.git`-less tree copy, so this is excluded from mutation builds
+    // via `RUSTFLAGS='--cfg avada_mutants'` (see rs/.cargo/mutants.toml).
+    #[cfg(not(avada_mutants))]
     #[test]
     fn materialize_into_copies_the_tree_and_leaves_local_files_be() {
         let tmp = scratch("into");

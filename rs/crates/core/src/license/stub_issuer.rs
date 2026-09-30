@@ -919,4 +919,129 @@ mod tests {
         assert_eq!(served.status, 200);
         assert_eq!(served.text(), token);
     }
+
+    /// The `Debug` impl is hand-written to name the issuer while keeping the signing key out
+    /// of logs. A blanked body would print nothing — useless in a panic message or a trace.
+    #[test]
+    fn debug_names_the_issuer_without_leaking_the_key() {
+        let stub = issuer();
+        let shown = format!("{stub:?}");
+        assert!(shown.contains("StubIssuer"), "{shown:?}");
+        assert!(shown.contains("base"), "{shown:?}");
+    }
+
+    /// `base()` hands back the configured issuer URL; callers build discovery and download
+    /// URLs from it, so a stubbed-out accessor would silently point them at the wrong host.
+    #[test]
+    fn base_returns_the_configured_issuer_url() {
+        let stub = StubIssuer::new("https://issuer.test");
+        assert_eq!(stub.base(), "https://issuer.test");
+    }
+
+    /// `revoke_product` revokes only *live* tokens of the *named* product — the guard is
+    /// `product == p && !revoked`. Flipped to `||` it would revoke every live token
+    /// regardless of product (and re-touch already-revoked ones). A second product with a
+    /// live token, left untouched, is what proves the conjunction.
+    #[test]
+    fn revoke_product_revokes_only_live_tokens_of_that_product() {
+        let stub = issuer();
+        let _pro1 = stub.issue(&Grant::for_product("acme/pro")).unwrap();
+        let _pro2 = stub.issue(&Grant::for_product("acme/pro")).unwrap();
+        let _other = stub.issue(&Grant::for_product("other/thing")).unwrap();
+        // Two live acme/pro tokens revoked; the || mutant would count three (other/thing too).
+        assert_eq!(stub.revoke_product("acme/pro"), 2);
+        // Already revoked: the !revoked half of the guard means nothing left to do.
+        assert_eq!(stub.revoke_product("acme/pro"), 0, "already revoked");
+        // other/thing was never in scope, so its one token is still live and revocable.
+        assert_eq!(
+            stub.revoke_product("other/thing"),
+            1,
+            "a different product was left untouched",
+        );
+    }
+
+    /// The admin credential is compared constant-time *and* length-checked:
+    /// `given.len() == want.len() && ct_eq`. Existing tests reject a short wrong token, which
+    /// the length check alone stops. Only a wrong token of the *same length* forces the
+    /// second half to matter — flip `&&` to `||` and it would be admitted.
+    #[test]
+    fn admin_ok_rejects_a_same_length_wrong_credential() {
+        let stub = issuer();
+        let real = stub.admin_token().to_string();
+        let mut chars: Vec<char> = real.chars().collect();
+        chars[0] = if chars[0] == 'a' { 'b' } else { 'a' };
+        let wrong: String = chars.into_iter().collect();
+        assert_eq!(wrong.len(), real.len(), "same length by construction");
+        assert_ne!(wrong, real);
+        let form = vec![("product".to_string(), "acme/pro".to_string())];
+        assert_eq!(
+            stub.handle_post("/admin/issue", Some(&wrong), &form).status,
+            401,
+            "a same-length forgery must still be rejected",
+        );
+    }
+
+    /// The handler tests above drive `handle_get`/`handle_post` directly, which leaves the
+    /// axum wiring — `router()`, `stub_get`, `stub_post`, `into_axum`, and `bearer_of` —
+    /// completely uncovered. Serving the router on a real loopback socket and speaking HTTP
+    /// to it exercises all five together: a stubbed `router()` (empty) 404s the JWKS probe,
+    /// a stubbed `stub_get`/`into_axum` returns an empty body that fails the kid check, a
+    /// stubbed `bearer_of` drops the credential so the authorized issue turns 401, and a
+    /// stubbed `stub_post` answers 200 where a rejection is expected.
+    #[tokio::test]
+    async fn the_axum_router_answers_over_a_real_loopback_socket() {
+        let stub = issuer();
+        let admin = stub.admin_token().to_string();
+        let expected_kid = stub.kid().to_string();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, stub.router()).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+
+        // GET the JWKS: exercises router() -> stub_get -> into_axum and returns real keys.
+        let jwks_url = format!("http://{addr}{}", crate::license::introspect::JWKS_PATH);
+        let jwks: Value = client
+            .get(&jwks_url)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            jwks["keys"][0]["kid"].as_str().unwrap(),
+            expected_kid,
+            "the router serves the issuer's real signing key",
+        );
+
+        // POST /admin/issue WITH a Bearer header: exercises stub_post + bearer_of + admin_ok.
+        let issued = client
+            .post(format!("http://{addr}/admin/issue"))
+            .header("authorization", format!("Bearer {admin}"))
+            .form(&[("product", "acme/pro")])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(issued.status(), 200, "the admin credential was accepted");
+        let body: Value = issued.json().await.unwrap();
+        assert!(
+            !body["jti"].as_str().unwrap().is_empty(),
+            "an issued license carries a jti",
+        );
+
+        // POST the same route WITHOUT the header: a rejection, not stub_post's Default 200.
+        let denied = client
+            .post(format!("http://{addr}/admin/issue"))
+            .form(&[("product", "acme/pro")])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), 401, "no credential, no issue");
+
+        server.abort();
+    }
 }

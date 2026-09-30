@@ -864,4 +864,98 @@ mod tests {
         assert!(s.load("acme/widget").unwrap().is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// `StoreError`'s `Display` is the text a caller logs or shows when the store fails, so
+    /// a blanked body (every arm an empty string) is a real regression. Each variant must
+    /// render a non-empty message naming the thing that went wrong.
+    #[test]
+    fn store_error_display_names_each_variant() {
+        let cases = [
+            (StoreError::BadProduct("acme".into()), "acme"),
+            (
+                StoreError::Io {
+                    path: PathBuf::from("/tmp/x.jwt"),
+                    source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope"),
+                },
+                "x.jwt",
+            ),
+            (
+                StoreError::Corrupt {
+                    path: PathBuf::from("/tmp/meta.json"),
+                    reason: "missing".into(),
+                },
+                "meta.json",
+            ),
+        ];
+        for (err, needle) in cases {
+            let shown = err.to_string();
+            assert!(!shown.is_empty(), "{err:?} rendered empty");
+            assert!(
+                shown.contains(needle),
+                "{err:?} rendered {shown:?}, missing {needle:?}",
+            );
+        }
+    }
+
+    /// `read_optional` folds a missing file into `Ok(None)` but must surface every other io
+    /// error. `load` consults `meta.json` as the presence marker first, so a valid meta is
+    /// written and the store driven with an empty in-memory vault — `read_token` then falls
+    /// through to the on-disk token path. Pointing that path at a *directory* makes
+    /// `std::fs::read` fail with `IsADirectory`, not `NotFound`, so the `NotFound` guard must
+    /// stay a guard: flipped to `true` it would report the read failure as "no license
+    /// installed".
+    #[test]
+    fn a_non_missing_io_error_reading_the_token_is_reported_not_hidden() {
+        let root = scratch("read-optional-io");
+        let s = FileLicenseStore::with_vault(&root, MemVault::new().boxed());
+        let dir = s.product_dir("acme/widget").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        // Presence marker present, so `load` proceeds past meta to read the token.
+        write_json(
+            &dir.join(META_FILE),
+            &Meta {
+                product: "acme/widget".into(),
+                issuer: "https://issuer.test".into(),
+            },
+        )
+        .unwrap();
+        // Make the token *path* a directory: read() then fails with IsADirectory, not NotFound.
+        std::fs::create_dir_all(dir.join(TOKEN_FILE)).unwrap();
+        assert!(matches!(s.load("acme/widget"), Err(StoreError::Io { .. })));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `remove` reports "nothing to remove" only for a genuinely absent directory; a real
+    /// io failure must propagate. `remove_dir_all` on a *regular file* fails with
+    /// NotADirectory, not NotFound, so the guard flipped to `true` would silently answer
+    /// `Ok(false)` instead of erroring.
+    #[test]
+    fn a_non_missing_io_error_removing_is_reported_not_hidden() {
+        let root = scratch("remove-io");
+        // `remove` calls `vault.delete` first; an in-memory vault keeps the real keychain untouched.
+        let s = FileLicenseStore::with_vault(&root, MemVault::new().boxed());
+        let dir = s.product_dir("acme/widget").unwrap();
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        // The product "directory" is actually a file: remove_dir_all fails with NotADirectory.
+        std::fs::write(&dir, b"not a directory").unwrap();
+        assert!(matches!(
+            s.remove("acme/widget"),
+            Err(StoreError::Io { .. })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `products` reports an empty list for a store that was never created, but any other
+    /// io failure must propagate. `read_dir` on a *file* fails with NotADirectory, not
+    /// NotFound, so the guard flipped to `true` would hide the failure as "no products".
+    #[test]
+    fn a_non_missing_io_error_listing_is_reported_not_hidden() {
+        let root = scratch("products-io");
+        let s = FileLicenseStore::with_vault(&root, MemVault::new().boxed());
+        std::fs::create_dir_all(&root).unwrap();
+        // The licenses dir is actually a file: read_dir fails with NotADirectory.
+        std::fs::write(s.dir(), b"not a directory").unwrap();
+        assert!(matches!(s.products(), Err(StoreError::Io { .. })));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -429,6 +429,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // pid_alive is live OS introspection judged directly: our own pid is unquestionably
+    // alive, and an absurd never-issued pid is dead. The guard's higher-level tests only
+    // ever feed pids where the two operands of `!is_empty() && !starts_with('Z')` agree
+    // (a live process => non-empty, non-zombie), so the conjunction survived there. A
+    // dead pid, whose `ps` output is empty, is the input that flips `&&` to `||`: with
+    // `&&` the empty output reads dead, with `||` it would read alive.
+    #[test]
+    fn pid_alive_true_for_self_false_for_absurd_pid() {
+        assert!(pid_alive(std::process::id()), "our own process is alive");
+        assert!(!pid_alive(DEAD_PID), "an absurd, never-issued pid is dead");
+    }
+
+    // process_name reads our own image name/path back from the OS. It must be Some, must
+    // carry the real test-binary name (`avada_core`) rather than empty or a constant,
+    // and a dead pid must have no name at all. This pins the function against the
+    // whole-body replacements (None / Some("") / Some("xyzzy")) on every platform.
+    #[test]
+    fn process_name_reads_our_binary_and_is_none_for_a_dead_pid() {
+        let name = process_name(std::process::id()).expect("current process has a name");
+        assert!(!name.is_empty(), "our process name is non-empty: {name:?}");
+        assert!(
+            name.to_lowercase().contains("avada_core"),
+            "names the real test binary, not a constant: {name:?}"
+        );
+        assert!(
+            is_avada_name(&name),
+            "our own binary reads as a avada process: {name:?}"
+        );
+        assert_eq!(process_name(DEAD_PID), None, "a dead pid has no name");
+    }
+
     #[tokio::test]
     async fn recorded_pid_reads_the_owner() {
         let dir = scratch("recorded");

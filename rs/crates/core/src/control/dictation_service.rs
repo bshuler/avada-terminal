@@ -340,6 +340,53 @@ mod tests {
         ))
     }
 
+    /// A recorder that *opens* — so the pane counts as recording — but writes no WAV and
+    /// simply waits to be stopped. Because no capture file is ever created, cancelling the
+    /// recording finds nothing to move into the real dictation archive
+    /// (`crate::stt::archive::keep` bails before it can rename or prune), so these tests
+    /// leave `~/Library/Application Support/avada/dictation` untouched and can never evict a
+    /// real recording. Same `{wav}`-placeholder shape as the recorder in `stt::dictation`.
+    #[cfg(unix)]
+    fn idle_recorder() -> Vec<String> {
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "sleep 30".into(),
+            "sh".into(),
+            "{wav}".into(),
+        ]
+    }
+
+    /// A `DictationService` whose settings name [`idle_recorder`], so `start` really opens a
+    /// (silent) recording rather than reporting "no microphone".
+    #[cfg(unix)]
+    fn recording_service(tag: &str) -> DictationService {
+        let p = temp_settings(tag);
+        stt::save(
+            &p,
+            &SttSettings {
+                record_template: Some(idle_recorder()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        DictationService::new(p)
+    }
+
+    /// A `Shared` with an empty session table: every `write`/`paste` to it fails with
+    /// `NotFound`, which is exactly what the `apply` error-branch tests want to observe.
+    fn shared_for(dir: &std::path::Path) -> Arc<Shared> {
+        use crate::session_manager::SessionManager;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        Shared::new(
+            Arc::new(SessionManager::new(tx)),
+            true,
+            "0.0.0-test",
+            dir.join("control.json"),
+            dir.join("speech.json"),
+        )
+    }
+
     #[test]
     fn a_fresh_service_is_recording_nothing() {
         let d = DictationService::new(temp_settings("fresh"));
@@ -383,6 +430,179 @@ mod tests {
         d.reload();
         assert!(d.submit_after_insert());
         let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- recording lifecycle ----
+
+    /// One strong test over `start`/`start_live`/`is_recording`/`recording_panes`/`cancel`:
+    /// a real (silent) recording opens, is visible in exactly the right places, and cancel
+    /// actually tears it down.
+    #[cfg(unix)]
+    #[test]
+    fn starting_opens_a_recording_visible_everywhere_it_should_be() {
+        let d = recording_service("start");
+
+        // `start` names the recorder that actually opened — the custom one we configured.
+        // A stubbed `Ok("")` / `Ok("xyzzy")` start would return the wrong string, and the
+        // `== Denied` permission gate flipped to `!= Denied` would make this an `Err`
+        // (prompt(Microphone) is `Undetermined`, never `Denied`, on this platform), so the
+        // `.unwrap()` alone would then fail.
+        assert_eq!(d.start("pane-A").unwrap(), "custom");
+
+        assert!(
+            d.is_recording("pane-A"),
+            "the pane that started is recording"
+        );
+        assert!(
+            !d.is_recording("pane-B"),
+            "a pane that never started must read as not recording"
+        );
+        assert_eq!(d.recording_panes(), vec!["pane-A".to_string()]);
+
+        // `cancel` really stops it; a stubbed no-op `cancel` would leave it recording.
+        d.cancel("pane-A");
+        assert!(!d.is_recording("pane-A"), "cancel stops the recording");
+        assert!(d.recording_panes().is_empty());
+    }
+
+    /// `cancel_all` stops every recording, not just one. A no-op `cancel_all` leaves them up.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_all_stops_every_recording_at_once() {
+        let d = recording_service("cancelall");
+        d.start("pane-1").unwrap();
+        d.start("pane-2").unwrap();
+        assert_eq!(d.recording_panes().len(), 2, "both panes are recording");
+
+        d.cancel_all();
+        assert!(
+            d.recording_panes().is_empty(),
+            "cancel_all must clear every pane"
+        );
+    }
+
+    /// `start_dictation` opens a recording through the control-server `Shared` state and
+    /// reports the recorder that opened. A stubbed `Ok("")` / `Ok("xyzzy")` would not.
+    #[cfg(unix)]
+    #[test]
+    fn start_dictation_opens_a_recording_through_shared_state() {
+        let dir =
+            std::env::temp_dir().join(format!("hp-dictation-svc-{}-startdict", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // `Shared::new` derives its `stt.json` from the speech-settings path's directory, so
+        // the fake recorder has to be on disk there before `Shared::new` reads it.
+        stt::save(
+            &dir.join("stt.json"),
+            &SttSettings {
+                record_template: Some(idle_recorder()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let shared = shared_for(&dir);
+
+        assert_eq!(
+            start_dictation(&shared, "pane-X", "uid-X").unwrap(),
+            "custom"
+        );
+        assert!(shared.dictation.is_recording("pane-X"));
+        shared.dictation.cancel_all();
+    }
+
+    // ---- apply ----
+
+    /// A backspace whose write is refused surfaces as a *correction* error — and never
+    /// touches the paste branch when there is nothing to insert.
+    ///
+    /// Pins the `edit.backspaces > 0` guard with a positive count: `> 0` is true, so the
+    /// write runs and fails; `==`/`<` would both skip it and return `Ok(())`, and the
+    /// whole-body `Ok(())` mutant loses the `Err` entirely.
+    #[test]
+    fn apply_reports_a_refused_backspace_as_a_correction() {
+        let dir =
+            std::env::temp_dir().join(format!("hp-dictation-svc-{}-apply-bs", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = shared_for(&dir);
+
+        let err = apply(
+            &shared,
+            "no-such-uid",
+            &Edit {
+                backspaces: 2,
+                insert: String::new(),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("correction"), "wrong branch/message: {err}");
+        assert!(
+            !err.contains("transcript"),
+            "an empty insert must not reach the paste branch: {err}"
+        );
+    }
+
+    /// With nothing to do — no backspaces, no insert — `apply` is a clean `Ok(())`.
+    ///
+    /// This is the boundary the `>=`/`==` mutants get wrong: `0 > 0` is false so the write
+    /// is skipped, but `0 >= 0` / `0 == 0` are true, so those mutants would run the write
+    /// against the unknown uid and return `Err`.
+    #[test]
+    fn apply_with_nothing_to_do_succeeds() {
+        let dir = std::env::temp_dir().join(format!(
+            "hp-dictation-svc-{}-apply-noop",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = shared_for(&dir);
+
+        assert!(
+            apply(
+                &shared,
+                "no-such-uid",
+                &Edit {
+                    backspaces: 0,
+                    insert: String::new(),
+                },
+            )
+            .is_ok(),
+            "an empty edit writes nothing, so an unknown uid is never touched"
+        );
+    }
+
+    /// An insert whose paste is refused surfaces as a *transcript* error.
+    ///
+    /// Pins the `!edit.insert.is_empty()` guard: a non-empty insert takes the paste branch
+    /// and fails; deleting the `!` would flip the test so a non-empty insert is *skipped*
+    /// and `apply` returns `Ok(())` instead.
+    #[test]
+    fn apply_reports_a_refused_insert_as_a_transcript() {
+        let dir =
+            std::env::temp_dir().join(format!("hp-dictation-svc-{}-apply-ins", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = shared_for(&dir);
+
+        let err = apply(
+            &shared,
+            "no-such-uid",
+            &Edit {
+                backspaces: 0,
+                insert: "hello".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("transcript"), "wrong branch/message: {err}");
+    }
+
+    // ---- clean_for_pane ----
+
+    /// The pane-shaping every dictated word gets: whisper timestamps stripped (from
+    /// `clean_transcript`) and control bytes flattened (from `sanitize_for_pane`), in one
+    /// call. An exact result, so a stubbed `String::new()` or constant `"xyzzy"` both fail.
+    #[test]
+    fn clean_for_pane_strips_timestamps_and_flattens_control_bytes() {
+        assert_eq!(
+            clean_for_pane("[00:00.000 --> 00:02.000]  open the\u{7f} file"),
+            "open the file"
+        );
     }
 
     // ---- sanitize_for_pane ----

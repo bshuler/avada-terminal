@@ -1314,6 +1314,99 @@ mod tests {
         assert_eq!(shared.compute_activity(&pane), Activity::Busy);
     }
 
+    /// `take_projects_dirty` is a read-and-CLEAR: it must return the flag's value *before* the
+    /// swap and leave it false. A fresh `Shared` has never been marked, so the first read is
+    /// false. (Kills `swap(false, …)` → `swap(true, …)`, i.e. the mutant that stores `true`
+    /// while returning the old value: it would report a spurious dirty on an untouched flag,
+    /// and — worse — set the flag so every subsequent tick sees dirty forever.)
+    #[test]
+    fn take_projects_dirty_is_false_until_marked_and_clears_after_read() {
+        let (shared, _uid) = shared_with_pane();
+        // Never marked ⇒ the very first read is false. Under the `swap(true,…)` mutant this
+        // read still returns the old `false`, so pin the follow-up read too: the mutant would
+        // have STORED true, making the second read true.
+        assert!(!shared.take_projects_dirty(), "untouched flag reads clean");
+        assert!(
+            !shared.take_projects_dirty(),
+            "and a clean flag stays clean"
+        );
+
+        // Mark once ⇒ exactly one read returns true, then it clears.
+        shared.mark_projects_dirty();
+        assert!(shared.take_projects_dirty(), "the mark is observed once");
+        assert!(
+            !shared.take_projects_dirty(),
+            "and the read cleared it back to false"
+        );
+    }
+
+    /// A minimal in-test pty: it captures nothing and does nothing, so a session can exist
+    /// (and carry a `last_output_at`) without a real shell.
+    struct NoopPty;
+    impl crate::session::pty::Pty for NoopPty {
+        fn write(&self, _data: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn resize(&self, _cols: u16, _rows: u16) -> io::Result<()> {
+            Ok(())
+        }
+        fn kill(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The legacy fallback in `activity_for` compares `now_ms() - last_output_at` against the
+    /// idle threshold: a pane that emitted output *just now* is BUSY (elapsed ≈ 0 < 10s), and
+    /// only crosses to Idle once the silence exceeds the threshold. (Kills `now - t` → `now + t`
+    /// at line 403: with a real epoch `t`, `now + t` is ~2×now, hugely exceeding any threshold,
+    /// so the mutant would misreport a freshly-active pane as Idle.)
+    #[tokio::test]
+    async fn activity_for_treats_fresh_output_as_busy_via_the_silence_fallback() {
+        let (tx, _rx) = unbounded_channel();
+        let sessions = SessionManager::new(tx);
+
+        // Inject a session with a captured sink, no real process.
+        let slot: Arc<Mutex<Option<crate::session_manager::EventSink>>> =
+            Arc::new(Mutex::new(None));
+        let slot2 = Arc::clone(&slot);
+        let factory: crate::session_manager::SpawnFn = Box::new(move |_spec, sink| {
+            *slot2.lock().unwrap() = Some(sink);
+            Ok(Box::new(NoopPty) as Box<dyn crate::session::pty::Pty>)
+        });
+        sessions
+            .create_with(
+                crate::session_manager::SpawnOptions {
+                    uid: "live".into(),
+                    cols: Some(80),
+                    rows: Some(24),
+                    ..Default::default()
+                },
+                factory,
+            )
+            .expect("session created");
+        let sink = slot.lock().unwrap().clone().expect("sink captured");
+
+        // Drive one output event; the 16 ms batch timer stamps `last_output_at`.
+        sink(crate::session::pty::PtyEvent::Data(b"x".to_vec()));
+        let mut stamped = false;
+        for _ in 0..200 {
+            if sessions.last_output_at("live").is_some() {
+                stamped = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(stamped, "the batch timer must record last_output_at");
+
+        // No prompt markers were emitted ⇒ liveness gate is off ⇒ the silence fallback runs.
+        // Fresh output (elapsed well under 10 s) ⇒ Busy. The `+` mutant would compute a huge
+        // pseudo-elapsed and return Idle.
+        assert_eq!(
+            activity_for(&sessions, 10_000, "live", PaneStatus::Running),
+            Activity::Busy,
+        );
+    }
+
     #[test]
     fn discovery_url_shape() {
         assert_eq!(

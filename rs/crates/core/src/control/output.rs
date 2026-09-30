@@ -541,4 +541,106 @@ mod tests {
     fn does_not_flag_an_agent_that_is_mid_turn_working() {
         assert!(!detect_awaiting_input(WORKING));
     }
+
+    // ── mutation guards ─────────────────────────────────────────────────────
+    // Tight boundary/behaviour tests targeting arithmetic, comparison and boolean
+    // mutants in the pure cores. Each asserts the exact behaviour that flips when a
+    // single operator is mutated (see the comments for which mutant each kills).
+
+    #[test]
+    fn wait_decision_timeout_uses_now_minus_start_not_plus() {
+        // Streaming (last output == now → not quiet) so we reach the timeout branch.
+        // now - start = 1000 - 400 = 600 < 700 → Wait. A `now + start` mutant would
+        // compute 1400 >= 700 → Timeout, so this pins the `-` at the else-if.
+        assert_eq!(
+            wait_decision(Some(1000), 100, None, 1000, 400, 600, 700),
+            WaitVerdict::Wait
+        );
+    }
+
+    #[test]
+    fn next_poll_delay_deadline_uses_now_minus_start_not_plus() {
+        // until_deadline = 810 - (1000 - 200) = 10 binds below the poll band → 10.
+        // A `now + start` mutant yields 810 - 1200 = -390, which clamps up to 1.
+        assert_eq!(next_poll_delay(Some(1000), 1000, 200, 600, 810), 10);
+    }
+
+    #[test]
+    fn is_word_true_for_alnum_and_underscore_false_otherwise() {
+        // Alnum-only case: left true, right false → `||` true but `&&` false, and
+        // rules out the `-> false` mutant.
+        assert!(is_word('a'));
+        assert!(is_word('Z'));
+        assert!(is_word('7'));
+        // Underscore-only case: left false, right true → `||` true, `&&` false.
+        assert!(is_word('_'));
+        assert!(!is_word(' '));
+        assert!(!is_word('-'));
+    }
+
+    #[test]
+    fn bounded_contains_boundary_and_arithmetic() {
+        // Match only on the SECOND occurrence (the first "enter" is glued to a word
+        // char), forcing correct arithmetic on a later loop iteration: `idx = start
+        // + pos` (`-`/`*` mutants underflow-panic or run off the end), `start = idx
+        // + 1` must advance, and the `start > s.len()` guard must not be `<`
+        // (a `<` mutant would break early and miss the real match).
+        assert!(bounded_contains("xenter enter", "enter"));
+        // Preceded by a word char with no other occurrence → not a bounded match.
+        // Kills the deleted `!` in before_ok (which would accept a glued prefix).
+        assert!(!bounded_contains("xenter", "enter"));
+        // Followed by a word char → after_ok is false; a `&&`→`||` mutant on the
+        // final predicate would wrongly accept "enter" inside "enters".
+        assert!(!bounded_contains("enters", "enter"));
+        // Whole-string match: end == s.len() drives after_ok (kills `==`→`!=`, which
+        // then indexes past the end and panics) and idx == 0 drives before_ok.
+        assert!(bounded_contains("enter", "enter"));
+    }
+
+    #[test]
+    fn matches_press_key_recognizes_each_keyword() {
+        // Kills the `-> false` mutant, the `==`→`!=` slice compare, the `<=`→`>`
+        // loop bound, `i + len`→`i * len` for j's start, the inner `j < len`
+        // comparisons, the `j += 1` step, and the first `||` (enter/return).
+        assert!(matches_press_key("press enter"));
+        // Second `||` (return vs any key): with only "return" true, `A || (B && C)`
+        // collapses to false unless this branch is a real `||`.
+        assert!(matches_press_key("press return"));
+        assert!(matches_press_key("press any key"));
+    }
+
+    #[test]
+    fn matches_press_key_scans_past_earlier_text() {
+        // "press" starts at index 3, beyond the reach of a bugged `i * len` bound
+        // (which only visits i = 0,1,2). Also, a non-advancing `i *= 1` step would
+        // spin forever here (timeout) instead of finding the match.
+        assert!(matches_press_key("go press enter"));
+    }
+
+    #[test]
+    fn matches_press_key_requires_a_keyword_after_the_space() {
+        // Trailing whitespace runs j to b.len(); the correct `j < b.len()` stops
+        // there, but a `j <= b.len()` mutant indexes b[b.len()] and panics.
+        assert!(!matches_press_key("press "));
+        // No whitespace after "press" → never a match.
+        assert!(!matches_press_key("pressenter"));
+    }
+
+    #[test]
+    fn detect_awaiting_input_each_do_you_clause_stands_alone() {
+        // Each line matches EXACTLY ONE bounded_contains clause (no '?', no ❯, no
+        // y/n, no "press"), so turning that clause's leading `||` into `&&` — which
+        // ANDs it with the preceding clause (always false here) — flips the whole
+        // result to false. One line per targeted `||`.
+        assert!(detect_awaiting_input("Do you want to proceed"));
+        assert!(detect_awaiting_input("Do you wish to proceed"));
+        assert!(detect_awaiting_input("Do you trust this program"));
+    }
+
+    #[test]
+    fn detect_awaiting_input_scans_back_over_trailing_blank_lines() {
+        // A trailing blank line forces the back-scan loop to run and terminate via
+        // `i -= 1`. A `i /= 1` mutant leaves i pinned and spins forever (timeout).
+        assert!(!detect_awaiting_input("all done\n"));
+    }
 }

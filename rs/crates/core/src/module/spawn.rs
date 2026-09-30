@@ -349,6 +349,99 @@ mod tests {
         assert!(matches!(r, Err(HandshakeError::NotAHello(_))));
     }
 
+    #[test]
+    fn spawn_error_display_names_every_variant() {
+        let io = || io::Error::other("boom");
+        let m = SpawnError::HashMismatch {
+            expected: "e".repeat(64),
+            actual: "a".repeat(64),
+        }
+        .to_string();
+        assert!(m.contains("binary hash"));
+        assert!(m.contains("does not match the install record"));
+        // The message shows the shortened hashes, not the full 64 chars.
+        assert!(m.contains(&"a".repeat(12)));
+        assert!(!m.contains(&"a".repeat(13)));
+
+        assert!(SpawnError::Unreadable(io())
+            .to_string()
+            .contains("cannot read the module binary: boom"));
+        assert!(SpawnError::Notarized {
+            reason: "bad-sig".into(),
+        }
+        .to_string()
+        .contains("refused by the notarization policy: bad-sig"));
+        assert!(SpawnError::Transport(io())
+            .to_string()
+            .starts_with("transport: boom"));
+        assert!(SpawnError::Exec(io())
+            .to_string()
+            .contains("cannot start the module: boom"));
+    }
+
+    #[test]
+    fn handshake_error_display_names_every_variant() {
+        assert_eq!(
+            HandshakeError::Closed.to_string(),
+            "module closed before saying hello"
+        );
+        assert!(HandshakeError::NotAHello("junk".into())
+            .to_string()
+            .contains("first line was not module.hello: junk"));
+        let c = HandshakeError::Contract {
+            module_min: 7,
+            module_max: 9,
+        }
+        .to_string();
+        assert!(c.contains("module speaks contract 7..=9"));
+        assert!(c.contains(&format!("host speaks {CONTRACT_VERSION}")));
+        assert_eq!(
+            HandshakeError::ManifestMismatch.to_string(),
+            "manifest differs from the install record"
+        );
+        assert!(HandshakeError::Io(io::Error::other("boom"))
+            .to_string()
+            .contains("cannot write host hello: boom"));
+    }
+
+    #[test]
+    fn short_truncates_to_twelve_and_passes_short_input_through() {
+        // A full-length hash is cut to its first twelve hex characters — this rejects
+        // both an empty replacement and any constant replacement.
+        assert_eq!(short("0123456789abcdef0123456789abcdef"), "0123456789ab");
+        // Anything shorter than twelve is returned whole.
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short("012345678901"), "012345678901");
+    }
+
+    #[test]
+    fn host_hello_answer_carries_host_kind_and_negotiated_contract_version() {
+        // A reply whose `kind` and `contract_version` deliberately differ from what the
+        // answer must carry, so dropping either field (falling back to `..reply`) is caught.
+        let mut r = reply();
+        r.kind = HelloKind::Module;
+        r.contract_version = 999;
+
+        let record = testkit::record(&[]);
+        let hello = testkit::module_hello(&record.manifest);
+        let mut reader = LineReader::new(Box::new(Cursor::new(
+            format!("{}\n", serde_json::to_string(&hello).unwrap()).into_bytes(),
+        )));
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut writer = LineWriter::new(Box::new(Buf(out.clone())));
+        let token = Token::mint();
+        let h = handshake(&mut reader, &mut writer, &record, &r, &token).unwrap();
+        assert_eq!(h.contract_version, CONTRACT_VERSION);
+
+        let written = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        let parsed: HostHello = serde_json::from_str(written.trim()).unwrap();
+        // Kills the deleted `kind` field: it would otherwise inherit reply's Module.
+        assert_eq!(parsed.kind, HelloKind::Host);
+        // Kills the deleted `contract_version` field: it would otherwise inherit 999.
+        assert_eq!(parsed.contract_version, CONTRACT_VERSION);
+        assert_ne!(parsed.contract_version, 999);
+    }
+
     #[cfg(unix)]
     #[test]
     fn spawn_sets_the_environment_and_the_child_sees_the_descriptor() {

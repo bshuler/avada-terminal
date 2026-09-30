@@ -297,6 +297,12 @@ mod tests {
         let mut w = LineWriter::new(Box::new(Sink(sink.clone())));
         w.write_line("x").unwrap();
         assert_eq!(&*sink.lock().unwrap(), b"x\n");
+        // Exactly MAX_LINE bytes is accepted: the guard is `line.len() > MAX_LINE`, so the
+        // boundary length passes through and only length MAX_LINE + 1 is refused.
+        sink.lock().unwrap().clear();
+        let exact = "a".repeat(MAX_LINE);
+        w.write_line(&exact).unwrap();
+        assert_eq!(sink.lock().unwrap().len(), MAX_LINE + 1);
         let big = "y".repeat(MAX_LINE + 1);
         assert!(w.write_line(&big).is_err());
     }
@@ -318,5 +324,66 @@ mod tests {
             reader.read_message(),
             Ok(None) | Err(FrameError::Io(_))
         ));
+    }
+
+    #[test]
+    fn debug_for_closer_names_it() {
+        // If `Debug::fmt` is stubbed to `Ok(())` it writes nothing; the real impl
+        // writes the type name.
+        let closer = Closer(Box::new(|| {}));
+        assert_eq!(format!("{closer:?}"), "Closer");
+    }
+
+    #[test]
+    fn frame_error_display_covers_each_variant() {
+        // A stubbed `Display::fmt` returning `Ok(())` yields an empty string for every
+        // variant; the real impl renders distinct, non-empty text.
+        let io = FrameError::Io(io::Error::other("boom"));
+        assert_eq!(io.to_string(), "io: boom");
+
+        let too_long = FrameError::LineTooLong;
+        assert_eq!(
+            too_long.to_string(),
+            format!("line longer than {MAX_LINE} bytes")
+        );
+
+        let proto = FrameError::Protocol(RpcError::new(ErrorCode::ParseError, "bad".to_string()));
+        let text = proto.to_string();
+        assert!(text.starts_with("protocol: "), "got {text:?}");
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn read_line_rejects_only_lengths_strictly_over_the_limit() {
+        // Exactly MAX_LINE bytes is accepted: the guard is `buf.len() > MAX_LINE`, so the
+        // limit itself is fine. Mutating `>` to `>=` (or `==`) would reject this line.
+        let exact = "a".repeat(MAX_LINE);
+        let mut r = LineReader::new(Box::new(Cursor::new(format!("{exact}\n").into_bytes())));
+        assert_eq!(r.read_line().unwrap().as_deref(), Some(exact.as_str()));
+
+        // One byte over the limit is a LineTooLong error. Mutating `>` to `==` would let an
+        // oversize line through (its running length need never land exactly on MAX_LINE).
+        let over = "a".repeat(MAX_LINE + 1);
+        let mut r = LineReader::new(Box::new(Cursor::new(format!("{over}\n").into_bytes())));
+        assert!(matches!(r.read_line(), Err(FrameError::LineTooLong)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pair_yields_connected_usable_endpoints() {
+        // `pair()` must hand back two real, connected endpoints — a stub returning inert
+        // defaults would carry no live descriptor and never round-trip.
+        let (host, child) = pair().unwrap();
+        assert!(
+            child.raw_fd() >= 0,
+            "child end must carry a real descriptor"
+        );
+        let (mut reader, _writer, _closer) = host.split().unwrap();
+        let mut child_stream = child.into_stream();
+        child_stream
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"module.event\"}\n")
+            .unwrap();
+        let msg = reader.read_message().unwrap().unwrap();
+        assert!(matches!(msg, Message::Notification(n) if n.method == "module.event"));
     }
 }

@@ -360,6 +360,15 @@ mod unix_tests {
     }
 
     // End-to-end through the seam: a fake $SHELL drives the whole provider.
+    //
+    // This spawns a real login shell and captures its output under a 3s timeout.
+    // cargo-mutants runs the whole suite per mutant, so under a sweep's concurrent build
+    // load the child can miss that window from scheduler starvation and fall back to `None`,
+    // failing the baseline while an unrelated subsystem is mutated. This bites the serial
+    // (`-j1`) module sweep as badly as a parallel (`-j`) one — the baseline build churns the
+    // CPU regardless of `-j`. Excluded from every mutation build via the always-on
+    // `RUSTFLAGS='--cfg avada_mutants'`; it still runs in every normal `cargo test`.
+    #[cfg(not(avada_mutants))]
     #[test]
     fn provider_uses_dollar_shell_and_falls_back_on_failure() {
         let shell = fake_shell("seam", r#"printf 'FROM_LOGIN=1\0PATH=/login/bin\0'"#);

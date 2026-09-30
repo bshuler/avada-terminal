@@ -1862,6 +1862,317 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // ---- mutation-closing tests ----
+
+    #[test]
+    fn queue_prompt_with_both_fields_reaches_enqueue_not_the_missing_arm() {
+        let mut m = model_one_window();
+        let s = sessions();
+        // Both sessionId and text present, so the `(Some(s), Some(t))` arm runs `enqueue`. An
+        // INVALID session id makes enqueue fail with its OWN distinct message *before* any
+        // global queue write — a different string from the `_ =>` missing-fields message the
+        // deleted arm would produce. Pinning the message distinguishes "arm ran" from "arm
+        // deleted", both of which are HTTP 400.
+        let cmd =
+            json!({ "type": "queuePrompt", "sessionId": "bad id with spaces", "text": "hello" });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 400);
+        let err = r.body["error"].as_str().unwrap();
+        assert!(err.contains("not a valid session id"), "{err}");
+        assert!(!err.contains("needs sessionId and text"), "{err}");
+    }
+
+    #[test]
+    fn focus_pane_with_a_pane_project_field_does_not_mark_projects_dirty() {
+        let mut m = model_one_window();
+        let s = sessions();
+        // Only a successful `newPane` naming a project marks the registry dirty. A `focusPane`
+        // that merely carries a `pane.project` must NOT — guarding the `ty == "newPane"` gate
+        // (a `!=` mutation there would flag every non-newPane command with a `/pane/project`).
+        let cmd = json!({
+            "type": "focusPane", "windowId": 1, "paneId": "ghost",
+            "pane": { "project": "anything" }
+        });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        assert!(!r.projects_dirty, "focusPane must never set projects_dirty");
+    }
+
+    #[tokio::test]
+    async fn attach_as_panes_inserts_panes_and_returns_pane_ids() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let cmd = json!({
+            "type": "attach", "windowId": 1, "as": "panes",
+            "groups": [ { "panes": [ { "command": "echo a" }, { "command": "echo b" } ] } ]
+        });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        assert!(r.notify_state);
+        let ids = r.body["result"].as_array().expect("array of ids");
+        assert_eq!(ids.len(), 2);
+        // The `unit == "panes"` branch returns PANE ids, each inserted into the model (a `!=`
+        // mutation would route to the tab branch and return tab ids; a deleted `!` on
+        // `insert_pane` would 404 on a *successful* insert).
+        for id in ids {
+            let id = id.as_str().unwrap();
+            assert!(m.pane(id).is_some(), "expected a real pane for {id}");
+            assert!(
+                m.tab_window(id).is_none(),
+                "{id} is a pane id, not a tab id"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_as_tabs_inserts_a_tab_and_returns_tab_ids() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let cmd = json!({
+            "type": "attach", "windowId": 1,
+            "groups": [ { "title": "Grp", "panes": [ { "command": "echo a" } ] } ]
+        });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        assert!(r.notify_state);
+        let ids = r.body["result"].as_array().expect("array of ids");
+        assert_eq!(ids.len(), 1);
+        let tab_id = ids[0].as_str().unwrap();
+        // The default `as: tab` branch returns a real new TAB id in window 1 — not a pane id
+        // (a `!=` mutation would route to the panes branch; a deleted `!` on `insert_tab`
+        // would 404 on a successful insert).
+        assert_eq!(m.tab_window(tab_id), Some(1));
+        assert!(m.pane(tab_id).is_none());
+    }
+
+    #[test]
+    fn tail_bytes_walks_forward_to_a_char_boundary_and_respects_the_cap() {
+        // Cap larger than the string → the whole string comes back untouched.
+        assert_eq!(tail_bytes("hello", 8), "hello");
+
+        // 5 ASCII bytes then five 4-byte chars = 25 bytes. Keeping the last 10 bytes lands the
+        // naive cut (`len - max` = 15) INSIDE the third multi-byte char, so the boundary walk
+        // moves FORWARD (`start += 1`) to byte 17, yielding exactly the last two whole chars.
+        // This pins the subtraction, the `+= 1` direction, and the boundary loop together.
+        let s = format!("{}{}", "x".repeat(5), "🎉".repeat(5));
+        assert_eq!(s.len(), 25);
+        assert_eq!(tail_bytes(&s, 10), "🎉🎉");
+
+        // The real tail size flows through the `8 * 1024` const: 2000 bytes is well under 8192
+        // (kept whole) but over the mutated `8 + 1024 = 1032` (which would truncate to 1032).
+        let big = "a".repeat(2000);
+        assert_eq!(tail_bytes(&big, RECOVER_TAIL_BYTES).len(), 2000);
+    }
+
+    #[test]
+    fn error_class_str_names_every_class() {
+        assert_eq!(error_class_str(ErrorClass::Transient), "transient");
+        assert_eq!(error_class_str(ErrorClass::AccountLimit), "account-limit");
+        assert_eq!(error_class_str(ErrorClass::Poisoned), "poisoned");
+        assert_eq!(error_class_str(ErrorClass::Unknown), "unknown");
+    }
+
+    #[tokio::test]
+    async fn recover_repair_refuses_a_non_poisoned_class_without_force() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let open = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi" } });
+        let pane_id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Healthy tail (no API Error → class `None`) and no `force` → the guard fires BEFORE
+        // any session resolution and returns the "refusing to repair" error. A deleted `!`,
+        // a flipped `!=`, or an `Ok(Default)` body would each change this observable outcome.
+        let cmd = json!({ "type": "recoverPane", "paneId": pane_id, "action": "repair" });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 500, "{:?}", r.body);
+        let err = r.body["error"].as_str().unwrap();
+        assert!(err.contains("refusing to repair"), "{err}");
+        assert!(err.contains("not poisoned"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn recover_repair_with_force_bypasses_the_guard_and_then_resolves() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let open = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi" } });
+        let pane_id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // `force:true` must skip the class guard entirely (the `&&` in `!force && class != …`).
+        // With no cwd on the pane, session resolution is what fails next — a DIFFERENT error
+        // than "refusing to repair", proving the guard was bypassed rather than taken.
+        let cmd = json!({
+            "type": "recoverPane", "paneId": pane_id, "action": "repair", "force": true
+        });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 500, "{:?}", r.body);
+        let err = r.body["error"].as_str().unwrap();
+        assert!(err.contains("no cwd"), "{err}");
+        assert!(!err.contains("refusing to repair"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn recover_resume_proceeds_past_the_guard_for_a_non_unknown_class() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let open = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi" } });
+        let pane_id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Healthy tail (class `None`, not `Unknown`) and no force → the `!force && class ==
+        // Unknown` guard must NOT fire; resolution then fails on the missing cwd. An `&&`→`||`
+        // mutation would (wrongly) refuse here with "refusing to resume".
+        let cmd = json!({ "type": "recoverPane", "paneId": pane_id, "action": "resume" });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 500, "{:?}", r.body);
+        let err = r.body["error"].as_str().unwrap();
+        assert!(err.contains("no cwd"), "{err}");
+        assert!(!err.contains("refusing to resume"), "{err}");
+    }
+
+    #[test]
+    fn resume_target_from_marker_carries_config_dir_only_when_non_empty() {
+        let with_cfg = crate::claude_panes::PaneClaudeSession {
+            session_id: "sess-1".to_string(),
+            cwd: "/work/dir".to_string(),
+            config_dir: "/cfg/acct".to_string(),
+        };
+        let t = ResumeTarget::from_marker(&with_cfg);
+        assert_eq!(t.session_id, "sess-1");
+        assert_eq!(t.cwd, "/work/dir");
+        // A non-empty config_dir is carried through (a deleted `!` would drop it to `None`).
+        assert_eq!(t.config_dir, Some("/cfg/acct".to_string()));
+
+        let no_cfg = crate::claude_panes::PaneClaudeSession {
+            session_id: "sess-2".to_string(),
+            cwd: "/w".to_string(),
+            config_dir: String::new(),
+        };
+        assert_eq!(ResumeTarget::from_marker(&no_cfg).config_dir, None);
+    }
+
+    // `cat` echoes its stdin, so the typed resume line becomes observable output — POSIX only.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn respawn_resuming_swaps_the_uid_and_injects_the_account_prefix() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let open = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "cat" } });
+        let pane_id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let old_uid = m.pane(&pane_id).unwrap().session_uid.clone();
+        let pane = m.pane(&pane_id).unwrap().clone();
+
+        let target = ResumeTarget {
+            session_id: "0198c4a2-1f2e-4d3c-8a5b-9e7f6c5d4b3a".to_string(),
+            cwd: "/tmp".to_string(),
+            config_dir: Some("/tmp/acct-cfg".to_string()),
+        };
+        respawn_resuming(&mut m, &s, None, &pane, &target, None, None)
+            .expect("respawn should succeed");
+
+        // The pane was actually respawned — a no-op `Ok(())` body would leave the uid untouched.
+        let new_uid = m.pane(&pane_id).unwrap().session_uid.clone();
+        assert_ne!(new_uid, old_uid, "respawn must swap in a fresh session uid");
+
+        // The typed resume line (shell-hosted pane path) must carry the `CLAUDE_CONFIG_DIR`
+        // prefix injected from the target's config_dir by the `if !already_set` block.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let out = s.replay(&new_uid).unwrap_or_default();
+            if out.contains("CLAUDE_CONFIG_DIR='/tmp/acct-cfg'")
+                && out.contains("--resume 0198c4a2")
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "typed resume line never appeared; got {:?}",
+                s.replay(&new_uid)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn new_pane_preserves_nonempty_args_and_meta() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let cmd = json!({
+            "type": "newPane", "windowId": 1,
+            "pane": { "command": "echo", "args": ["a", "b"], "meta": { "role": "worker" } }
+        });
+        let id = handle_command(&mut m, &s, None, None, &cmd, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let pane = m.pane(&id).unwrap();
+        // Non-empty args survive: `.filter(|a| !a.is_empty())` keeps them (a deleted `!` drops
+        // every non-empty list to `None`).
+        assert_eq!(
+            pane.args.as_deref(),
+            Some(&["a".to_string(), "b".to_string()][..])
+        );
+        // Non-empty meta survives the same way (`meta.filter(|m| !m.is_empty())`).
+        assert_eq!(
+            pane.meta.as_ref().unwrap().get("role").map(String::as_str),
+            Some("worker")
+        );
+    }
+
+    #[tokio::test]
+    async fn new_pane_label_length_boundary_is_exactly_eighty() {
+        let mut m = model_one_window();
+        let s = sessions();
+        // 80 chars is allowed — the check is `n > 80`, not `>= 80` or `== 80`.
+        let ok = json!({ "type": "newPane", "windowId": 1, "pane": { "label": "a".repeat(80) } });
+        let r = handle_command(&mut m, &s, None, None, &ok, &speech());
+        assert_eq!(
+            r.status, 200,
+            "80-char label should be accepted: {:?}",
+            r.body
+        );
+
+        // 81 chars is rejected.
+        let bad = json!({ "type": "newPane", "windowId": 1, "pane": { "label": "a".repeat(81) } });
+        let r = handle_command(&mut m, &s, None, None, &bad, &speech());
+        assert_eq!(
+            r.status, 500,
+            "81-char label should be rejected: {:?}",
+            r.body
+        );
+        assert!(r.body["error"].as_str().unwrap().contains("label too long"));
+    }
+
+    #[test]
+    fn new_id_is_a_fresh_uuid_each_call() {
+        let a = new_id();
+        let b = new_id();
+        // A hyphenated UUID v4 is 36 chars — rules out both `String::new()` and `"xyzzy"`.
+        assert_eq!(a.len(), 36, "expected a 36-char uuid, got {a:?}");
+        assert!(a.contains('-'), "{a:?}");
+        assert!(!a.is_empty());
+        // Distinct per call — a constant replacement would return the same string twice.
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn capability_resolver_debug_renders_the_struct_and_source_count() {
+        let r = CapabilityResolver::new();
+        let s = format!("{r:?}");
+        // A fresh resolver has zero sources. The `Ok(Default::default())` mutation writes
+        // nothing, leaving the string empty — so pinning both the struct name and the count
+        // field kills it.
+        assert!(s.contains("CapabilityResolver"), "{s}");
+        assert!(s.contains("sources: 0"), "{s}");
+    }
 }
 
 #[cfg(test)]

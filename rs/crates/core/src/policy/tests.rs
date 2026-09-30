@@ -242,6 +242,24 @@ fn a_malformed_policy_is_reported_and_falls_back_to_the_strict_default() {
 }
 
 #[test]
+fn an_unreadable_policy_file_fails_loudly_rather_than_defaulting() {
+    // Only a *missing* file (NotFound) may fall back to the default. Any other IO
+    // error must propagate: swallowing it would silently fail open, running the
+    // strict-default matrix while the operator's real policy sat unread on disk.
+    let dir = scratch("unreadable");
+    // A directory where the file belongs makes `read_to_string` return an error
+    // whose kind is not NotFound (IsADirectory on Linux/macOS), deterministically.
+    std::fs::create_dir_all(Policy::path_under(&dir)).expect("dir at policy path");
+    assert!(
+        matches!(Policy::load(&dir), Err(PolicyError::Io(_))),
+        "a non-NotFound IO error must not be treated as a missing file"
+    );
+    let (p, complaint) = Policy::load_or_default(&dir);
+    assert_eq!(p, Policy::default());
+    assert!(complaint.is_some(), "the IO failure must be reported");
+}
+
+#[test]
 fn an_unknown_field_is_a_typo_not_a_silent_no_op() {
     let dir = scratch("unknown-field");
     std::fs::write(
@@ -366,4 +384,38 @@ fn verdicts_and_decisions_have_stable_words_for_the_record() {
     assert_eq!(Rule::RequireSignature.kind(), "require-signature");
     assert_eq!(built().kind(), "built");
     assert_eq!(prebuilt().kind(), "prebuilt");
+}
+
+#[test]
+fn a_decision_prints_its_verdict_in_words() {
+    // `Display` backs log lines and any human-facing rendering of a decision. A blanked
+    // formatter (one that writes nothing and returns Ok) would silently erase every such
+    // diagnostic, so assert each variant renders its own distinct, non-empty text.
+    assert_eq!(Decision::Run.to_string(), "run");
+    assert_eq!(
+        Decision::Refuse {
+            reason: "spctl is missing".into()
+        }
+        .to_string(),
+        "refuse: spctl is missing"
+    );
+    assert_eq!(
+        Decision::Warn {
+            reason: "tampered".into()
+        }
+        .to_string(),
+        "warn: tampered"
+    );
+}
+
+#[test]
+fn now_secs_reads_the_real_wall_clock_not_a_constant() {
+    // `now_secs` stamps the `at` field of every RecordedVerdict. Pinning it to 0 or 1
+    // would date every assessment to 1970 and defeat any "how old is this verdict?"
+    // reasoning. Assert it is well past a fixed recent epoch (2023-11-14T22:13:20Z),
+    // which neither the `-> 0` nor the `-> 1` mutant can satisfy.
+    assert!(
+        now_secs() > 1_700_000_000,
+        "now_secs must reflect the real wall clock, not a constant"
+    );
 }

@@ -505,6 +505,17 @@ mod tests {
         assert!(!is_module_pipe_name(&good, pid.wrapping_add(1)));
         assert!(!is_module_pipe_name(&pipe_name(pid, "short"), pid));
         assert!(!is_module_pipe_name(&pipe_name(pid, &"G".repeat(32)), pid));
+        // Right length, but an UPPERCASE hex letter: rejected. The suffix must be all
+        // lowercase hex (`is_ascii_hexdigit() && !is_ascii_uppercase()`); replacing the
+        // `&&` with `||` would wrongly accept an uppercase hex digit like 'A'.
+        let upper_hex = format!("{}A", "a".repeat(SUFFIX_BYTES * 2 - 1));
+        assert_eq!(upper_hex.len(), SUFFIX_BYTES * 2);
+        assert!(!is_module_pipe_name(&pipe_name(pid, &upper_hex), pid));
+        // Right length, but a lowercase NON-hex character: also rejected. A `||` mutant
+        // would accept it (lowercase satisfies one half of the conjunction).
+        let lower_nonhex = format!("{}z", "0".repeat(SUFFIX_BYTES * 2 - 1));
+        assert_eq!(lower_nonhex.len(), SUFFIX_BYTES * 2);
+        assert!(!is_module_pipe_name(&pipe_name(pid, &lower_nonhex), pid));
         assert!(!is_module_pipe_name(r"\\.\pipe\other", pid));
         assert!(!is_module_pipe_name(
             r"\\server\pipe\avada-module-1-00",

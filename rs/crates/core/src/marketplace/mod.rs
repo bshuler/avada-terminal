@@ -1414,3 +1414,600 @@ mod options_tests {
         );
     }
 }
+
+// ---- end track G6 resolver
+
+// ---- track G7 policy
+
+/// The notarization gate seen from the pipeline: a fake verifier gives each of the four
+/// verdicts, and the install either refuses, warns or runs.
+///
+/// The [`policy`] module tests the matrix exhaustively; these tests only prove the
+/// wiring — that the verifier is consulted at all, that a refusal fails the job and
+/// installs nothing, and that what was decided is remembered next to the artifact.
+#[cfg(test)]
+mod policy_wiring {
+    use super::testing::{files_state, manifest_for, rig, wait, FakeCargo, FILES};
+    use super::*;
+    use crate::install::RecordStatus;
+    use crate::policy::{Context, RecordedVerdict, Verdict};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    /// Answers with one fixed verdict and counts the asking.
+    #[derive(Debug)]
+    struct FakeVerifier {
+        verdict: Verdict,
+        calls: AtomicUsize,
+    }
+
+    impl FakeVerifier {
+        fn new(verdict: Verdict) -> Arc<Self> {
+            Arc::new(FakeVerifier {
+                verdict,
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        /// How many artifacts were put to this verifier.
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Verifier for FakeVerifier {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn verify(&self, binary: &Path, _ctx: &Context) -> Verdict {
+            // The gate must run on the artifact itself, not on a path that might exist.
+            assert!(binary.is_file(), "{} is not a file", binary.display());
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.verdict.clone()
+        }
+    }
+
+    fn write_policy(root: &Path, json: &str) {
+        std::fs::write(Policy::path_under(root), json).expect("policy.json");
+    }
+
+    /// The one installed artifact and the verdict recorded beside it.
+    fn installed_verdict(mp: &Marketplace) -> (PathBuf, Option<RecordedVerdict>) {
+        let records = mp.store.records().expect("records");
+        let installed = records
+            .into_iter()
+            .find_map(|s| match s {
+                RecordStatus::Ok(i) => Some(i),
+                RecordStatus::Broken { .. } => None,
+            })
+            .expect("one installed module");
+        let verdict = policy::read_verdict(&installed.binary);
+        (installed.binary.clone(), verdict)
+    }
+
+    async fn install_under(
+        name: &str,
+        policy_json: &str,
+        verdict: Verdict,
+    ) -> (Job, super::testing::Rig, Arc<FakeVerifier>) {
+        let r = rig(
+            name,
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(60),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+        write_policy(&r.root, policy_json);
+        let fake = FakeVerifier::new(verdict);
+        r.mp.set_verifier(Arc::clone(&fake) as Arc<dyn Verifier>);
+        let job = r.mp.install(InstallRequest::new(FILES)).expect("job");
+        let done = wait(&r.mp, &job.id).await;
+        (done, r, fake)
+    }
+
+    #[tokio::test]
+    async fn a_refusal_fails_the_job_and_installs_nothing() {
+        let (done, r, fake) = install_under(
+            "g7-refuse",
+            r#"{"locally_built":"require-signature"}"#,
+            Verdict::Unsigned,
+        )
+        .await;
+        assert_eq!(done.phase, Phase::Failed, "{done:?}");
+        let err = done.error.as_deref().unwrap_or_default();
+        assert!(err.contains("requires a signature"), "{err}");
+        assert!(err.contains("unsigned"), "{err}");
+        assert!(
+            r.mp.installed().expect("installed").is_empty(),
+            "a refused artifact must not be recorded"
+        );
+        assert_eq!(fake.calls(), 1, "the artifact is assessed exactly once");
+    }
+
+    #[tokio::test]
+    async fn a_warning_installs_and_is_remembered_beside_the_binary() {
+        let (done, r, fake) =
+            install_under("g7-warn", r#"{"locally_built":"warn"}"#, Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        assert!(
+            done.log_tail.iter().any(|l| l.contains("notarization")),
+            "the warning must reach the job log: {:?}",
+            done.log_tail
+        );
+        let (_, recorded) = installed_verdict(&r.mp);
+        let recorded = recorded.expect("a verdict beside the binary");
+        assert_eq!(recorded.decision, "warn");
+        assert_eq!(recorded.verdict, "unsigned");
+        assert_eq!(recorded.verifier, "fake");
+        assert_eq!(recorded.source, "built");
+        assert!(!recorded.refused());
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_trusted_artifact_installs_and_records_a_run() {
+        let (done, r, fake) = install_under(
+            "g7-trusted",
+            r#"{"locally_built":"require-signature"}"#,
+            Verdict::Trusted {
+                by: "Acme Software Ltd".into(),
+            },
+        )
+        .await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let (binary, recorded) = installed_verdict(&r.mp);
+        let recorded = recorded.expect("a verdict beside the binary");
+        assert_eq!(recorded.decision, "run");
+        assert!(
+            recorded.detail.contains("Acme Software Ltd"),
+            "{recorded:?}"
+        );
+        assert_eq!(crate::policy::recorded_refusal(&binary), None);
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_default_policy_lets_a_locally_built_module_through_unsigned() {
+        // No policy.json at all — the shipped default. A module the host compiled
+        // itself from a verified commit must still install with no signature anywhere.
+        let (done, r, fake) = install_under("g7-default", "{}", Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let (_, recorded) = installed_verdict(&r.mp);
+        assert_eq!(recorded.expect("recorded").decision, "run");
+        assert_eq!(fake.calls(), 1, "the default policy still asks");
+    }
+
+    #[tokio::test]
+    async fn a_recorded_refusal_stops_the_spawn_path() {
+        // The install-time refusal is what makes a module `Broken` later: `verify_hash`
+        // is the host's gate, and it consults the recorded verdict before hashing.
+        let (done, r, _fake) = install_under("g7-spawn", "{}", Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        let records = r.mp.store.records().expect("records");
+        let installed = records
+            .into_iter()
+            .find_map(|s| match s {
+                RecordStatus::Ok(i) => Some(i),
+                RecordStatus::Broken { .. } => None,
+            })
+            .expect("one installed module");
+
+        // As installed, it spawns.
+        crate::module::spawn::verify_hash(&installed.binary, installed.rights())
+            .expect("a run verdict does not block the spawn");
+
+        // Now record the refusal the policy would have reached.
+        let refused = RecordedVerdict::new(
+            &Verdict::Unsigned,
+            &Decision::Refuse {
+                reason: "unsigned (built here from deadbeef)".into(),
+            },
+            &policy::Source::Built {
+                commit: "deadbeef".into(),
+            },
+            "fake",
+        );
+        policy::write_verdict(&installed.binary, &refused).expect("write");
+        match crate::module::spawn::verify_hash(&installed.binary, installed.rights()) {
+            Err(crate::module::spawn::SpawnError::Notarized { reason }) => {
+                assert!(reason.contains("unsigned"), "{reason}")
+            }
+            other => panic!("expected a notarization refusal, got {other:?}"),
+        }
+
+        // Removing the sidecar returns the artifact to the pre-G7 hash check and no
+        // further: the file can add a refusal, never remove one.
+        std::fs::remove_file(policy::verdict_path(&installed.binary)).expect("remove");
+        crate::module::spawn::verify_hash(&installed.binary, installed.rights())
+            .expect("no sidecar is the status quo");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_policy_is_logged_and_falls_back_to_the_strict_default() {
+        // Fail closed, and say so. The default allows a locally built module, so the
+        // install still succeeds — but the complaint has to reach the job log.
+        let (done, _r, _fake) =
+            install_under("g7-malformed", "{ not json", Verdict::Unsigned).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        assert!(
+            done.log_tail
+                .iter()
+                .any(|l| l.contains("malformed") && l.contains("default policy")),
+            "{:?}",
+            done.log_tail
+        );
+    }
+}
+
+// ---- end track G7 policy
+
+// ---- mutation-kill tests
+//
+// Each test here pins one behaviour tightly enough that a specific cargo-mutants
+// mutation flips the assertion. They drive the same real install pipeline the
+// `testing` rig provides; the comment on each names the survivor it closes.
+#[cfg(test)]
+mod survivor_tests {
+    use super::testing::{fake_tools, files_state, manifest_for, reopen, rig, wait, FakeCargo};
+    use super::testing::{FILES, GIT};
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn write_exec(path: &std::path::Path, text: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, text).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Kills 455:9 — `options()` body replaced with a leaked `Default::default()`.
+    /// The rig configures a `file://` git base and an injected tool PATH; the default
+    /// would answer `https://github.com` and no PATH.
+    #[tokio::test]
+    async fn options_returns_the_configured_options_not_the_default() {
+        let r = rig(
+            "opt-accessor",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        let opts = r.mp.options();
+        assert!(
+            opts.git_base.starts_with("file://"),
+            "the fixture git base, not the default: {}",
+            opts.git_base
+        );
+        assert!(
+            opts.path.is_some(),
+            "the injected tool PATH, not the default None"
+        );
+    }
+
+    /// Kills 724:42 — `+` → `-`/`*` in the build-progress `50 + compiled.min(35)`.
+    /// A cargo that emits exactly one `Compiling` line and then blocks lets the test
+    /// observe the mid-build progress: the real code reaches 51, `-` gives 49 and `*`
+    /// gives 50 (the pre-build phase value), so only an exact `Some(51)` passes.
+    #[tokio::test]
+    async fn first_compile_step_moves_progress_to_fifty_one() {
+        let r = rig(
+            "build-progress",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+
+        // A cargo that emits ONE Compiling line, then blocks until a go-file appears.
+        let tools = fake_tools("build-progress", FakeCargo::Builds, false);
+        let go = tools.join("go-build");
+        let cargo = format!(
+            "#!/bin/sh\n\
+             PATH=/usr/bin:/bin:$PATH\n\
+             bin=\"\"\n\
+             while [ $# -gt 0 ]; do case \"$1\" in --bin) shift; bin=\"$1\";; esac; shift; done\n\
+             if [ -z \"$bin\" ]; then bin=$(basename \"$PWD\" | sed 's/^.*__//'); fi\n\
+             echo \"   Compiling $bin v1.0.0\" >&2\n\
+             while [ ! -f \"{go}\" ]; do sleep 0.05; done\n\
+             mkdir -p \"$CARGO_TARGET_DIR/release\"\n\
+             printf 'stub binary for %s\\n' \"$bin\" > \"$CARGO_TARGET_DIR/release/$bin\"\n\
+             chmod 755 \"$CARGO_TARGET_DIR/release/$bin\"\n\
+             echo \"    Finished release [optimized] target(s)\" >&2\n",
+            go = go.display()
+        );
+        write_exec(&tools.join("cargo"), &cargo);
+        let mp = reopen(
+            &r.root,
+            &r.fixtures,
+            &r.github,
+            Arc::clone(&r.tokens),
+            Some(tools),
+            Duration::from_secs(300),
+        );
+
+        let job = mp.install(InstallRequest::new(FILES)).unwrap();
+        // Poll until the blocked build parks at exactly Some(51).
+        let mut saw_51 = false;
+        for _ in 0..400 {
+            let j = mp.job(&job.id).unwrap();
+            if j.phase == Phase::Build && j.progress == Some(51) {
+                saw_51 = true;
+                break;
+            }
+            if j.phase.is_terminal() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            saw_51,
+            "one Compiling line puts build progress at 50 + 1 = 51"
+        );
+
+        // Release the build and let it finish cleanly.
+        std::fs::write(&go, b"go").unwrap();
+        let done = wait(&mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+    }
+
+    /// Kills 871:24 — `==` → `!=` in the `if step.id == id { continue; }` that skips the
+    /// root in the plan-wide free-build check. A non-root BINARY dependency is refused
+    /// here with a doubled-id message (`{step.id}: {check_free_build message}`); the
+    /// `!=` mutant skips every non-root step, so the binary is instead refused later in
+    /// the nested `run_install` at line 687 with the plain single-id message.
+    #[tokio::test]
+    async fn a_binary_dependency_is_refused_with_the_step_prefixed_message() {
+        let r = rig(
+            "binary-dep",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        // FILES ships as a prebuilt binary but provides the shape GIT requires.
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(
+                FILES,
+                "1.0.0",
+                "kind = \"binary\"",
+                "[[provides]]\nshape = \"avada.files.tree\"\nversion = \"1.0.0\"\n",
+            ),
+        );
+        r.fixtures.repo(
+            GIT,
+            "v1.0.0",
+            &manifest_for(
+                GIT,
+                "1.0.0",
+                "kind = \"source\"",
+                "[[requires]]\nshape = \"avada.files.tree\"\nversion = \"^1\"\n\
+                 provider = \"acme/avada-files\"\n",
+            ),
+        );
+        let job = r.mp.install(InstallRequest::new(GIT)).unwrap();
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Failed, "{done:?}");
+        let e = done.error.unwrap();
+        assert!(
+            e.contains("acme/avada-files: acme/avada-files ships as a prebuilt binary"),
+            "the plan-wide check refuses the dependency with the step-prefixed message: {e}"
+        );
+    }
+
+    /// Kills 883:42 — `==` → `!=` in the provider-log `who` prefix
+    /// (`if choice.requirer == id { String::new() } else { format!("{} ", ...) }`).
+    /// For the root's own requirement the real code logs no prefix; the mutant would
+    /// prepend `acme/avada-git `.
+    #[tokio::test]
+    async fn the_roots_own_requirement_is_logged_without_a_requirer_prefix() {
+        let r = rig(
+            "req-prefix",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(
+                FILES,
+                "1.0.0",
+                "kind = \"source\"",
+                "[[provides]]\nshape = \"avada.files.tree\"\nversion = \"1.0.0\"\n",
+            ),
+        );
+        r.fixtures.repo(
+            GIT,
+            "v1.0.0",
+            &manifest_for(
+                GIT,
+                "1.0.0",
+                "kind = \"source\"",
+                "[[requires]]\nshape = \"avada.files.tree\"\nversion = \"^1\"\n\
+                 provider = \"acme/avada-files\"\n",
+            ),
+        );
+        let job = r.mp.install(InstallRequest::new(GIT)).unwrap();
+        let done = wait(&r.mp, &job.id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        // Log lines carry a `[<module>] ` context prefix, so the real message body
+        // begins immediately after `] `: `[acme/avada-git] requires avada.files.tree`.
+        // The mutant inserts the requirer, giving `] acme/avada-git requires ...`.
+        assert!(
+            done.log_tail
+                .iter()
+                .any(|l| l.contains("] requires avada.files.tree")),
+            "the root's requirement has no requirer prefix: {:?}",
+            done.log_tail
+        );
+        assert!(
+            !done
+                .log_tail
+                .iter()
+                .any(|l| l.contains("acme/avada-git requires avada.files.tree")),
+            "the root never prefixes itself with its own id: {:?}",
+            done.log_tail
+        );
+    }
+
+    /// Kills 1014:24 — `==` → `!=` in `if dep == &id` when gathering Identity
+    /// (`[dependencies]`) demands for a pin. An enabled module depends on FILES `=1.0.0`;
+    /// pinning FILES to 1.2.0 must be refused. The mutant drops the demand and allows it.
+    #[tokio::test]
+    async fn a_pin_respects_an_enabled_modules_identity_dependency() {
+        let r = rig(
+            "pin-identity",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        for (tag, provided) in [("v1.0.0", "1.0.0"), ("v1.2.0", "1.2.0")] {
+            let _ = std::fs::remove_dir_all(r.fixtures.root.join(format!("{FILES}.git")));
+            r.fixtures.repo(
+                FILES,
+                tag,
+                &manifest_for(FILES, provided, "kind = \"source\"", ""),
+            );
+        }
+        // GIT depends on FILES by identity, pinned to exactly 1.0.0.
+        r.fixtures.repo(
+            GIT,
+            "v1.0.0",
+            &manifest_for(
+                GIT,
+                "1.0.0",
+                "kind = \"source\"",
+                "[dependencies]\n\"acme/avada-files\" = \"=1.0.0\"\n",
+            ),
+        );
+
+        // Installing GIT pulls FILES 1.0.0 as its identity dependency, and enables GIT.
+        let mut req = InstallRequest::new(GIT);
+        req.workspace = Some("w".into());
+        let done = wait(&r.mp, &r.mp.install(req).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+        // Also install FILES 1.2.0 by hand so it is a pin candidate.
+        let mut req = InstallRequest::new(FILES);
+        req.tag = Some("v1.2.0".into());
+        let done = wait(&r.mp, &r.mp.install(req).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+
+        // Pinning FILES to 1.2.0 breaks GIT's `= 1.0.0`, so it is refused.
+        let e = r.mp.pin("w", FILES, "1.2.0").unwrap_err();
+        assert_eq!(e.http_status(), 409, "{e}");
+        assert!(
+            r.mp.pins("w").unwrap().is_empty(),
+            "a refused pin is never recorded"
+        );
+    }
+
+    /// Kills 1046:9 — `unpin` body replaced with `Ok(empty)`. The return value is empty
+    /// either way, so the test re-reads the persisted pins: the real `unpin` clears
+    /// them, the stub leaves the pin in place.
+    #[tokio::test]
+    async fn unpin_clears_the_persisted_pin() {
+        let r = rig(
+            "unpin",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(FILES, "1.0.0", "kind = \"source\"", ""),
+        );
+        let done = wait(&r.mp, &r.mp.install(InstallRequest::new(FILES)).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+
+        r.mp.pin("w", FILES, "1.0.0").unwrap();
+        assert_eq!(r.mp.pins("w").unwrap().len(), 1, "pin recorded");
+        let _ = r.mp.unpin("w", FILES).unwrap();
+        assert!(
+            r.mp.pins("w").unwrap().is_empty(),
+            "unpin actually removed the persisted pin"
+        );
+    }
+
+    /// Kills 1120:9 — `clear_default` body replaced with `Ok(empty)`. Same shape as the
+    /// unpin case: re-read the persisted defaults, since the return value is empty either
+    /// way.
+    #[tokio::test]
+    async fn clear_default_removes_the_persisted_default() {
+        let r = rig(
+            "clear-default",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        r.fixtures.repo(
+            FILES,
+            "v1.0.0",
+            &manifest_for(
+                FILES,
+                "1.0.0",
+                "kind = \"source\"",
+                "[[provides]]\nshape = \"avada.files.tree\"\nversion = \"1.0.0\"\n",
+            ),
+        );
+        let done = wait(&r.mp, &r.mp.install(InstallRequest::new(FILES)).unwrap().id).await;
+        assert_eq!(done.phase, Phase::Done, "{done:?}");
+
+        let id = ModuleId::new(FILES).unwrap();
+        r.mp.set_default("avada.files.tree", FILES).unwrap();
+        assert_eq!(
+            r.mp.defaults().unwrap().get("avada.files.tree"),
+            Some(&id),
+            "default recorded"
+        );
+        let _ = r.mp.clear_default("avada.files.tree").unwrap();
+        assert!(
+            !r.mp.defaults().unwrap().contains_key("avada.files.tree"),
+            "clear_default actually removed the persisted default"
+        );
+    }
+
+    /// Kills 1227:43 — `+` → `-`/`*` in `signin_start`'s
+    /// `expires_at: cache::now_secs() + start.expires_in`. The fake device flow returns
+    /// `expires_in = 900`, so `expires_at` must land in `[now+900, now+900]` bracketed by
+    /// two clock reads. `-` gives `now-900` (below the bracket) and `*` gives `now*900`
+    /// (far above it).
+    #[tokio::test]
+    async fn signin_expiry_is_now_plus_the_devices_lifetime() {
+        let r = rig(
+            "signin-expiry",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        let before = super::cache::now_secs();
+        let view = r.mp.signin_start().await.unwrap();
+        let after = super::cache::now_secs();
+        assert!(
+            view.expires_at >= before + 900 && view.expires_at <= after + 900,
+            "expires_at {} should be now + 900 (before {}, after {})",
+            view.expires_at,
+            before,
+            after
+        );
+    }
+}
+// ---- end mutation-kill tests

@@ -606,11 +606,50 @@ mod tests {
     }
 
     #[test]
+    fn a_signature_debug_shows_the_algorithm_key_and_comment() {
+        // The `{:?}` rendering of a Signature is what lands in a failed-verification log
+        // line. A blanked formatter (writing nothing, returning Ok) would erase the very
+        // fields an operator needs to see which key and comment were on the artifact, so
+        // assert the debug output is non-empty and names each field with its real value.
+        let s = signer();
+        let sig = parse_signature(&s.sign(DATA, COMMENT)).expect("parses");
+        let shown = format!("{sig:?}");
+        assert!(shown.starts_with("Signature"), "{shown}");
+        assert!(shown.contains("key_id"), "{shown}");
+        assert!(shown.contains(&sig.key_id_hex()), "{shown}");
+        assert!(shown.contains("trusted_comment"), "{shown}");
+        // The comment carries tab separators that Debug escapes, so match on a tab-free
+        // fragment rather than the raw constant.
+        assert!(shown.contains("timestamp:1757000000"), "{shown}");
+        assert!(shown.contains("avada-files"), "{shown}");
+    }
+
+    #[test]
     fn a_public_key_round_trips_through_base64() {
         let s = signer();
         let parsed = parse_public_key(&s.public().to_base64()).expect("parses");
         assert_eq!(parsed, s.public());
         assert_eq!(parsed.key_id_hex(), "5A5B1E4A0F0C0D0E");
+    }
+
+    #[test]
+    fn public_keys_differ_when_either_the_id_or_the_bytes_differ() {
+        // Equality gates nothing in `verify` (that matches on `key_id` alone), but it
+        // backs `assert_eq!` in these tests and any future key bookkeeping, so it must
+        // actually compare. A key equal to a *different* key would let an operator's
+        // "is this the key I configured?" check pass against the wrong material.
+        let base = signer().public();
+        // Same signing bytes (seed 7), different key id.
+        let other_id = Signer32::new(7, 0x0102_0304_0506_0708).public();
+        assert_ne!(base, other_id, "a differing key id must break equality");
+        // Same key id, different signing bytes (seed 8).
+        let other_key = Signer32::new(8, 0x5A5B_1E4A_0F0C_0D0E).public();
+        assert_ne!(
+            base, other_key,
+            "differing key material must break equality"
+        );
+        // And a key is equal to an independently parsed copy of itself.
+        assert_eq!(base, signer().public());
     }
 
     #[test]

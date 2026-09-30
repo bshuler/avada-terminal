@@ -155,4 +155,78 @@ mod tests {
         // Releasing a free pane is a no-op success.
         assert!(locks.release("free", "anyone", 0));
     }
+
+    /// An *expired* lock counts as freed for ANY caller — once the lock is dead, release
+    /// need not come from the holder (the `release` contract: "an expired/absent lock counts
+    /// as freed"). mgr holds "p" until 6000. A non-holder is refused while it is live, frees
+    /// it AT the exact expiry instant, and frees it again strictly after. This kills every
+    /// mutation of the `cur.expires_at <= now` guard at line 80: `-> false` and `-> <` both
+    /// wrongly refuse at the boundary (falling through to the owner-mismatch arm), and
+    /// `-> ==` wrongly refuses strictly past expiry — each leaving a stale lock a non-holder
+    /// cannot clear.
+    #[test]
+    fn a_different_owner_may_release_an_expired_lock() {
+        let mut locks = PaneLocks::new();
+        // mgr holds "p" until expires_at == 6000.
+        locks.acquire("p", "mgr", 1000, 5000);
+        // Live at 5999: a non-holder is refused.
+        assert!(!locks.release("p", "intruder", 5999));
+        // AT the expiry instant (6000): the lock is dead, so the non-holder frees it.
+        assert!(locks.release("p", "intruder", 6000));
+        assert_eq!(locks.holder("p", 6000), None);
+        // Re-hold to expires_at == 7000, then release strictly past it (8000), which
+        // distinguishes `<=` from `==`.
+        locks.acquire("p", "mgr", 6000, 1000);
+        assert!(locks.release("p", "intruder", 8000));
+    }
+
+    /// The expiry comparison in `acquire` is a strict `>`: a lock is live only while
+    /// `now` is *before* `expires_at`. At the exact expiry instant the pane is FREE, so a
+    /// different owner may take it. (Kills `expires_at > now` → `>=` at line 49: a `>=`
+    /// would keep the incumbent holding at the boundary and refuse the newcomer.)
+    #[test]
+    fn acquire_at_the_exact_expiry_instant_treats_the_pane_as_free() {
+        let mut locks = PaneLocks::new();
+        // mgrA holds until exactly 2000.
+        assert_eq!(locks.acquire("p", "mgrA", 1000, 1000).expires_at, 2000);
+        // A different owner acquiring AT 2000 must succeed — the old lock is expired.
+        let b = locks.acquire("p", "mgrB", 2000, 1000);
+        assert!(
+            b.ok,
+            "at now == expires_at the incumbent lock is dead; mgrB wins"
+        );
+        assert_eq!(b.owner, "mgrB");
+        assert_eq!(b.expires_at, 3000);
+    }
+
+    /// `holder` mirrors that strict boundary: at `now == expires_at` the pane reports FREE,
+    /// not held. (Kills `expires_at > now` → `>=` at line 97: `>=` would still name the
+    /// owner one tick too long.)
+    #[test]
+    fn holder_reports_free_at_the_exact_expiry_instant() {
+        let mut locks = PaneLocks::new();
+        locks.acquire("p", "mgr", 1000, 1000); // expires 2000
+        assert_eq!(locks.holder("p", 1999), Some("mgr".to_string()));
+        assert_eq!(
+            locks.holder("p", 2000),
+            None,
+            "at the expiry instant the pane is free"
+        );
+    }
+
+    /// `drop` forgets a pane's lock outright, regardless of TTL. (Kills the `drop` body →
+    /// `()` mutant at line 105: a no-op would leave the still-live lock in place, so the
+    /// pane would keep reporting a holder.)
+    #[test]
+    fn drop_forgets_a_live_lock() {
+        let mut locks = PaneLocks::new();
+        // A long-lived lock: expiry alone can't explain a later `None`.
+        locks.acquire("p", "mgr", 1000, 10_000); // live until 11000
+        assert_eq!(locks.holder("p", 2000), Some("mgr".to_string()));
+        locks.drop("p");
+        // Well before expiry, yet the lock is gone — only `drop` removing it explains this.
+        assert_eq!(locks.holder("p", 2000), None);
+        // And the pane is immediately re-acquirable by anyone.
+        assert!(locks.acquire("p", "someone-else", 2000, 1000).ok);
+    }
 }

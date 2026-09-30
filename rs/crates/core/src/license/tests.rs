@@ -283,6 +283,36 @@ async fn a_license_for_another_issuer_is_refused() {
 }
 
 #[tokio::test]
+async fn a_registered_issuer_that_agrees_admits_the_token_by_every_route() {
+    let w = world();
+    w.service.register_issuer("acme/pro", "https://issuer.test");
+
+    // An explicit issuer equal to the registration: resolve_issuer's (Some, Some)
+    // guard must stay false so the install proceeds rather than reporting a mismatch.
+    let token = LicenseToken::new(w.issuer.issue(&Grant::for_product("acme/pro")).unwrap());
+    let summary = w
+        .service
+        .install_token(token, Some("https://issuer.test"))
+        .await
+        .expect("an explicit issuer equal to the registration is accepted");
+    assert_eq!(summary.issuer, "https://issuer.test");
+
+    // No explicit issuer, but the token's `iss` equals the registration: the
+    // (None, Some) guard must stay false and resolve to the registered issuer.
+    let again = LicenseToken::new(w.issuer.issue(&Grant::for_product("acme/pro")).unwrap());
+    let resummary = w
+        .service
+        .install_token(again, None)
+        .await
+        .expect("a token whose iss equals the registration is accepted");
+    assert_eq!(resummary.issuer, "https://issuer.test");
+
+    // And the stored license gates green: check_issuer's guard must stay false when
+    // the stored issuer equals the registration.
+    assert_eq!(w.gate("acme/pro").await, Gate::Run);
+}
+
+#[tokio::test]
 async fn a_token_signed_by_a_stranger_does_not_verify() {
     let w = world();
     // Same issuer URL, different key: the stub's key set will not know the `kid`.
@@ -849,5 +879,244 @@ async fn a_refusal_names_the_product_and_never_the_token() {
         refusals[2].to_string().contains("acme/other"),
         "…while still naming the product the caller asked about: {}",
         refusals[2]
+    );
+}
+
+/// `LicenseError` is the crate's outward error; the three wrapping variants must hand
+/// their cause back through `Error::source` so a `?`-chained caller (or an error reporter
+/// walking the chain) can reach the store/verify/io error underneath, and downcast it to
+/// the concrete type. The variants that wrap nothing report no source.
+#[test]
+fn the_error_chain_reaches_the_wrapped_cause() {
+    use std::error::Error as _;
+
+    // Store(e): the source is the very StoreError we wrapped.
+    let e = LicenseError::Store(StoreError::BadProduct("acme".into()));
+    let src = e.source().expect("Store wraps a source");
+    assert!(
+        matches!(src.downcast_ref::<StoreError>(), Some(StoreError::BadProduct(p)) if p == "acme"),
+        "source should be the wrapped StoreError"
+    );
+
+    // Verify(e): the source is the wrapped VerifyError.
+    let e = LicenseError::Verify(VerifyError::NoKid);
+    let src = e.source().expect("Verify wraps a source");
+    assert!(
+        matches!(src.downcast_ref::<VerifyError>(), Some(VerifyError::NoKid)),
+        "source should be the wrapped VerifyError"
+    );
+
+    // Io { source, .. }: the source is the wrapped io::Error, kind preserved.
+    let e = LicenseError::Io {
+        path: PathBuf::from("/nope"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+    };
+    let src = e.source().expect("Io wraps a source");
+    assert_eq!(
+        src.downcast_ref::<std::io::Error>().map(|io| io.kind()),
+        Some(std::io::ErrorKind::NotFound),
+        "source should be the wrapped io::Error"
+    );
+
+    // A variant that wraps no other error reports no source.
+    assert!(
+        LicenseError::NotLicensed("acme/pro".into())
+            .source()
+            .is_none(),
+        "a non-wrapping variant has no source"
+    );
+}
+
+/// The check-in constant used below; unclamped since it is well under `MAX_CHECKIN_DAYS`.
+fn reason_claims() -> LicenseClaims {
+    LicenseClaims {
+        jti: "j1".into(),
+        product: "acme/pro".into(),
+        licensee: "dev@example.test".into(),
+        seats: 1,
+        nbf: 0,
+        exp: 0,
+        max_major: None,
+        kid: String::new(),
+        download_url: None,
+        checkin_interval_days: 30,
+    }
+}
+
+/// `state_reason`'s grace/stale sentences quote a day count that is pure arithmetic on the
+/// last check-in, the interval, and the grace window. The inputs are chosen so the true
+/// answer is a clean 4 days left: `last_ok` at day 100, a 30-day interval, and the 14-day
+/// grace put the deadline at day 144, and `now` at day 140 leaves exactly 4. Every operator
+/// swap in that computation (`+`↔`-`↔`*`, `*`↔`+`↔`/`) drives the count to 0 — the outer
+/// `saturating_sub` floors the resulting underflow — or into the millions, never back to 4,
+/// so pinning the exact wording is a complete check on the arithmetic. A one-day-left case
+/// pins the singular/plural branch, and the stale sentence pins its own `interval + grace`.
+#[test]
+fn the_grace_and_stale_sentences_count_the_days_exactly() {
+    let claims = reason_claims();
+    let checkin = CheckinRecord {
+        last_ok: 100 * DAY,
+        revoked: false,
+    };
+    // Deadline is day 144 (100 + 30 interval + 14 grace); at day 140, four days remain.
+    let four = state_reason(LicenseState::GracePeriod, &claims, &checkin, 140 * DAY);
+    assert_eq!(
+        four,
+        "license check-in overdue; the issuer must confirm acme/pro within 4 days or the module stops",
+    );
+    // At day 143 exactly one day remains — the singular branch.
+    let one = state_reason(LicenseState::GracePeriod, &claims, &checkin, 143 * DAY);
+    assert_eq!(
+        one,
+        "license check-in overdue; the issuer must confirm acme/pro within 1 day or the module stops",
+    );
+    // The stale sentence quotes interval + grace = 30 + 14 = 44, independent of `now`.
+    let stale = state_reason(LicenseState::StaleCheckin, &claims, &checkin, 200 * DAY);
+    assert_eq!(
+        stale,
+        "license for acme/pro has not been confirmed by the issuer for more than 44 days",
+    );
+}
+
+/// `verifier()` is a borrow of the service's own stored verifier — the contract a caller
+/// relies on when it reads the skew or reuses the verifier — not a fresh one minted per
+/// call. Since the service always stores a default-skew verifier, value alone cannot tell a
+/// genuine borrow from a freshly defaulted one; reference identity can, and must: two calls
+/// hand back the very same reference, and a leaked new allocation would not.
+#[test]
+fn verifier_borrows_the_service_s_own_and_is_not_reallocated() {
+    let w = world();
+    let first = w.service.verifier();
+    let second = w.service.verifier();
+    assert!(
+        std::ptr::eq(first, second),
+        "verifier() must borrow the stored verifier, not allocate a new one each call",
+    );
+    assert_eq!(
+        first.skew_secs,
+        super::verify::DEFAULT_SKEW_SECS,
+        "the service is built with the default-skew verifier",
+    );
+}
+
+/// The existing "another issuer is refused" test installs with *no* explicit issuer, so it
+/// exercises resolve_issuer's `(None, Some)` arm. This one drives the `(Some, Some)` arm:
+/// the caller passes an explicit issuer that contradicts the registration. Blank that
+/// guard to `false` and the install would trust the caller's rogue URL over the registered
+/// one instead of reporting the conflict.
+#[tokio::test]
+async fn an_explicit_issuer_that_contradicts_the_registration_is_refused() {
+    let w = world();
+    w.service.register_issuer("acme/pro", "https://issuer.test");
+    // The token is legitimately signed by the registered issuer; only the caller-supplied
+    // explicit issuer disagrees, which is exactly what the (Some, Some) guard must catch.
+    let token = LicenseToken::new(w.issuer.issue(&Grant::for_product("acme/pro")).unwrap());
+    match w
+        .service
+        .install_token(token, Some("https://rogue.test"))
+        .await
+    {
+        Err(LicenseError::IssuerMismatch {
+            product,
+            expected,
+            actual,
+        }) => {
+            assert_eq!(product, "acme/pro");
+            assert_eq!(expected, "https://issuer.test");
+            assert_eq!(actual, "https://rogue.test");
+        }
+        other => panic!("expected an explicit-issuer mismatch, got {other:?}"),
+    }
+}
+
+/// The host checks a device code's expiry *locally* before it ever polls the issuer
+/// (mod.rs ~985), so the existing lapsed-flow test — which advances the one shared clock —
+/// only ever reaches that local check. To reach the issuer's own `"expired_token"` answer
+/// (the match arm in `device_flow_poll`) the host must still believe the code is live while
+/// the issuer has already retired it. Two deliberately divergent clocks arrange exactly
+/// that; delete the arm and `"expired_token"` falls through to the catch-all, turning a
+/// clean `Expired` into an `Err`.
+#[tokio::test]
+async fn a_code_the_issuer_calls_expired_maps_to_expired_not_an_error() {
+    let host_dial = Dial::new(T0);
+    let issuer_dial = Dial::new(T0);
+    let issuer = Arc::new(StubIssuer::with_clock(
+        "https://issuer.test",
+        issuer_dial.clock(),
+    ));
+    let http: Arc<dyn LicenseHttp> = issuer.clone();
+    let service = LicenseService::new(Arc::new(MemoryLicenseStore::new()), http, host_dial.clock());
+
+    let flow = service
+        .device_flow_start("https://issuer.test", "acme/pro")
+        .await
+        .unwrap();
+
+    // Only the issuer's clock jumps past the code's TTL. The host still thinks it is live,
+    // so it actually POSTs and the stub answers `expired_token`.
+    issuer_dial.set(T0 + DEVICE_CODE_TTL + 1);
+
+    assert_eq!(
+        service.device_flow_poll(&flow.code).await.unwrap(),
+        DevicePoll::Expired,
+        "the issuer's expired_token answer maps to DevicePoll::Expired",
+    );
+    // The arm also forgets the flow, so a second poll no longer knows the code.
+    assert!(matches!(
+        service.device_flow_poll(&flow.code).await,
+        Err(LicenseError::UnknownFlow(_)),
+    ));
+}
+
+/// The stub *always* sends an `interval`, so the `#[serde(default = "default_interval")]`
+/// fallback in `device_flow_start` never fires in the other tests — and its value (5) is
+/// invisible because `DEVICE_POLL_INTERVAL` is 1 and `interval.max(1)` flattens the mutant's
+/// 0 or 1 to the same 1. This transport strips the `interval` field from the device
+/// authorization answer, forcing the default path so the real 5 shows through and a mutated
+/// default (0 or 1 → 1) is distinguishable.
+struct StripInterval(Arc<StubIssuer>);
+
+impl LicenseHttp for StripInterval {
+    fn get(&self, url: String) -> HttpFuture<'_> {
+        self.0.get(url)
+    }
+
+    fn post_form(
+        &self,
+        url: String,
+        bearer: Option<LicenseToken>,
+        form: Vec<(String, String)>,
+        accept: String,
+    ) -> HttpFuture<'_> {
+        let inner = self.0.post_form(url.clone(), bearer, form, accept);
+        Box::pin(async move {
+            let mut resp = inner.await?;
+            if url.contains("device_authorization") {
+                if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&resp.body) {
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.remove("interval");
+                    }
+                    resp.body = serde_json::to_vec(&v).unwrap();
+                }
+            }
+            Ok(resp)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_device_answer_without_an_interval_uses_the_default_cadence() {
+    let dial = Dial::new(T0);
+    let issuer = Arc::new(StubIssuer::with_clock("https://issuer.test", dial.clock()));
+    let http: Arc<dyn LicenseHttp> = Arc::new(StripInterval(issuer));
+    let service = LicenseService::new(Arc::new(MemoryLicenseStore::new()), http, dial.clock());
+
+    let flow = service
+        .device_flow_start("https://issuer.test", "acme/pro")
+        .await
+        .unwrap();
+    assert_eq!(
+        flow.interval, 5,
+        "with no interval in the answer, the built-in default of 5 seconds applies",
     );
 }

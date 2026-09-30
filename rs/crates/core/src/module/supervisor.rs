@@ -213,6 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn recent_crashes_counts_live_history() {
+        let mut s = Supervisor::new(RestartPolicy::default());
+        // Fresh: nothing has crashed yet.
+        assert_eq!(s.recent_crashes(), 0);
+        let t0 = Instant::now();
+        s.on_crash(t0);
+        s.on_crash(t0 + ms(10));
+        // Both are still inside the window.
+        assert_eq!(s.recent_crashes(), 2);
+        s.reset();
+        assert_eq!(s.recent_crashes(), 0);
+    }
+
+    #[test]
     fn reset_forgets_history() {
         let mut s = Supervisor::new(RestartPolicy::default());
         let t0 = Instant::now();

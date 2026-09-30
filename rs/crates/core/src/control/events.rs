@@ -405,4 +405,39 @@ mod tests {
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
         ));
     }
+
+    #[test]
+    fn add_client_assigns_distinct_incrementing_ids() {
+        // Kills `+=`→`*=` at events.rs:141. next_id starts at 0, so `*= 1` leaves it 0 for
+        // every client (all get id 0); `+= 1` yields 1, 2, ...
+        let hub = EventHub::new();
+        let (id1, _r1) = hub.add_client(None);
+        let (id2, _r2) = hub.add_client(None);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn send_to_delivers_to_the_addressed_client() {
+        // Kills the `()` no-op replacement of send_to's body at events.rs:162: the frame
+        // must actually reach the client's receiver.
+        let hub = EventHub::new();
+        let (id, mut rx) = hub.add_client(None);
+        hub.send_to(id, &ControlEvent::State);
+        assert_eq!(rx.try_recv().unwrap(), r#"{"type":"state"}"#);
+    }
+
+    #[test]
+    fn send_to_reaches_only_the_addressed_client() {
+        // Kills `==`→`!=` at events.rs:164 (which client `find` selects). Two clients;
+        // send to the second only. `==` delivers to it alone; `!=` finds the first
+        // non-matching client and delivers to the wrong one.
+        let hub = EventHub::new();
+        let (_id1, mut rx1) = hub.add_client(None);
+        let (id2, mut rx2) = hub.add_client(None);
+        hub.send_to(id2, &ControlEvent::State);
+        assert_eq!(rx2.try_recv().unwrap(), r#"{"type":"state"}"#);
+        assert!(rx1.try_recv().is_err());
+    }
 }

@@ -98,4 +98,22 @@ mod tests {
             .get_envs()
             .any(|(k, v)| k == ENV_FD && v.and_then(|v| v.to_str()) == Some(want.as_str())));
     }
+
+    #[test]
+    fn set_cloexec_sets_the_flag_and_is_idempotent() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let fd: OwnedFd = a.into();
+        // Clear first (uses the `& !` branch, unaffected by the `|` mutation), so the two
+        // sets below start from a known-off state.
+        set_cloexec(&fd, false).unwrap();
+        assert!(!cloexec(fd.as_raw_fd()));
+        // Setting is bitwise-OR: doing it twice must leave the flag SET. An XOR would
+        // toggle it back off on the second call, ending with it cleared.
+        set_cloexec(&fd, true).unwrap();
+        set_cloexec(&fd, true).unwrap();
+        assert!(
+            cloexec(fd.as_raw_fd()),
+            "FD_CLOEXEC must stay set after repeated set_cloexec(true)"
+        );
+    }
 }

@@ -195,6 +195,20 @@ mod tests {
     }
 
     #[test]
+    fn maps_the_remaining_named_keys_to_their_exact_vt_bytes() {
+        // Each of these has its own arm in `named_key`; deleting an arm makes the name
+        // fall through to `None`, so a tight assert on the exact bytes kills that survivor.
+        assert_eq!(key_to_bytes("backtab").as_deref(), Some("\x1b[Z"));
+        assert_eq!(key_to_bytes("home").as_deref(), Some("\x1b[H"));
+        assert_eq!(key_to_bytes("end").as_deref(), Some("\x1b[F"));
+        assert_eq!(key_to_bytes("pgup").as_deref(), Some("\x1b[5~"));
+        assert_eq!(key_to_bytes("insert").as_deref(), Some("\x1b[2~"));
+        assert_eq!(key_to_bytes("delete").as_deref(), Some("\x1b[3~"));
+        assert_eq!(key_to_bytes("del").as_deref(), Some("\x1b[3~"));
+        assert_eq!(key_to_bytes("space").as_deref(), Some(" "));
+    }
+
+    #[test]
     fn returns_none_for_an_unknown_key() {
         assert_eq!(key_to_bytes("frobnicate"), None);
         assert_eq!(key_to_bytes("ctrl+shift+x"), None);

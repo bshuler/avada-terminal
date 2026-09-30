@@ -711,6 +711,12 @@ mod host_tests {
         r.host.shutdown(&r.record.module_id).unwrap();
     }
 
+    // Wall-clock timing assertion. cargo-mutants runs the whole suite per mutant, so under a
+    // parallel (`-j`) sweep's concurrent build load this can fail from scheduler starvation
+    // while an unrelated line is mutated, falsely scoring that mutant CAUGHT and hiding a real
+    // gap. Excluded from parallel mutation builds via `RUSTFLAGS='--cfg avada_mutants_parallel'`;
+    // it still runs in the serial (`-j1`) module sweep that owns its timeout coverage.
+    #[cfg(not(avada_mutants_parallel))]
     #[test]
     fn crash_restarts_with_toasts_then_disables_after_the_cap() {
         let r = rig(&all_ui(), |c| {
@@ -830,6 +836,10 @@ mod host_tests {
         ));
     }
 
+    // Wall-clock timing assertion; see the note on `crash_restarts_with_toasts_then_disables_after_the_cap`.
+    // Excluded from parallel mutation builds via `RUSTFLAGS='--cfg avada_mutants_parallel'`;
+    // still runs in the serial (`-j1`) module sweep.
+    #[cfg(not(avada_mutants_parallel))]
     #[test]
     fn a_module_that_never_says_hello_is_cut_off_at_the_timeout() {
         // The error alone does not prove much: a child that sleeps 30 s and then exits

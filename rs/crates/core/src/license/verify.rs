@@ -385,6 +385,79 @@ mod tests {
         }
     }
 
+    /// `is_ed25519` is the gate `decoding_key` trusts before it ever touches the bytes, so
+    /// each of its three conjuncts has to genuinely veto. A fully-valid key cannot prove
+    /// that: with every term true, `&&` and `||` agree. Each `&&` is pinned by a key whose
+    /// left side is false while the right side is true — the only inputs where turning that
+    /// `&&` into `||` would flip the answer from "no" to "yes".
+    #[test]
+    fn is_ed25519_needs_the_okp_type_the_ed25519_curve_and_public_bytes() {
+        let ok = Jwk::ed25519("k1", &[7u8; 32]);
+        assert!(ok.is_ed25519());
+
+        // Wrong kty, curve and x intact: pins the first `&&`. As `||`, the right-hand
+        // `crv == Ed25519 && x.is_some()` would admit a non-OKP key on its own.
+        let wrong_kty = Jwk {
+            kty: "EC".into(),
+            ..ok.clone()
+        };
+        assert!(!wrong_kty.is_ed25519(), "a non-OKP kty is not Ed25519");
+
+        // Right kty and x, wrong curve: pins the second `&&`. As `||`, `x.is_some()` would
+        // admit a key on the wrong curve.
+        let wrong_crv = Jwk {
+            crv: Some("X25519".into()),
+            ..ok.clone()
+        };
+        assert!(
+            !wrong_crv.is_ed25519(),
+            "a non-Ed25519 curve is not Ed25519"
+        );
+
+        // Kty and curve intact, no public bytes: pins the `x.is_some()` term.
+        let no_x = Jwk {
+            x: None,
+            ..ok.clone()
+        };
+        assert!(
+            !no_x.is_ed25519(),
+            "a key with no public bytes is not Ed25519"
+        );
+    }
+
+    /// `VerifyError`'s `Display` is what a `?`-propagated verification failure prints in a
+    /// log or a user-facing refusal, so a blanked body (every arm collapsed to an empty
+    /// string) is a real regression. Each variant must render a non-empty message that
+    /// names its own cause — checked here across the wrapping and the unit variants.
+    #[test]
+    fn every_verify_error_prints_a_message_that_names_its_cause() {
+        let cases = [
+            (VerifyError::Malformed("truncated".into()), "truncated"),
+            (VerifyError::NoKid, "key id"),
+            (VerifyError::UnknownKey("k9".into()), "k9"),
+            (VerifyError::BadSignature, "signature"),
+            (VerifyError::BadKey("short".into()), "short"),
+            (VerifyError::Algorithm("HS256".into()), "HS256"),
+            (VerifyError::NotYet, "yet"),
+            (VerifyError::Expired, "expired"),
+            (
+                VerifyError::WrongProduct {
+                    expected: "acme/pro".into(),
+                    actual: "acme/lite".into(),
+                },
+                "acme/lite",
+            ),
+        ];
+        for (err, needle) in cases {
+            let shown = err.to_string();
+            assert!(!shown.is_empty(), "{err:?} rendered empty");
+            assert!(
+                shown.contains(needle),
+                "{err:?} rendered {shown:?}, missing {needle:?}",
+            );
+        }
+    }
+
     #[test]
     fn jwk_round_trips_as_rfc_8037_okp() {
         let k = SigningKey::generate_with_kid("k1");

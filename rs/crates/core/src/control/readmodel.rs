@@ -950,6 +950,33 @@ mod tests {
         Activity::Busy
     }
 
+    /// A one-tab window whose single tab holds `panes`. The tab is marked active so
+    /// `insert_pane(window_id, ..)` targets it.
+    fn win(id: i64, tab: &str, panes: Vec<PaneInfo>) -> WindowInfo {
+        WindowInfo {
+            keyboard_focus_pane: None,
+            window_id: id,
+            active_tab_id: Some(tab.to_string()),
+            tabs: vec![TabInfo {
+                system: false,
+                id: tab.to_string(),
+                title: tab.to_string(),
+                layout: "auto".to_string(),
+                panes,
+            }],
+        }
+    }
+
+    /// A window with no tab at all, so it cannot host a pane (`insert_pane` returns false).
+    fn win_no_tabs(id: i64) -> WindowInfo {
+        WindowInfo {
+            keyboard_focus_pane: None,
+            window_id: id,
+            active_tab_id: None,
+            tabs: vec![],
+        }
+    }
+
     #[test]
     fn serializes_state_with_omitted_optionals_and_field_order() {
         let m = seeded();
@@ -1246,5 +1273,80 @@ mod tests {
         assert_eq!(m.focused_pane(), Some("p1"));
         m.set_focused_pane(None);
         assert_eq!(m.focused_pane(), None);
+    }
+
+    #[test]
+    fn drop_window_removes_only_the_named_window_and_reindexes() {
+        // Kills `!=`→`==` on the `removed` computation (readmodel.rs:230): under `==`,
+        // dropping a present window reports `false` and skips reindex, while dropping an
+        // absent one reports `true`.
+        let mut m = ReadModel::new();
+        m.add_window(win(1, "t1", vec![pane("p1", "u1")]));
+        m.add_window(win(2, "t2", vec![pane("p2", "u2")]));
+        m.add_window(win(3, "t3", vec![pane("p3", "u3")]));
+        // Dropping a present window returns true.
+        assert!(m.drop_window(2));
+        assert!(m.has_window(1) && m.has_window(3));
+        assert!(!m.has_window(2));
+        // Reindex ran: the dropped window's pane is no longer addressable.
+        assert!(m.coords_of("p2").is_none());
+        assert_eq!(m.uid_to_pane("u2"), None);
+        // Survivors keep their indexes intact.
+        assert_eq!(m.coords_of("p1").map(|c| c.tab_id), Some("t1".to_string()));
+        assert_eq!(m.coords_of("p3").map(|c| c.tab_id), Some("t3".to_string()));
+        // Dropping an absent window returns false.
+        assert!(!m.drop_window(999));
+    }
+
+    #[test]
+    fn publish_replace_skips_orphan_whose_uid_the_rebuilt_tree_already_holds() {
+        // Kills `||`→`&&` at readmodel.rs:278 — the "already adopted this cycle" guard.
+        // The rebuilt tree holds a DIFFERENT pane id with the SAME session uid, so exactly
+        // one operand of `id-present || uid-present` is true. `||` skips (correct); `&&`
+        // fails to skip and re-inserts the orphan as a duplicate.
+        let mut m = ReadModel::new();
+        m.add_window(win(10, "t10", vec![pane("orphanP", "sharedU")]));
+        let rebuilt = win(20, "t20", vec![pane("newP", "sharedU")]);
+        let carried = m.publish_replace(&[10], vec![rebuilt], &HashSet::new());
+        assert!(carried.is_empty(), "carried: {carried:?}");
+        assert!(m.pane("orphanP").is_none());
+        assert_eq!(m.uid_to_pane("sharedU").as_deref(), Some("newP"));
+        assert_eq!(m.panes().len(), 1);
+    }
+
+    #[test]
+    fn publish_replace_places_orphan_in_surviving_tab_without_double_insert() {
+        // Kills `||`→`&&` at readmodel.rs:286 — the first arm of the placement chain
+        // `insert_pane_in_tab || insert_pane || first_window`. The orphan's original tab
+        // survives, so the tab insert (A) succeeds and must short-circuit the window
+        // insert (B). Under `A && B` both run, inserting the orphan twice.
+        let mut m = ReadModel::new();
+        m.add_window(win(30, "t30", vec![pane("oP", "oU")]));
+        let rebuilt = win(30, "t30", vec![]);
+        let carried = m.publish_replace(&[30], vec![rebuilt], &HashSet::new());
+        assert_eq!(carried, vec!["oP".to_string()]);
+        assert_eq!(m.panes().iter().filter(|p| p.pane_id == "oP").count(), 1);
+        assert_eq!(m.panes().len(), 1);
+    }
+
+    #[test]
+    fn publish_replace_reports_orphan_placed_even_when_first_window_cannot_host() {
+        // Kills `||`→`&&` at readmodel.rs:287 — the second arm of the placement chain.
+        // The orphan lands in its surviving tab (A true), so `(A || B) || C` is true and
+        // the id is carried. The first window has no tab, so C is false; under
+        // `(A || B) && C` the placement is falsely reported as failed (carried empty).
+        let mut m = ReadModel::new();
+        m.add_window(win(40, "tGone", vec![pane("oP", "oU")]));
+        let first = win_no_tabs(5);
+        let host = win(40, "tHost", vec![]);
+        let carried = m.publish_replace(&[40], vec![first, host], &HashSet::new());
+        // The killing assertion: real reports the placement, the mutant drops it.
+        assert_eq!(carried, vec!["oP".to_string()], "carried: {carried:?}");
+        // Sanity (identical under both real and mutant): B homed the pane into "tHost".
+        assert_eq!(
+            m.coords_of("oP").map(|c| c.tab_id),
+            Some("tHost".to_string())
+        );
+        assert_eq!(m.panes().iter().filter(|p| p.pane_id == "oP").count(), 1);
     }
 }

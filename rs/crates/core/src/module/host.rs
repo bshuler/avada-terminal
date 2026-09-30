@@ -1312,3 +1312,229 @@ impl Slot {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        lock, CapabilityGate, CommandSpec, Host, HostConfig, HostError, Licensing, ModuleStatus,
+    };
+    use crate::license::Gate;
+    use crate::module::gate::DeclaredOnly;
+    use crate::module::rpc::tests::tempdir::Dir;
+    use crate::module::testkit;
+    use avada_module_sdk::rights::InstallRecord;
+    use avada_module_sdk::ModuleId;
+    use std::sync::Arc;
+
+    fn gate_for(record: &InstallRecord) -> Arc<dyn CapabilityGate> {
+        Arc::new(DeclaredOnly::from_record(record))
+    }
+
+    /// A host whose slots map is empty; `data_root` lives under `dir`.
+    fn host_with(record: &InstallRecord, dir: &Dir) -> Host {
+        Host::new(HostConfig::new(dir.0.join("data")), gate_for(record))
+    }
+
+    /// A record whose stored hash cannot match this binary, so `spawn_with` inserts the
+    /// slot and `start` fails at the hash check before any child is spawned. Lets the
+    /// slot-shaped getters be exercised without a subprocess.
+    fn broken_slot(host: &Host) -> ModuleId {
+        let mut record = testkit::record(&[]);
+        record.artifact_sha256 = "f".repeat(64);
+        let id = record.module_id.clone();
+        let bin = std::env::current_exe().unwrap();
+        assert!(matches!(
+            host.spawn_with(&record, &bin, &[], &[]),
+            Err(HostError::HashMismatch { .. })
+        ));
+        id
+    }
+
+    // ---- Display for HostError (host.rs:175) -------------------------------------
+
+    #[test]
+    fn every_host_error_displays_its_human_text() {
+        let id = testkit::module_id();
+        let cases: Vec<(HostError, &str)> = vec![
+            (HostError::NotInstalled(id.clone()), "is not installed"),
+            (
+                HostError::HashMismatch {
+                    expected: "a".into(),
+                    actual: "b".into(),
+                },
+                "binary hash mismatch",
+            ),
+            (HostError::HandshakeTimeout, "did not say hello in time"),
+            (HostError::NotRunning(id.clone()), "is not running"),
+            (HostError::Timeout, "did not answer in time"),
+            (HostError::Closed, "connection closed"),
+            (HostError::Unlicensed("seat expired".into()), "not licensed"),
+            (
+                HostError::Io(std::io::Error::other("disk melted")),
+                "disk melted",
+            ),
+        ];
+        for (err, needle) in cases {
+            let shown = err.to_string();
+            assert!(
+                shown.contains(needle),
+                "`{shown}` should contain `{needle}`"
+            );
+        }
+        // The id-bearing variants name the module, not just a fixed phrase.
+        assert!(HostError::NotInstalled(id.clone())
+            .to_string()
+            .contains("acme/avada-files"));
+        assert!(HostError::Unlicensed("seat expired".into())
+            .to_string()
+            .contains("seat expired"));
+    }
+
+    // ---- Host::licensing (host.rs:308) ------------------------------------------
+
+    struct AlwaysRun;
+    impl Licensing for AlwaysRun {
+        fn gate(&self, _product: &ModuleId, _major: u64) -> Gate {
+            Gate::Run
+        }
+    }
+
+    #[test]
+    fn licensing_returns_the_installed_gate() {
+        let record = testkit::record(&[]);
+        let dir = Dir::new("host-lic");
+        let host = host_with(&record, &dir);
+        // No gate to start with.
+        assert!(host.licensing().is_none());
+        host.set_licensing(Arc::new(AlwaysRun));
+        let got = host
+            .licensing()
+            .expect("the gate just installed is returned");
+        assert!(matches!(got.gate(&testkit::module_id(), 1), Gate::Run));
+    }
+
+    // ---- Host::record (host.rs:402) ---------------------------------------------
+
+    #[test]
+    fn record_is_returned_for_an_installed_slot() {
+        let dir = Dir::new("host-record");
+        let record = testkit::record(&[]);
+        let host = host_with(&record, &dir);
+        let id = broken_slot(&host);
+        let got = host
+            .record(&id)
+            .expect("a slot exists, so its record is present");
+        assert_eq!(got.module_id, id);
+        assert_eq!(got.artifact_sha256, "f".repeat(64));
+        assert_eq!(got.tag, record.tag);
+        // An id the host never saw still yields None, so Some is not unconditional.
+        assert!(host
+            .record(&ModuleId::new("nobody/nothing").unwrap())
+            .is_none());
+    }
+
+    // ---- Host::commands (host.rs:420) -------------------------------------------
+
+    #[test]
+    fn commands_reflect_what_the_dispatcher_holds() {
+        let dir = Dir::new("host-cmds");
+        let record = testkit::record(&[]);
+        let host = host_with(&record, &dir);
+        let id = broken_slot(&host);
+        // Nothing registered yet.
+        assert!(host.commands(&id).is_empty());
+        // Seed the slot's dispatcher exactly as a module's `host.command.register` would.
+        let want = CommandSpec {
+            id: "reveal".into(),
+            label: "Reveal".into(),
+            chord: None,
+        };
+        {
+            let slots = lock(&host.inner.slots);
+            let slot = slots.get(&id).expect("slot present");
+            *lock(&slot.dispatcher.commands) = vec![want.clone()];
+        }
+        assert_eq!(host.commands(&id), vec![want]);
+    }
+
+    // ---- Host::remove (host.rs:624) ---------------------------------------------
+
+    #[test]
+    fn remove_forgets_the_slot() {
+        let dir = Dir::new("host-remove");
+        let record = testkit::record(&[]);
+        let host = host_with(&record, &dir);
+        let id = broken_slot(&host);
+        assert!(matches!(host.status(&id), ModuleStatus::Broken { .. }));
+        assert_eq!(host.statuses().len(), 1);
+        host.remove(&id);
+        // Gone from every query the host exposes.
+        assert_eq!(host.status(&id), ModuleStatus::NotInstalled);
+        assert!(host.statuses().is_empty());
+        assert!(host.record(&id).is_none());
+    }
+
+    // ---- subprocess-backed: token_matches (host.rs:457) and shutdown_all (host.rs:611)
+
+    #[cfg(unix)]
+    mod live {
+        use super::super::{Host, HostConfig, ModuleStatus};
+        use super::gate_for;
+        use crate::module::rpc::tests::tempdir::Dir;
+        use crate::module::testkit::{self, child_args, MODE_ENV};
+        use avada_module_sdk::caps::Capability;
+        use avada_module_sdk::rights::InstallRecord;
+        use avada_module_sdk::ModuleId;
+
+        fn all_ui() -> Vec<Capability> {
+            vec![Capability::UiRail, Capability::UiCommands]
+        }
+
+        /// A running fake module in `normal` mode; `spawn_with` returns only once the
+        /// handshake is done and the status is `Running`.
+        fn running(dir: &Dir) -> (Host, ModuleId, InstallRecord) {
+            let record = testkit::record(&all_ui());
+            let host = Host::new(HostConfig::new(dir.0.join("data")), gate_for(&record));
+            let id = record.module_id.clone();
+            host.spawn_with(
+                &record,
+                &std::env::current_exe().unwrap(),
+                &[(MODE_ENV.to_string(), "normal".to_string())],
+                &child_args(),
+            )
+            .unwrap();
+            assert_eq!(host.status(&id), ModuleStatus::Running);
+            (host, id, record)
+        }
+
+        #[test]
+        fn token_matches_accepts_the_minted_token_and_rejects_others() {
+            let dir = Dir::new("host-token");
+            let (host, id, _record) = running(&dir);
+            let tok = host
+                .test_token(&id)
+                .expect("a token is minted while running");
+            // The real token matches; the mutation that forces `false` cannot.
+            assert!(host.token_matches(&id, &tok));
+            // Wrong values still miss.
+            assert!(!host.token_matches(&id, ""));
+            assert!(!host.token_matches(&id, &"0".repeat(64)));
+            // Once it is not running, even the old token no longer matches.
+            host.shutdown(&id).unwrap();
+            assert!(!host.token_matches(&id, &tok));
+        }
+
+        #[test]
+        fn shutdown_all_disables_every_running_module() {
+            let dir = Dir::new("host-shutall");
+            let (host, id, _record) = running(&dir);
+            host.shutdown_all();
+            // A no-op body would leave it Running; the real one leaves it Disabled.
+            assert!(
+                matches!(host.status(&id), ModuleStatus::Disabled { .. }),
+                "{:?}",
+                host.status(&id)
+            );
+        }
+    }
+}

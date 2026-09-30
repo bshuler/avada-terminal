@@ -4624,6 +4624,92 @@ mod golden {
         assert_eq!(got["result"], json!("artifact://x"));
     }
 
+    /// `queue_purge` must actually run the delete and report the count in its JSON body.
+    /// (Kills the `queue_purge` body → `Default::default()` mutant, which would return a bare
+    /// 200 with an EMPTY body: no delete performed and neither `ok` nor `removed` present.)
+    #[tokio::test]
+    async fn queue_purge_deletes_terminal_tasks_and_reports_the_count() {
+        let s = boot(true).await;
+        // Drive one task all the way to a terminal (done) state so it is purge-eligible.
+        let (id, fencing) = enqueue_and_claim(&s, "build", "wkr").await;
+        let ack: Value = post(
+            &s,
+            &format!("/tasks/{id}/ack"),
+            &s.token,
+            &format!(r#"{{"fencingToken":{fencing}}}"#),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+        assert_eq!(ack["state"], json!("done"));
+
+        // No cutoff ⇒ `older_than` defaults to now ⇒ the just-finished task qualifies.
+        let r = post(&s, "/queues/build/purge", &s.token, "{}").await;
+        assert_eq!(r.status().as_u16(), 200);
+        let v: Value = r.json().await.unwrap();
+        assert_eq!(v["ok"], json!(true), "purge body must carry ok:true");
+        assert_eq!(
+            v["removed"],
+            json!(1),
+            "exactly the one terminal task is purged"
+        );
+
+        // And it is really gone: a second purge finds nothing to remove.
+        let again: Value = post(&s, "/queues/build/purge", &s.token, "{}")
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(again["removed"], json!(0));
+    }
+
+    /// `read_output_body` copies the `strip` query flag straight into the `stripped` field of
+    /// its JSON. The flag is `q["strip"] == "1"`. (Kills `==` → `!=` at the strip parse: with
+    /// `!=`, `strip="1"` would read as false and an absent/other value as true — the exact
+    /// inversion of the reported flag.)
+    #[tokio::test]
+    async fn read_output_body_reports_the_strip_flag_verbatim() {
+        let s = boot(true).await;
+
+        let mut q = std::collections::HashMap::new();
+        q.insert("strip".to_string(), "1".to_string());
+        let body = super::read_output_body(&s.shared, "p1", "u1", &q);
+        assert_eq!(
+            body["stripped"],
+            json!(true),
+            "strip=1 ⇒ stripped:true; the `!=` mutant would say false"
+        );
+
+        // Omitting the flag ⇒ false. (The `==`/`!=` closure never runs when the key is absent,
+        // so this case reads false under both real and mutant code; it guards the default, while
+        // the strip="1" assertion above is what actually kills the `!=` mutant.)
+        let empty = std::collections::HashMap::new();
+        let body2 = super::read_output_body(&s.shared, "p1", "u1", &empty);
+        assert_eq!(
+            body2["stripped"],
+            json!(false),
+            "no strip param ⇒ stripped:false"
+        );
+    }
+
+    /// `wait_for_quiet` returns `(settled, timed_out)`. With a zero timeout, an as-yet-unadvanced
+    /// pane (a `since` cursor ahead of any produced output, and no `last_output_at`) must time out
+    /// on the first poll: `(false, true)`. (Kills the whole-body → `(true, false)` mutant, which
+    /// would claim the pane settled when it in fact timed out.)
+    #[tokio::test]
+    async fn wait_for_quiet_times_out_when_output_never_advances() {
+        let s = boot(true).await;
+        // uid "u1" has no session ⇒ last_output_at None, output_bytes 0. `since` far ahead of 0
+        // forces `advanced=false`; timeout_ms=0 ⇒ Timeout on the very first iteration.
+        let verdict = super::wait_for_quiet(&s.shared, "u1", 0, 0, Some(1_000_000)).await;
+        assert_eq!(
+            verdict,
+            (false, true),
+            "must report timed-out, not settled; the mutant returns (true,false)"
+        );
+    }
+
     #[tokio::test]
     async fn queue_claim_empty_is_200_empty_tasks_byte_exact() {
         let s = boot(true).await;

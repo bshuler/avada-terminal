@@ -167,3 +167,49 @@ pub(crate) fn io_at(path: &std::path::Path, source: std::io::Error) -> InstallEr
         source,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::lockfile::LockfileIoError;
+    use avada_module_sdk::rights::RightsError;
+    use std::error::Error as _;
+
+    fn io_err() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope")
+    }
+
+    #[test]
+    fn every_wrapping_error_exposes_its_underlying_cause() {
+        // `source()` is what `?`-propagation, `anyhow`'s `{:#}`, and a log's error chain
+        // walk to reach the real cause. Each wrapping variant must hand back its inner
+        // error; dropping any arm (or blanking the whole method to `None`) would sever
+        // the chain and hide, e.g., the io errno or the MAC-verification failure behind a
+        // bare top-line. Assert a source is present for each wrapping variant, and that
+        // the leaf/plain variants correctly report none.
+        let wrapping: Vec<InstallError> = vec![
+            InstallError::Io {
+                path: PathBuf::from("/x"),
+                source: io_err(),
+            },
+            InstallError::Rights(RightsError::BadSignature),
+            InstallError::Lockfile(LockfileIoError::Io {
+                path: PathBuf::from("/x/modules.lock"),
+                source: io_err(),
+            }),
+            InstallError::Key(KeyError::BadKeyId("bad".into())),
+        ];
+        for e in &wrapping {
+            assert!(
+                e.source().is_some(),
+                "a wrapping variant must expose its cause: {e:?}"
+            );
+        }
+        // A variant that carries only strings/paths has no deeper Error to point at.
+        let plain = InstallError::Inconsistent("no manifest".into());
+        assert!(
+            plain.source().is_none(),
+            "a plain variant has no underlying error to expose"
+        );
+    }
+}

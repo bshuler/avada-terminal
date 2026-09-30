@@ -734,6 +734,10 @@ mod tests {
         }
     }
 
+    // Cross-checks packaging manifests read off disk, anchored at the repo root; those paths
+    // do not resolve in cargo-mutants' `.git`-less tree copy. Excluded from mutation builds
+    // via `RUSTFLAGS='--cfg avada_mutants'` (see rs/.cargo/mutants.toml).
+    #[cfg(not(avada_mutants))]
     #[test]
     fn every_hook_ships_in_every_packaging_manifest() {
         // The set of shipped hooks is spelled out in six places — four packaging manifests,

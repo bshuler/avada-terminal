@@ -945,6 +945,29 @@ mod tests {
         assert!(!should_dead_letter(4, 5));
     }
 
+    #[test]
+    fn counts_add_targets_each_field_and_total_sums_exactly() {
+        // Distinct powers of two so no two subsets share a sum: every field carries a
+        // unique weight, which makes any single arithmetic mutation observable.
+        let mut c = Counts::default();
+        c.add("queued", 2);
+        c.add("claimed", 4);
+        c.add("done", 8);
+        c.add("failed", 16);
+        c.add("dead", 32);
+        // Each arm of `add` must land in its own field, incremented by exactly the amount
+        // (from a 0 base): `-=` underflows/panics, `*=` yields 0 — both diverge from these.
+        assert_eq!(c.queued, 2);
+        assert_eq!(c.claimed, 4);
+        assert_eq!(c.done, 8);
+        assert_eq!(c.failed, 16);
+        assert_eq!(c.dead, 32);
+        // `total()` is the exact arithmetic sum; any `+`→`-`/`*` at any position diverges
+        // (distinct powers of two ⇒ no accidental collision back to 62).
+        assert_eq!(c.total(), 2 + 4 + 8 + 16 + 32);
+        assert_eq!(c.total(), 62);
+    }
+
     // --- enqueue / claim --------------------------------------------------
 
     #[test]
