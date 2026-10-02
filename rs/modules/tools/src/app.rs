@@ -128,8 +128,11 @@ impl App {
         self.state.sessions.clear();
     }
 
-    /// Re-read the catalogue, decide which entries exist, and read each one's history.
-    pub fn refresh(&mut self, api: &mut impl Api) {
+    /// Read only what the rail needs to exist: the catalogue and the stars, never a
+    /// history. This is the startup paint, and it has to stay cheap — the host's first
+    /// `module.activate` queues behind it, and a cold transcript scan on a freshly started
+    /// host takes longer than the host waits for an answer.
+    pub fn prime(&mut self, api: &mut impl Api) {
         self.state.now = api.now_ms();
         self.state.errors.clear();
         match api.tools() {
@@ -162,6 +165,11 @@ impl App {
 
         let wanted: BTreeSet<&String> = self.state.entries.iter().collect();
         self.state.sessions.retain(|k, _| wanted.contains(k));
+    }
+
+    /// Re-read the catalogue, decide which entries exist, and read each one's history.
+    pub fn refresh(&mut self, api: &mut impl Api) {
+        self.prime(api);
         for id in self.state.entries.clone() {
             match api.sessions(&id) {
                 Ok(rows) => {

@@ -44,6 +44,9 @@ struct Sim {
     seen: Vec<(String, String, Value)>,
     /// Whether `GET /state` has a window to offer.
     windows: bool,
+    /// How long each `GET /tools/{tool}/sessions` takes: a freshly started host walking a
+    /// cold transcript tree.
+    history_delay: Duration,
 }
 
 impl Sim {
@@ -60,6 +63,7 @@ impl Sim {
             favourites: None,
             seen: vec![],
             windows: true,
+            history_delay: Duration::ZERO,
         }
     }
 
@@ -161,6 +165,10 @@ fn serve(mut stream: TcpStream, sim: &Arc<Mutex<Sim>>) {
     }
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
 
+    let delay = sim.lock().unwrap().history_delay;
+    if path.ends_with("/sessions") {
+        std::thread::sleep(delay);
+    }
     let mut sim = sim.lock().unwrap();
     sim.seen.push((verb.clone(), path.clone(), body.clone()));
     let (status, payload): (u16, Value) = match (verb.as_str(), path.as_str()) {
@@ -236,8 +244,14 @@ struct Host {
 }
 
 impl Host {
+    /// A module spawned and activated the way the app does it: the handshake, the first
+    /// paint, then `module.activate` and the push that carries the histories.
     fn spawn(sim: Sim) -> Self {
-        Self::spawn_with(sim, granted(), true)
+        let mut host = Self::spawn_with(sim, granted(), true);
+        host.wait_for(methods::HOST_ROWS_SET, 1);
+        host.ok(methods::MODULE_ACTIVATE, json!({}));
+        host.settle();
+        host
     }
 
     /// `wired: false` withholds `control_url`, which is what a host with no control server
@@ -873,6 +887,41 @@ fn looking_away_and_back_re_reads_the_history() {
     host.ok(methods::MODULE_DEACTIVATE, json!({}));
     host.ok(methods::MODULE_ACTIVATE, json!({}));
     host.wait_for_http("GET", "/tools/claude/sessions", before + 1);
+    host.shutdown();
+}
+
+#[test]
+fn activation_is_answered_before_a_slow_history_is_read() {
+    // A host that has just started walks a cold transcript tree: seconds per tool, more
+    // than the host waits for `module.activate`. Neither the first paint nor the answer
+    // may wait on it; the histories follow on their own push.
+    let slow = Duration::from_secs(3);
+    let mut sim = Sim::ready();
+    sim.favourites = Some(vec!["claude".into()]);
+    sim.history_delay = slow;
+    sim.sessions.insert(
+        "claude".into(),
+        vec![session("a1", "/Users/x/code/one", "Late but here")],
+    );
+    let started = Instant::now();
+    let mut host = Host::spawn_with(sim, granted(), true);
+    host.wait_for(methods::HOST_ROWS_SET, 1);
+    assert!(started.elapsed() < slow, "the first paint read a history");
+    assert_eq!(
+        labels(&host.rows("claude")),
+        ["Reading the conversation history…"]
+    );
+
+    let asked = Instant::now();
+    host.ok(methods::MODULE_ACTIVATE, json!({}));
+    assert!(
+        asked.elapsed() < slow,
+        "module.activate waited {:?} on the history",
+        asked.elapsed()
+    );
+    host.wait_for(methods::HOST_ROWS_SET, 2);
+    assert_eq!(labels(&host.rows("claude")), ["one", "Late but here"]);
+    assert_eq!(host.control.sim().count("GET", "/tools/claude/sessions"), 1);
     host.shutdown();
 }
 

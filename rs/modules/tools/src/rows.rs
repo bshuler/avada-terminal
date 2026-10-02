@@ -50,7 +50,11 @@ pub fn rows(state: &State, entry: &str) -> Vec<Row> {
         return vec![note_row("error", why)];
     }
     let Some(sessions) = state.sessions.get(entry) else {
-        // No error and no list: the entry exists but nothing has been read into it yet.
+        // Nothing read into it yet. If the catalogue itself was refused, the histories
+        // come from the same server and will be too: say why now, not "reading".
+        if let Some(why) = state.errors.get("") {
+            return vec![note_row("error", why)];
+        }
         return vec![note_row("idle", "Reading the conversation history…")];
     };
     let query = state.query(entry);

@@ -157,8 +157,10 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
     }
 
     // First paint, before any activation: the rail has to have its entries the moment the
-    // panel is drawn, not the first time somebody clicks where one should have been.
-    app.activate(&mut host);
+    // panel is drawn, not the first time somebody clicks where one should have been. The
+    // histories wait for `module.activate`, which the host sends straight after the
+    // handshake.
+    app.prime(&mut host);
     let mut registered = app.state.entries.clone();
     register_rail(&mut conn, &app)?;
     push_rows(&mut conn, &app)?;
@@ -166,11 +168,12 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
     while let Some(msg) = conn.recv()? {
         match msg {
             Message::Request(req) => {
+                // Activation is answered before the histories are read, not after: on a
+                // cold host one read takes longer than the host waits, and the rows
+                // arrive on their own push either way.
+                let activating = req.method == methods::MODULE_ACTIVATE;
                 let outcome: Option<Result<Outcome, RpcError>> = match req.method.as_str() {
-                    methods::MODULE_ACTIVATE => {
-                        app.activate(&mut host);
-                        Some(Ok(Outcome::default()))
-                    }
+                    methods::MODULE_ACTIVATE => Some(Ok(Outcome::default())),
                     methods::MODULE_DEACTIVATE => {
                         app.deactivate();
                         None
@@ -217,6 +220,9 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
                     } else if let Err(e) = host.spawn(&spec) {
                         toast(&mut conn, &format!("Could not resume: {e}"), "error")?;
                     }
+                }
+                if activating {
+                    app.activate(&mut host);
                 }
                 if registered != app.state.entries {
                     registered = app.state.entries.clone();
