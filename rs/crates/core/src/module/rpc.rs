@@ -173,6 +173,10 @@ pub(crate) struct Shared {
     /// `HostConfig` because the root changes when the human switches workspace, and a
     /// module that outlives the switch must not keep reading the old tree.
     pub workspace_root: Mutex<Option<PathBuf>>,
+    /// The control server's base URL, handed to each module in its hello. Held here rather
+    /// than read off `HostConfig` for the same reason as `workspace_root`: the server binds
+    /// after the first modules have spawned, and Preferences can restart it on a new port.
+    pub control_url: Mutex<Option<String>>,
 }
 
 /// Per-module dispatch state.
@@ -1352,6 +1356,7 @@ pub(crate) mod tests {
             rail_events: FanOut::default(),
             events: FanOut::default(),
             workspace_root: Mutex::new(None),
+            control_url: Mutex::new(None),
         });
         let rail = shared.rail_events.subscribe();
         let events = shared.events.subscribe();

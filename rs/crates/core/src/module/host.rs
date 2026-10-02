@@ -398,6 +398,9 @@ struct Live {
     closer: Closer,
     child: Arc<Mutex<Child>>,
     token: Token,
+    /// The control URL this process was given in its hello. A module reads it once, so a
+    /// process holding an old one has to be respawned (see [`Host::stale_control_url`]).
+    control_url: Option<String>,
     pending: Arc<Mutex<HashMap<u64, Sender<Response>>>>,
     next_id: Arc<AtomicU64>,
 }
@@ -468,6 +471,7 @@ impl Host {
     /// A host with `gate` deciding every capability check.
     pub fn new(config: HostConfig, gate: Arc<dyn CapabilityGate>) -> Host {
         let config_root = config.workspace.as_ref().and_then(|w| w.root.clone());
+        let control_url = config.control_url.clone();
         Host {
             inner: Arc::new(Inner {
                 config: Arc::new(config),
@@ -476,6 +480,7 @@ impl Host {
                     rail_events: Default::default(),
                     events: Default::default(),
                     workspace_root: Mutex::new(config_root.map(std::path::PathBuf::from)),
+                    control_url: Mutex::new(control_url),
                 }),
                 slots: Mutex::new(HashMap::new()),
                 licensing: Arc::new(Mutex::new(None)),
@@ -727,6 +732,52 @@ impl Host {
         *lock(&self.inner.shared.workspace_root) = root.map(PathBuf::from);
     }
 
+    /// Tell modules spawned from now on where the control server is (or that there is none).
+    /// Cheap: a running module keeps the URL it was given until it is respawned, which is
+    /// the caller's call --- see [`Host::stale_control_url`] and [`Host::respawn`].
+    pub fn set_control_url(&self, url: Option<String>) {
+        *lock(&self.inner.shared.control_url) = url;
+    }
+
+    /// The control URL modules are handed now.
+    pub fn control_url(&self) -> Option<String> {
+        lock(&self.inner.shared.control_url).clone()
+    }
+
+    /// Running modules whose hello carried a different control URL than the current one,
+    /// sorted. Empty while there is no URL: a module told about a server that has since
+    /// stopped is no worse off than one told nothing, so stopping never costs a restart.
+    pub fn stale_control_url(&self) -> Vec<ModuleId> {
+        let Some(url) = self.control_url() else {
+            return Vec::new();
+        };
+        let slots = lock(&self.inner.slots);
+        let mut out: Vec<ModuleId> = slots
+            .values()
+            .filter(|s| {
+                let st = lock(&s.state);
+                st.status.is_live()
+                    && st
+                        .live
+                        .as_ref()
+                        .is_some_and(|l| l.control_url.as_deref() != Some(url.as_str()))
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Stop a module and start it again with a fresh hello and restart budget. Used when
+    /// something the hello carries has changed under a running module. The rail is not
+    /// told the module is gone: it re-registers its entries at the next `module.activate`.
+    pub fn respawn(&self, id: &ModuleId, reason: &str) -> Result<(), HostError> {
+        let slot = self.slot(id)?;
+        slot.shutdown(reason);
+        lock(&slot.supervisor).reset();
+        slot.start()
+    }
+
     /// The root `host.fs.*` is currently scoped to.
     pub fn workspace_root(&self) -> Option<PathBuf> {
         lock(&self.inner.shared.workspace_root).clone()
@@ -969,7 +1020,7 @@ impl Slot {
             data_dir: self.data_dir.to_string_lossy().into_owned(),
             workspace: self.config.workspace.clone(),
             token: None,
-            control_url: self.config.control_url.clone(),
+            control_url: lock(&self.shared.control_url).clone(),
         }
     }
 
@@ -1063,6 +1114,7 @@ impl Slot {
         let (tx, rx) = mpsc::channel();
         let record = self.record.clone();
         let reply = self.host_hello();
+        let control_url = reply.control_url.clone();
         let hs_token = token.clone();
         thread::spawn(move || {
             let r = spawn::handshake(&mut reader, &mut writer, &record, &reply, &hs_token);
@@ -1105,6 +1157,7 @@ impl Slot {
             closer,
             child: Arc::new(Mutex::new(child)),
             token,
+            control_url,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
         };
@@ -1535,6 +1588,37 @@ mod tests {
                 "{:?}",
                 host.status(&id)
             );
+        }
+
+        #[test]
+        fn a_module_spawned_before_the_control_url_is_stale_until_respawned() {
+            let dir = Dir::new("host-control-url");
+            // Spawned with no URL, the way the app's modules start before the server binds.
+            let (host, id, _record) = running(&dir);
+            assert!(
+                host.stale_control_url().is_empty(),
+                "no URL yet, nothing to refresh"
+            );
+            let before = host.test_token(&id).unwrap();
+
+            host.set_control_url(Some("http://127.0.0.1:4041".into()));
+            assert_eq!(host.stale_control_url(), vec![id.clone()]);
+
+            host.respawn(&id, "control server moved").unwrap();
+            assert_eq!(host.status(&id), ModuleStatus::Running);
+            assert_ne!(
+                host.test_token(&id).unwrap(),
+                before,
+                "a fresh process, fresh hello"
+            );
+            assert!(host.stale_control_url().is_empty());
+
+            // A move makes it stale again; a stopped server never does.
+            host.set_control_url(Some("http://127.0.0.1:4042".into()));
+            assert_eq!(host.stale_control_url(), vec![id.clone()]);
+            host.set_control_url(None);
+            assert!(host.stale_control_url().is_empty());
+            host.shutdown_all();
         }
     }
 }

@@ -133,6 +133,10 @@ enum Job {
     /// child down (a blocking grace wait, which is why this is worker-thread work) and
     /// emits `RailEvent::Gone`, so the panel drops the entry on the next tick.
     Remove(ModuleId),
+    /// The control server's URL changed: respawn every running module that was handed a
+    /// different one, then activate it so it re-registers its rail. Worker-thread work for
+    /// the same reason as `Remove` --- each respawn waits out the module's shutdown grace.
+    RefreshControl,
     /// Stop every module and end the worker.
     Stop,
 }
@@ -447,16 +451,25 @@ impl ModuleRuntime {
     }
 
     /// Hand the control server this host, so `/m/<owner>/<repo>/...` routes reach the
-    /// modules. Cheap and idempotent per server instance; call it whenever the server
-    /// starts.
+    /// modules, and tell the modules where the server is. Cheap and idempotent per server
+    /// instance; call it every tick the server is running.
     pub fn attach_control(&self, shared: &Arc<Shared>) {
         let Some(host) = self.host.as_ref() else {
             return;
         };
-        if self.attached.replace(true) {
-            return;
+        if !self.attached.replace(true) {
+            attach_host(shared.clone(), host);
         }
-        attach_host(shared.clone(), host);
+        // The modules are spawned before the server has bound (port 0 until then), and a
+        // restart from Preferences can move it, so this keeps checking rather than latching.
+        let Some(url) = control_url(&shared.advertised_host(), shared.port()) else {
+            return;
+        };
+        if host.control_url().as_deref() != Some(url.as_str()) {
+            tracing::info!(%url, "handing modules the control server");
+            host.set_control_url(Some(url));
+            self.post(Job::RefreshControl);
+        }
     }
 
     /// The control server stopped; the next start needs the invoker installed again.
@@ -1057,11 +1070,35 @@ fn run_worker(host: Host, licenses: Arc<Licenses>, rx: Receiver<Job>) {
                 // re-enable spawns cleanly.
                 host.remove(&id);
             }
+            Job::RefreshControl => {
+                for id in host.stale_control_url() {
+                    if let Err(e) = host.respawn(&id, "control server moved") {
+                        tracing::warn!(error = %e, module = %id.as_str(), "module would not restart");
+                        continue;
+                    }
+                    if let Err(e) = host.activate(&id, None) {
+                        tracing::warn!(error = %e, module = %id.as_str(), "module.activate failed");
+                    }
+                }
+            }
             Job::Stop => {
                 host.shutdown_all();
                 return;
             }
         }
+    }
+}
+
+/// `http://<host>:<port>` for a server listening on `port`, or `None` before it has bound.
+/// An IPv6 literal is bracketed, as a URL authority requires.
+fn control_url(host: &str, port: u16) -> Option<String> {
+    if port == 0 {
+        return None;
+    }
+    if host.contains(':') {
+        Some(format!("http://[{host}]:{port}"))
+    } else {
+        Some(format!("http://{host}:{port}"))
     }
 }
 
@@ -1075,6 +1112,19 @@ mod tests {
     use avada_core::rights::{Capability, DistributionKind, InstallKind, Manifest};
     use std::collections::{BTreeSet, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    #[test]
+    fn control_url_waits_for_the_bind_and_brackets_ipv6() {
+        assert_eq!(super::control_url("127.0.0.1", 0), None);
+        assert_eq!(
+            super::control_url("127.0.0.1", 50359).as_deref(),
+            Some("http://127.0.0.1:50359")
+        );
+        assert_eq!(
+            super::control_url("::1", 8080).as_deref(),
+            Some("http://[::1]:8080")
+        );
+    }
 
     /// A manifest with no `[skills]` section, so an install needs no checkout to stage
     /// from and every test here is a pure store round trip.
