@@ -190,7 +190,7 @@ descriptor together, over SCM_RIGHTS — then exits WITHOUT killing anything. Th
 shells never notice; they are reparented to init and keep running under the new
 daemon (rs/crates/core/src/session/daemon_client.rs, "Build handshake").
 
-Nothing here needs `pkill`. Killing the daemon closes the pty masters and every
+Nothing here needs \`pkill\`. Killing the daemon closes the pty masters and every
 program in every pane dies with them — the exact loss the handoff exists to
 prevent. If the daemon is genuinely wedged and will not hand over, that is a bug
 worth a log, not a routine step.
