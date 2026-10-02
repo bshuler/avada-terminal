@@ -7,15 +7,18 @@
 //! between the two: the server knows a [`RouteInvoker`], not the module host, so the
 //! control plane can be tested with a fake and the host can be wired in later by the app.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods::MODULE_ROUTE_INVOKE;
 use avada_module_sdk::descriptor::RouteDescriptor;
 use avada_module_sdk::manifest::ModuleId;
 use serde_json::{json, Map, Value};
 
+use crate::control::dispatch::CapabilitySource;
 use crate::control::schema::SchemaState;
 use crate::control::server::Shared;
 use crate::module::{Host, HostError, HostEvent};
@@ -129,13 +132,25 @@ pub fn apply_host_event(schema: &SchemaState, event: &HostEvent) {
     }
 }
 
-/// Wire a module host into the control server: the host answers `/m/...` calls, and a
-/// thread named `module-routes` keeps the schema registry in step with the host's
+/// A running module's per-run token as a control-server identity, holding what the host's
+/// gate allows that module. Without it a module presenting its own token gets a 401.
+struct HostTokens(Host);
+
+impl CapabilitySource for HostTokens {
+    fn caps_for(&self, token: &str) -> Option<BTreeSet<Capability>> {
+        self.0.caps_for_token(token)
+    }
+}
+
+/// Wire a module host into the control server: the host answers `/m/...` calls, a
+/// running module's token is accepted as an identity holding its gate's capabilities, and
+/// a thread named `module-routes` keeps the schema registry in step with the host's
 /// events (see [`apply_host_event`]). The thread owns only an event receiver, so it ends
 /// on its own once the host is dropped; the handle is returned for tests that want to
 /// join it.
 pub fn attach_host(shared: Arc<Shared>, host: &Host) -> std::thread::JoinHandle<()> {
     shared.install_route_invoker(Arc::new(host.clone()));
+    shared.caps.install(Arc::new(HostTokens(host.clone())));
     let events = host.events();
     std::thread::Builder::new()
         .name("module-routes".into())

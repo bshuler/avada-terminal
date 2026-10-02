@@ -7,7 +7,7 @@
 //! lock across I/O. Host→module calls are synchronous: write the request, block on a
 //! one-shot channel with a timeout.
 
-use super::gate::CapabilityGate;
+use super::gate::{CapabilityGate, Decision};
 use super::rail::{RailEvent, RailState};
 use super::rpc::{CommandSpec, Dispatcher, Shared};
 use super::spawn::{self, HandshakeError, SpawnError};
@@ -15,6 +15,7 @@ use super::supervisor::{ModuleStatus, RestartPolicy, Supervisor, Verdict};
 use super::token::Token;
 use super::transport::{Closer, LineReader, LineWriter};
 use crate::license::Gate;
+use avada_module_sdk::caps::Capability;
 use avada_module_sdk::contract::methods;
 use avada_module_sdk::contract::{
     HelloKind, HostHello, Message, Notification, Request, Response, RpcError, WorkspaceInfo,
@@ -28,7 +29,7 @@ use avada_module_sdk::rail::RowActivate;
 use avada_module_sdk::rights::InstallRecord;
 use avada_module_sdk::ModuleId;
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -694,6 +695,22 @@ impl Host {
             }
         }
         found
+    }
+
+    /// What the running module holding `presented` may do: every capability this host's
+    /// gate answers `Allow` for. `None` when no running module holds the token, so the
+    /// control server's next source decides. `Ask` is left out --- the prompt belongs to
+    /// the pipe, and an HTTP route is refused until it has been answered there.
+    pub fn caps_for_token(&self, presented: &str) -> Option<BTreeSet<Capability>> {
+        let module = self.module_for_token(presented)?;
+        let gate = &self.inner.shared.gate;
+        Some(
+            Capability::ALL
+                .iter()
+                .copied()
+                .filter(|cap| gate.check(&module, *cap) == Decision::Allow)
+                .collect(),
+        )
     }
 
     /// The live token itself, for tests that play the module's side of the wire. Never
@@ -1588,6 +1605,23 @@ mod tests {
                 "{:?}",
                 host.status(&id)
             );
+        }
+
+        #[test]
+        fn a_running_modules_token_holds_exactly_what_its_gate_allows() {
+            let dir = Dir::new("host-token-caps");
+            let (host, id, _record) = running(&dir);
+            let token = host.test_token(&id).unwrap();
+            let caps: Vec<Capability> = host.caps_for_token(&token).unwrap().into_iter().collect();
+            let mut want = all_ui();
+            want.sort();
+            assert_eq!(caps, want, "the accepted set, nothing more");
+            assert_eq!(host.caps_for_token("not-a-module-token"), None);
+            assert_eq!(host.caps_for_token(""), None);
+
+            // A stopped module's token stops being an identity.
+            host.shutdown_all();
+            assert_eq!(host.caps_for_token(&token), None);
         }
 
         #[test]
