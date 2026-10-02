@@ -40,6 +40,10 @@ mod live;
 #[cfg(all(test, unix))]
 mod wiring_tests;
 
+// The Marketplace module binary driving these routes through the host, as the app does.
+#[cfg(all(test, unix))]
+mod module_e2e;
+
 use crate::install::{
     hash_file, FileKeyStore, InstallError, InstallPaths, InstallStore, KeyStore, RecordStatus,
 };
