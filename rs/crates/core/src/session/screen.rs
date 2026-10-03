@@ -120,6 +120,203 @@ impl Screen {
     }
 }
 
+impl Screen {
+    /// Serialize the visible grid back to **ANSI**: a self-contained byte sequence that,
+    /// fed to a terminal of the same size, reproduces this screen — every cell with its
+    /// colours and attributes, the cursor position and visibility, and the input modes a
+    /// client routes keys and mouse by.
+    ///
+    /// This is what a re-attaching view is seeded with after the raw replay. The replay is
+    /// a rolling 128 KiB window, so for a program that redraws in place with
+    /// cursor-*relative* moves (Claude Code's interface, any diffing TUI) its front edge
+    /// lands mid-frame and replaying it draws those moves from the wrong origin. The
+    /// repaint comes from the mirror, which saw every byte, so it ends the seed on the
+    /// screen exactly as the program left it.
+    ///
+    /// Callers must `sync_screen()` first. Scrollback is not included (the mirror keeps
+    /// none); the replay ahead of the repaint still supplies it.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn repaint(&self) -> String {
+        use alacritty_terminal::term::TermMode;
+        let mode = *self.term.mode();
+        let mut out = String::with_capacity(self.cols * self.rows + 64);
+        // Reset attributes, enter the right screen, then clear it and home.
+        out.push_str("\x1b[0m");
+        out.push_str(if mode.contains(TermMode::ALT_SCREEN) {
+            "\x1b[?1049h"
+        } else {
+            "\x1b[?1049l"
+        });
+        out.push_str("\x1b[H\x1b[2J");
+
+        let grid = self.term.grid();
+        let mut pen = Pen::default();
+        for l in 0..self.rows {
+            let row = &grid[Line(l as i32)];
+            // Stop at the last cell that differs from a blank, default-styled one: the
+            // clear above already painted the rest.
+            let end = (0..self.cols)
+                .rev()
+                .find(|&c| {
+                    let cell = &row[Column(c)];
+                    cell.c != ' ' || Pen::of(cell) != Pen::default()
+                })
+                .map_or(0, |c| c + 1);
+            if end == 0 {
+                continue;
+            }
+            out.push_str(&format!("\x1b[{};1H", l + 1));
+            for c in 0..end {
+                let cell = &row[Column(c)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                let want = Pen::of(cell);
+                if want != pen {
+                    out.push_str(&want.sgr());
+                    pen = want;
+                }
+                out.push(cell.c);
+                if let Some(zw) = cell.zerowidth() {
+                    out.extend(zw.iter());
+                }
+            }
+        }
+        out.push_str("\x1b[0m");
+
+        let set = |on: bool, n: u16, out: &mut String| {
+            out.push_str(&format!("\x1b[?{n}{}", if on { 'h' } else { 'l' }));
+        };
+        set(mode.contains(TermMode::APP_CURSOR), 1, &mut out);
+        set(mode.contains(TermMode::LINE_WRAP), 7, &mut out);
+        set(mode.contains(TermMode::MOUSE_REPORT_CLICK), 1000, &mut out);
+        set(mode.contains(TermMode::MOUSE_DRAG), 1002, &mut out);
+        set(mode.contains(TermMode::MOUSE_MOTION), 1003, &mut out);
+        set(mode.contains(TermMode::FOCUS_IN_OUT), 1004, &mut out);
+        set(mode.contains(TermMode::SGR_MOUSE), 1006, &mut out);
+        set(mode.contains(TermMode::BRACKETED_PASTE), 2004, &mut out);
+        out.push_str(if mode.contains(TermMode::APP_KEYPAD) {
+            "\x1b="
+        } else {
+            "\x1b>"
+        });
+        let cursor = grid.cursor.point;
+        out.push_str(&format!(
+            "\x1b[{};{}H",
+            cursor.line.0 + 1,
+            cursor.column.0 + 1
+        ));
+        set(mode.contains(TermMode::SHOW_CURSOR), 25, &mut out);
+        out
+    }
+}
+
+/// The graphic rendition one cell is drawn with — what [`Screen::repaint`] diffs between
+/// cells so it only emits an SGR where the style actually changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Pen {
+    fg: alacritty_terminal::vte::ansi::Color,
+    bg: alacritty_terminal::vte::ansi::Color,
+    flags: Flags,
+}
+
+impl Default for Pen {
+    fn default() -> Self {
+        use alacritty_terminal::vte::ansi::{Color, NamedColor};
+        Self {
+            fg: Color::Named(NamedColor::Foreground),
+            bg: Color::Named(NamedColor::Background),
+            flags: Flags::empty(),
+        }
+    }
+}
+
+impl Pen {
+    /// The style flags a repaint reproduces; layout flags (wrap, wide-char spacers) are not
+    /// style and must not split a run.
+    const STYLE: Flags = Flags::BOLD
+        .union(Flags::DIM)
+        .union(Flags::ITALIC)
+        .union(Flags::ALL_UNDERLINES)
+        .union(Flags::INVERSE)
+        .union(Flags::HIDDEN)
+        .union(Flags::STRIKEOUT);
+
+    fn of(cell: &alacritty_terminal::term::cell::Cell) -> Self {
+        Self {
+            fg: cell.fg,
+            bg: cell.bg,
+            flags: cell.flags & Self::STYLE,
+        }
+    }
+
+    /// A full SGR for this pen, starting from a reset so no attribute leaks across.
+    fn sgr(&self) -> String {
+        let mut p: Vec<String> = vec!["0".into()];
+        for (flag, code) in [
+            (Flags::BOLD, "1"),
+            (Flags::DIM, "2"),
+            (Flags::ITALIC, "3"),
+            (Flags::UNDERLINE, "4"),
+            (Flags::DOUBLE_UNDERLINE, "21"),
+            (Flags::UNDERCURL, "4:3"),
+            (Flags::DOTTED_UNDERLINE, "4:4"),
+            (Flags::DASHED_UNDERLINE, "4:5"),
+            (Flags::INVERSE, "7"),
+            (Flags::HIDDEN, "8"),
+            (Flags::STRIKEOUT, "9"),
+        ] {
+            if self.flags.contains(flag) {
+                p.push(code.into());
+            }
+        }
+        if let Some(c) = color_sgr(self.fg, false) {
+            p.push(c);
+        }
+        if let Some(c) = color_sgr(self.bg, true) {
+            p.push(c);
+        }
+        format!("\x1b[{}m", p.join(";"))
+    }
+}
+
+/// The SGR parameter selecting `color` as foreground (or background), `None` for the
+/// default (which the leading reset already selected).
+fn color_sgr(color: alacritty_terminal::vte::ansi::Color, bg: bool) -> Option<String> {
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+    let base = if bg { 40 } else { 30 };
+    match color {
+        Color::Spec(rgb) => Some(format!("{};2;{};{};{}", base + 8, rgb.r, rgb.g, rgb.b)),
+        Color::Indexed(i) => Some(format!("{};5;{i}", base + 8)),
+        Color::Named(n) => {
+            let i = n as usize;
+            match i {
+                0..=7 => Some((base + i).to_string()),
+                8..=15 => Some((base + 60 + i - 8).to_string()),
+                _ => match n {
+                    // A dim named colour is how alacritty records SGR 2 on a palette colour;
+                    // the DIM flag already says so, so emit the base colour.
+                    NamedColor::DimBlack
+                    | NamedColor::DimRed
+                    | NamedColor::DimGreen
+                    | NamedColor::DimYellow
+                    | NamedColor::DimBlue
+                    | NamedColor::DimMagenta
+                    | NamedColor::DimCyan
+                    | NamedColor::DimWhite => {
+                        let k = i - NamedColor::DimBlack as usize;
+                        Some((base + k).to_string())
+                    }
+                    _ => None,
+                },
+            }
+        }
+    }
+}
+
 /// One-shot convenience: render `bytes` onto a fresh `cols`×`rows` screen and return
 /// the serialized text. Equivalent to `new` + `advance` + `render`; handy for tests
 /// and for rendering a captured replay buffer without keeping a live `Screen`.
@@ -183,6 +380,81 @@ mod tests {
             render_bytes(40, 3, b"\x1b[1;32mgreen bold\x1b[0m text"),
             "green bold text"
         );
+    }
+
+    /// A Claude-Code-style interface: a frame drawn once, then redrawn in place by moving
+    /// the cursor UP from wherever it is (`CSI n A`) and rewriting lines — no absolute
+    /// positioning anywhere.
+    fn relative_redraw_stream() -> (Vec<u8>, usize) {
+        let mut b: Vec<u8> = b"$ claude\r\n".to_vec();
+        b.extend_from_slice(b"\x1b[1mheader\x1b[0m\r\n> \x1b[32mtyping\x1b[0m\r\nstatus 0");
+        // Everything from here on is relative; a seed that starts here has lost its origin.
+        let cut = b.len();
+        for i in 1..=3 {
+            b.extend_from_slice(b"\r\x1b[2A\x1b[2K\x1b[1;35mheader ");
+            b.extend_from_slice(i.to_string().as_bytes());
+            b.extend_from_slice(b"\x1b[0m\r\n\r\n\x1b[2Kstatus ");
+            b.extend_from_slice(i.to_string().as_bytes());
+        }
+        (b, cut)
+    }
+
+    #[test]
+    fn a_truncated_relative_redraw_garbles_and_the_repaint_does_not() {
+        let (stream, cut) = relative_redraw_stream();
+        let mut live = Screen::new(30, 8);
+        live.advance(&stream);
+        let want = live.render();
+        assert_eq!(want, "$ claude\nheader 3\n> typing\nstatus 3");
+
+        // The bug: a seed whose front edge fell inside the redraws draws them from the wrong
+        // origin (here, the top-left), so the pane shows a scrambled screen.
+        let truncated = render_bytes(30, 8, &stream[cut..]);
+        assert_ne!(truncated, want, "the truncated replay should garble");
+
+        // The fix: the same truncated replay, then the mirror's repaint, lands on the screen
+        // exactly as the program left it — text, styles, cursor and all.
+        let mut seeded = Screen::new(30, 8);
+        seeded.advance(&stream[cut..]);
+        seeded.advance(live.repaint().as_bytes());
+        assert_eq!(seeded.render(), want);
+        assert_eq!(
+            seeded.repaint(),
+            live.repaint(),
+            "styles and cursor survive"
+        );
+        // And the program's next relative redraw lands where it should.
+        let next = b"\r\x1b[2A\x1b[2Kheader 4\r\n\r\n\x1b[2Kstatus 4";
+        live.advance(next);
+        seeded.advance(next);
+        assert_eq!(seeded.render(), live.render());
+        assert_eq!(seeded.render(), "$ claude\nheader 4\n> typing\nstatus 4");
+    }
+
+    #[test]
+    fn repaint_round_trips_colours_wide_chars_and_modes() {
+        let mut s = Screen::new(20, 4);
+        s.advance(
+            "\x1b[?2004h\x1b[?1h\x1b[38;5;208mor\x1b[48;2;1;2;3mbg\x1b[0m \x1b[4;7m宽\x1b[0m\r\n\x1b[91mbright\x1b[?25l"
+                .as_bytes(),
+        );
+        let mut copy = Screen::new(20, 4);
+        copy.advance(s.repaint().as_bytes());
+        assert_eq!(copy.render(), s.render());
+        assert_eq!(copy.repaint(), s.repaint());
+        assert!(copy.bracketed_paste());
+    }
+
+    #[test]
+    fn repaint_restores_the_alternate_screen() {
+        let mut s = Screen::new(20, 4);
+        s.advance(b"shell\x1b[?1049h\x1b[Hvim");
+        let mut copy = Screen::new(20, 4);
+        copy.advance(s.repaint().as_bytes());
+        assert_eq!(copy.render(), "vim");
+        // Leaving the alternate screen in the copy must not reveal the repaint's content.
+        copy.advance(b"\x1b[?1049l");
+        assert_ne!(copy.render(), "vim");
     }
 
     #[test]

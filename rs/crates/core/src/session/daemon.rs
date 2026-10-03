@@ -1208,7 +1208,11 @@ impl Daemon {
                 // splices on it by dropping every `Data` at or below it. Untorn is the whole
                 // point: a torn pair would drop or duplicate bytes at the seam.
                 attached.lock().unwrap().insert(uid.clone());
-                let (data, cursor) = self.registry.replay_with_cursor(&uid).unwrap_or_default();
+                //
+                // The seed is the replay followed by a repaint of the screen mirror
+                // (`seed_with_cursor`): the replay is a rolling window, and on its own it
+                // garbles a program that redraws in place with cursor-relative moves.
+                let (data, cursor) = self.registry.seed_with_cursor(&uid).unwrap_or_default();
                 let _ = out.send(DaemonMsg::Replay { uid, data, cursor });
             }
             ClientMsg::Create(spec) => {
@@ -1500,7 +1504,7 @@ fn classify_bus_event(
 /// branches on.
 #[cfg(unix)]
 struct ConnFanout {
-    /// For `replay_with_cursor` when a `Lagged` forces a resync.
+    /// For `seed_with_cursor` when a `Lagged` forces a resync.
     registry: SessionRegistry,
     /// The uids this connection has attached to, shared with the reader thread (`Attach`/
     /// `Detach` mutate it; here it's read-only).
@@ -1583,7 +1587,7 @@ async fn forward_broadcasts(
                         );
                         let uids: Vec<String> = attached.lock().unwrap().iter().cloned().collect();
                         for uid in uids {
-                            let (data, cursor) = registry.replay_with_cursor(&uid).unwrap_or_default();
+                            let (data, cursor) = registry.seed_with_cursor(&uid).unwrap_or_default();
                             // A resync `Replay` must not be dropped the way a plain `Event`
                             // may be — it's the thing repairing the loss, not routine
                             // traffic — so this uses the blocking `send`, same as a reply.

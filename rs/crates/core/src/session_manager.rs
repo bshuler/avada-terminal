@@ -158,6 +158,12 @@ pub struct SessionSnapshot {
     pub cursor: u64,
     pub cols: u16,
     pub rows: u16,
+    /// The screen mirror serialized to ANSI ([`Screen::repaint`](crate::session::screen::Screen::repaint))
+    /// at handoff. The successor rebuilds its mirror from this rather than from `replay`,
+    /// whose front edge can fall inside a program's cursor-relative redraws and garble the
+    /// rebuilt screen. Absent from a predecessor that predates it; the replay is used then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
     /// Last sniffed cwd, when the sender tracks one. The registry does not (it accumulates
     /// counters, not cwds — the daemon keeps that cache), so [`SessionRegistry::hand_off`]
     /// leaves this `None` for its caller to fill in.
@@ -486,8 +492,9 @@ impl SessionRegistry {
     /// The restored session is an ordinary one in every respect: same driver task, same
     /// events, same accessors. What carries across is exactly what a client can observe —
     /// the replay buffer, the output cursor and the grid. The screen mirror is rebuilt
-    /// lazily by replaying the buffer through it, so a `mode:"screen"` read after an
-    /// upgrade sees the pane as it was rather than an empty grid.
+    /// lazily from the predecessor's repaint (or, from an older predecessor, by replaying
+    /// the buffer through it), so a `mode:"screen"` read — and every re-attach seed — after
+    /// an upgrade sees the pane as it was rather than an empty or garbled grid.
     ///
     /// What does NOT carry: the phase-4 liveness mirror (it re-learns itself from the next
     /// marker the shell emits) and `last_output_at` (nothing has been flushed *by us* yet;
@@ -516,17 +523,17 @@ impl SessionRegistry {
         }
 
         let shared = Shared::fresh(snap.cols.max(1), snap.rows.max(1));
-        if !snap.replay.is_empty() {
-            shared.replay.lock().unwrap().append(&snap.replay);
-            // Feed the same bytes to the LAZY screen path rather than parsing them now:
-            // an adopted session may never get a screen read, and `sync_screen` will bring
-            // the mirror up to date if one comes.
-            shared
-                .screen_pending
-                .lock()
-                .unwrap()
-                .extend_from_slice(snap.replay.as_bytes());
-        }
+        shared.replay.lock().unwrap().append(&snap.replay);
+        // Feed the mirror through the LAZY screen path rather than parsing now: an adopted
+        // session may never get a screen read, and `sync_screen` will bring it up to date
+        // if one comes. The repaint is exact; the replay is the fallback for a predecessor
+        // that sent none, and garbles a cursor-relative redraw cut at its front edge.
+        let mirror = snap.screen.as_deref().unwrap_or(&snap.replay);
+        shared
+            .screen_pending
+            .lock()
+            .unwrap()
+            .extend_from_slice(mirror.as_bytes());
         shared.output_bytes.store(snap.cursor, Ordering::Relaxed);
 
         self.install(snap.uid.clone(), shared, pty, prx);
@@ -574,7 +581,12 @@ impl SessionRegistry {
                 let cursor = session.shared.output_bytes.load(Ordering::Relaxed);
                 (replay.get().to_string(), cursor)
             };
-            let (cols, rows) = session.shared.screen.lock().unwrap().dims();
+            session.shared.sync_screen();
+            let (cols, rows, screen) = {
+                let screen = session.shared.screen.lock().unwrap();
+                let (cols, rows) = screen.dims();
+                (cols, rows, screen.repaint())
+            };
             out.push((
                 SessionSnapshot {
                     uid,
@@ -582,6 +594,7 @@ impl SessionRegistry {
                     cursor,
                     cols,
                     rows,
+                    screen: Some(screen),
                     cwd: None,
                     fd_index: out.len(),
                     pgrp: info.pgrp,
@@ -722,6 +735,29 @@ impl SessionRegistry {
             let replay = s.shared.replay.lock().unwrap();
             let cursor = s.shared.output_bytes.load(Ordering::Relaxed);
             (replay.get().to_string(), cursor)
+        })
+    }
+
+    /// What a re-attaching view is **seeded** with: the replay buffer followed by the
+    /// screen mirror's [`repaint`](crate::session::screen::Screen::repaint), plus the output
+    /// cursor — all read under the replay lock, so the three agree.
+    ///
+    /// The replay alone is not enough: it is a rolling window, and a program that redraws
+    /// in place with cursor-relative moves (Claude Code) leaves it starting mid-frame, so a
+    /// fresh grid fed only the replay draws those moves from the wrong origin. The repaint
+    /// overwrites the visible screen with the mirror's, which saw every byte; the replay
+    /// ahead of it still supplies scrollback. The cursor counts output only — the repaint
+    /// is not output, and a client splicing live `Data` on the cursor never sees it twice.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn seed_with_cursor(&self, uid: &str) -> Option<(String, u64)> {
+        let map = self.sessions.lock().unwrap();
+        map.get(uid).map(|s| {
+            let replay = s.shared.replay.lock().unwrap();
+            let cursor = s.shared.output_bytes.load(Ordering::Relaxed);
+            s.shared.sync_screen();
+            let mut seed = replay.get().to_string();
+            seed.push_str(&s.shared.screen.lock().unwrap().repaint());
+            (seed, cursor)
         })
     }
 
@@ -1565,16 +1601,18 @@ impl SessionPipeline {
         // Bump the cursor while HOLDING the replay lock: `replay_with_cursor` reads the
         // pair under the same lock, so a snapshot can never see one without the other
         // (a torn pair would drop or duplicate bytes on a remote attach splice).
+        // The screen stash goes in under the same lock, so `seed_with_cursor`'s repaint
+        // always describes exactly the output its cursor counts.
         let cursor = {
             let mut replay = self.shared.replay.lock().unwrap();
             replay.append(&data);
+            self.shared
+                .screen_pending
+                .lock()
+                .unwrap()
+                .extend_from_slice(data.as_bytes());
             self.shared.output_bytes.fetch_add(n, Ordering::Relaxed) + n
         };
-        self.shared
-            .screen_pending
-            .lock()
-            .unwrap()
-            .extend_from_slice(data.as_bytes());
         self.shared
             .last_output_at
             .store(now_epoch_ms, Ordering::Relaxed);
@@ -2178,6 +2216,56 @@ mod tests {
         sink(PtyEvent::Data(b"after".to_vec()));
         assert_eq!(cursor_reaches(&reg, "s1", 1005).await, 1005);
         assert_eq!(reg.replay("s1").as_deref(), Some("before-the-upgradeafter"));
+    }
+
+    // The IPTV-pane bug: Claude Code redraws in place with cursor-relative moves, so after
+    // an upgrade the carried replay (a rolling window) began mid-frame, and both the rebuilt
+    // mirror and every re-attaching grid seeded from it drew those moves from the wrong
+    // origin. The handoff now carries the mirror's repaint; adopt rebuilds from it, and the
+    // attach seed ends with it.
+    #[tokio::test]
+    async fn adopt_rebuilds_the_mirror_from_the_repaint_and_the_seed_repaints_the_screen() {
+        use crate::session::screen::{render_bytes, Screen};
+        let frame = b"$ claude\r\nheader\r\n> typing\r\nstatus 0".as_slice();
+        let redraws = b"\r\x1b[2A\x1b[2Kheader 1\r\n\r\n\x1b[2Kstatus 1".as_slice();
+        let mut old = Screen::new(30, 8);
+        old.advance(frame);
+        old.advance(redraws);
+        let want = "$ claude\nheader 1\n> typing\nstatus 1";
+        assert_eq!(old.render(), want);
+        // The window kept only the redraws, which garble on their own.
+        let carried = std::str::from_utf8(redraws).unwrap();
+        assert_ne!(render_bytes(30, 8, redraws), want);
+
+        let (etx, _erx) = unbounded_channel::<SessionEvent>();
+        let reg = SessionRegistry::new(etx);
+        let snap = SessionSnapshot {
+            uid: "s1".into(),
+            replay: carried.into(),
+            cursor: 500,
+            cols: 30,
+            rows: 8,
+            screen: Some(old.repaint()),
+            ..Default::default()
+        };
+        reg.adopt(&snap, |_sink| {
+            Ok(Box::new(MockPty::default()) as Box<dyn Pty>)
+        })
+        .expect("adopt");
+
+        assert_eq!(reg.render_screen("s1").as_deref(), Some(want));
+        assert_eq!(
+            reg.replay("s1").as_deref(),
+            Some(carried),
+            "output reads still see the carried replay verbatim"
+        );
+
+        // A view re-attaching after the upgrade: a fresh grid fed the seed shows the screen
+        // the program left, and the cursor is the output cursor — the repaint isn't output.
+        let (seed, cursor) = reg.seed_with_cursor("s1").expect("seed");
+        assert_eq!(cursor, 500);
+        assert!(seed.starts_with(carried), "scrollback first");
+        assert_eq!(render_bytes(30, 8, seed.as_bytes()), want);
     }
 
     // A successor's uid counter starts at 1, so without a floor it would re-mint `s3` while

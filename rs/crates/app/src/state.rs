@@ -2575,7 +2575,12 @@ impl State {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn adopt_pane_at(&mut self, mgr: &SessionManager, det: DetachedPane, at: usize) {
         let palette = self.settings.frame_palette;
-        let (cols, rows) = (80u16, 24u16);
+        // Born at the pty's own size (as a relaunch re-host is): the seed ends with an
+        // absolutely-positioned repaint of the daemon's screen, written for that geometry.
+        let (cols, rows) = match mgr.dims(&det.uid) {
+            Some((c, r)) if c >= 2 && r >= 1 => (c, r),
+            _ => (80u16, 24u16),
+        };
         let mut pane = TerminalPane::with_scrollback(
             cols as usize,
             rows as usize,
@@ -7219,7 +7224,12 @@ impl State {
             return;
         }
         let palette = self.settings.frame_palette;
-        let (cols, rows) = (80u16, 24u16);
+        // Born at the pty's own size (as a relaunch re-host is): the seed ends with an
+        // absolutely-positioned repaint of the daemon's screen, written for that geometry.
+        let (cols, rows) = match mgr.dims(&det.uid) {
+            Some((c, r)) if c >= 2 && r >= 1 => (c, r),
+            _ => (80u16, 24u16),
+        };
         let mut pane = TerminalPane::with_scrollback(
             cols as usize,
             rows as usize,
