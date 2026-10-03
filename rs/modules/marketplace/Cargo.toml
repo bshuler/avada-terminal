@@ -1,6 +1,6 @@
 [package]
 name = "avada-marketplace"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.89"
 description = "Marketplace rail for Avada Terminal: search, install, enable, disable and remove modules"

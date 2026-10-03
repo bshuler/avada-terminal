@@ -48,18 +48,24 @@ pub struct Installed {
     /// Workspace key → enabled there.
     #[serde(default)]
     pub enabled: BTreeMap<String, bool>,
+    /// Whether it runs where no workspace has said; `None` from a host that predates the
+    /// field, which runs every installed module by default.
+    #[serde(default)]
+    pub enabled_default: Option<bool>,
     /// Why the record cannot be trusted, when it cannot.
     #[serde(default)]
     pub broken: Option<String>,
 }
 
 impl Installed {
-    /// Enabled in `workspace`, `false` when unknown.
+    /// Enabled in `workspace`: what it said, else the host's default — the same rule the
+    /// host uses to decide what starts, so a running module never reads as off.
     pub fn enabled_in(&self, workspace: Option<&str>) -> bool {
         workspace
             .and_then(|w| self.enabled.get(w))
             .copied()
-            .unwrap_or(false)
+            .or(self.enabled_default)
+            .unwrap_or(true)
     }
 }
 

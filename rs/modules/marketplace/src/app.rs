@@ -334,6 +334,13 @@ impl<C: Control> App<C> {
     /// `DELETE /marketplace/modules/{owner}/{repo}/{version}`; the active version
     /// when `version` is `None`.
     pub fn uninstall(&mut self, module: &str, version: Option<&str>) -> Result<Outcome, RpcError> {
+        // The one module that cannot go: removing it removes the only way to install
+        // anything again. Disabling it in a workspace is still allowed.
+        if module == SELF_ID {
+            return Err(invalid(
+                "the Marketplace cannot be uninstalled; disable it instead",
+            ));
+        }
         let version = match version {
             Some(v) => v.to_string(),
             None => self.state.installed_version(module).ok_or_else(|| {
@@ -348,6 +355,11 @@ impl<C: Control> App<C> {
         self.state.installed.retain(|i| {
             !(i.module.as_deref() == Some(module) && i.version.as_deref() == Some(&version))
         });
+        // An open module page lists that version as installed; re-read it. The removal
+        // already happened, so a failed re-read only leaves the page stale, not wrong.
+        if self.state.focus.as_deref() == Some(module) {
+            let _ = self.focus(module);
+        }
         Ok(Outcome {
             result: json!({ "module": module, "version": version, "ok": true }),
             toast: Some(format!("Marketplace: removed {module} {version}")),
@@ -1159,6 +1171,23 @@ mod tests {
                 "{data}"
             );
         }
+    }
+
+    #[test]
+    fn the_marketplace_refuses_to_uninstall_itself_from_any_path() {
+        // No DELETE is answered: reaching the server at all would fail differently.
+        let mut app = ready(focus_fake());
+        let by_command = app
+            .command("uninstall", &json!({ "module": SELF_ID }))
+            .unwrap_err();
+        assert_eq!(by_command.kind(), ErrorCode::InvalidParams);
+        assert!(by_command.message.contains("cannot be uninstalled"));
+        let row = json!({ "action": "uninstall", "module": SELF_ID, "version": "0.2.2" });
+        app.row_activate(&row, "open").unwrap();
+        assert_eq!(
+            app.row_activate(&row, "open").unwrap_err().kind(),
+            ErrorCode::InvalidParams
+        );
     }
 
     #[test]

@@ -313,8 +313,11 @@ pub struct InstalledView {
     pub sha256: Option<String>,
     /// Capabilities granted.
     pub accepted: Vec<Capability>,
-    /// Workspace key → enabled there.
+    /// Workspace key → enabled there, for the workspaces that have said.
     pub enabled: BTreeMap<String, bool>,
+    /// Whether it runs in a workspace that has not said — the app's own fallback, so a
+    /// client reading `enabled` alone does not show a running module as off.
+    pub enabled_default: bool,
     /// Why the record cannot be trusted, when it cannot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broken: Option<String>,
@@ -1257,6 +1260,9 @@ impl Marketplace {
 
     /// Every installed version, verified or reported broken.
     pub fn installed(&self) -> Result<Vec<InstalledView>, MarketplaceError> {
+        let lock = self.store.lockfile()?;
+        // `WorkspaceModuleState::is_enabled`'s fallback, which is what decides what starts.
+        let by_default = |id: &ModuleId| lock.defaults.get(id).copied().unwrap_or(true);
         let mut out = Vec::new();
         for status in self.store.records()? {
             out.push(match status {
@@ -1272,6 +1278,7 @@ impl Marketplace {
                         sha256: Some(r.artifact_sha256.clone()),
                         accepted: r.accepted.iter().copied().collect(),
                         enabled: self.workspaces.enabled_in(&i.id),
+                        enabled_default: by_default(&i.id),
                         broken: None,
                     }
                 }
@@ -1289,6 +1296,7 @@ impl Marketplace {
                     commit: None,
                     sha256: None,
                     accepted: Vec::new(),
+                    enabled_default: id.as_ref().is_none_or(by_default),
                     enabled: id
                         .map(|i| self.workspaces.enabled_in(&i))
                         .unwrap_or_default(),

@@ -228,26 +228,12 @@ pub fn rows(state: &State) -> Vec<Row> {
             r = marked(r, "ok");
         }
         out.push(r);
-        // The Marketplace cannot remove itself: the rows that would bring it back go with it.
-        if module != crate::app::SELF_ID {
-            let armed = state.armed_uninstall.as_ref() == Some(&(module.clone(), version.clone()));
-            let mut u = with(
-                sub(
-                    format!("uninstall-{i}"),
-                    "Uninstall",
-                    if armed {
-                        format!("open again to remove {version}")
-                    } else {
-                        format!("open to remove {version}")
-                    },
-                ),
-                json!({ "action": "uninstall", "module": module, "version": version }),
-            );
-            if armed {
-                u = marked(u, "error");
-            }
-            out.push(u);
-        }
+        out.extend(uninstall_row(
+            state,
+            format!("uninstall-{i}"),
+            &module,
+            &version,
+        ));
     }
 
     // Search.
@@ -310,6 +296,29 @@ pub fn rows(state: &State) -> Vec<Row> {
     }
 
     out
+}
+
+/// The Uninstall sub-row for one installed version, armed by a first open and carried
+/// out by a second; none for the Marketplace itself, which would take with it the rows
+/// that could bring it back.
+fn uninstall_row(state: &State, id: String, module: &str, version: &str) -> Option<Row> {
+    if module == crate::app::SELF_ID {
+        return None;
+    }
+    let armed = state.armed_uninstall.as_ref() == Some(&(module.to_string(), version.to_string()));
+    let u = with(
+        sub(
+            id,
+            "Uninstall",
+            if armed {
+                format!("open again to remove {version}")
+            } else {
+                format!("open to remove {version}")
+            },
+        ),
+        json!({ "action": "uninstall", "module": module, "version": version }),
+    );
+    Some(if armed { marked(u, "error") } else { u })
 }
 
 /// The rows for the module pane: the same state, projected wider.
@@ -429,8 +438,33 @@ fn pane_module(state: &State, module: &str, out: &mut Vec<Row>) {
         ));
     }
 
+    pane_toggle(state, module, out);
     pane_versions(state, module, out);
     pane_rights(state, module, out);
+}
+
+/// Whether the module runs in this workspace, openable to flip it — the same action the
+/// rail's Installed row carries. Nothing until some version is installed.
+fn pane_toggle(state: &State, module: &str, out: &mut Vec<Row>) {
+    let Some(inst) = state
+        .installed
+        .iter()
+        .find(|i| i.module.as_deref() == Some(module))
+    else {
+        return;
+    };
+    let ws = state.workspace.as_deref();
+    let enabled = inst.enabled_in(ws);
+    let detail = match (ws, enabled) {
+        (None, _) => "no workspace is open",
+        (Some(_), true) => "enabled · open to disable",
+        (Some(_), false) => "disabled · open to enable",
+    };
+    let r = with(
+        row("workspace", "This workspace", detail),
+        json!({ "action": if enabled { "disable" } else { "enable" }, "module": module }),
+    );
+    out.push(if enabled { marked(r, "ok") } else { r });
 }
 
 /// The version picker: every tag the repo has, marked with what is installed,
@@ -500,6 +534,9 @@ fn pane_versions(state: &State, module: &str, out: &mut Vec<Row>) {
             r = marked(r, "modified");
         }
         out.push(r);
+        if is_installed {
+            out.extend(uninstall_row(state, format!("uninstall-{i}"), module, name));
+        }
     }
 }
 
@@ -755,15 +792,21 @@ mod tests {
             { "module": "acme/avada-files", "version": "1.2.0", "active": true, "kind": "manual",
               "tag": "v1.2.0", "accepted": ["ui.rail"], "enabled": { "ws1": true } },
             { "module": "acme/avada-git", "version": "0.3.0", "active": true, "kind": "dependency",
-              "accepted": [], "enabled": {} },
+              "accepted": [], "enabled": {}, "enabled_default": false },
             { "module": null, "version": null, "active": false, "accepted": [], "enabled": {},
-              "broken": "unreadable record" }
+              "broken": "unreadable record" },
+            // Seeded: no workspace has said, and the host runs it by default.
+            { "module": "acme/avada-seeded", "version": "0.1.0", "active": true,
+              "accepted": [], "enabled": {}, "enabled_default": true },
+            // From a host that predates `enabled_default`: it ran everything installed.
+            { "module": "acme/avada-old", "version": "0.1.0", "active": true,
+              "accepted": [], "enabled": { "ws2": false } }
         ]))
         .unwrap();
         let mut st = ready_state();
         st.installed = list;
         let rows = rows(&st);
-        assert_eq!(find(&rows, "installed").detail, "3 versions");
+        assert_eq!(find(&rows, "installed").detail, "5 versions");
         let a = find(&rows, "installed-0");
         assert_eq!(a.label, "acme/avada-files");
         assert!(a.detail.contains("enabled · open to disable"));
@@ -777,6 +820,57 @@ mod tests {
         let c = find(&rows, "installed-2");
         assert!(c.detail.starts_with("broken:"));
         assert!(c.marks.contains(&"error".to_string()));
+        for id in ["installed-3", "installed-4"] {
+            let r = find(&rows, id);
+            assert!(r.detail.contains("enabled · open to disable"), "{r:?}");
+            assert_eq!(r.data["action"], "disable");
+        }
+    }
+
+    #[test]
+    fn the_module_page_offers_the_workspace_toggle_and_uninstall_for_installed_versions() {
+        let mut st = focused_state();
+        let module = st.focus.clone().unwrap();
+        st.installed = ["1.1.0", "1.2.0"]
+            .iter()
+            .map(|v| Installed {
+                module: Some(module.clone()),
+                version: Some((*v).to_string()),
+                active: *v == "1.1.0",
+                ..Default::default()
+            })
+            .collect();
+        let rows = pane_rows(&st);
+        let toggle = pane(&st, "workspace");
+        assert!(toggle.detail.contains("open to disable"), "{toggle:?}");
+        assert_eq!(toggle.data["action"], "disable");
+        assert_eq!(toggle.data["module"], module.as_str());
+        let installed: Vec<String> = st.view.as_ref().unwrap().installed.clone();
+        let removes: Vec<&Row> = rows
+            .iter()
+            .filter(|r| r.data["action"] == "uninstall")
+            .collect();
+        assert_eq!(
+            removes.len(),
+            installed.len(),
+            "one Uninstall per installed version"
+        );
+        for r in &removes {
+            assert!(installed.iter().any(|v| r.data["version"] == v.as_str()));
+        }
+
+        // Disabled here: the same row offers the opposite.
+        for inst in st.installed.iter_mut() {
+            inst.enabled.insert(st.workspace.clone().unwrap(), false);
+        }
+        assert_eq!(pane(&st, "workspace").data["action"], "enable");
+
+        // Not installed: neither row.
+        st.installed.clear();
+        st.view.as_mut().unwrap().installed.clear();
+        let rows = pane_rows(&st);
+        assert!(rows.iter().all(|r| r.id != "workspace"));
+        assert!(rows.iter().all(|r| r.data["action"] != "uninstall"));
     }
 
     #[test]

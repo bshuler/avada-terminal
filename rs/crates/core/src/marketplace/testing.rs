@@ -698,6 +698,10 @@ async fn install_from_source_records_pins_and_enables() {
     assert_eq!(list[0].module.as_deref(), Some(FILES));
     assert!(list[0].active);
     assert_eq!(list[0].enabled.get("ws1"), Some(&true));
+    assert!(
+        list[0].enabled_default,
+        "a workspace that has not said runs it, as the app decides"
+    );
     assert!(list[0].broken.is_none());
     assert!(
         !r.mp.state_dir().join(SCRATCH_DIR).join(&job.id).exists(),
