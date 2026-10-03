@@ -546,6 +546,15 @@ pub enum RailRequest {
         /// Which gesture.
         gesture: RailGesture,
     },
+    /// `Host::invoke_command(module, command, args)`: a module command run from the palette.
+    Command {
+        /// Which module.
+        module: avada_core::rights::ModuleId,
+        /// The command id the module registered.
+        command: String,
+        /// `Null`, or `{ <arg key>: <typed text> }`.
+        args: serde_json::Value,
+    },
 }
 
 /// The path-string a rail entry's `icon` yields for `RailEntryRow.icon`.

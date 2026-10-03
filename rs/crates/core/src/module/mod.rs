@@ -97,7 +97,7 @@ pub use avada_module_sdk::doc;
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, LaunchSpec, Licensing, Opener};
 pub use rail::{Gesture, RailEntry, RailEvent, RailState, Row, RowActivate, RowTarget};
-pub use rpc::CommandSpec;
+pub use rpc::{CommandArg, CommandSpec};
 pub use spawn::{HandshakeError, SpawnError};
 pub use supervisor::{ModuleStatus, RestartPolicy};
 pub use token::Token;

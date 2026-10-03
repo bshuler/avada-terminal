@@ -4727,6 +4727,15 @@ impl App {
         {
             let app = app.clone();
             let id = win.id;
+            win.app.on_submit_module_arg(move |text| {
+                if let Some(w) = app.window_by_id(id) {
+                    app.run_command(&w, Command::SubmitModuleArg(text.to_string()));
+                }
+            });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
             win.app.on_pick_browser(move |row| {
                 if let Some(w) = app.window_by_id(id) {
                     app.run_command(&w, Command::PickBrowser(row.max(0) as usize));

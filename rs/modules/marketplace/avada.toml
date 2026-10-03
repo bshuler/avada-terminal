@@ -18,7 +18,7 @@ capabilities = [
 [module]
 id = "bshuler/avada-marketplace"
 name = "Marketplace"
-version = "0.2.0"
+version = "0.2.1"
 description = "Find, install, enable, disable and remove Avada modules"
 publisher = "Avada"
 contract = "^1"

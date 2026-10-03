@@ -293,6 +293,9 @@ pub struct State {
     pub rights: Option<RightsView>,
     /// This workspace's pins, module → version.
     pub pins: BTreeMap<String, String>,
+    /// The `(module, version)` whose Uninstall row was clicked once. A second click on
+    /// the same row removes it; a click on anything else disarms it.
+    pub armed_uninstall: Option<(String, String)>,
 }
 
 impl State {

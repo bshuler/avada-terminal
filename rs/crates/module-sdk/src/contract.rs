@@ -363,7 +363,7 @@ pub mod methods {
     pub const HOST_RAIL_REGISTER: &str = "host.rail.register";
     /// Host: replace the rows shown under a rail entry. Params: `{ entry: id, rows: [Row] }`.
     pub const HOST_ROWS_SET: &str = "host.rows.set";
-    /// Host: register commands. Params: `{ commands: [{ id, label, chord? }] }`.
+    /// Host: register commands. Params: `{ commands: [{ id, label, chord?, arg?: { key, prompt, placeholder? } }] }` — a command with `arg` is prompted for that one value in the palette, sent as `args.<key>`.
     pub const HOST_COMMAND_REGISTER: &str = "host.command.register";
     /// Host: declare a typed preferences page. Params: `{ page: PrefsPage }`.
     pub const HOST_PREFS_DECLARE: &str = "host.prefs.declare";

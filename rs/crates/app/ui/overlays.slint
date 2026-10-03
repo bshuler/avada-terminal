@@ -539,6 +539,12 @@ export component OverlayLayer inherits Rectangle {
     // ---- Add Project dialog (kind 4) ----
     in property <string> ap-error: "";       // inline validation error ("" = none)
     callback add-project-submit(string);     // the typed directory path
+    // ---- module command prompt (kind 8): the Add-project card with a module's words ----
+    in property <string> ma-title;
+    in property <string> ma-label;
+    in property <string> ma-placeholder;
+    in property <string> ma-error: "";
+    callback module-arg-submit(string);
     // ---- "Open link with…" chooser (kind == 6) ----
     in property <string> ask-url;            // the URL being routed
     in property <[PrefBrowserRow]> ask-browsers;
@@ -1825,6 +1831,20 @@ export component OverlayLayer inherits Rectangle {
         height: 100%;
         error: root.ap-error;
         submit(p) => { root.add-project-submit(p); }
+        cancel => { root.dismiss(); }
+    }
+
+    // ===== module command prompt =====
+    if root.kind == 8 : AddProjectDialog {
+        width: 100%;
+        height: 100%;
+        title: root.ma-title;
+        field-label: root.ma-label;
+        placeholder: root.ma-placeholder;
+        hint: "";
+        action: "Run";
+        error: root.ma-error;
+        submit(t) => { root.module-arg-submit(t); }
         cancel => { root.dismiss(); }
     }
 

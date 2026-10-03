@@ -149,6 +149,11 @@ export component AppWindow inherits Window {
     in property <[PrefOption]> np-shells;
     // ---- Add Project dialog (overlay kind 4) ----
     in property <string> ap-error: "";   // inline validation error ("" = none)
+    // ---- module command prompt (overlay kind 8) ----
+    in property <string> ma-title;
+    in property <string> ma-label;
+    in property <string> ma-placeholder;
+    in property <string> ma-error: "";
     // ---- "Open link with…" chooser (overlay kind 6) ----
     in property <string> ask-url;
     in property <[PrefBrowserRow]> ask-browsers;
@@ -280,6 +285,7 @@ export component AppWindow inherits Window {
     callback resume-session(int, string); // resume Claude session <id> for project <idx> in a new pane
     callback open-add-project();          // the ＋ on the PROJECTS header → open the dialog
     callback submit-add-project(string);  // Add-Project dialog submit (directory path)
+    callback submit-module-arg(string);   // module command prompt submit (the typed value)
     callback pick-browser(int);           // "Open link with…" chooser: browser row index
     // New-goal box (controller-owned mirrors — the Rust key router drives the keyboard;
     // these callbacks are the mouse affordances)
@@ -630,6 +636,11 @@ export component AppWindow inherits Window {
             }
             ap-error: root.ap-error;
             add-project-submit(p) => { root.submit-add-project(p); }
+            ma-title: root.ma-title;
+            ma-label: root.ma-label;
+            ma-placeholder: root.ma-placeholder;
+            ma-error: root.ma-error;
+            module-arg-submit(t) => { root.submit-module-arg(t); }
             ask-url: root.ask-url;
             ask-browsers: root.ask-browsers;
             browser-pick(i) => { root.pick-browser(i); }

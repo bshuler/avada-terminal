@@ -228,6 +228,26 @@ pub fn rows(state: &State) -> Vec<Row> {
             r = marked(r, "ok");
         }
         out.push(r);
+        // The Marketplace cannot remove itself: the rows that would bring it back go with it.
+        if module != crate::app::SELF_ID {
+            let armed = state.armed_uninstall.as_ref() == Some(&(module.clone(), version.clone()));
+            let mut u = with(
+                sub(
+                    format!("uninstall-{i}"),
+                    "Uninstall",
+                    if armed {
+                        format!("open again to remove {version}")
+                    } else {
+                        format!("open to remove {version}")
+                    },
+                ),
+                json!({ "action": "uninstall", "module": module, "version": version }),
+            );
+            if armed {
+                u = marked(u, "error");
+            }
+            out.push(u);
+        }
     }
 
     // Search.
@@ -235,7 +255,7 @@ pub fn rows(state: &State) -> Vec<Row> {
         "search",
         "Search",
         match &state.query {
-            None => "run “Marketplace: Search modules” with q=<text>".to_string(),
+            None => "⌃⇧P → “Marketplace: Search modules”".to_string(),
             Some(q) => format!("“{q}” · {} results", state.results.len()),
         },
     ));
@@ -365,7 +385,7 @@ fn pane_index(state: &State, out: &mut Vec<Row>) {
         "search",
         "Search",
         match &state.query {
-            None => "run “Marketplace: Search modules” with q=<text>".to_string(),
+            None => "⌃⇧P → “Marketplace: Search modules”".to_string(),
             Some(q) => format!("“{q}” · {} results", state.results.len()),
         },
     ));
@@ -628,6 +648,39 @@ mod tests {
 
     fn row(st: &State, id: &str) -> Row {
         find(&rows(st), id)
+    }
+
+    #[test]
+    fn each_installed_version_but_the_marketplace_offers_an_uninstall_that_arms_first() {
+        let mut st = ready_state();
+        st.installed = vec![
+            Installed {
+                module: Some("acme/avada-files".into()),
+                version: Some("1.2.0".into()),
+                ..Default::default()
+            },
+            Installed {
+                module: Some(crate::app::SELF_ID.into()),
+                version: Some("0.2.1".into()),
+                ..Default::default()
+            },
+        ];
+        let all = rows(&st);
+        let u = find(&all, "uninstall-0");
+        assert_eq!(u.depth, 2);
+        assert_eq!(
+            u.data,
+            json!({ "action": "uninstall", "module": "acme/avada-files", "version": "1.2.0" })
+        );
+        assert_eq!(u.detail, "open to remove 1.2.0");
+        assert!(
+            !all.iter().any(|r| r.id == "uninstall-1"),
+            "the Marketplace cannot uninstall itself"
+        );
+
+        st.armed_uninstall = Some(("acme/avada-files".into(), "1.2.0".into()));
+        let armed = row(&st, "uninstall-0");
+        assert_eq!(armed.detail, "open again to remove 1.2.0");
     }
 
     #[test]

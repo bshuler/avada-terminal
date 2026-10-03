@@ -12,6 +12,39 @@ use crate::model::{Installed, Job, ModuleView, RepoSummary, RightsView, SignIn, 
 use crate::rows::url_encode;
 
 /// Every command id in `avada.toml`, in the order the host lists them.
+/// This module's own id: the one installed row that offers no Uninstall.
+pub const SELF_ID: &str = "bshuler/avada-marketplace";
+
+/// The commands that need one value from the human: `(command, args key, prompt,
+/// placeholder)`. Registered as each command's `arg`, so the palette asks before invoking.
+pub const COMMAND_ARGS: &[(&str, &str, &str, &str)] = &[
+    ("search", "q", "Search text", "files, editor, git…"),
+    (
+        "install",
+        "module",
+        "Module (owner/repo)",
+        "owner/avada-thing",
+    ),
+    (
+        "enable",
+        "module",
+        "Module (owner/repo)",
+        "owner/avada-thing",
+    ),
+    (
+        "disable",
+        "module",
+        "Module (owner/repo)",
+        "owner/avada-thing",
+    ),
+    (
+        "uninstall",
+        "module",
+        "Module (owner/repo)",
+        "owner/avada-thing",
+    ),
+];
+
 pub const COMMANDS: &[(&str, &str)] = &[
     ("search", "Marketplace: Search modules"),
     ("install", "Marketplace: Install module"),
@@ -620,7 +653,27 @@ impl<C: Control> App<C> {
         if gesture != "open" {
             return Ok(Outcome::default());
         }
+        // Any click disarms a pending uninstall; only a second click on that same row
+        // carries it out.
+        let armed = self.state.armed_uninstall.take();
         match data.get("action").and_then(Value::as_str) {
+            Some("uninstall") => {
+                let module = module_arg(data)?;
+                let version = arg(data, "version")
+                    .ok_or_else(|| invalid("row has no version to remove"))?
+                    .to_string();
+                if armed.as_ref() == Some(&(module.clone(), version.clone())) {
+                    return self.uninstall(&module, Some(&version));
+                }
+                self.state.armed_uninstall = Some((module.clone(), version.clone()));
+                Ok(Outcome {
+                    result: json!({ "module": module, "version": version, "armed": true }),
+                    toast: Some(format!(
+                        "Marketplace: open Uninstall again to remove {module} {version}"
+                    )),
+                    spawn_pane: false,
+                })
+            }
             Some("toolchain") => {
                 let guide = self
                     .state
@@ -1265,6 +1318,41 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), ErrorCode::NoWorkspace);
         assert!(app.control.calls().is_empty());
+    }
+
+    #[test]
+    fn the_uninstall_row_removes_only_on_a_second_click_in_a_row() {
+        let fake = FakeControl::default().answer(
+            "DELETE /marketplace/modules/acme/avada-files/1.2.0",
+            200,
+            json!({ "ok": true }),
+        );
+        let mut app = ready(fake);
+        app.state.installed = vec![Installed {
+            module: Some("acme/avada-files".into()),
+            version: Some("1.2.0".into()),
+            active: true,
+            ..Default::default()
+        }];
+        let data =
+            json!({ "action": "uninstall", "module": "acme/avada-files", "version": "1.2.0" });
+
+        // First click arms; nothing is deleted.
+        let out = app.row_activate(&data, "open").unwrap();
+        assert_eq!(out.result["armed"], true);
+        assert!(app.control.calls().is_empty());
+        // Any other click disarms.
+        app.row_activate(&json!({ "action": "job" }), "open").ok();
+        assert_eq!(app.state.armed_uninstall, None);
+        // Two in a row remove it.
+        app.row_activate(&data, "open").unwrap();
+        app.row_activate(&data, "open").unwrap();
+        assert_eq!(
+            app.control.calls(),
+            ["DELETE /marketplace/modules/acme/avada-files/1.2.0"]
+        );
+        assert!(app.state.installed.is_empty());
+        assert_eq!(app.state.armed_uninstall, None);
     }
 
     #[test]

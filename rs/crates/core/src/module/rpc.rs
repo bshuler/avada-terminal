@@ -94,6 +94,22 @@ pub struct CommandSpec {
     /// Optional key chord.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chord: Option<String>,
+    /// The one value the command needs from the human, if any. The palette asks for it
+    /// before invoking and sends it as `args.<key>`; a command without one runs at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arg: Option<CommandArg>,
+}
+
+/// The argument a [`CommandSpec`] asks the palette to prompt for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandArg {
+    /// The key the typed text is sent under in `module.command.invoke`'s `args`.
+    pub key: String,
+    /// What the prompt says above the field (`Search text`, `Module (owner/repo)`).
+    pub prompt: String,
+    /// Greyed example text in the empty field.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub placeholder: String,
 }
 
 #[derive(Deserialize)]
@@ -1842,7 +1858,10 @@ pub(crate) mod tests {
         // A surface with no name is the shape a bug takes; refused before it reaches the app.
         let e = rig
             .d
-            .call(methods::HOST_DOC_SET, &json!({ "surface": "  ", "blocks": [] }))
+            .call(
+                methods::HOST_DOC_SET,
+                &json!({ "surface": "  ", "blocks": [] }),
+            )
             .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::InvalidParams);
         assert!(e.message.contains("name its surface"), "{}", e.message);
@@ -1899,7 +1918,10 @@ pub(crate) mod tests {
         // A surface with no name is the shape a bug takes; refused before it reaches the app.
         let e = rig
             .d
-            .call(methods::HOST_IMAGE_SET, &json!({ "surface": "  ", "rgba_b64": "" }))
+            .call(
+                methods::HOST_IMAGE_SET,
+                &json!({ "surface": "  ", "rgba_b64": "" }),
+            )
             .unwrap_err();
         assert_eq!(e.kind(), ErrorCode::InvalidParams);
         assert!(e.message.contains("name its surface"), "{}", e.message);
@@ -1959,7 +1981,10 @@ pub(crate) mod tests {
         assert_eq!(e.kind(), ErrorCode::InvalidParams);
         assert!(e.message.contains("table"), "{}", e.message);
         assert_eq!(
-            rig.d.call(methods::HOST_ROWS_SET, &rows).unwrap_err().kind(),
+            rig.d
+                .call(methods::HOST_ROWS_SET, &rows)
+                .unwrap_err()
+                .kind(),
             ErrorCode::InvalidParams
         );
 
@@ -2749,7 +2774,10 @@ pub(crate) mod tests {
                 assert_eq!(spec.args, ["-d", "10"]);
                 assert_eq!(spec.cwd.as_deref(), Some("/w"));
                 assert_eq!(
-                    spec.env.as_ref().and_then(|e| e.get("TERM")).map(String::as_str),
+                    spec.env
+                        .as_ref()
+                        .and_then(|e| e.get("TERM"))
+                        .map(String::as_str),
                     Some("xterm-256color"),
                 );
             }

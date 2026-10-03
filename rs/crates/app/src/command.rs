@@ -426,6 +426,14 @@ pub enum Command {
     /// Submit the Add-Project dialog with the typed directory path (validated in state;
     /// a bad path keeps the dialog open with an inline error).
     SubmitAddProject(String),
+    /// Run a module's registered command (a palette entry); one that takes a value opens
+    /// the prompt first.
+    ModuleCommand(
+        avada_core::rights::ModuleId,
+        avada_core::module::CommandSpec,
+    ),
+    /// Submit the module-command prompt with the typed value.
+    SubmitModuleArg(String),
     // ---- the left slide-out panel (mux plan M5) ----
     /// Show/hide the left panel (workspace tree · library · detached sessions).
     ToggleLeftPanel,
@@ -1076,6 +1084,8 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::RemoveProject(i) => state.remove_project(i),
         Command::OpenAddProject => state.open_add_project(),
         Command::SubmitAddProject(path) => state.submit_add_project(&path),
+        Command::ModuleCommand(module, spec) => state.run_module_command(module, spec),
+        Command::SubmitModuleArg(text) => state.submit_module_arg(&text),
         // ---- the left slide-out panel ----
         Command::ToggleLeftPanel => state.toggle_left_panel(),
         Command::LeftFocusPane(ti, i) => state.focus_pane_in_tab(ti, i),
@@ -1709,6 +1719,78 @@ mod rail_command_tests {
             vec![RailRequest::Activate {
                 module: module(),
                 entry: "browse".into()
+            }]
+        );
+    }
+
+    /// A module command reaches the palette; one that takes a value prompts for it, and
+    /// the typed value goes to the host as `args.<key>`. One that takes none runs at once.
+    #[test]
+    fn a_module_command_runs_from_the_palette_and_prompts_for_its_value() {
+        use avada_core::module::{CommandArg, CommandSpec};
+        let mgr = mgr();
+        let mut st = with_a_module();
+        let search = CommandSpec {
+            id: "search".into(),
+            label: "Marketplace: Search modules".into(),
+            chord: None,
+            arg: Some(CommandArg {
+                key: "q".into(),
+                prompt: "Search text".into(),
+                placeholder: String::new(),
+            }),
+        };
+        let refresh = CommandSpec {
+            id: "refresh".into(),
+            label: "Marketplace: Refresh".into(),
+            chord: None,
+            arg: None,
+        };
+        st.set_module_commands(vec![(module(), search), (module(), refresh)]);
+
+        dispatch(&mut st, Command::PaletteOpen, &mgr);
+        dispatch(
+            &mut st,
+            Command::PaletteQuery("search modules".into()),
+            &mgr,
+        );
+        dispatch(&mut st, Command::PaletteActivate, &mgr);
+        assert_eq!(st.overlay, crate::state::Overlay::ModuleArg);
+        assert!(
+            st.take_rail_requests().is_empty(),
+            "nothing runs before the value"
+        );
+
+        dispatch(&mut st, Command::SubmitModuleArg("  ".into()), &mgr);
+        assert_eq!(st.overlay, crate::state::Overlay::ModuleArg);
+        assert_eq!(st.module_arg_error, "Enter search text");
+
+        dispatch(&mut st, Command::SubmitModuleArg("files".into()), &mgr);
+        assert_eq!(st.overlay, crate::state::Overlay::None);
+        assert!(st.module_arg_pending.is_none());
+        assert_eq!(
+            st.take_rail_requests(),
+            vec![RailRequest::Command {
+                module: module(),
+                command: "search".into(),
+                args: serde_json::json!({ "q": "files" }),
+            }]
+        );
+
+        dispatch(&mut st, Command::PaletteOpen, &mgr);
+        dispatch(
+            &mut st,
+            Command::PaletteQuery("marketplace refresh".into()),
+            &mgr,
+        );
+        dispatch(&mut st, Command::PaletteActivate, &mgr);
+        assert_eq!(st.overlay, crate::state::Overlay::None);
+        assert_eq!(
+            st.take_rail_requests(),
+            vec![RailRequest::Command {
+                module: module(),
+                command: "refresh".into(),
+                args: serde_json::Value::Null,
             }]
         );
     }

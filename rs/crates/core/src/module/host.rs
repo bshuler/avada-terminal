@@ -1518,6 +1518,7 @@ mod tests {
             id: "reveal".into(),
             label: "Reveal".into(),
             chord: None,
+            arg: None,
         };
         {
             let slots = lock(&host.inner.slots);

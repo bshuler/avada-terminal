@@ -63,6 +63,10 @@ pub enum Overlay {
     /// [`State::pending_close`] until they answer; answering routes through
     /// [`State::confirm_close_go`] / the ordinary dismiss path (which cancels).
     ConfirmClose,
+    /// The one-field prompt a module command asks for before it runs (palette →
+    /// "Marketplace: Search modules" → the search text). The command waits in
+    /// [`State::module_arg_pending`]; submitting routes through [`State::submit_module_arg`].
+    ModuleArg,
 }
 
 // Pane/session uid minting moved to the backend: `SessionManager::fresh_uid` picks the
@@ -1600,6 +1604,19 @@ pub struct State {
     /// pane. Sorted by the host (extension, then module), so the first match on an extension
     /// is the tie-break winner — see [`State::opener_for_path`].
     pub module_openers: Vec<avada_core::module::Opener>,
+    /// Every command a running module registered, refreshed each module tick beside
+    /// [`State::module_openers`]. The palette lists one entry per command.
+    pub module_commands: Vec<(
+        avada_core::rights::ModuleId,
+        avada_core::module::CommandSpec,
+    )>,
+    /// The module command waiting on its [`Overlay::ModuleArg`] prompt.
+    pub module_arg_pending: Option<(
+        avada_core::rights::ModuleId,
+        avada_core::module::CommandSpec,
+    )>,
+    /// The prompt's inline error (an empty submit).
+    pub module_arg_error: String,
     /// Capability rights for every installed module — the truth the Preferences rights
     /// page projects and the ask toast answers against (track H2). Constructed empty and
     /// rooted at the real app-support dir; nothing is read or written until a module is
@@ -1836,6 +1853,9 @@ impl State {
             module_events: Vec::new(),
             opener_panes: Vec::new(),
             module_openers: Vec::new(),
+            module_commands: Vec::new(),
+            module_arg_pending: None,
+            module_arg_error: String::new(),
             rights: crate::prefs::rights::shared().clone(),
             rights_selected: None,
             rights_effects: Vec::new(),
@@ -3787,6 +3807,8 @@ impl State {
             self.capturing_binding = None;
             self.capture_conflict = None;
             self.add_project_error.clear();
+            self.module_arg_pending = None;
+            self.module_arg_error.clear();
             self.ask_url.clear();
             self.ask_browsers.clear();
             // Dismissing the confirm card IS the cancel: the close it was holding is dropped
@@ -5359,6 +5381,64 @@ impl State {
     /// layer free of any dependency on the live host.
     pub fn set_module_openers(&mut self, openers: Vec<avada_core::module::Opener>) {
         self.module_openers = openers;
+    }
+
+    /// Store the running modules' commands for the palette; same cadence and reasoning as
+    /// [`State::set_module_openers`].
+    pub fn set_module_commands(
+        &mut self,
+        commands: Vec<(
+            avada_core::rights::ModuleId,
+            avada_core::module::CommandSpec,
+        )>,
+    ) {
+        self.module_commands = commands;
+    }
+
+    /// Run a module command picked in the palette. One that needs a value opens the
+    /// [`Overlay::ModuleArg`] prompt and waits there; one that does not is queued at once.
+    pub fn run_module_command(
+        &mut self,
+        module: avada_core::rights::ModuleId,
+        spec: avada_core::module::CommandSpec,
+    ) {
+        if spec.arg.is_some() {
+            self.module_arg_error.clear();
+            self.module_arg_pending = Some((module, spec));
+            self.overlay = Overlay::ModuleArg;
+        } else {
+            self.rail_requests.push(RailRequest::Command {
+                module,
+                command: spec.id,
+                args: serde_json::Value::Null,
+            });
+        }
+        self.dirty = true;
+    }
+
+    /// Submit the [`Overlay::ModuleArg`] prompt: queue the waiting command with the typed
+    /// text as `args.<key>`. Empty text keeps the prompt open with an inline error.
+    pub fn submit_module_arg(&mut self, text: &str) {
+        let text = text.trim();
+        let Some((module, spec)) = self.module_arg_pending.clone() else {
+            self.close_overlay();
+            return;
+        };
+        let Some(arg) = spec.arg.as_ref() else {
+            return;
+        };
+        if text.is_empty() {
+            self.module_arg_error = format!("Enter {}", arg.prompt.to_lowercase());
+            self.dirty = true;
+            return;
+        }
+        self.rail_requests.push(RailRequest::Command {
+            module,
+            command: spec.id.clone(),
+            args: serde_json::json!({ arg.key.as_str(): text }),
+        });
+        self.close_overlay();
+        self.dirty = true;
     }
 
     /// Which module pane, if any, an installed module claims for `path`'s extension.
@@ -9654,7 +9734,10 @@ mod session_file_tests {
              relaunch re-execs it — not the plain-shell None a New Pane dialog leaves"
         );
         assert_eq!(
-            pane.env.as_ref().and_then(|e| e.get("GIT_PAGER")).map(String::as_str),
+            pane.env
+                .as_ref()
+                .and_then(|e| e.get("GIT_PAGER"))
+                .map(String::as_str),
             Some("cat"),
             "the module's env is kept on the pane verbatim"
         );

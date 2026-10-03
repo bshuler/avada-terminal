@@ -1069,6 +1069,7 @@ pub fn resync(
         Overlay::NewGoal => 5,
         Overlay::AskBrowser => 6,
         Overlay::ConfirmClose => 7,
+        Overlay::ModuleArg => 8,
     };
     app.set_overlay_kind(kind);
 
@@ -1120,6 +1121,15 @@ pub fn resync(
     // re-instantiated each time `kind` becomes 4, but the error must update live while it
     // stays open (a failed submit keeps the overlay mounted).
     app.set_ap_error(state.add_project_error.as_str().into());
+
+    // Module command prompt: the waiting command's words, and its inline error.
+    if let Some((_, spec)) = &state.module_arg_pending {
+        let arg = spec.arg.as_ref();
+        app.set_ma_title(spec.label.as_str().into());
+        app.set_ma_label(arg.map_or("", |a| a.prompt.as_str()).into());
+        app.set_ma_placeholder(arg.map_or("", |a| a.placeholder.as_str()).into());
+    }
+    app.set_ma_error(state.module_arg_error.as_str().into());
 
     // New Pane dialog seeds: the default swatch index (next palette-rotation slot), the
     // palette swatches, and the shell-picker options (id 0 = "Use default shell"). The dialog
@@ -2428,7 +2438,10 @@ mod image_arm_tests {
         let kind = ps.kind.clone();
         let item = pane_item(ps, true, false, false, false, 14.0, &kind, 0, 0);
 
-        assert!(item.has_image, "a module that shipped pixels is a texture pane");
+        assert!(
+            item.has_image,
+            "a module that shipped pixels is a texture pane"
+        );
         assert_eq!(
             item.kind,
             kind.ui_kind(),

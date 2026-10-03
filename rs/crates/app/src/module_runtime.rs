@@ -60,7 +60,8 @@ use avada_core::marketplace::workspace::WorkspaceStates;
 use avada_core::module::grid::{GridKey, GridResize};
 use avada_core::module::WorkspaceInfo;
 use avada_core::module::{
-    DeclaredOnly, Gesture, Host, HostConfig, HostEvent, LaunchSpec, RailEvent, RowActivate,
+    DeclaredOnly, Gesture, Host, HostConfig, HostError, HostEvent, LaunchSpec, ModuleStatus,
+    RailEvent, RowActivate,
 };
 use avada_core::rights::{InstallRecord, ModuleId};
 
@@ -125,6 +126,12 @@ enum Job {
     Row {
         module: ModuleId,
         row: Box<RowActivate>,
+    },
+    /// `module.command.invoke` — a module command run from the palette.
+    Invoke {
+        module: ModuleId,
+        command: String,
+        args: Value,
     },
     /// `module.event` fan-out to every subscriber of `kind`.
     Emit { kind: String, payload: Value },
@@ -507,6 +514,15 @@ impl ModuleRuntime {
         // the window dirty: nothing on screen changed, only where the *next* open will route.
         if let Some(host) = self.host.as_ref() {
             st.set_module_openers(host.openers());
+            st.set_module_commands(
+                host.statuses()
+                    .into_iter()
+                    .filter(|(_, s)| *s == ModuleStatus::Running)
+                    .flat_map(|(id, _)| {
+                        host.commands(&id).into_iter().map(move |c| (id.clone(), c))
+                    })
+                    .collect(),
+            );
         }
         for event in &tick.rail {
             st.apply_rail_event(event.clone());
@@ -706,6 +722,15 @@ impl ModuleRuntime {
                         data,
                         gesture: wire_gesture(gesture),
                     }),
+                }),
+                RailRequest::Command {
+                    module,
+                    command,
+                    args,
+                } => self.post(Job::Invoke {
+                    module,
+                    command,
+                    args,
                 }),
             }
         }
@@ -1059,6 +1084,26 @@ fn run_worker(host: Host, licenses: Arc<Licenses>, rx: Receiver<Job>) {
             Job::Row { module, row } => {
                 if let Err(e) = host.activate_row(&module, &row) {
                     tracing::warn!(error = %e, module = %module.as_str(), "module.row.activate failed");
+                }
+            }
+            Job::Invoke {
+                module,
+                command,
+                args,
+            } => {
+                // A command that did not run is the human's to see: they picked it from the
+                // palette. A module that answered with an error has said so itself; anything
+                // else (not running, timed out, pipe gone) nobody would otherwise mention.
+                match host.invoke_command(&module, &command, args) {
+                    Ok(_) => {}
+                    Err(HostError::Rpc(e)) => {
+                        tracing::warn!(error = %e.message, module = %module.as_str(), command = %command, "module.command.invoke refused");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, module = %module.as_str(), command = %command, "module.command.invoke failed");
+                        let _ =
+                            host.toast(&module, &format!("{command} did not run: {e}"), "error");
+                    }
                 }
             }
             Job::Emit { kind, payload } => {
@@ -1452,7 +1497,11 @@ label = "Tree"
             command: "git".into(),
             args: vec!["status".into()],
             cwd: Some("/work/repo".into()),
-            env: Some([("GIT_PAGER".to_string(), "cat".to_string())].into_iter().collect()),
+            env: Some(
+                [("GIT_PAGER".to_string(), "cat".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
         };
         rt.fold_event(
             HostEvent::PaneSpawn {

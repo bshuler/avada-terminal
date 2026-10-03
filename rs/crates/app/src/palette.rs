@@ -242,6 +242,24 @@ pub fn build(state: &State) -> Vec<Entry> {
         ));
     }
 
+    // ---- what running modules registered ----
+    for (module, spec) in &state.module_commands {
+        let subtitle = match &spec.arg {
+            Some(arg) => format!(
+                "{} · asks for {}",
+                module.as_str(),
+                arg.prompt.to_lowercase()
+            ),
+            None => module.as_str().to_string(),
+        };
+        cmds.push(Entry::new(
+            &spec.label,
+            &subtitle,
+            "module",
+            Command::ModuleCommand(module.clone(), spec.clone()),
+        ));
+    }
+
     cmds
 }
 

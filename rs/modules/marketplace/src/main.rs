@@ -43,7 +43,7 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
     use serde_json::{json, Value};
     use std::io::{Read, Write};
 
-    use app::{App, Outcome, COMMANDS, PANE};
+    use app::{App, Outcome, COMMANDS, COMMAND_ARGS, PANE};
     use control::HttpControl;
 
     let manifest = Manifest::parse(MANIFEST).map_err(|e| ClientError::Handshake(e.to_string()))?;
@@ -166,7 +166,15 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
     if conn.has(Capability::UiCommands) {
         let commands: Vec<Value> = COMMANDS
             .iter()
-            .map(|(id, label)| json!({ "id": id, "label": label }))
+            .map(|(id, label)| {
+                let mut c = json!({ "id": id, "label": label });
+                if let Some((_, key, prompt, placeholder)) =
+                    COMMAND_ARGS.iter().find(|(cmd, ..)| cmd == id)
+                {
+                    c["arg"] = json!({ "key": key, "prompt": prompt, "placeholder": placeholder });
+                }
+                c
+            })
             .collect();
         conn.call(
             methods::HOST_COMMAND_REGISTER,

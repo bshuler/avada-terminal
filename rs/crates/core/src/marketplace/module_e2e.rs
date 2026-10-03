@@ -12,7 +12,7 @@
 //!
 //! The walk: search → click the result (install) → the Installed row says
 //! "open to disable" → click it (disable) → it says "open to enable" → click it (enable)
-//! → palette "Uninstall module" → the row is gone and the store is empty.
+//! → click its Uninstall row twice → the row is gone and the store is empty.
 //!
 //! Unix only: the pipeline rig runs POSIX-shell fakes for cargo and git.
 
@@ -255,9 +255,17 @@ async fn the_marketplace_module_installs_disables_enables_and_uninstalls() {
             row_for(rows, "disable", FILES)
         });
 
-        // ---- uninstall: palette command; the row and the record both go ----------------
-        host.invoke_command(&id, "uninstall", json!({ "module": FILES }))
-            .expect("Marketplace: Uninstall module");
+        // ---- uninstall: the row's Uninstall, clicked twice; the row and record both go
+        let remove = rows_until(&host, &id, "the Uninstall row", |rows| {
+            row_for(rows, "uninstall", FILES)
+        });
+        assert!(remove.detail.starts_with("open to remove"), "{remove:?}");
+        click(&host, &id, &remove);
+        assert_eq!(mp.installed().unwrap().len(), 1, "one click only arms");
+        let armed = rows_until(&host, &id, "the Uninstall row armed", |rows| {
+            row_for(rows, "uninstall", FILES).filter(|r| r.detail.contains("again"))
+        });
+        click(&host, &id, &armed);
         assert!(mp.installed().unwrap().is_empty(), "the record is gone");
         rows_until(&host, &id, "the installed row gone", |rows| {
             let gone = row_for(rows, "enable", FILES).is_none()

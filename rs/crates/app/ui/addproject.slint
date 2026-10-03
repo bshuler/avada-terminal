@@ -83,6 +83,13 @@ export component AddProjectDialog inherits Rectangle {
     // The Rust-side validation error (`""` = none) — shown inline under the input. Updates
     // live while the dialog stays open (a failed submit keeps the overlay mounted).
     in property <string> error: "";
+    // The words, so the same card also serves as a module command's one-field prompt
+    // (kind 8). The defaults are the Add-project dialog's.
+    in property <string> title: "Add project";
+    in property <string> field-label: "Directory";
+    in property <string> placeholder: "C:\\path\\to\\project";
+    in property <string> hint: "any folder works — it doesn't have to be a git repo";
+    in property <string> action: "Add project";
     callback submit(string);   // the typed directory path
     callback cancel();
 
@@ -108,7 +115,7 @@ export component AddProjectDialog inherits Rectangle {
             spacing: 12px;
 
             Text {
-                text: "Add project";
+                text: root.title;
                 color: Theme.text;
                 font-size: 15px;
                 font-weight: 700;
@@ -116,14 +123,14 @@ export component AddProjectDialog inherits Rectangle {
 
             VerticalLayout {
                 spacing: 5px;
-                Text { text: "Directory"; color: Theme.faint; font-size: 11px; }
+                Text { text: root.field-label; color: Theme.faint; font-size: 11px; }
                 path-input := ApInput {
-                    placeholder: "C:\\path\\to\\project";
+                    placeholder: root.placeholder;
                     submit => { root.submit(path-input.text); }
                     escape => { root.cancel(); }
                 }
-                Text {
-                    text: "any folder works — it doesn't have to be a git repo";
+                if root.hint != "" : Text {
+                    text: root.hint;
                     color: Theme.faint;
                     font-size: 11px;
                 }
@@ -140,7 +147,7 @@ export component AddProjectDialog inherits Rectangle {
                 spacing: 8px;
                 Rectangle { horizontal-stretch: 1; }
                 ApButton { label: "Cancel"; clicked => { root.cancel(); } }
-                ApButton { label: "Add project"; primary: true; clicked => { root.submit(path-input.text); } }
+                ApButton { label: root.action; primary: true; clicked => { root.submit(path-input.text); } }
             }
         }
     }

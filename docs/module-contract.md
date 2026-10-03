@@ -154,7 +154,7 @@ version-1 peer must serve.
 |---|---|
 | `host.rail.register` | `{ entries: [RailEntry] }` |
 | `host.rows.set` | `{ entry, rows: [Row] }` |
-| `host.command.register` | `{ commands: [{ id, label, chord? }] }` |
+| `host.command.register` | `{ commands: [{ id, label, chord?, arg?: { key, prompt, placeholder? } }] }` — a command with `arg` is prompted for that one value in the palette, sent as `args.<key>` |
 | `host.prefs.declare` | `{ page: PrefsPage }` |
 | `host.prefs.get` | → `{ values }` |
 | `host.panes.spawn` | `{ kind, path?, surface? }` → `{ pane_id }` |
