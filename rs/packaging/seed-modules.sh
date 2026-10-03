@@ -79,6 +79,14 @@ stage_seed_modules() {
     done
     [ "${#dirs[@]}" -gt 0 ] || { echo "stage_seed_modules: no modules under $modules_dir" >&2; return 1; }
 
+    # Seeding installs once per id@version, so a changed module that kept its version would
+    # ship here and never reach an existing install. Refuse to package one.
+    echo "==> checking module versions against rs/modules/versions.lock"
+    cargo test -q --manifest-path "$SEED_ROOT/rs/Cargo.toml" -p avada-core --test module_versions || {
+        echo "stage_seed_modules: a module changed without a version bump (see above)" >&2
+        return 1
+    }
+
     echo "==> building ${#dirs[@]} in-tree modules (release)"
     cargo build --release --manifest-path "$SEED_ROOT/rs/Cargo.toml" "${build_args[@]}" -j 4
 
