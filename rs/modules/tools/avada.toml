@@ -29,7 +29,7 @@ capabilities = [
 [module]
 id = "bshuler/avada-tools"
 name = "Tools"
-version = "0.1.0"
+version = "0.1.1"
 description = "One rail entry per AI CLI, listing its resumable conversations"
 publisher = "Avada"
 contract = "^1"
