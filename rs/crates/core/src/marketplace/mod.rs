@@ -68,7 +68,7 @@ use loader::{LoadError, LoadRequest, Loader, SourceLoader};
 use semver::Version;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -197,6 +197,10 @@ pub struct MarketplaceOptions {
     pub git_base: String,
     /// `PATH` for tool detection and subprocesses; `None` inherits the process one.
     pub path: Option<OsString>,
+    /// With no `path`, take the login shell's `PATH` instead of the process one. A
+    /// macOS app launched from Finder gets launchd's bare `/usr/bin:/bin:...`, which
+    /// misses Homebrew's and rustup's `cargo` — the toolchain a terminal user has.
+    pub login_path: bool,
 }
 
 impl Default for MarketplaceOptions {
@@ -204,6 +208,7 @@ impl Default for MarketplaceOptions {
         MarketplaceOptions {
             git_base: "https://github.com".into(),
             path: None,
+            login_path: false,
         }
     }
 }
@@ -226,7 +231,10 @@ impl MarketplaceOptions {
     /// process-wide `set_var`. Blank means "no override"; a trailing slash is dropped
     /// because the clone URL appends `/owner/repo.git`.
     pub fn with_git_base_override(raw: Option<&str>) -> Self {
-        let mut o = MarketplaceOptions::default();
+        let mut o = MarketplaceOptions {
+            login_path: true,
+            ..MarketplaceOptions::default()
+        };
         if let Some(base) = raw.map(str::trim).filter(|b| !b.is_empty()) {
             o.git_base = base.trim_end_matches('/').to_string();
         }
@@ -574,8 +582,18 @@ impl Marketplace {
         Ok(self.tokens.get()?)
     }
 
-    fn path(&self) -> Option<&OsStr> {
-        self.options.path.as_deref()
+    /// The `PATH` tools are found on and run with; `None` inherits the process one.
+    fn path(&self) -> Option<OsString> {
+        if let Some(p) = &self.options.path {
+            return Some(p.clone());
+        }
+        if self.options.login_path {
+            // Captured from `$SHELL -l` and cached briefly; falls back to the process env.
+            return crate::session::env::fresh_env()
+                .get("PATH")
+                .map(OsString::from);
+        }
+        None
     }
 
     fn parse_id(module: &str) -> Result<ModuleId, MarketplaceError> {
@@ -665,7 +683,7 @@ impl Marketplace {
     /// Detection and execution have to agree about which `PATH` they mean.
     pub fn toolchain(&self) -> Toolchain {
         match self.path() {
-            Some(p) => Toolchain::detect_in(Some(p)),
+            Some(p) => Toolchain::detect_in(Some(&p)),
             None => Toolchain::detect(),
         }
     }
@@ -719,8 +737,9 @@ impl Marketplace {
                 .git
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("git")),
-            self.path(),
-        );
+            self.path().as_deref(),
+        )
+        .with_github_token(self.auth()?.as_ref());
         let url = self.repo_url(&id);
 
         // Fetch: which commit does the tag name?
@@ -827,7 +846,7 @@ impl Marketplace {
             commit: &head,
             scratch: &scratch,
             cargo: toolchain.cargo.clone(),
-            path: self.path().map(OsStr::to_os_string),
+            path: self.path(),
         };
         let binary = loader
             .load(&request, &log, &|pct| jobs.progress(job_id, pct))

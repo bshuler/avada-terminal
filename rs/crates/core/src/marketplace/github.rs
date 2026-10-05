@@ -24,6 +24,10 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// The topic every marketplace module carries.
 pub const TOPIC: &str = "avada-module";
 
+/// What sign-in asks for: `repo` lets search, the manifest read and the clone reach
+/// private module repos the account can see.
+pub const SCOPES: &str = "read:user repo";
+
 /// One repository as the index shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoSummary {
@@ -486,7 +490,7 @@ impl GitHubApi for HttpGitHub {
             let v = self
                 .post_form(
                     &url,
-                    &[("client_id", &self.cfg.client_id), ("scope", "read:user")],
+                    &[("client_id", &self.cfg.client_id), ("scope", SCOPES)],
                 )
                 .await?;
             let field = |k: &str| {

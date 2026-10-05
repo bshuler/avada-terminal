@@ -15,12 +15,30 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The git binary and the `PATH` it runs with.
-#[derive(Debug, Clone)]
+/// The git binary, the `PATH` it runs with, and the GitHub credential it presents.
+#[derive(Clone)]
 pub struct Git {
     program: PathBuf,
     path: Option<std::ffi::OsString>,
+    /// The `Authorization` header value for github.com; never printed.
+    github_auth: Option<String>,
 }
+
+impl std::fmt::Debug for Git {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Git")
+            .field("program", &self.program)
+            .field("path", &self.path)
+            .field(
+                "github_auth",
+                &self.github_auth.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+/// The git config key that scopes an extra header to github.com only.
+const GITHUB_HEADER_KEY: &str = "http.https://github.com/.extraheader";
 
 /// Git problems, with the tail of what git said.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +79,20 @@ impl Git {
         Git {
             program: program.into(),
             path: path.map(|p| p.to_os_string()),
+            github_auth: None,
         }
+    }
+
+    /// Present `token` to github.com, so private repos clone. It travels in git's
+    /// `GIT_CONFIG_*` environment, never on the command line, and only github.com sees it.
+    pub fn with_github_token(mut self, token: Option<&super::token::Token>) -> Self {
+        use base64::Engine as _;
+        self.github_auth = token.map(|t| {
+            let basic = base64::engine::general_purpose::STANDARD
+                .encode(format!("x-access-token:{}", t.expose_secret()));
+            format!("Authorization: Basic {basic}")
+        });
+        self
     }
 
     fn command(&self) -> Command {
@@ -82,6 +113,11 @@ impl Git {
         cmd.env_remove("GIT_WORK_TREE");
         if let Some(p) = &self.path {
             cmd.env("PATH", p);
+        }
+        if let Some(header) = &self.github_auth {
+            cmd.env("GIT_CONFIG_COUNT", "1");
+            cmd.env("GIT_CONFIG_KEY_0", GITHUB_HEADER_KEY);
+            cmd.env("GIT_CONFIG_VALUE_0", header);
         }
         cmd
     }
@@ -414,6 +450,50 @@ contract = "^1"
         let expected = std::fs::canonicalize(std::env::temp_dir()).unwrap();
         assert_eq!(tags["cwd"], expected.to_string_lossy().as_ref());
         assert_eq!(tags["env"], "GIT_DIR=unset");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A signed-in token reaches git as a github.com-scoped header in the environment —
+    /// never in argv, where `ps` would show it — and an unsigned Git sets nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_token_reaches_git_through_the_environment_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("avada-mp-fetch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("git");
+        let out = dir.join("seen");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n{{ printf '%s\\n' \"$*\" \"${{GIT_CONFIG_COUNT:-}}\" \"${{GIT_CONFIG_KEY_0:-}}\" \"${{GIT_CONFIG_VALUE_0:-}}\"; }} > '{}'\n",
+                out.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let token = super::super::token::Token::new("tok-123");
+        let git = Git::new(&fake, None).with_github_token(Some(&token));
+        assert!(!format!("{git:?}").contains("tok-123"), "Debug redacts");
+        git.ls_remote_tags("https://github.com/acme/private")
+            .unwrap();
+        let seen = std::fs::read_to_string(&out).unwrap();
+        let lines: Vec<&str> = seen.lines().collect();
+        assert!(!lines[0].contains("tok-123") && !lines[0].contains("Authorization"));
+        assert_eq!(lines[1], "1");
+        assert_eq!(lines[2], GITHUB_HEADER_KEY);
+        // base64("x-access-token:tok-123")
+        assert_eq!(
+            lines[3],
+            "Authorization: Basic eC1hY2Nlc3MtdG9rZW46dG9rLTEyMw=="
+        );
+
+        Git::new(&fake, None)
+            .with_github_token(None)
+            .ls_remote_tags("https://github.com/acme/public")
+            .unwrap();
+        let seen = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(seen.lines().nth(1), Some(""), "no token, no config");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

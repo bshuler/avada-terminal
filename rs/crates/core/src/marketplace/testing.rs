@@ -569,6 +569,7 @@ pub(crate) fn reopen(
         MarketplaceOptions {
             git_base: fixtures.git_base(),
             path: tools.map(|t| t.into_os_string()),
+            login_path: false,
         },
     ))
 }
