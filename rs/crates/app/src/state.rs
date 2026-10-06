@@ -7055,6 +7055,46 @@ impl State {
         Some(swap)
     }
 
+    /// Every pty pane in every tab — the system tab included — as `(tab, pane, uid, tool)`,
+    /// `tool` naming the agent of a tool pane. The dead-session recovery restarts all of
+    /// them: unlike [`Self::monitored_panes`] it cannot skip the Hyperpane agent or plain
+    /// shells, because every one of those processes holds the dead bootstrap port.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn all_pty_panes(&self) -> Vec<(usize, usize, String, Option<String>)> {
+        let mut out = Vec::new();
+        for (ti, t) in self.tabs.iter().enumerate() {
+            for (pi, p) in t.panes.iter().enumerate() {
+                if !p.kind.is_pty() {
+                    continue;
+                }
+                let tool = match &p.kind {
+                    PaneKind::Tool(tool) => Some(tool.clone()),
+                    _ => None,
+                };
+                out.push((ti, pi, p.uid.clone(), tool));
+            }
+        }
+        out
+    }
+
+    /// Restart the shell of pane `(ti, pi)` in any tab, keeping its cwd and env overrides —
+    /// [`Self::refresh_env_pane`] without the active-tab addressing. Returns the uid swap.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn refresh_pane_at(
+        &mut self,
+        ti: usize,
+        pi: usize,
+        mgr: &SessionManager,
+    ) -> Option<(String, String)> {
+        let (cwd, env) = self
+            .tabs
+            .get(ti)?
+            .panes
+            .get(pi)
+            .map(|p| (p.cwd.clone(), p.env.clone()))?;
+        self.restart_pane_at(ti, pi, mgr, cwd, env)
+    }
+
     /// "Refresh Env" (#28): restart pane `idx`'s shell in place but KEEP its live cwd and its
     /// env overrides. The spawn path resolves a fresh registry-backed environment on every
     /// spawn (core `session::env::fresh_env`), so a restart IS the refresh — this variant just

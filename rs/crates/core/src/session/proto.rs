@@ -321,6 +321,12 @@ pub enum DaemonMsg {
         conn_id: crate::session::claims::ConnId,
         #[serde(default)]
         build_id: String,
+        /// Whether the daemon's macOS login session is still alive (see
+        /// [`namespace`](crate::session::namespace)): `Some(false)` means every shell it
+        /// spawns is born unable to reach launchd services. `None` — not macOS, or a daemon
+        /// from before the field — is unknown, and unknown never forces anything.
+        #[serde(default)]
+        namespace_ok: Option<bool>,
     },
     /// Reply to [`ClientMsg::ListSessions`].
     Sessions(Vec<SessionMeta>),
@@ -576,6 +582,7 @@ mod tests {
                 daemon_pid: 4242,
                 conn_id: 7,
                 build_id: "9.9.9+0123456789abcdef".into(),
+                namespace_ok: Some(false),
             },
             DaemonMsg::Sessions(vec![SessionMeta {
                 uid: "s1".into(),
@@ -679,11 +686,13 @@ mod tests {
             daemon_pid,
             conn_id,
             build_id,
+            namespace_ok,
         } = roundtrip_daemon(&DaemonMsg::Hello {
             proto_ver: PROTO_VER,
             daemon_pid: 77,
             conn_id: 5,
             build_id: "1.2.3+abcdef0123456789".into(),
+            namespace_ok: Some(false),
         })
         else {
             panic!("expected Hello");
@@ -692,6 +701,11 @@ mod tests {
         assert_eq!(daemon_pid, 77);
         assert_eq!(conn_id, 5);
         assert_eq!(build_id, "1.2.3+abcdef0123456789");
+        assert_eq!(
+            namespace_ok,
+            Some(false),
+            "a dead session must survive the wire"
+        );
     }
 
     /// `Hello.conn_id` is `#[serde(default)]` so a pre-M7 daemon's two-field reply still
@@ -707,6 +721,7 @@ mod tests {
                 daemon_pid: 9,
                 conn_id: 0,
                 build_id,
+                namespace_ok: None,
             } if build_id.is_empty()
         ));
     }
@@ -726,6 +741,25 @@ mod tests {
             !crate::session::build_id::differs(&build_id),
             "and unknown must never look like a build worth upgrading to"
         );
+    }
+
+    /// `Hello.namespace_ok` is `Option` + `#[serde(default)]`: a daemon from before the field
+    /// answers without it and lands on `None`, which [`should_escape`] never acts on. A bare
+    /// `bool` would have defaulted to `false` and read every older daemon as dead.
+    ///
+    /// [`should_escape`]: crate::session::namespace::should_escape
+    #[test]
+    fn a_hello_without_namespace_ok_reads_as_unknown() {
+        let body = br#"{"Hello":{"proto_ver":3,"daemon_pid":9,"conn_id":4,"build_id":"x"}}"#;
+        let msg: DaemonMsg = serde_json::from_slice(body).expect("legacy Hello parses");
+        let DaemonMsg::Hello { namespace_ok, .. } = msg else {
+            panic!("expected Hello");
+        };
+        assert_eq!(namespace_ok, None);
+        assert!(!crate::session::namespace::should_escape(
+            namespace_ok,
+            Some(true)
+        ));
     }
 
     /// The claim messages must survive the wire in both directions - the whole

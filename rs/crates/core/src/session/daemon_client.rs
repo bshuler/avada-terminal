@@ -58,6 +58,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::session::build_id;
 use crate::session::claims::ConnId;
+use crate::session::namespace;
 use crate::session::proto::{write_frame, ClientMsg, DaemonMsg, SpawnSpec, PROTO_VER};
 // The blocking `read_frame` is unix-only here: the reader loop peeks via `read_frame_deadline`
 // on Windows (so an idle read never holds the pipe's file-object lock), and the tests that
@@ -314,6 +315,44 @@ impl DaemonSessionManager {
                         tracing::info!(
                             "build takeover failed against daemon {daemon_build}; driving it \
                              as-is — the terminals matter more than the upgrade"
+                        );
+                        let stream = connect_or_spawn(&endpoint, salt)?;
+                        return Self::from_stream_with_hello(stream, events, None, Some(redial(&endpoint, salt)));
+                    }
+                }
+                ProtoCheck::NamespaceDead
+                    if policy == VersionPolicy::Tolerant || forced_build_upgrade =>
+                {
+                    // Tolerant: the Windows pty-host, which has no bootstrap namespace and
+                    // never reports one dead — unreachable, but never a takeover. Already
+                    // forced once: a successor that ALSO reports dead means the escape does
+                    // not work from here; looping would not change that.
+                    tracing::warn!(
+                        "daemon reports a dead login session after a takeover was already \
+                         attempted; driving it as-is — new panes may be unable to reach \
+                         launchd services (ssh agent, open, codesign)"
+                    );
+                    return Self::from_stream_with_hello(stream, events, hello, Some(redial(&endpoint, salt)));
+                }
+                ProtoCheck::NamespaceDead => {
+                    // The 2026-10-05 incident: the daemon outlived its login session and
+                    // every pane it spawns inherits a dead bootstrap port. We are healthy, so
+                    // a daemon WE spawn is too; hand the sessions to it. The pty masters move,
+                    // but the shells on them still hold the dead port — so on success the GUI
+                    // is told to restart every pane (see `take_escaped_dead_namespace`).
+                    tracing::warn!(
+                        "daemon's login session is dead (client is healthy); attempting live \
+                         takeover onto a fresh daemon (attempt {attempt})"
+                    );
+                    forced_build_upgrade = true;
+                    drop(stream);
+                    if hand_over_stale_daemon(salt, &endpoint) {
+                        ESCAPED_DEAD_NAMESPACE.store(true, Ordering::SeqCst);
+                        tracing::info!("took the sessions over from the dead-session daemon; panes will be restarted");
+                    } else {
+                        tracing::warn!(
+                            "takeover from the dead-session daemon failed; driving it as-is — \
+                             quitting Avada and stopping the daemon is the manual fix"
                         );
                         let stream = connect_or_spawn(&endpoint, salt)?;
                         return Self::from_stream_with_hello(stream, events, None, Some(redial(&endpoint, salt)));
@@ -1459,6 +1498,12 @@ enum ProtoCheck {
     /// *this* binary and expects its backend, so ask for a live takeover. Every session
     /// survives it, which is why this is worth doing on a merely-different build at all.
     BuildMismatch { daemon_build: String },
+    /// Same protocol, any build, but the daemon reports its macOS login session is dead
+    /// (and ours is not): every shell it spawns is born unable to reach launchd, so
+    /// ssh-through-1Password, `open`, `codesign` and the rest fail inside its panes. A live
+    /// takeover onto a daemon WE spawn — born into our healthy session — is the escape; the
+    /// GUI then restarts every pane, because the existing shells keep the dead port.
+    NamespaceDead,
     /// The daemon speaks a different version — hand its sessions over + respawn (or, when
     /// that fails and it holds live terminals, drive it as it is).
     Mismatch { daemon_ver: u32 },
@@ -1520,6 +1565,7 @@ fn probe_daemon_identity(stream: &Conn) -> io::Result<(ProtoCheck, Option<HelloA
             Ok(Some(DaemonMsg::Hello {
                 proto_ver,
                 build_id: daemon_build,
+                namespace_ok: daemon_namespace,
                 conn_id,
                 ..
             })) => {
@@ -1536,7 +1582,14 @@ fn probe_daemon_identity(stream: &Conn) -> io::Result<(ProtoCheck, Option<HelloA
                         hello,
                     ));
                 }
-                // Same protocol. The build id is the finer question: is this daemon the
+                // Same protocol. Before asking which build it is, ask whether it can still
+                // spawn a working shell at all: a daemon whose login session died hands every
+                // new pane a dead bootstrap port, and no build of it fixes that. Only acted on
+                // when WE are healthy — see `namespace::should_escape`.
+                if namespace::should_escape(daemon_namespace, namespace::namespace_ok()) {
+                    return Ok((ProtoCheck::NamespaceDead, hello));
+                }
+                // The build id is the finer question: is this daemon the
                 // binary the user just launched, or a different build of it? An empty id is
                 // a daemon from before the field existed — unknown, and unknown is never a
                 // reason to move anything.
@@ -1556,6 +1609,19 @@ fn probe_daemon_identity(stream: &Conn) -> io::Result<(ProtoCheck, Option<HelloA
         }
     }
     Ok((ProtoCheck::Match, None))
+}
+
+/// Set once a launch has moved the sessions off a daemon whose login session was dead
+/// ([`ProtoCheck::NamespaceDead`]). Process-wide because a GUI has exactly one daemon
+/// connection and the flag must outlive the connect call, until the GUI has restored its
+/// workspace and can act on it.
+static ESCAPED_DEAD_NAMESPACE: AtomicBool = AtomicBool::new(false);
+
+/// `true` exactly once after this process escaped a dead-session daemon: every pane's shell
+/// still holds the dead bootstrap port (its pty master moved; the process did not), so the
+/// caller should restart every pane — resuming agents where it can. Consumes the flag.
+pub fn take_escaped_dead_namespace() -> bool {
+    ESCAPED_DEAD_NAMESPACE.swap(false, Ordering::SeqCst)
 }
 
 /// How long to wait for a spawned successor to take the incumbent's sessions and start
@@ -3082,6 +3148,7 @@ mod tests {
                         daemon_pid: 4242,
                         conn_id: 1,
                         build_id: build_id::build_id().to_string(),
+                        namespace_ok: None,
                     },
                 );
                 // Keep the connection open briefly so the client reads the reply.
@@ -3119,6 +3186,7 @@ mod tests {
                         daemon_pid: 4243,
                         conn_id: 1,
                         build_id: "0.0.0+deadbeefdeadbeef".into(),
+                        namespace_ok: None,
                     },
                 );
                 std::thread::sleep(Dur::from_millis(200));
@@ -3131,6 +3199,44 @@ mod tests {
             matches!(&check, ProtoCheck::BuildMismatch { daemon_build } if daemon_build == "0.0.0+deadbeefdeadbeef"),
             "a same-proto, other-build daemon must be a BuildMismatch carrying its build id"
         );
+        drop(stream);
+        let _ = server.join();
+    }
+
+    // The 2026-10-05 incident: our protocol, our build, but its login session is gone. From a
+    // healthy client (the test runner is one) that is a reason to take over, and it must NOT
+    // count as a successor serving — a dead successor would otherwise end the takeover poll.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn version_probe_detects_a_daemon_in_a_dead_session() {
+        let socket = temp_socket("dead-namespace");
+        let _ = std::fs::remove_file(&socket);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("fake bind");
+
+        let server = std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let _ = read_frame::<_, ClientMsg>(&mut conn); // the client's Hello
+                let _ = write_frame(
+                    &mut conn,
+                    &DaemonMsg::Hello {
+                        proto_ver: PROTO_VER,
+                        daemon_pid: 4244,
+                        conn_id: 1,
+                        build_id: build_id::build_id().to_string(),
+                        namespace_ok: Some(false),
+                    },
+                );
+                std::thread::sleep(Dur::from_millis(200));
+            }
+        });
+
+        let stream = std::os::unix::net::UnixStream::connect(&socket).expect("connect fake");
+        let probe = probe_daemon_identity(&stream);
+        assert!(
+            matches!(probe, Ok((ProtoCheck::NamespaceDead, Some(_)))),
+            "a dead-session daemon of our own build must still be escaped"
+        );
+        assert!(!successor_is_serving(probe));
         drop(stream);
         let _ = server.join();
     }
@@ -3203,6 +3309,7 @@ mod tests {
                         conn_id: 1,
                         // What `#[serde(default)]` yields for a pre-build-id daemon's reply.
                         build_id: String::new(),
+                        namespace_ok: None,
                     },
                 );
                 std::thread::sleep(Dur::from_millis(200));
@@ -3252,6 +3359,7 @@ mod tests {
                                 daemon_pid: 4321,
                                 conn_id: 99,
                                 build_id: build_id::build_id().to_string(),
+                                namespace_ok: None,
                             },
                         );
                     }
@@ -3411,6 +3519,7 @@ mod tests {
                                 daemon_pid: 4242,
                                 conn_id: 0,
                                 build_id: build_id::build_id().to_string(),
+                                namespace_ok: None,
                             },
                         );
                     }

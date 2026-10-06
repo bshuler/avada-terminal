@@ -547,6 +547,8 @@ impl Daemon {
                         daemon_pid: std::process::id(),
                         conn_id,
                         build_id: crate::session::build_id::build_id().to_string(),
+                        // No bootstrap namespace on Windows; `None` never forces anything.
+                        namespace_ok: None,
                     })
                     .await;
                 // M7: open the push gate, then seed by broadcasting — same ordering argument
@@ -1047,7 +1049,8 @@ mod tests {
         // the workers with no timeout — the very freeze this helper exists to prevent, and
         // why the Windows release runs hung with no failure ever printed. Catch it, bound the
         // teardown, then resume, so a flaky assertion fails the test instead of the binary.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.block_on(body())));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.block_on(body())));
         rt.shutdown_timeout(Duration::from_secs(5));
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);

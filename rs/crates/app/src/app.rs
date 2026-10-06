@@ -229,6 +229,11 @@ pub struct App {
     hyperpane_done: Cell<bool>,
     /// Monotonic tick counter (only used to delay the screenshot scaffold).
     ticks: Cell<u64>,
+    /// When to restart every pane because this launch escaped a daemon whose login session
+    /// was dead (`daemon_client::take_escaped_dead_namespace`). `None` in the ordinary case.
+    /// A deadline rather than "now" so the restored workspace has attached its sessions and
+    /// bound its control-plane pane ids first — the resume markers are keyed by those ids.
+    dead_session_restart: Cell<Option<std::time::Instant>>,
     /// The in-flight drag/tear-off gesture, if any (driven by [`App::pump_drag`]).
     drag: RefCell<Option<DragState>>,
     /// The Win32 ghost window that chases the cursor mid tear-off (lazily created on the
@@ -302,6 +307,9 @@ pub struct App {
 /// model's per-call latency, not this.
 const AI_FEED_INTERVAL: Duration = Duration::from_millis(400);
 
+/// How long after launch (and never before the first window is seeded) the dead-session
+/// recovery waits before restarting every pane (see [`App::service_dead_session_restart`]).
+const DEAD_SESSION_RESTART_DELAY: Duration = Duration::from_secs(3);
 /// How long a pane drag must rest over a tab before it springs open (Chrome/Finder).
 const SPRING_DELAY: std::time::Duration = std::time::Duration::from_millis(450);
 
@@ -336,6 +344,10 @@ impl App {
             erx: RefCell::new(erx),
             next_id: Cell::new(0),
             first_seed: Cell::new(true),
+            dead_session_restart: Cell::new(
+                avada_core::session::daemon_client::take_escaped_dead_namespace()
+                    .then(|| std::time::Instant::now() + DEAD_SESSION_RESTART_DELAY),
+            ),
             scaffold_done: Cell::new(false),
             hyperpane_done: Cell::new(false),
             ticks: Cell::new(0),
@@ -1191,6 +1203,64 @@ impl App {
         }
     }
 
+    /// After a launch escaped a daemon whose login session was dead, restart every pty pane
+    /// once — the sessions moved to a healthy daemon, but each shell (and everything under
+    /// it) still holds the dead bootstrap port, so ssh-through-1Password, `open` and the like
+    /// keep failing until the process itself is replaced. Agent panes are put back into their
+    /// conversation the way the restart loop does it; plain shells come back in the same
+    /// directory with the same env. Busy panes are restarted too: a process in a dead session
+    /// cannot finish its work anyway, and an agent's transcript is on disk.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn service_dead_session_restart(&self, windows: &[Rc<Window>]) {
+        let Some(due) = self.dead_session_restart.get() else {
+            return;
+        };
+        if self.first_seed.get() || windows.is_empty() || std::time::Instant::now() < due {
+            return;
+        }
+        self.dead_session_restart.set(None);
+        for w in windows {
+            let targets = w.state.borrow().all_pty_panes();
+            tracing::warn!(
+                window = w.id,
+                count = targets.len(),
+                "dead login session escaped: restarting every pane"
+            );
+            for (ti, pi, uid, tool) in targets {
+                let pane_id = self
+                    .control
+                    .pane_id_for_uid(&uid)
+                    .unwrap_or_else(|| uid.clone());
+                let rebound = match tool.as_deref() {
+                    Some(tool) => {
+                        let marker = (tool == "claude")
+                            .then(|| avada_core::claude_panes::read_pane_session(&pane_id))
+                            .flatten();
+                        w.state.borrow_mut().restart_monitored_pane(
+                            ti,
+                            pi,
+                            &self.mgr,
+                            marker.as_ref(),
+                        )
+                    }
+                    None => w.state.borrow_mut().refresh_pane_at(ti, pi, &self.mgr),
+                };
+                match rebound {
+                    Some((old, new)) => {
+                        self.ai.send(crate::ai::AiMsg::Exit { uid: old.clone() });
+                        self.ai_feed.borrow_mut().remove(&old);
+                        self.openurl_carry.borrow_mut().remove(&old);
+                        self.control.rebind_uid(&old, &new);
+                        tracing::info!(pane = %pane_id, old = %old, new = %new, tool = ?tool, "dead-session recovery: pane restarted");
+                    }
+                    None => {
+                        tracing::warn!(pane = %pane_id, uid = %uid, "dead-session recovery: pane not restarted")
+                    }
+                }
+            }
+        }
+    }
+
     /// Execute a pending `restartApp` control command (flag set by the route; see
     /// `Shared::restart_app`): flush a final snapshot, spawn a detached relauncher of our
     /// own binary, optionally shut the session daemon down (scope "full" — every pane dies
@@ -1913,6 +1983,9 @@ impl App {
         self.service_restart_request();
         // 5e. The Hyperpane scheduler loops: a throttled clock compare unless one is due.
         self.service_loops(&windows);
+        // 5f. One-shot repair after escaping a dead-session daemon. Not behind the loops'
+        //     startup grace: this is a repair of a known-broken state, not a schedule.
+        self.service_dead_session_restart(&windows);
 
         // ---- adaptive idle cadence (#3) ----
         // A tick "did work" if it drained any session output, animated/rendered real pane

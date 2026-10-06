@@ -1179,6 +1179,8 @@ impl Daemon {
                     daemon_pid: std::process::id(),
                     conn_id,
                     build_id: crate::session::build_id::build_id().to_string(),
+                    // Fresh per Hello: the session can die under us at any moment.
+                    namespace_ok: crate::session::namespace::namespace_ok(),
                 });
                 // M7: `Hello` marks this peer as a full protocol client, so unsolicited
                 // snapshots may now flow to it. Open the gate BEFORE seeding, and seed by
@@ -2432,7 +2434,10 @@ mod tests {
 
         let nobody = temp_socket("nobody-home");
         let _ = std::fs::remove_file(&nobody);
-        assert!(!incumbent_is_our_build(&nobody), "nothing listening is not us");
+        assert!(
+            !incumbent_is_our_build(&nobody),
+            "nothing listening is not us"
+        );
     }
 
     #[test]
