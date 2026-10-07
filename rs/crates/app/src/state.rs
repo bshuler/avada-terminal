@@ -8575,10 +8575,10 @@ impl State {
         let spawn_cwd = self.resolve_new_pane_cwd(&kind, spawn_cwd);
 
         // A survivor's grid is born at the size the DAEMON says its pty has, not at
-        // `spawn_cells()`'s 80x24 guess. The replay we are about to feed it is the raw pty
-        // stream, cursor-positioning escapes and all, written for that width — replay it
-        // narrower or wider and every absolute column move lands somewhere else, so the
-        // scrollback comes back with lines overwriting each other. Seed at the daemon's
+        // `spawn_cells()`'s 80x24 guess. The seed we are about to feed it is the daemon
+        // mirror's repaint, written for that width: soft-wrapped rows are full width with no
+        // line break and the cursor is placed absolutely — feed it narrower or wider and the
+        // rows break in the wrong places and the cursor lands elsewhere. Seed at the daemon's
         // width, let the pump's `place()` reflow to the real rect afterwards (alacritty's
         // reflow preserves scrollback; a mis-rendered seed is not recoverable).
         // `None` = daemon can't say (predates `SessionMeta::cols`, or in-process backend) —

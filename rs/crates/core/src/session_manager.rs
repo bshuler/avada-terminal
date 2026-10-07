@@ -583,7 +583,7 @@ impl SessionRegistry {
             };
             session.shared.sync_screen();
             let (cols, rows, screen) = {
-                let screen = session.shared.screen.lock().unwrap();
+                let mut screen = session.shared.screen.lock().unwrap();
                 let (cols, rows) = screen.dims();
                 (cols, rows, screen.repaint())
             };
@@ -738,25 +738,24 @@ impl SessionRegistry {
         })
     }
 
-    /// What a re-attaching view is **seeded** with: the replay buffer followed by the
-    /// screen mirror's [`repaint`](crate::session::screen::Screen::repaint), plus the output
-    /// cursor — all read under the replay lock, so the three agree.
+    /// What a re-attaching view is **seeded** with: the screen mirror's
+    /// [`repaint`](crate::session::screen::Screen::repaint) — scrollback and screen — plus
+    /// the output cursor, both read under the replay lock so they agree.
     ///
-    /// The replay alone is not enough: it is a rolling window, and a program that redraws
-    /// in place with cursor-relative moves (Claude Code) leaves it starting mid-frame, so a
-    /// fresh grid fed only the replay draws those moves from the wrong origin. The repaint
-    /// overwrites the visible screen with the mirror's, which saw every byte; the replay
-    /// ahead of it still supplies scrollback. The cursor counts output only — the repaint
+    /// Not the replay buffer: it is a rolling window, and a program that redraws in place
+    /// with cursor-relative moves (Claude Code) leaves it starting mid-frame, so a fresh
+    /// grid fed it draws those moves from the wrong origin and the garble lands in the
+    /// scrollback. The mirror saw every byte. The cursor counts output only — the repaint
     /// is not output, and a client splicing live `Data` on the cursor never sees it twice.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn seed_with_cursor(&self, uid: &str) -> Option<(String, u64)> {
         let map = self.sessions.lock().unwrap();
         map.get(uid).map(|s| {
-            let replay = s.shared.replay.lock().unwrap();
+            // Held, not read: `flush_into` appends output and bumps the cursor under it.
+            let _replay = s.shared.replay.lock().unwrap();
             let cursor = s.shared.output_bytes.load(Ordering::Relaxed);
             s.shared.sync_screen();
-            let mut seed = replay.get().to_string();
-            seed.push_str(&s.shared.screen.lock().unwrap().repaint());
+            let seed = s.shared.screen.lock().unwrap().repaint();
             (seed, cursor)
         })
     }
@@ -2229,6 +2228,10 @@ mod tests {
         let frame = b"$ claude\r\nheader\r\n> typing\r\nstatus 0".as_slice();
         let redraws = b"\r\x1b[2A\x1b[2Kheader 1\r\n\r\n\x1b[2Kstatus 1".as_slice();
         let mut old = Screen::new(30, 8);
+        for i in 0..20 {
+            old.advance(format!("history {i}\r\n").as_bytes());
+        }
+        old.advance(b"\x1b[H\x1b[2J");
         old.advance(frame);
         old.advance(redraws);
         let want = "$ claude\nheader 1\n> typing\nstatus 1";
@@ -2264,8 +2267,14 @@ mod tests {
         // the program left, and the cursor is the output cursor — the repaint isn't output.
         let (seed, cursor) = reg.seed_with_cursor("s1").expect("seed");
         assert_eq!(cursor, 500);
-        assert!(seed.starts_with(carried), "scrollback first");
+        assert!(!seed.contains(carried), "the raw window is not replayed");
         assert_eq!(render_bytes(30, 8, seed.as_bytes()), want);
+        // The scrollback survived the upgrade too, rebuilt from the old mirror's history.
+        let mut fresh = Screen::new(30, 8);
+        fresh.advance(seed.as_bytes());
+        let all = fresh.render_all();
+        assert!(all.starts_with("history 0\nhistory 1\n"), "{all}");
+        assert!(all.ends_with(want), "{all}");
     }
 
     // A successor's uid counter starts at 1, so without a floor it would re-mint `s3` while

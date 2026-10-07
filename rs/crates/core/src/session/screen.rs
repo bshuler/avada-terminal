@@ -15,10 +15,14 @@
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
+
+/// Lines of history the mirror keeps — what a re-attaching view's scrollback is rebuilt
+/// from. Screen reads still serialize only the visible viewport.
+pub const SCROLLBACK_LINES: usize = 2000;
 
 /// A live VTE screen: an `alacritty_terminal` `Term` fed incrementally from the pty
 /// byte stream, plus its ANSI parser. One per session, mirroring how the renderer
@@ -31,15 +35,14 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// A blank screen of `cols`×`rows`. Scrollback is disabled: screen reads only ever
-    /// serialize the visible viewport, so per-session history would be wasted memory.
+    /// A blank screen of `cols`×`rows`, keeping [`SCROLLBACK_LINES`] of history so a
+    /// re-attaching view's scrollback can be rebuilt from it (see [`Screen::repaint`]).
     #[tracing::instrument(level = "debug")]
     pub fn new(cols: u16, rows: u16) -> Self {
         let cols = (cols as usize).max(1);
         let rows = (rows as usize).max(1);
-        // Scrollback disabled: screen reads only serialize the visible viewport.
         let config = Config {
-            scrolling_history: 0,
+            scrolling_history: SCROLLBACK_LINES,
             ..Config::default()
         };
         let term = Term::new(config, &TermSize::new(cols, rows), VoidListener);
@@ -121,70 +124,49 @@ impl Screen {
 }
 
 impl Screen {
-    /// Serialize the visible grid back to **ANSI**: a self-contained byte sequence that,
-    /// fed to a terminal of the same size, reproduces this screen — every cell with its
-    /// colours and attributes, the cursor position and visibility, and the input modes a
-    /// client routes keys and mouse by.
+    /// Serialize the mirror back to **ANSI**: a self-contained byte sequence that, fed to a
+    /// fresh terminal of the same size, reproduces this session — the scrollback, every
+    /// visible cell with its colours and attributes, the cursor position and visibility,
+    /// and the input modes a client routes keys and mouse by.
     ///
-    /// This is what a re-attaching view is seeded with after the raw replay. The replay is
-    /// a rolling 128 KiB window, so for a program that redraws in place with
-    /// cursor-*relative* moves (Claude Code's interface, any diffing TUI) its front edge
-    /// lands mid-frame and replaying it draws those moves from the wrong origin. The
-    /// repaint comes from the mirror, which saw every byte, so it ends the seed on the
-    /// screen exactly as the program left it.
+    /// This is the whole of a re-attaching view's seed. The raw replay is a rolling
+    /// 128 KiB window, so for a program that redraws in place with cursor-*relative* moves
+    /// (Claude Code's interface, any diffing TUI) its front edge lands mid-frame and
+    /// replaying it draws those moves from the wrong origin — garbling the scrollback as
+    /// well as the screen. The mirror saw every byte, so its history and screen are clean.
     ///
-    /// Callers must `sync_screen()` first. Scrollback is not included (the mirror keeps
-    /// none); the replay ahead of the repaint still supplies it.
+    /// History is written as plain lines from the top, so it scrolls into the client's
+    /// scrollback; soft-wrapped rows are written full width without a line break, so the
+    /// client still knows they wrap and can reflow them. With the alternate screen up, the
+    /// primary (history, screen and cursor) is painted first and the alternate screen on
+    /// top, so leaving vim/less shows the shell underneath.
+    ///
+    /// Callers must `sync_screen()` first. `&mut` only because reading the hidden primary
+    /// grid means swapping it in; the mirror is left exactly as it was.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn repaint(&self) -> String {
+    pub fn repaint(&mut self) -> String {
         use alacritty_terminal::term::TermMode;
         let mode = *self.term.mode();
         let mut out = String::with_capacity(self.cols * self.rows + 64);
-        // Reset attributes, enter the right screen, then clear it and home.
-        out.push_str("\x1b[0m");
-        out.push_str(if mode.contains(TermMode::ALT_SCREEN) {
-            "\x1b[?1049h"
-        } else {
-            "\x1b[?1049l"
-        });
-        out.push_str("\x1b[H\x1b[2J");
+        // Reset attributes, leave any alternate screen, make sure rows wrap, then clear the
+        // screen AND the scrollback — a seed fed to a grid that already holds a copy must not
+        // stack a second one. ED 2 before ED 3: on the primary screen ED 2 pushes the
+        // viewport into history, which ED 3 then drops.
+        out.push_str("\x1b[0m\x1b[?1049l\x1b[?7h\x1b[H\x1b[2J\x1b[3J");
 
-        let grid = self.term.grid();
-        let mut pen = Pen::default();
-        for l in 0..self.rows {
-            let row = &grid[Line(l as i32)];
-            // Stop at the last cell that differs from a blank, default-styled one: the
-            // clear above already painted the rest.
-            let end = (0..self.cols)
-                .rev()
-                .find(|&c| {
-                    let cell = &row[Column(c)];
-                    cell.c != ' ' || Pen::of(cell) != Pen::default()
-                })
-                .map_or(0, |c| c + 1);
-            if end == 0 {
-                continue;
-            }
-            out.push_str(&format!("\x1b[{};1H", l + 1));
-            for c in 0..end {
-                let cell = &row[Column(c)];
-                if cell
-                    .flags
-                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                {
-                    continue;
-                }
-                let want = Pen::of(cell);
-                if want != pen {
-                    out.push_str(&want.sgr());
-                    pen = want;
-                }
-                out.push(cell.c);
-                if let Some(zw) = cell.zerowidth() {
-                    out.extend(zw.iter());
-                }
-            }
+        if mode.contains(TermMode::ALT_SCREEN) {
+            // alacritty only exposes the active grid. Swap the primary in to read it; swapping
+            // back resets the alternate grid, so restore it from a copy.
+            let alt = self.term.grid().clone();
+            self.term.swap_alt();
+            paint_grid(self.term.grid(), self.cols, &mut out);
+            push_cursor(self.term.grid(), &mut out);
+            self.term.swap_alt();
+            *self.term.grid_mut() = alt;
+            // DECSET 1049 saves the primary cursor just placed, then clears the alternate.
+            out.push_str("\x1b[?1049h\x1b[H");
         }
+        paint_grid(self.term.grid(), self.cols, &mut out);
         out.push_str("\x1b[0m");
 
         let set = |on: bool, n: u16, out: &mut String| {
@@ -203,15 +185,88 @@ impl Screen {
         } else {
             "\x1b>"
         });
-        let cursor = grid.cursor.point;
-        out.push_str(&format!(
-            "\x1b[{};{}H",
-            cursor.line.0 + 1,
-            cursor.column.0 + 1
-        ));
+        push_cursor(self.term.grid(), &mut out);
         set(mode.contains(TermMode::SHOW_CURSOR), 25, &mut out);
         out
     }
+}
+
+/// Write every line of `grid` — history from the oldest, then the screen — top to bottom
+/// from the home position, so the last `screen_lines` land on screen and the rest scroll
+/// into the receiver's scrollback. Leaves the pen at its default.
+fn paint_grid(grid: &alacritty_terminal::grid::Grid<Cell>, cols: usize, out: &mut String) {
+    use alacritty_terminal::grid::Dimensions;
+    let top = -(grid.history_size() as i32);
+    let bottom = grid.screen_lines() as i32;
+    let mut pen = Pen::default();
+    let mut wrapped = false;
+    for l in top..bottom {
+        let row = &grid[Line(l)];
+        let wraps = row[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
+        // A wrapped row is written full width so the next row's first glyph wraps onto it
+        // (re-creating the soft wrap); any other row stops at its last non-blank or styled
+        // cell, the clear already painted the rest.
+        let end = if wraps {
+            cols
+        } else {
+            (0..cols)
+                .rev()
+                .find(|&c| {
+                    let cell = &row[Column(c)];
+                    cell.c != ' ' || Pen::of(cell) != Pen::default()
+                })
+                .map_or(0, |c| c + 1)
+        };
+        if wrapped && end == 0 {
+            // A blank continuation: one space still triggers the wrap that marks it so.
+            out.push(' ');
+        }
+        let mut first = wrapped;
+        for c in 0..end {
+            let cell = &row[Column(c)];
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            let want = Pen::of(cell);
+            if want != pen {
+                out.push_str(&want.sgr());
+                pen = want;
+            }
+            out.push(cell.c);
+            if let Some(zw) = cell.zerowidth() {
+                out.extend(zw.iter());
+            }
+            if first && pen != Pen::default() {
+                // The glyph that wrapped may have scrolled a new line in, and a scrolled-in
+                // line is filled with the pen's background. Erase the rest of it plain.
+                out.push_str("\x1b[0m\x1b[K");
+                pen = Pen::default();
+            }
+            first = false;
+        }
+        if pen != Pen::default() {
+            // Same reason: the line feed below scrolls with the pen's background.
+            out.push_str("\x1b[0m");
+            pen = Pen::default();
+        }
+        if !wraps && l + 1 < bottom {
+            out.push_str("\r\n");
+        }
+        wrapped = wraps;
+    }
+}
+
+/// Place the cursor where `grid` has it (screen-relative, 1-based).
+fn push_cursor(grid: &alacritty_terminal::grid::Grid<Cell>, out: &mut String) {
+    let cursor = grid.cursor.point;
+    out.push_str(&format!(
+        "\x1b[{};{}H",
+        cursor.line.0 + 1,
+        cursor.column.0 + 1
+    ));
 }
 
 /// The graphic rendition one cell is drawn with — what [`Screen::repaint`] diffs between
@@ -314,6 +369,44 @@ fn color_sgr(color: alacritty_terminal::vte::ansi::Color, bg: bool) -> Option<St
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl Screen {
+    /// Like [`Screen::render`], but history included — the whole scrollback, then the screen.
+    pub(crate) fn render_all(&self) -> String {
+        use alacritty_terminal::grid::Dimensions;
+        let grid = self.term.grid();
+        let mut lines: Vec<String> = Vec::new();
+        for l in -(grid.history_size() as i32)..self.rows as i32 {
+            let row = &grid[Line(l)];
+            let mut s: String = (0..self.cols)
+                .map(|c| &row[Column(c)])
+                .filter(|cell| !cell.flags.contains(Flags::WIDE_CHAR_SPACER))
+                .map(|cell| cell.c)
+                .collect();
+            while s.ends_with(' ') {
+                s.pop();
+            }
+            lines.push(s);
+        }
+        while matches!(lines.last(), Some(l) if l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    /// Whether row `line` (negative = history) is soft-wrapped onto the next.
+    pub(crate) fn wraps(&self, line: i32) -> bool {
+        self.term.grid()[Line(line)][Column(self.cols - 1)]
+            .flags
+            .contains(Flags::WRAPLINE)
+    }
+
+    /// The background of one cell.
+    pub(crate) fn bg(&self, line: i32, col: usize) -> alacritty_terminal::vte::ansi::Color {
+        self.term.grid()[Line(line)][Column(col)].bg
     }
 }
 
@@ -446,15 +539,91 @@ mod tests {
     }
 
     #[test]
-    fn repaint_restores_the_alternate_screen() {
+    fn repaint_restores_the_alternate_screen_over_the_primary() {
         let mut s = Screen::new(20, 4);
-        s.advance(b"shell\x1b[?1049h\x1b[Hvim");
+        s.advance(b"old\r\nmore\r\nlines\r\nhere\r\nshell $ \x1b[?1049h\x1b[Hvim\x1b[2;3H");
+        let alt_before = s.render();
         let mut copy = Screen::new(20, 4);
         copy.advance(s.repaint().as_bytes());
         assert_eq!(copy.render(), "vim");
-        // Leaving the alternate screen in the copy must not reveal the repaint's content.
+        // Reading the hidden primary must leave the mirror's alternate screen untouched.
+        assert_eq!(s.render(), alt_before);
+        assert_eq!(copy.repaint(), s.repaint(), "cursor and modes survive");
+        // Leaving the alternate screen shows the shell, history and cursor intact.
         copy.advance(b"\x1b[?1049l");
-        assert_ne!(copy.render(), "vim");
+        s.advance(b"\x1b[?1049l");
+        assert_eq!(copy.render(), "more\nlines\nhere\nshell $");
+        assert_eq!(copy.render_all(), s.render_all());
+        copy.advance(b"ls");
+        assert_eq!(copy.render(), "more\nlines\nhere\nshell $ ls");
+    }
+
+    #[test]
+    fn repaint_carries_the_scrollback() {
+        let mut s = Screen::new(20, 4);
+        for i in 0..50 {
+            s.advance(format!("\x1b[3{}mline {i}\x1b[0m\r\n", i % 8).as_bytes());
+        }
+        s.advance(b"$ ");
+        let mut copy = Screen::new(20, 4);
+        copy.advance(s.repaint().as_bytes());
+        assert!(copy.render_all().starts_with("line 0\nline 1\n"));
+        assert_eq!(copy.render_all(), s.render_all());
+        assert_eq!(copy.repaint(), s.repaint(), "colours and cursor survive");
+        // Feeding a seed to a grid that already holds one replaces it rather than stacking.
+        copy.advance(s.repaint().as_bytes());
+        assert_eq!(copy.render_all(), s.render_all());
+    }
+
+    #[test]
+    fn the_scrollback_is_capped() {
+        let mut s = Screen::new(20, 4);
+        for i in 0..SCROLLBACK_LINES + 100 {
+            s.advance(format!("{i}\r\n").as_bytes());
+        }
+        let all = s.render_all();
+        assert_eq!(all.lines().count(), SCROLLBACK_LINES + 3);
+        // 2100 numbered lines plus the blank one the cursor sits on; 4 on screen.
+        assert!(all.starts_with("97\n"), "oldest lines dropped");
+    }
+
+    #[test]
+    fn repaint_keeps_soft_wraps_including_a_wide_char_at_the_edge() {
+        let mut s = Screen::new(10, 4);
+        // A 15-char line wraps once; then 9 cells + a wide char that can't fit in the last
+        // column wraps leaving a spacer; then enough lines to push both into history.
+        s.advance(b"abcdefghijklmno\r\n123456789\xe5\xae\xbd!\r\nx\r\ny\r\nz\r\nw");
+        let mut copy = Screen::new(10, 4);
+        copy.advance(s.repaint().as_bytes());
+        assert_eq!(copy.render_all(), s.render_all());
+        assert_eq!(copy.repaint(), s.repaint());
+        for l in -4..4 {
+            assert_eq!(copy.wraps(l), s.wraps(l), "row {l}");
+        }
+        assert!(copy.wraps(-4) && copy.wraps(-2), "both wraps survive");
+        // Reflow at a wider width rejoins the wrapped lines.
+        copy.resize(20, 4);
+        assert!(copy
+            .render_all()
+            .starts_with("abcdefghijklmno\n123456789宽!"));
+    }
+
+    #[test]
+    fn a_coloured_row_does_not_bleed_into_the_lines_below() {
+        use alacritty_terminal::vte::ansi::{Color, NamedColor};
+        let mut s = Screen::new(10, 3);
+        // Coloured rows, a coloured row that wraps, then blank rows, enough to scroll.
+        s.advance(b"\x1b[41mred\x1b[0m\r\n\r\n\x1b[44mabcdefghijkl\x1b[0m\r\n\r\n\r\n\r\nend");
+        let mut copy = Screen::new(10, 3);
+        copy.advance(s.repaint().as_bytes());
+        assert_eq!(copy.render_all(), s.render_all());
+        let plain = Color::Named(NamedColor::Background);
+        for l in -5..3 {
+            for c in 0..10 {
+                assert_eq!(copy.bg(l, c), s.bg(l, c), "cell {l},{c}");
+            }
+        }
+        assert_eq!(copy.bg(-4, 0), plain, "the blank row under red stays plain");
     }
 
     #[test]

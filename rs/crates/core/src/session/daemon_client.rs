@@ -1242,11 +1242,11 @@ fn reader_loop(read_half: Conn, link: Link) {
             // (`session::attach`); the GUI has its own shadow and instead refuses to seed a
             // non-empty one, which covers the same overlap.
             Ok(Some(DaemonMsg::Replay { uid, data, cursor })) => {
-                // The one-shot replay seed from an `Attach`: prime the mirror from the
-                // daemon's retained buffer so a re-attaching view restores history. A `Data`
-                // chunk can race ahead of this frame (the daemon attaches before it snapshots
-                // the buffer), so the splice keeps whatever the mirror appended past
-                // `cursor` and puts the replay in front of it.
+                // The one-shot seed from an `Attach`: prime the shadow with the daemon
+                // mirror's repaint so a re-attaching view restores scrollback and screen. A
+                // `Data` chunk can race ahead of this frame (the daemon attaches before it
+                // snapshots the mirror), so the splice keeps whatever the shadow appended past
+                // `cursor` and puts the seed in front of it.
                 if !data.is_empty() {
                     let mut shadows = link.shadows.lock().unwrap();
                     let shadow = shadows.entry(uid).or_insert_with(Shadow::new);

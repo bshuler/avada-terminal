@@ -10,7 +10,7 @@
 //!
 //! ## The seed/stream seam
 //! `Attach` subscribes the connection to the session's broadcast *before* it snapshots the
-//! replay buffer — it has to, or a chunk flushed between the two would be lost. The cost is
+//! screen mirror for the seed — it has to, or a chunk flushed between the two would be lost. The cost is
 //! an **overlap**: whatever is flushed in that window, plus anything already queued on the
 //! bus, is inside the seed *and* arrives as a live `Data` event. The GUI can ignore the seed
 //! because it keeps its own mirror; this client is the terminal itself and has nothing to
@@ -252,9 +252,9 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    /// `Attach` to `uid` and return the attachment plus its **replay seed** — the daemon's
-    /// rolling buffer for that session, to be written to the terminal once before the live
-    /// stream starts. Empty when the session has produced nothing yet.
+    /// `Attach` to `uid` and return the attachment plus its **seed** — a repaint of the
+    /// daemon's screen mirror for that session (scrollback, then screen), to be written to
+    /// the terminal once before the live stream starts.
     #[tracing::instrument(level = "debug")]
     pub fn open(conn: Conn, uid: &str) -> io::Result<(Self, String)> {
         let read = transport::try_clone(&conn)?;
@@ -474,7 +474,7 @@ impl AttachWriter {
         )
     }
 
-    /// Ask the daemon to re-send this session's replay buffer, which the output pump renders
+    /// Ask the daemon to re-send this session's seed, which the output pump renders
     /// as a repaint (clear + re-seed). `Attach` is idempotent daemon-side — the uid is
     /// already in this connection's attached set — so this is a pure read.
     ///

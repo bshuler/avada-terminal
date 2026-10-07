@@ -333,13 +333,14 @@ pub enum DaemonMsg {
     /// Reply to [`ClientMsg::Create`]: the (possibly daemon-minted) uid of the new
     /// session, so the client can correlate its request.
     Created { uid: String },
-    /// Reply to [`ClientMsg::Attach`]: the session's replay buffer followed by an ANSI
-    /// repaint of its current screen, to seed a fresh grid exactly once. Empty string when
-    /// the session has produced nothing yet. The repaint is what makes the seed land on the
-    /// right screen when the replay's front edge falls inside a cursor-relative redraw.
+    /// Reply to [`ClientMsg::Attach`]: an ANSI repaint of the session's screen mirror —
+    /// scrollback, then the screen — to seed a fresh grid exactly once. Not the raw replay
+    /// buffer: its front edge can fall inside a cursor-relative redraw and garble the
+    /// result. The repaint opens by clearing screen and scrollback, so a client that feeds
+    /// it to a grid already holding a copy is replaced, not stacked.
     ///
     /// `cursor` is the session's monotonic UTF-16 output cursor **at the instant the
-    /// buffer was snapshotted** (`SessionRegistry::seed_with_cursor` reads the pair under
+    /// mirror was snapshotted** (`SessionRegistry::seed_with_cursor` reads the pair under
     /// the replay lock, so it can never be torn). It exists because `Attach` subscribes the
     /// connection to the session's broadcast *before* snapshotting: without it, a chunk
     /// flushed in that window — or one already queued on the bus — is both inside the seed
