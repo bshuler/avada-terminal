@@ -220,6 +220,26 @@ pub fn launcher(tool: &ToolDef, overrides: &BTreeMap<String, String>) -> String 
     }
 }
 
+/// [`launcher`] for code that has no `Settings` in hand — the control dispatcher's
+/// `restartPane`/`recoverPane` resume runs in core, which cannot see the app's settings.
+/// Reads the same `toolPaths` map the app persists to `native-settings.json`; an
+/// unreadable or missing file is no override, so this degrades to the bare bin.
+pub fn saved_launcher(tool: &ToolDef) -> String {
+    let path = crate::persistence::paths::user_data_dir().join("native-settings.json");
+    let json = std::fs::read_to_string(path).unwrap_or_default();
+    launcher(tool, &tool_paths_from_settings(&json))
+}
+
+/// The `toolPaths` map out of a `native-settings.json` body (camelCase, as the app's
+/// `Settings` serializes it); anything malformed reads as empty.
+pub fn tool_paths_from_settings(json: &str) -> BTreeMap<String, String> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|v| v.get("toolPaths").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
 /// Single-quote `s` for a POSIX shell, but only when it needs it — an unquoted word is
 /// what every existing caller and test expects to see for a plain binary name.
 fn shell_quote(s: &str) -> String {
@@ -235,6 +255,25 @@ fn shell_quote(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::tools::registry;
+
+    #[test]
+    fn the_saved_tool_paths_come_out_of_a_settings_body() {
+        let body = r#"{"keepAlive":true,"toolPaths":{"claude":"/u/.local/bin/claude_auto"}}"#;
+        let t = registry::by_id("claude").unwrap();
+        assert_eq!(
+            launcher(t, &tool_paths_from_settings(body)),
+            "/u/.local/bin/claude_auto"
+        );
+        // No file, junk, or no key: no override — never an error.
+        for body in [
+            "",
+            "not json",
+            r#"{"keepAlive":true}"#,
+            r#"{"toolPaths":7}"#,
+        ] {
+            assert!(tool_paths_from_settings(body).is_empty(), "{body}");
+        }
+    }
 
     #[test]
     fn the_launcher_is_the_bare_bin_until_the_user_overrides_it() {

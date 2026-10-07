@@ -541,6 +541,7 @@ fn exec(
                 &target,
                 cmd.get("env"),
                 cmd.get("prompt").and_then(Value::as_str),
+                &claude_launcher(),
             )?;
             Ok((None, true))
         }
@@ -915,6 +916,7 @@ fn recover_resume(
         &resume_target,
         cmd.get("env"),
         cmd.get("prompt").and_then(Value::as_str),
+        &claude_launcher(),
     )
 }
 
@@ -939,11 +941,21 @@ impl ResumeTarget {
     }
 }
 
+/// How the user launches Claude (their Preferences → Tools override, e.g. `claude_auto`),
+/// for the shell-pane resume line — typing a bare `claude` there silently drops whatever the
+/// wrapper adds, such as bypass-permissions mode.
+fn claude_launcher() -> String {
+    crate::tools::by_id("claude")
+        .map(crate::tools::detect::saved_launcher)
+        .unwrap_or_else(|| "claude".to_string())
+}
+
 /// Kill `pane`'s current session and respawn it resuming `target`'s conversation — the
 /// mechanics shared by `restartPane { resume: true }` (marker-sourced target) and
 /// `recoverPane { action: "resume" }` (marker-or-scan-fallback target), factored out so
 /// there's exactly one place that knows how to rebuild a resumed launch.
 #[tracing::instrument(level = "debug", skip_all)]
+#[allow(clippy::too_many_arguments)]
 fn respawn_resuming(
     model: &mut ReadModel,
     sessions: &SessionManager,
@@ -952,6 +964,7 @@ fn respawn_resuming(
     target: &ResumeTarget,
     env_field: Option<&Value>,
     prompt_field: Option<&str>,
+    launcher: &str,
 ) -> Result<(), String> {
     let old_uid = pane.session_uid.clone();
     let new_uid = new_id();
@@ -1033,11 +1046,11 @@ fn respawn_resuming(
         let prefix = &resume_cfg_prefix;
         let line = if crate::claude_panes::valid_resume_cwd(&target.cwd) {
             format!(
-                "cd '{}' && {prefix}claude --resume {}\r",
+                "cd '{}' && {prefix}{launcher} --resume {}\r",
                 target.cwd, target.session_id
             )
         } else {
-            format!("{prefix}claude --resume {}\r", target.session_id)
+            format!("{prefix}{launcher} --resume {}\r", target.session_id)
         };
         // The pane was respawned a moment ago, so a failure here is not a stale uid — it is
         // the backend being gone. Report it: the caller is being told its pane recovered.
@@ -2075,7 +2088,7 @@ mod tests {
             cwd: "/tmp".to_string(),
             config_dir: Some("/tmp/acct-cfg".to_string()),
         };
-        respawn_resuming(&mut m, &s, None, &pane, &target, None, None)
+        respawn_resuming(&mut m, &s, None, &pane, &target, None, None, "claude")
             .expect("respawn should succeed");
 
         // The pane was actually respawned — a no-op `Ok(())` body would leave the uid untouched.
