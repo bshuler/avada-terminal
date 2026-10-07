@@ -65,7 +65,7 @@ use crate::session::proto::{write_frame, ClientMsg, DaemonMsg, SpawnSpec, PROTO_
 // read frames directly stand up UnixStream fakes that don't compile on Windows.
 #[cfg(unix)]
 use crate::session::proto::read_frame;
-use crate::session::replay::Replay;
+use crate::session::replay::{Replay, REPLAY_BUFFER_SIZE};
 use crate::session::transport::{self, Conn, Endpoint};
 use crate::session_manager::{SessionEvent, SpawnOptions};
 
@@ -1309,6 +1309,11 @@ fn reader_loop(read_half: Conn, link: Link) {
 /// arrived live, racing ahead of the replay frame, and must survive: the result is the
 /// replay followed by exactly that tail. Output at or before `cursor` is covered by the
 /// replay and is replaced, so a chunk that was mirrored twice never renders twice.
+///
+/// The seed is a repaint of the daemon's mirror and can be longer than the usual rolling
+/// window (its scrollback alone runs to thousands of lines), so the merged buffer is sized
+/// to hold all of it plus a normal window of live output. Trimming its front would cut an
+/// escape sequence in half and print the rest of it as text on the oldest line.
 #[tracing::instrument(level = "debug", ret, skip(shadow))]
 fn splice_replay(shadow: &mut Shadow, cursor: u64, data: &str) {
     let ahead = shadow.output_bytes.saturating_sub(cursor) as usize;
@@ -1317,7 +1322,8 @@ fn splice_replay(shadow: &mut Shadow, cursor: u64, data: &str) {
     } else {
         utf16_tail(shadow.replay.get(), ahead)
     };
-    let mut merged = Replay::new();
+    let seed_units = data.encode_utf16().count();
+    let mut merged = Replay::with_capacity(seed_units + REPLAY_BUFFER_SIZE);
     merged.append(data);
     merged.append(tail);
     shadow.replay = merged;
@@ -2124,6 +2130,20 @@ mod tests {
         splice_replay(&mut sh, 3, "abc");
         assert_eq!(sh.replay.get(), "abc");
         assert_eq!(sh.output_bytes, 3);
+    }
+
+    #[test]
+    fn replay_splice_keeps_a_seed_longer_than_the_rolling_window_whole() {
+        let mut sh = Shadow::new();
+        let seed: String = (0..4000)
+            .map(|i| format!("\x1b[0;3{}mline {i:>60}\x1b[0m\r\n", i % 8))
+            .collect();
+        assert!(seed.len() > REPLAY_BUFFER_SIZE, "the case this guards");
+        splice_replay(&mut sh, 9, &seed);
+        assert_eq!(sh.replay.get(), seed, "not front-trimmed mid-escape");
+        // Live output still has a full window before anything is evicted.
+        sh.replay.append("x");
+        assert!(sh.replay.get().starts_with("\x1b[0;30mline"));
     }
 
     #[test]
