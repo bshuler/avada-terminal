@@ -4856,13 +4856,13 @@ impl App {
                     let st = w.state.borrow();
                     st.projects
                         .get(proj_idx as usize)
-                        .map(|p| (p.path.clone(), p.color.clone()))
+                        .map(|p| (p.path.clone(), p.color.clone(), st.claude_launcher()))
                 };
-                let Some((cwd, color)) = target else { return };
+                let Some((cwd, color, launcher)) = target else { return };
                 let opts = NewPaneOpts {
                     label: Some("claude".to_string()),
                     cwd: Some(cwd),
-                    command: Some(crate::sidebar::claude_resume_command(&sid)),
+                    command: Some(crate::sidebar::claude_resume_command(&launcher, &sid)),
                     args: None,
                     shell: None,
                     accent: Some(crate::state::parse_hex(&color)),

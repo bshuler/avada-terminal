@@ -1307,7 +1307,7 @@ fn resume_command(base: Option<&str>, session_id: &str) -> Option<String> {
 /// unrelated program that merely starts with those letters (`claudette`) is not a
 /// wrapper, and `declaude` was never a match to begin with.
 #[tracing::instrument(level = "debug", ret)]
-fn launches_claude_token(tok: &str) -> bool {
+pub fn launches_claude_token(tok: &str) -> bool {
     let tok = tok.trim_matches(['"', '\'']);
     let base = tok.rsplit(['/', '\\']).next().unwrap_or(tok);
     let base = base

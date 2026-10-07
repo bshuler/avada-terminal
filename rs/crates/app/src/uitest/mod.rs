@@ -372,7 +372,7 @@ fn the_left_panel_toggle_reaches_rust() {
 
         let found = by_label(
             &w,
-            "Show the left panel — workspace tree, library, sets, detached sessions",
+            "Show the left panel — workspace tree, library, sets, detached sessions. Drag to move the window",
         );
         assert_eq!(found.len(), 1, "a closed panel offers one Show button");
         click(&w, &found[0]);
@@ -396,11 +396,70 @@ fn the_app_menu_button_reaches_rust() {
 
         let found = by_label(
             &w,
-            "Application menu — new tab or pane, layouts, preferences",
+            "Application menu — new tab or pane, layouts, preferences. Drag to move the window",
         );
         assert_eq!(found.len(), 1, "one hamburger");
         click(&w, &found[0]);
         assert!(fired.get(), "the hamburger must reach open-app-menu");
+    });
+}
+
+/// The hamburger and the left-panel toggle double as window-drag handles: the tab strip
+/// leaves little bare bar to grab. A press that travels is a move, not a click — even when
+/// it ends back inside the button, where the release alone would otherwise count as one.
+#[test]
+fn dragging_the_titlebar_buttons_moves_the_window_instead_of_clicking() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one"], 0, None);
+        w.global::<crate::LeftPanelAdapter>().set_open(false);
+
+        let drags = std::rc::Rc::new(std::cell::Cell::new(0));
+        let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+        {
+            let drags = drags.clone();
+            w.on_start_drag(move || drags.set(drags.get() + 1));
+        }
+        {
+            let clicks = clicks.clone();
+            w.on_open_app_menu(move |_x, _y| clicks.set(clicks.get() + 1));
+        }
+        {
+            let clicks = clicks.clone();
+            w.global::<crate::LeftPanelAdapter>()
+                .on_toggle(move || clicks.set(clicks.get() + 1));
+        }
+
+        for label in [
+            "Application menu — new tab or pane, layouts, preferences. Drag to move the window",
+            "Show the left panel — workspace tree, library, sets, detached sessions. Drag to move the window",
+        ] {
+            let found = by_label(&w, label);
+            assert_eq!(found.len(), 1, "one {label}");
+            let pos = found[0].absolute_position();
+            let size = found[0].size();
+            let at = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+            // 8px: past the slop, still inside the 28-30px button.
+            let to = LogicalPosition::new(at.x + 8.0, at.y);
+            let win = w.window();
+            win.dispatch_event(WindowEvent::PointerMoved { position: at });
+            win.dispatch_event(WindowEvent::PointerPressed {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+            win.dispatch_event(WindowEvent::PointerMoved { position: to });
+            win.dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(to.x + 1.0, to.y) });
+            win.dispatch_event(WindowEvent::PointerReleased {
+                position: to,
+                button: PointerEventButton::Left,
+            });
+        }
+        assert_eq!(drags.get(), 2, "each button starts exactly one window move");
+        assert_eq!(clicks.get(), 0, "a drag must not also open the menu or toggle the panel");
+
+        // And a press that stays put is still a click, after a drag on the same button.
+        click(&w, &by_label(&w, "Application menu — new tab or pane, layouts, preferences. Drag to move the window")[0]);
+        assert_eq!(clicks.get(), 1, "a still press is a click again");
     });
 }
 

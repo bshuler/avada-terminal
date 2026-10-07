@@ -305,6 +305,9 @@ export component TopBar inherits Rectangle {
     callback toggle-zoom();
     callback toggle-fullscreen();
     callback start-drag();
+    // How far a press on the hamburger or left-panel button must travel before it stops
+    // being a click and becomes a window move.
+    property <length> drag-slop: 4px;
     callback min-window();
     callback max-window();
     callback close-window();
@@ -350,11 +353,26 @@ export component TopBar inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     ink: mta.has-hover ? Theme.text : Theme.subtext;
                 }
+                // Also a drag handle: the bar has little bare strip once tabs fill it, and
+                // these two buttons can't be torn off like tabs, so press-and-move here moves
+                // the window. A press that never travels stays an ordinary click.
                 mta := TipArea {
-                    tip: "Application menu — new tab or pane, layouts, preferences";
+                    property <bool> dragged;
+                    tip: "Application menu — new tab or pane, layouts, preferences. Drag to move the window";
+                    pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { self.dragged = false; } }
+                    moved => {
+                        if (self.pressed && !self.dragged
+                            && (abs(self.mouse-x - self.pressed-x) > root.drag-slop
+                                || abs(self.mouse-y - self.pressed-y) > root.drag-slop)) {
+                            self.dragged = true;
+                            root.start-drag();
+                        }
+                    }
                     clicked => {
-                        root.open-app-menu(menu-btn.absolute-position.x,
-                                           menu-btn.absolute-position.y + menu-btn.height);
+                        if (!self.dragged) {
+                            root.open-app-menu(menu-btn.absolute-position.x,
+                                               menu-btn.absolute-position.y + menu-btn.height);
+                        }
                     }
                 }
             }
@@ -376,11 +394,22 @@ export component TopBar inherits Rectangle {
                     on: root.left-panel-open;
                     ink: (root.left-panel-open || pta.has-hover) ? Theme.text : Theme.subtext;
                 }
+                // A drag handle too — see the hamburger above.
                 pta := TipArea {
+                    property <bool> dragged;
                     tip: root.left-panel-open
-                        ? "Hide the left panel — workspace tree, library, sets, detached sessions"
-                        : "Show the left panel — workspace tree, library, sets, detached sessions";
-                    clicked => { root.toggle-left-panel(); }
+                        ? "Hide the left panel — workspace tree, library, sets, detached sessions. Drag to move the window"
+                        : "Show the left panel — workspace tree, library, sets, detached sessions. Drag to move the window";
+                    pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { self.dragged = false; } }
+                    moved => {
+                        if (self.pressed && !self.dragged
+                            && (abs(self.mouse-x - self.pressed-x) > root.drag-slop
+                                || abs(self.mouse-y - self.pressed-y) > root.drag-slop)) {
+                            self.dragged = true;
+                            root.start-drag();
+                        }
+                    }
+                    clicked => { if (!self.dragged) { root.toggle-left-panel(); } }
                 }
             }
         }

@@ -6982,6 +6982,15 @@ impl State {
         out
     }
 
+    /// How Claude is launched in this install: the user's Preferences → Tools override
+    /// when set (a wrapper such as `claude_auto`), else the bare `claude`. Every path that
+    /// relaunches or resumes a Claude conversation types this, never a literal `claude`.
+    pub(crate) fn claude_launcher(&self) -> String {
+        avada_core::tools::by_id("claude")
+            .map(|t| avada_core::tools::detect::launcher(t, &self.settings.tool_paths))
+            .unwrap_or_else(|| "claude".to_string())
+    }
+
     /// Restart-loop respawn of the monitored tool pane `(ti, pi)`: a fresh shell in the
     /// same directory with the same env overrides, and the tool typed back into its
     /// conversation at the shell's first output. The conversation comes from `marker`
@@ -8451,15 +8460,17 @@ impl State {
                 .split_whitespace()
                 .next()
                 .unwrap_or("");
-            let head = head.rsplit(['/', '\\']).next().unwrap_or(head);
             if spawn_command.is_none() {
+                // The user's Preferences → Tools override (a `claude_auto` wrapper that adds
+                // `--dangerously-skip-permissions`, say) — a bare `claude` here silently drops
+                // whatever the wrapper exists to supply on every cold restore.
                 startup = Some(resume_startup_line(
                     resume_cwd.as_deref(),
                     &cfg_prefix,
-                    "claude",
+                    &self.claude_launcher(),
                     &format!("--resume {id}"),
                 ));
-            } else if head == "claude" || head == "claude.exe" {
+            } else if avada_core::control::dispatch::launches_claude_token(head) {
                 if resume_cwd.is_some() {
                     spawn_cwd = resume_cwd.clone();
                 }

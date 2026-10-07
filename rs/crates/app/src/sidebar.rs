@@ -516,8 +516,8 @@ pub fn history_seq_changed(seq: i32) -> bool {
 /// Session ids are UUIDs (hex + `-`), so no shell-quoting is required. The caller spawns this
 /// via the existing New-Pane path (`State::add_pane_opts` with `command` + the project `cwd`).
 #[tracing::instrument(level = "debug", ret)]
-pub fn claude_resume_command(session_id: &str) -> String {
-    format!("claude --resume {session_id}")
+pub fn claude_resume_command(launcher: &str, session_id: &str) -> String {
+    format!("{launcher} --resume {session_id}")
 }
 
 #[cfg(test)]
@@ -641,8 +641,13 @@ prunable
     #[test]
     fn resume_command_is_claude_resume() {
         assert_eq!(
-            claude_resume_command("0517332c-4987-439d-b154-6ec67856fdb3"),
+            claude_resume_command("claude", "0517332c-4987-439d-b154-6ec67856fdb3"),
             "claude --resume 0517332c-4987-439d-b154-6ec67856fdb3"
+        );
+        // A wrapper override is what gets launched, so its flags survive the resume.
+        assert_eq!(
+            claude_resume_command("/u/.local/bin/claude_auto", "abc"),
+            "/u/.local/bin/claude_auto --resume abc"
         );
     }
 

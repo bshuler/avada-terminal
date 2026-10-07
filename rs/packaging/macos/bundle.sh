@@ -60,9 +60,9 @@ echo "==> building rs/crates/app (release)"
 cargo build --release --manifest-path "$ROOT/rs/crates/app/Cargo.toml" -j 4
 
 # The app crate is NOT a workspace member: depending on local config the release
-# binary lands either in the crate-local target dir or a shared rs/target.
+# binary lands in $CARGO_TARGET_DIR when set, else the crate-local target dir or a shared rs/target.
 BIN=""
-for c in "$ROOT/rs/crates/app/target/release/avada" "$ROOT/rs/target/release/avada" "$ROOT/target/release/avada"; do
+for c in ${CARGO_TARGET_DIR:+"$CARGO_TARGET_DIR/release/avada"} "$ROOT/rs/crates/app/target/release/avada" "$ROOT/rs/target/release/avada" "$ROOT/target/release/avada"; do
     if [[ -x "$c" ]]; then BIN="$c"; break; fi
 done
 if [[ -z "$BIN" ]]; then
