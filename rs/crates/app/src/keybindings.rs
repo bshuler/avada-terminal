@@ -111,6 +111,12 @@ fn is_printable(c: char) -> bool {
     u >= 0x20 && u != 0x7f && !(0xe000..=0xf8ff).contains(&u)
 }
 
+/// Pane focus sits on Cmd+Option+arrows on a Mac (iTerm2's split-pane chord), which leaves bare
+/// Option+arrows to move by word the way every Mac text field does (`keys::mac_line_edit_key`).
+/// Elsewhere it stays on Alt+arrows: Ctrl+Alt+arrows belongs to the desktop (GNOME switches
+/// workspaces on it), and word motion there is Ctrl+arrows, which this doesn't touch.
+const PANE_FOCUS_CMD: bool = cfg!(target_os = "macos");
+
 /// Display label for the chord's primary modifier. Slint remaps modifiers on macOS
 /// (control → Command, meta → Control — i_slint_core::input), so the `ctrl` chord slot
 /// IS the Command key there: show it as "Cmd" so the Preferences list matches what the
@@ -309,7 +315,7 @@ pub fn default_bindings() -> Vec<Binding> {
         // Panes
         b(
             "pane.focusLeft",
-            false,
+            PANE_FOCUS_CMD,
             true,
             false,
             Left,
@@ -319,7 +325,7 @@ pub fn default_bindings() -> Vec<Binding> {
         ),
         b(
             "pane.focusRight",
-            false,
+            PANE_FOCUS_CMD,
             true,
             false,
             Right,
@@ -329,7 +335,7 @@ pub fn default_bindings() -> Vec<Binding> {
         ),
         b(
             "pane.focusUp",
-            false,
+            PANE_FOCUS_CMD,
             true,
             false,
             Up,
@@ -339,7 +345,7 @@ pub fn default_bindings() -> Vec<Binding> {
         ),
         b(
             "pane.focusDown",
-            false,
+            PANE_FOCUS_CMD,
             true,
             false,
             Down,
@@ -767,9 +773,13 @@ mod tests {
     fn alt_arrow_focus_resolves() {
         let km = empty_keymap();
         assert!(matches!(
-            km.match_chord(false, true, false, KeyTok::Left),
+            km.match_chord(PANE_FOCUS_CMD, true, false, KeyTok::Left),
             Some(Command::FocusDir(Direction::Left))
         ));
+        // On a Mac bare Option+arrow is word motion for the shell, not an app chord.
+        if PANE_FOCUS_CMD {
+            assert!(km.match_chord(false, true, false, KeyTok::Left).is_none());
+        }
     }
 
     #[test]

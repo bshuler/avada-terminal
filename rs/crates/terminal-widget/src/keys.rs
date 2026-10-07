@@ -83,6 +83,12 @@ pub fn encode_key(text: &str, ctrl: bool, alt: bool, shift: bool) -> Option<Vec<
         return Some(csi_tilde(6));
     }
     if is(Key::Delete) {
+        // Alt+Delete (fn-Option-Delete on a Mac) is forward-kill-word, readline's `ESC d` — the
+        // byte iTerm2 sends. The xterm-modified `ESC[3;3~` it would otherwise get is bound by
+        // neither zsh nor bash, so the chord would do nothing.
+        if alt && !ctrl && !shift {
+            return Some(b"\x1bd".to_vec());
+        }
         return Some(csi_tilde(3));
     }
     if is(Key::Return) {
@@ -99,8 +105,10 @@ pub fn encode_key(text: &str, ctrl: bool, alt: bool, shift: bool) -> Option<Vec<
         });
     }
     if is(Key::Backspace) {
-        // Terminals conventionally map Backspace to DEL (0x7f).
-        return Some(vec![0x7f]);
+        // Terminals conventionally map Backspace to DEL (0x7f). Alt+Backspace (Option-Delete on
+        // a Mac) is meta-prefixed like every other Alt key — `ESC DEL`, readline's
+        // backward-kill-word — instead of falling back to a plain one-character delete.
+        return Some(if alt { vec![0x1b, 0x7f] } else { vec![0x7f] });
     }
     if is(Key::Tab) {
         // Shift+Tab is the backtab sequence (CSI Z) — TUIs bind it (e.g. Claude Code's
@@ -149,6 +157,51 @@ pub fn encode_key(text: &str, ctrl: bool, alt: bool, shift: bool) -> Option<Vec<
 
     // ---- plain printable text (already shifted/cased by Slint) ----
     Some(text.as_bytes().to_vec())
+}
+
+/// The macOS line-editing chords, translated to the readline bytes iTerm2 sends — the gestures
+/// a Mac text field answers to, so a prompt answers to them too:
+///
+/// * Cmd+Backspace / Cmd+Delete delete to the start / end of the line (`Ctrl-U` / `Ctrl-K`);
+/// * Cmd+Left / Cmd+Right jump to the start / end of the line (`Ctrl-A` / `Ctrl-E`);
+/// * Option+Left / Option+Right move a word back / forward (`ESC b` / `ESC f`) — not the
+///   xterm `ESC[1;3D` [`encode_key`] would send, which zsh and bash leave unbound.
+///
+/// (Option+Backspace / Option+Delete are word deletes, but they need no Mac special case: the
+/// ESC prefix [`encode_key`] gives every Alt key already makes them so.) `cmd` is the Command
+/// key — on macOS Slint reports it as `control`, which [`encode_key`] never sees (it gets the
+/// physical Control), hence a separate entry point. Only a lone Cmd or a lone Option counts;
+/// any other combination is left for app bindings and returns `None`, as does any other key.
+#[tracing::instrument(level = "debug", ret)]
+pub fn mac_line_edit_key(text: &str, cmd: bool, alt: bool, shift: bool) -> Option<Vec<u8>> {
+    if shift || cmd == alt {
+        return None;
+    }
+    let is = |k: Key| -> bool {
+        let s: slint::SharedString = k.into();
+        text == s.as_str()
+    };
+    if alt {
+        return if is(Key::LeftArrow) {
+            Some(b"\x1bb".to_vec())
+        } else if is(Key::RightArrow) {
+            Some(b"\x1bf".to_vec())
+        } else {
+            None
+        };
+    }
+    let byte = if is(Key::Backspace) {
+        0x15
+    } else if is(Key::Delete) {
+        0x0b
+    } else if is(Key::LeftArrow) {
+        0x01
+    } else if is(Key::RightArrow) {
+        0x05
+    } else {
+        return None;
+    };
+    Some(vec![byte])
 }
 
 /// Classify a key as the **scrollback** gesture (Shift+PageUp / Shift+PageDown), which scrolls

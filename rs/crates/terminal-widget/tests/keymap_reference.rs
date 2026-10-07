@@ -115,3 +115,46 @@ fn empty_text_sends_nothing() {
     // A bare modifier press (no text) must not emit bytes.
     assert_eq!(encode_key("", false, false, false), None);
 }
+
+#[test]
+fn option_delete_kills_words() {
+    // Option-Delete is backward-kill-word (ESC DEL); fn-Option-Delete is forward (ESC d) —
+    // the bytes iTerm2 sends, which zsh, bash and Claude Code all bind.
+    assert_eq!(
+        encode_key(&special(Key::Backspace), false, true, false),
+        Some(vec![0x1b, 0x7f])
+    );
+    assert_eq!(
+        encode_key(&special(Key::Delete), false, true, false),
+        Some(b"\x1bd".to_vec())
+    );
+}
+
+#[test]
+fn mac_chords_edit_the_line() {
+    use avada_terminal_widget::keys::mac_line_edit_key;
+    let cmd = |k: Key| mac_line_edit_key(&special(k), true, false, false);
+    assert_eq!(cmd(Key::Backspace), Some(vec![0x15])); // Ctrl-U: delete to line start
+    assert_eq!(cmd(Key::Delete), Some(vec![0x0b])); // Ctrl-K: delete to line end
+    assert_eq!(cmd(Key::LeftArrow), Some(vec![0x01])); // Ctrl-A: line start
+    assert_eq!(cmd(Key::RightArrow), Some(vec![0x05])); // Ctrl-E: line end
+    let opt = |k: Key| mac_line_edit_key(&special(k), false, true, false);
+    assert_eq!(opt(Key::LeftArrow), Some(b"\x1bb".to_vec())); // word back
+    assert_eq!(opt(Key::RightArrow), Some(b"\x1bf".to_vec())); // word forward
+                                                               // Option+Backspace is encode_key's job (ESC DEL), not a Mac special case.
+    assert_eq!(opt(Key::Backspace), None);
+    // No modifier, both, or Shift added: not a line edit.
+    assert_eq!(
+        mac_line_edit_key(&special(Key::Backspace), false, false, false),
+        None
+    );
+    assert_eq!(
+        mac_line_edit_key(&special(Key::LeftArrow), true, true, false),
+        None
+    );
+    assert_eq!(
+        mac_line_edit_key(&special(Key::Backspace), true, false, true),
+        None
+    );
+    assert_eq!(mac_line_edit_key("a", true, false, false), None);
+}

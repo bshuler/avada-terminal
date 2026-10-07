@@ -2822,7 +2822,14 @@ impl App {
         // `pty_ctrl`, not `msg.control`: on macOS the two are different keys, and the pty wants
         // the physical Control (see `crate::pty_ctrl`).
         let ctrl = crate::pty_ctrl(&msg);
-        if let Some(bytes) = encode_key(&msg.text, ctrl, msg.alt, msg.shift) {
+        // On a Mac, Command+Backspace/Delete/arrows and Option+arrows edit the line the way they
+        // do in any text field. Checked after the keymap above, so a chord the user bound wins.
+        let line_edit = if cfg!(target_os = "macos") {
+            keys::mac_line_edit_key(&msg.text, msg.control, msg.alt, msg.shift)
+        } else {
+            None
+        };
+        if let Some(bytes) = line_edit.or_else(|| encode_key(&msg.text, ctrl, msg.alt, msg.shift)) {
             // Typing clears the selection (#33, standard terminal behavior): a printable
             // character or Enter/Backspace/Delete drops the highlight of ANY active
             // drag-selection — scrollback, command output, or the prompt line — while the key
@@ -2853,6 +2860,7 @@ impl App {
                     // caret). Anywhere else (scrollback, multi-row, alt-screen) the highlight
                     // just clears and the key goes through.
                     let line_delete = !ctrl
+                        && !msg.control
                         && !msg.alt
                         && (crate::is_key(&msg.text, Key::Backspace)
                             || crate::is_key(&msg.text, Key::Delete));

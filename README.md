@@ -325,12 +325,24 @@ means Ctrl on Windows/Linux and Cmd on macOS.
 | `Ctrl+T` | New tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+T` | Reopen closed tab |
-| `Alt+←/→/↑/↓` | Move focus to the adjacent pane |
+| `Alt+←/→/↑/↓` (macOS: `Cmd+Option+←/→/↑/↓`) | Move focus to the adjacent pane |
 | `Alt+1`…`Alt+9` | Focus pane by index (fixed) |
 | `Alt+Z` | Maximize / restore the focused pane (within the window) |
 | `F11` | Fullscreen the focused pane (hold `Esc` to exit) |
 | `Ctrl+F` | Search within the focused pane |
 | `Ctrl +` / `Ctrl -` / `Ctrl 0` | Font zoom in / out / reset (also `Ctrl`+mouse‑wheel) |
+
+### Line editing (macOS)
+
+Inside a pane, the Mac text-field gestures edit the shell's line. They send the same bytes as
+iTerm2, so zsh, bash and Claude Code all understand them. A chord bound in Preferences wins.
+
+| Shortcut | Action | Sends |
+| --- | --- | --- |
+| `Option+Delete` / `fn+Option+Delete` | Delete the previous / next word | `ESC DEL` / `ESC d` |
+| `Cmd+Delete` / `fn+Cmd+Delete` | Delete to the start / end of the line | `Ctrl-U` / `Ctrl-K` |
+| `Option+←` / `Option+→` | Move back / forward a word | `ESC b` / `ESC f` |
+| `Cmd+←` / `Cmd+→` | Move to the start / end of the line | `Ctrl-A` / `Ctrl-E` |
 
 > [!NOTE]
 > The palette uses `Ctrl/Cmd+Shift+P` rather than `Ctrl+K` on purpose — `Ctrl+K` is the shell's
