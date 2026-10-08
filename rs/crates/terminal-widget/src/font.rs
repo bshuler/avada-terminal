@@ -19,6 +19,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::SystemTime;
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Angle, Format, Transform};
@@ -59,8 +61,66 @@ pub struct GlyphKey {
 /// pre-fallback renderer) and `<= 1.0` for a fallback whose natural line-height exceeds the
 /// primary cell, so its glyphs shrink into the cell box and never change the row height.
 struct FontFace {
-    data: Vec<u8>,
+    data: FaceBytes,
     fit: f32,
+}
+
+/// A face's raw font file, shared rather than owned. Every pane owns a [`Font`] (per-pane
+/// zoom), and each `Font` carries the whole fallback chain — on macOS that includes
+/// `Apple Color Emoji.ttc`, a 183 MB file. When each `Font` read its own copy, 42 panes
+/// held 7.9 GB of identical font bytes (2026-10-08: an 8.4 GB app, swap exhausted,
+/// WindowServer watchdog-killed). The bytes are immutable, so one copy per process serves
+/// every `Font`: embedded faces borrow the binary's static slice, file faces go through
+/// [`read_shared`].
+#[derive(Clone)]
+enum FaceBytes {
+    Static(&'static [u8]),
+    Shared(Arc<[u8]>),
+}
+
+/// Length only: `#[instrument(ret)]` on [`FallbackSpec::load`] would otherwise log the
+/// whole file — 183 MB of emoji font — at debug level.
+impl std::fmt::Debug for FaceBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FaceBytes({} bytes)", self.len())
+    }
+}
+
+impl std::ops::Deref for FaceBytes {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        match self {
+            FaceBytes::Static(b) => b,
+            FaceBytes::Shared(b) => b,
+        }
+    }
+}
+
+/// Font files already read by this process, keyed by path and stamped with the file's
+/// length + mtime so a font reinstalled on disk is re-read rather than served stale.
+/// Entries are never evicted: a process touches a handful of font files, and a user cycling
+/// through families holds at most a few MB of primaries beside the one shared fallback set.
+#[allow(clippy::type_complexity)]
+static FILE_CACHE: LazyLock<Mutex<HashMap<String, (u64, Option<SystemTime>, Arc<[u8]>)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Read a font file once per process; later calls for the same unchanged file share the
+/// first read's bytes. Errors are not cached — `load_font_at` probes candidates that may
+/// legitimately be missing, and each probe should see the filesystem as it is now.
+#[tracing::instrument(level = "debug", err)]
+fn read_shared(path: &str) -> std::io::Result<FaceBytes> {
+    let meta = std::fs::metadata(path)?;
+    let stamp = (meta.len(), meta.modified().ok());
+    let mut cache = FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((len, mtime, bytes)) = cache.get(path) {
+        if (*len, *mtime) == stamp {
+            return Ok(FaceBytes::Shared(Arc::clone(bytes)));
+        }
+    }
+    let bytes: Arc<[u8]> = std::fs::read(path)?.into();
+    cache.insert(path.to_string(), (stamp.0, stamp.1, Arc::clone(&bytes)));
+    Ok(FaceBytes::Shared(bytes))
 }
 
 impl FontFace {
@@ -99,7 +159,7 @@ pub struct Font {
 impl Font {
     #[tracing::instrument(level = "debug")]
     pub fn from_path(path: &str, px: f32) -> anyhow::Result<Self> {
-        let data = std::fs::read(path)?;
+        let data = read_shared(path)?;
         let font = FontRef::from_index(&data, 0)
             .ok_or_else(|| anyhow::anyhow!("not a valid font: {path}"))?;
 
@@ -262,16 +322,16 @@ enum FallbackSpec {
 
 impl FallbackSpec {
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    fn load(&self) -> Option<Vec<u8>> {
+    fn load(&self) -> Option<FaceBytes> {
         match self {
-            FallbackSpec::Embedded(bytes) => Some(bytes.to_vec()),
+            FallbackSpec::Embedded(bytes) => Some(FaceBytes::Static(bytes)),
             FallbackSpec::WindowsFont(name) => {
                 let dir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
                 let path = std::path::Path::new(&dir).join("Fonts").join(name);
-                std::fs::read(path).ok()
+                read_shared(&path.to_string_lossy()).ok()
             }
-            FallbackSpec::SystemPath(path) => std::fs::read(path).ok(),
-            FallbackSpec::Family(family) => std::fs::read(fontconfig_family_file(family)?).ok(),
+            FallbackSpec::SystemPath(path) => read_shared(path).ok(),
+            FallbackSpec::Family(family) => read_shared(&fontconfig_family_file(family)?).ok(),
         }
     }
 }
@@ -437,6 +497,41 @@ mod tests {
         std::fs::write(&tmp, JETBRAINS_MONO).unwrap();
         std::fs::rename(&tmp, &p).unwrap();
         Font::from_path(p.to_str().unwrap(), px).unwrap()
+    }
+
+    /// Many `Font`s (one per pane) must share one copy of each face's bytes — copying the
+    /// 183 MB Apple Color Emoji per pane is what drove the app to 8 GB. Same file → same
+    /// allocation; embedded faces → the binary's own static bytes, no allocation at all.
+    #[test]
+    fn every_font_shares_one_copy_of_each_face() {
+        // `font_at` rewrites its file (a new mtime, so a fresh read); load the same
+        // unchanged file twice instead, as two panes do.
+        let path = std::env::temp_dir().join(format!("hp-font-share-{}.ttf", std::process::id()));
+        std::fs::write(&path, JETBRAINS_MONO).unwrap();
+        let a = Font::from_path(path.to_str().unwrap(), 14.0).unwrap();
+        let b = Font::from_path(path.to_str().unwrap(), 20.0).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(a.faces.len(), b.faces.len());
+        for (fa, fb) in a.faces.iter().zip(&b.faces) {
+            assert_eq!(fa.data.as_ptr(), fb.data.as_ptr(), "a face was copied per Font");
+        }
+        assert!(matches!(a.faces[1].data, FaceBytes::Static(_)));
+        assert_eq!(a.faces[1].data.as_ptr(), JETBRAINS_MONO.as_ptr());
+    }
+
+    #[test]
+    fn a_rewritten_font_file_is_read_again() {
+        let dir = std::env::temp_dir().join(format!("hp-font-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("f.ttf");
+        let p = p.to_str().unwrap();
+        std::fs::write(p, JETBRAINS_MONO).unwrap();
+        let first = read_shared(p).unwrap();
+        assert_eq!(first.as_ptr(), read_shared(p).unwrap().as_ptr());
+        std::fs::write(p, SYMBOLS_NERD).unwrap();
+        let second = read_shared(p).unwrap();
+        assert_eq!(&*second, SYMBOLS_NERD, "a changed file was served from the cache");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
