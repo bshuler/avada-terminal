@@ -84,6 +84,8 @@ pub struct Ui {
     pub ctx_swatches: Rc<VecModel<Color>>,
     pub ctx_tabs: Rc<VecModel<CtxTab>>,
     pub ctx_openwith: Rc<VecModel<SharedString>>,
+    /// The application menu's "Windows & tabs" rows, in command order.
+    pub ctx_goto: Rc<VecModel<MenuEntry>>,
     pub ctx_layouts: Rc<VecModel<LayoutOption>>,
     // ---- sidebar worktree subtrees ----
     /// Per-project worktree models, keyed by repo path and reused across ticks so each
@@ -152,6 +154,7 @@ impl Ui {
             ctx_swatches: Rc::new(VecModel::default()),
             ctx_tabs: Rc::new(VecModel::default()),
             ctx_openwith: Rc::new(VecModel::default()),
+            ctx_goto: Rc::new(VecModel::default()),
             ctx_layouts: Rc::new(VecModel::default()),
             wt_models: RefCell::new(HashMap::new()),
             claude_models: RefCell::new(HashMap::new()),
@@ -198,6 +201,7 @@ impl Ui {
         app.set_ctx_swatches(ModelRc::from(self.ctx_swatches.clone()));
         app.set_ctx_tabs(ModelRc::from(self.ctx_tabs.clone()));
         app.set_ctx_openwith(ModelRc::from(self.ctx_openwith.clone()));
+        app.set_ctx_goto(ModelRc::from(self.ctx_goto.clone()));
         app.set_ctx_layouts(ModelRc::from(self.ctx_layouts.clone()));
         // The left panel is wired through a global (like RemindersAdapter) rather than new
         // AppWindow properties, so the whole feature stays self-contained.
@@ -1043,6 +1047,7 @@ pub fn resync(
 
     // scalars
     app.set_editing_tab(state.editing_tab);
+    app.set_active_tab(state.active as i32);
     app.set_zoomed(state.active_tab().zoomed.is_some());
     app.set_fullscreen(state.fullscreen);
     app.set_esc_holding(state.esc_holding);
@@ -1353,14 +1358,14 @@ pub fn resync(
         .collect();
     // The non-rebindable "Focus pane by number → Alt 1…9" documentation row, appended right
     // after the last Panes binding (mirrors Electron's static row under the Panes group).
-    if let Some(pos) = keybindings.iter().rposition(|k| k.category == "Panes") {
+    if let Some(pos) = keybindings.iter().rposition(|k| k.category == "Panels") {
         keybindings.insert(
             pos + 1,
             KeybindingItem {
                 id: SharedString::new(),
-                label: "Focus pane by number".into(),
+                label: "Focus panel by number".into(),
                 parts: ModelRc::from(Rc::new(VecModel::<SharedString>::default())),
-                category: "Panes".into(),
+                category: "Panels".into(),
                 group_first: false,
                 overridden: false,
                 capturing: false,
@@ -1665,16 +1670,7 @@ pub fn resync(
         let entries: Vec<MenuEntry> = c
             .entries
             .iter()
-            .map(|e| MenuEntry {
-                label: e.label.clone(),
-                shortcut: e.shortcut.clone(),
-                icon: e.icon,
-                kind: e.kind,
-                checked: e.checked,
-                show_check: e.show_check,
-                disabled: e.disabled,
-                danger: e.danger,
-            })
+            .map(menu_entry)
             .collect();
         sync_model(&ui.ctx_entries, entries);
 
@@ -1725,6 +1721,7 @@ pub fn resync(
                 sync_model(&ui.ctx_tabs, tabs);
                 sync_model(&ui.ctx_layouts, Vec::new());
                 sync_model(&ui.ctx_openwith, Vec::new());
+                sync_model(&ui.ctx_goto, Vec::new());
             }
             CtxKind::Tab => {
                 // Layout submenu reflects the TARGET tab's layout (checkmark on current).
@@ -1746,6 +1743,7 @@ pub fn resync(
                 sync_model(&ui.ctx_swatches, Vec::new());
                 sync_model(&ui.ctx_tabs, Vec::new());
                 sync_model(&ui.ctx_openwith, Vec::new());
+                sync_model(&ui.ctx_goto, Vec::new());
             }
             CtxKind::App => {
                 // The application menu's Layout submenu: Automatic + the 5 presets, radio ✓ on
@@ -1771,6 +1769,7 @@ pub fn resync(
                 sync_model(&ui.ctx_swatches, Vec::new());
                 sync_model(&ui.ctx_tabs, Vec::new());
                 sync_model(&ui.ctx_openwith, Vec::new());
+                sync_model(&ui.ctx_goto, c.goto.iter().map(menu_entry).collect());
             }
             // Every visible row of the file menu carries its own command, and its one
             // submenu — "Open With" — is a plain list of labels rather than a radio set or
@@ -1780,8 +1779,22 @@ pub fn resync(
                 sync_model(&ui.ctx_swatches, Vec::new());
                 sync_model(&ui.ctx_tabs, Vec::new());
                 sync_model(&ui.ctx_openwith, c.openwith.clone());
+                sync_model(&ui.ctx_goto, Vec::new());
             }
         }
+    }
+}
+
+fn menu_entry(e: &crate::contextmenu::CtxEntry) -> MenuEntry {
+    MenuEntry {
+        label: e.label.clone(),
+        shortcut: e.shortcut.clone(),
+        icon: e.icon,
+        kind: e.kind,
+        checked: e.checked,
+        show_check: e.show_check,
+        disabled: e.disabled,
+        danger: e.danger,
     }
 }
 
@@ -2139,7 +2152,7 @@ pub fn pump(
         let t = state.active_tab();
         app.set_hud(
             format!(
-                "{} · {} panes · {:.0} fps",
+                "{} · {} panels · {:.0} fps",
                 theme::layout_name(t.layout),
                 t.panes.len(),
                 fps

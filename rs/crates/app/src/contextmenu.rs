@@ -39,6 +39,7 @@ pub mod sub {
     pub const LAYOUT: i32 = 4;
     pub const REMINDER: i32 = 5;
     pub const OPEN_WITH: i32 = 6;
+    pub const GOTO: i32 = 7;
 }
 
 /// `pick(int)` rows at/above this base are not row indices: the Reminder flyout's Custom
@@ -54,7 +55,7 @@ pub struct CtxEntry {
     pub shortcut: SharedString,
     /// Drawn-icon kind (see [`crate::theme::menu_icon`]); `0` = no icon.
     pub icon: i32,
-    /// `-1` separator · `0` item · `2`/`3`/`4`/`5`/`6` a submenu (see [`sub`]).
+    /// `-1` separator · `0` item · `2`–`7` a submenu (see [`sub`]).
     pub kind: i32,
     pub checked: bool,
     pub show_check: bool,
@@ -91,6 +92,9 @@ pub struct CtxMenu {
     /// the visible rows — row `j` runs `commands[entries.len() + j]`. Empty for every menu
     /// that has no such flyout.
     pub openwith: Vec<SharedString>,
+    /// Rows of the application menu's "Windows & tabs" flyout. Like `openwith`, row `j`
+    /// runs `commands[entries.len() + j]`; a menu carries one or the other, never both.
+    pub goto: Vec<CtxEntry>,
 }
 
 /// A small builder that keeps `entries` and `commands` in lock-step.
@@ -98,6 +102,7 @@ struct Build {
     entries: Vec<CtxEntry>,
     commands: Vec<Option<Command>>,
     openwith: Vec<SharedString>,
+    goto: Vec<CtxEntry>,
 }
 
 impl Build {
@@ -107,6 +112,7 @@ impl Build {
             entries: Vec::new(),
             commands: Vec::new(),
             openwith: Vec::new(),
+            goto: Vec::new(),
         }
     }
     /// A plain action row.
@@ -169,6 +175,21 @@ impl Build {
         self.openwith.push(label.into());
         self.extra(cmd)
     }
+    /// A row of the "Windows & tabs" flyout — same past-the-visible-rows channel as
+    /// [`Build::open_with`], so call only after every visible row is pushed.
+    fn goto(&mut self, label: &str, shortcut: &str, checked: bool, cmd: Command) -> &mut Self {
+        self.goto.push(CtxEntry {
+            label: label.into(),
+            shortcut: shortcut.into(),
+            icon: 0,
+            kind: 0,
+            checked,
+            show_check: true,
+            disabled: false,
+            danger: false,
+        });
+        self.extra(cmd)
+    }
     #[tracing::instrument(level = "debug", skip_all)]
     fn finish(self, kind: CtxKind, target: usize, x: f32, y: f32) -> CtxMenu {
         CtxMenu {
@@ -179,6 +200,7 @@ impl Build {
             entries: self.entries,
             commands: self.commands,
             openwith: self.openwith,
+            goto: self.goto,
         }
     }
 }
@@ -238,7 +260,7 @@ pub fn pane_menu(state: &State, idx: usize, x: f32, y: f32, in_taskbar: bool) ->
         b.sep();
     }
 
-    b.item("New Pane…", Command::OpenNewPane);
+    b.item("New Panel…", Command::OpenNewPane);
     b.item("Rename…", Command::BeginRenamePane(idx as i32));
     b.row(
         "Change Color",
@@ -464,7 +486,7 @@ pub fn pane_menu(state: &State, idx: usize, x: f32, y: f32, in_taskbar: bool) ->
     }
     b.sep();
     b.row(
-        "Close Pane",
+        "Close Panel",
         "",
         0,
         false,
@@ -573,7 +595,7 @@ pub fn file_menu(
 
     if is_dir {
         b.item("Open as Root", Command::FilesSetRoot(p.clone()));
-        b.item("New File Browser Pane", Command::FilesOpen(p.clone()));
+        b.item("New File Browser Panel", Command::FilesOpen(p.clone()));
         b.item("Open in Terminal", Command::TerminalAt(p.clone()));
     } else {
         if is_md {
@@ -724,7 +746,7 @@ pub fn tab_menu(state: &State, idx: usize, x: f32, y: f32) -> CtxMenu {
     let only = state.tabs.len() < 2;
     let is_last = idx + 1 >= state.tabs.len();
     let no_closed = state.closed.is_empty();
-    // The system tab (the always-on "Hyperpane") is pinned to this window: `State::detach_tab`
+    // The system tab (the always-on "Avada" tab) is pinned to this window: `State::detach_tab`
     // refuses it, so the row is greyed rather than offered as a click that does nothing.
     let system = state.tabs.get(idx).is_some_and(|t| t.system);
 
@@ -806,7 +828,7 @@ pub fn tab_menu(state: &State, idx: usize, x: f32, y: f32) -> CtxMenu {
 }
 
 /// Build the application (hamburger) menu, anchored at window-logical `(x, y)`. The native
-/// port of the Electron `TopBar` menu: New pane · Command palette (+shortcut) · — · Layout ▸
+/// port of the Electron `TopBar` menu: New panel · Command palette (+shortcut) · — · Layout ▸
 /// (cascading submenu, radio ✓) · — · Open/Save workspace · — · Preferences. The Layout
 /// submenu rows come from the [`crate::theme::LAYOUT_MENU`] model the
 /// resync pushes into `ctx_layouts` (with the live checkmark + the Automatic "— <resolved>"
@@ -818,7 +840,7 @@ pub fn app_menu(state: &State, x: f32, y: f32) -> CtxMenu {
     let palette_sc = state.keymap.label_for("palette.toggle").unwrap_or_default();
 
     b.row(
-        "New pane…",
+        "New panel…",
         "",
         crate::theme::menu_icon::NEW_PANE,
         false,
@@ -851,6 +873,25 @@ pub fn app_menu(state: &State, x: f32, y: f32) -> CtxMenu {
         false,
         sub::NONE,
         Some(Command::ToggleLeftPanel),
+    );
+    // Every window and every tab, one click from anywhere — the way back to a tab scrolled
+    // off the strip, or to a window buried under others. The rows themselves are appended
+    // past the visible ones at the end (see `goto` below).
+    let dir = state.window_directory();
+    let ntabs: usize = dir.iter().map(|w| w.tabs.len()).sum();
+    b.row(
+        "Windows & tabs",
+        &match dir.len() {
+            1 => format!("{ntabs} tab{}", if ntabs == 1 { "" } else { "s" }),
+            n => format!("{n} windows"),
+        },
+        0,
+        false,
+        false,
+        false,
+        false,
+        sub::GOTO,
+        None,
     );
     b.sep();
     // Layout submenu header: drawn icon + label of the CURRENT layout (the submenu lists
@@ -963,6 +1004,32 @@ pub fn app_menu(state: &State, x: f32, y: f32) -> CtxMenu {
         sub::NONE,
         Some(Command::RestartApp),
     );
+
+    // The "Windows & tabs" flyout: each window as a heading row (✓ = this one), its tabs
+    // under it (✓ = the tab that window shows). Picking either brings that window forward.
+    for (n, w) in dir.iter().enumerate() {
+        b.goto(
+            &format!("Window {}", n + 1),
+            &format!("{} tab{}", w.tabs.len(), if w.tabs.len() == 1 { "" } else { "s" }),
+            w.window.is_none(),
+            Command::GoToTab {
+                window: w.window,
+                tab: w.active,
+            },
+        );
+        for (i, title) in w.tabs.iter().enumerate() {
+            let title = if title.is_empty() { "workspace" } else { title.as_str() };
+            b.goto(
+                &format!("    {title}"),
+                "",
+                i == w.active,
+                Command::GoToTab {
+                    window: w.window,
+                    tab: i,
+                },
+            );
+        }
+    }
 
     // Target = the active tab, so the Layout submenu (which routes through `ctx_target` →
     // `SetTabLayout`) retargets the *current* tab's layout (mirrors Electron's `setLayout`).
@@ -1127,6 +1194,68 @@ mod read_only_menu_tests {
         ));
     }
 
+    /// "Windows & tabs" lists every window with its tabs, and each row reaches the right
+    /// place: one of this window's tabs switches here, another window's becomes an effect
+    /// the app applies to that window (and raises it).
+    #[test]
+    fn the_app_menu_lists_every_window_and_tab() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mgr = SessionManager::new(tx);
+        let mut st = State::new(crate::theme::load_font(1.0));
+        // `new_tab` spawns a shell (and needs a runtime); a re-hosted session needs neither.
+        for uid in ["a", "b"] {
+            st.adopt_pane_as_tab(
+                &mgr,
+                DetachedPane {
+                    uid: uid.into(),
+                    title: uid.into(),
+                    subtitle: None,
+                    pinned_accent: None,
+                    show_frame: None,
+                    show_dot: None,
+                    font_px: 14.0,
+                    spawn_command: None,
+                    spawn_args: None,
+                    spawn_shell: None,
+                    kind: PaneKind::Terminal,
+                    tool_session: None,
+                    cwd: None,
+                },
+            );
+        }
+        let mine = st.tabs.len();
+        st.windows = vec![
+            crate::state::WindowSummary { window: None, tabs: Vec::new(), active: 0 },
+            crate::state::WindowSummary {
+                window: Some(7),
+                tabs: vec!["build".into(), "logs".into()],
+                active: 1,
+            },
+        ];
+        let menu = app_menu(&st, 0.0, 0.0);
+        let row = menu
+            .entries
+            .iter()
+            .find(|e| e.label == "Windows & tabs")
+            .expect("the app menu has a Windows & tabs row");
+        assert_eq!(row.kind, sub::GOTO);
+        assert_eq!(row.shortcut, "2 windows");
+        // Window 1 + its tabs, Window 2 + its two.
+        assert_eq!(menu.goto.len(), 1 + mine + 1 + 2);
+        assert_eq!(menu.goto[1 + mine].label, "Window 2");
+        assert_eq!(menu.goto.last().unwrap().label.trim(), "logs");
+
+        let cmd_for = |j: usize| menu.commands[menu.entries.len() + j].clone().unwrap();
+        let theirs = cmd_for(menu.goto.len() - 2);
+        assert!(matches!(
+            crate::command::dispatch(&mut st, theirs, &mgr),
+            crate::command::Effect::GoToWindowTab { window: 7, tab: 0 }
+        ));
+        st.active = mine - 1;
+        crate::command::dispatch(&mut st, cmd_for(1), &mgr);
+        assert_eq!(st.active, 0, "this window's first tab row switches to it");
+    }
+
     /// The rows that survive: a view pane still has content to copy, a cwd to open, and a
     /// pane to rename, colour, move and close.
     #[test]
@@ -1138,7 +1267,7 @@ mod read_only_menu_tests {
             "Open Folder",
             "Browse Files",
             "Rename…",
-            "Close Pane",
+            "Close Panel",
         ] {
             assert!(view.iter().any(|l| l == row), "{row} must survive");
         }

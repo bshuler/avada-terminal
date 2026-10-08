@@ -271,6 +271,7 @@ fn install_tabs(w: &crate::AppWindow, titles: &[&str], active: usize, system: Op
         })
         .collect();
     w.set_tabs(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+    w.set_active_tab(active as i32);
 }
 
 /// The ＋ is the only pointer route to a new tab that does not go through a menu.
@@ -339,13 +340,13 @@ fn the_tab_close_button_closes_that_tab() {
     });
 }
 
-/// The always-on "Hyperpane" tab cannot be closed, so it must not offer a ×: an affordance
+/// The always-on "Avada" tab cannot be closed, so it must not offer a ×: an affordance
 /// that does nothing is worse than no affordance.
 #[test]
 fn the_system_tab_offers_no_close_button() {
     ui(|| {
         let w = window();
-        install_tabs(&w, &["Hyperpane", "two", "three"], 1, Some(0));
+        install_tabs(&w, &["Avada", "two", "three"], 1, Some(0));
         assert_eq!(
             by_label(&w, "Close this tab").len(),
             2,
@@ -396,7 +397,7 @@ fn the_app_menu_button_reaches_rust() {
 
         let found = by_label(
             &w,
-            "Application menu — new tab or pane, layouts, preferences. Drag to move the window",
+            "Application menu — new tab or panel, layouts, preferences. Drag to move the window",
         );
         assert_eq!(found.len(), 1, "one hamburger");
         click(&w, &found[0]);
@@ -431,7 +432,7 @@ fn dragging_the_titlebar_buttons_moves_the_window_instead_of_clicking() {
         }
 
         for label in [
-            "Application menu — new tab or pane, layouts, preferences. Drag to move the window",
+            "Application menu — new tab or panel, layouts, preferences. Drag to move the window",
             "Show the left panel — workspace tree, library, sets, detached sessions. Drag to move the window",
         ] {
             let found = by_label(&w, label);
@@ -458,7 +459,7 @@ fn dragging_the_titlebar_buttons_moves_the_window_instead_of_clicking() {
         assert_eq!(clicks.get(), 0, "a drag must not also open the menu or toggle the panel");
 
         // And a press that stays put is still a click, after a drag on the same button.
-        click(&w, &by_label(&w, "Application menu — new tab or pane, layouts, preferences. Drag to move the window")[0]);
+        click(&w, &by_label(&w, "Application menu — new tab or panel, layouts, preferences. Drag to move the window")[0]);
         assert_eq!(clicks.get(), 1, "a still press is a click again");
     });
 }
@@ -535,7 +536,7 @@ fn the_pane_close_button_reaches_rust_with_its_own_index() {
             w.on_pane_close(move |i| saw.set(i));
         }
 
-        let found = by_label(&w, "Close this pane and end its shell");
+        let found = by_label(&w, "Close this panel and end its shell");
         assert_eq!(found.len(), 2, "one close button per pane");
         click(&w, &found[1]);
         assert_eq!(saw.get(), 1, "the second pane's × must close pane 1");
@@ -559,12 +560,12 @@ fn the_pane_zoom_and_fullscreen_buttons_reach_rust() {
             w.on_pane_fullscreen(move |i| full.set(i));
         }
 
-        let z = by_label(&w, "Zoom this pane to fill the tab");
+        let z = by_label(&w, "Zoom this panel to fill the tab");
         assert_eq!(z.len(), 1);
         click(&w, &z[0]);
         assert_eq!(zoomed.get(), 0, "zoom must reach pane-zoom(0)");
 
-        let f = by_label(&w, "Fullscreen this pane — the whole window, no chrome");
+        let f = by_label(&w, "Fullscreen this panel — the whole window, no chrome");
         assert_eq!(f.len(), 1);
         click(&w, &f[0]);
         assert_eq!(full.get(), 0, "fullscreen must reach pane-fullscreen(0)");
@@ -579,15 +580,15 @@ fn only_a_terminal_pane_offers_the_microphone() {
         let w = window();
         install_panes(&w, &[0, 2]);
 
-        let mic = "Dictate into this pane — record speech, then type the transcript";
+        let mic = "Dictate into this panel — record speech, then type the transcript";
         assert_eq!(
             by_label(&w, mic).len(),
             1,
             "the terminal pane offers a mic and the view pane does not"
         );
         // …and the view pane's close button must not promise to end a shell it has not got.
-        assert_eq!(by_label(&w, "Close this pane and end its shell").len(), 1);
-        assert_eq!(by_label(&w, "Close this pane").len(), 1);
+        assert_eq!(by_label(&w, "Close this panel and end its shell").len(), 1);
+        assert_eq!(by_label(&w, "Close this panel").len(), 1);
     });
 }
 
@@ -618,7 +619,7 @@ fn a_recording_pane_offers_stop_rather_than_start() {
             w.on_pane_mic(move |i| fired.set(i));
         }
 
-        let stop = "Stop recording — transcribe and type it into this pane";
+        let stop = "Stop recording — transcribe and type it into this panel";
         let found = by_label(&w, stop);
         assert_eq!(found.len(), 1, "a recording pane must offer Stop");
         click(&w, &found[0]);
@@ -643,7 +644,7 @@ fn the_rail_new_pane_button_reaches_rust() {
 
         let found = by_label(
             &w,
-            "New pane · Shift-click for shell, command and split options",
+            "New panel · Shift-click for shell, command and split options",
         );
         assert_eq!(found.len(), 1, "the rail shows exactly one ＋");
         click(&w, &found[0]);
@@ -791,7 +792,7 @@ fn a_disabled_context_menu_row_cannot_be_clicked() {
         install_menu(
             &w,
             vec![
-                menu_row("Close Pane"),
+                menu_row("Close Panel"),
                 crate::MenuEntry {
                     label: "Show Diff".into(),
                     disabled: true,
@@ -826,7 +827,7 @@ fn a_context_menu_separator_is_not_a_row() {
         install_menu(
             &w,
             vec![
-                menu_row("Close Pane"),
+                menu_row("Close Panel"),
                 crate::MenuEntry {
                     kind: -1,
                     ..Default::default()
@@ -862,7 +863,7 @@ fn clicking_a_palette_row_selects_it_before_running_it() {
         install_palette(
             &w,
             &[
-                ("New Pane", "Ctrl+T"),
+                ("New Panel", "Ctrl+T"),
                 ("Show Diff", ""),
                 ("Preferences", ""),
             ],
@@ -894,7 +895,7 @@ fn clicking_a_palette_row_selects_it_before_running_it() {
 fn the_palette_announces_which_row_is_selected() {
     ui(|| {
         let w = window();
-        install_palette(&w, &[("New Pane", ""), ("Show Diff", "")], 1);
+        install_palette(&w, &[("New Panel", ""), ("Show Diff", "")], 1);
 
         assert_eq!(
             only(&w, "Show Diff", AccessibleRole::Button).accessible_checked(),
@@ -902,7 +903,7 @@ fn the_palette_announces_which_row_is_selected() {
             "the selected row must announce itself as the selected one"
         );
         assert_eq!(
-            only(&w, "New Pane", AccessibleRole::Button).accessible_checked(),
+            only(&w, "New Panel", AccessibleRole::Button).accessible_checked(),
             Some(false),
             "…and only that row"
         );
@@ -1058,6 +1059,27 @@ fn the_add_project_dialog_submits() {
     });
 }
 
+/// A module command that takes an argument borrows the Add-Project card (overlay 8) with
+/// its own caption, so Run must reach the module's handler.
+#[test]
+fn the_module_command_prompt_submits() {
+    ui(|| {
+        let w = window();
+        w.set_ma_title("Open issue".into());
+        w.set_ma_label("Issue number".into());
+        w.set_overlay_kind(8);
+
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_submit_module_arg(move |_| fired.set(true));
+        }
+
+        click(&w, &only(&w, "Run", AccessibleRole::Button));
+        assert!(fired.get(), "Run must reach submit-module-arg");
+    });
+}
+
 /// An inline validation error must actually appear; a dialog that rejects a path silently
 /// looks like a dead button.
 #[test]
@@ -1110,8 +1132,8 @@ fn the_new_pane_dialog_creates() {
             w.on_submit_new_pane(move |_, _, _, _, _, _, _| fired.set(true));
         }
 
-        click(&w, &only(&w, "Create pane", AccessibleRole::Button));
-        assert!(fired.get(), "Create pane must reach submit-new-pane");
+        click(&w, &only(&w, "Create panel", AccessibleRole::Button));
+        assert!(fired.get(), "Create panel must reach submit-new-pane");
     });
 }
 
@@ -1421,7 +1443,7 @@ fn the_appearance_switches_reach_rust_with_their_own_kind() {
             w.on_pref_action(move |kind, arg| log.borrow_mut().push((kind, arg)));
         }
 
-        let frame = only(&w, "Pane frame border", AccessibleRole::Switch);
+        let frame = only(&w, "Panel frame border", AccessibleRole::Switch);
         assert_eq!(
             frame.accessible_checked(),
             Some(true),
@@ -1429,7 +1451,7 @@ fn the_appearance_switches_reach_rust_with_their_own_kind() {
         );
         click(&w, &frame);
 
-        let dot = only(&w, "Pane color dot", AccessibleRole::Switch);
+        let dot = only(&w, "Panel color dot", AccessibleRole::Switch);
         assert_eq!(dot.accessible_checked(), Some(false));
         click(&w, &dot);
 
@@ -1454,10 +1476,10 @@ fn every_preferences_panel_names_its_switches() {
         // The selected panel is dialog-local state — there is no global to poke — so the
         // test walks the rail the way a user does, which is the more honest route anyway.
         let panels: [(&str, &[&str]); 4] = [
-            ("Appearance", &["Pane frame border", "Pane color dot"]),
+            ("Appearance", &["Panel frame border", "Panel color dot"]),
             ("Terminal", &["Copy on select", "Clickable file paths"]),
-            ("AI features", &["Idle glow for AI panes"]),
-            ("General", &["Ask before closing a pane or a tab"]),
+            ("AI features", &["Idle glow for AI panels"]),
+            ("General", &["Ask before closing a panel or a tab"]),
         ];
         for (panel, switches) in panels {
             click(&w, &only(&w, panel, AccessibleRole::Tab));
@@ -1734,7 +1756,7 @@ fn the_history_segment_swaps_worktrees_for_sessions() {
             "the worktree rows are gone"
         );
         assert_eq!(
-            by_label(&w, "Resume this Claude session in a new pane").len(),
+            by_label(&w, "Resume this Claude session in a new panel").len(),
             1,
             "…and the session is there to resume"
         );

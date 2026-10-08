@@ -108,6 +108,42 @@ component CloseIcon inherits Path {
     commands: "M 3.5 3.5 L 12.5 12.5 M 12.5 3.5 L 3.5 12.5";
 }
 
+// A chevron for the tab-strip scroll buttons: `left` points ‹, otherwise ›.
+component ChevronIcon inherits Path {
+    in property <color> ink;
+    in property <bool> left;
+    width: 12px;
+    height: 12px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: ink;
+    stroke-width: 1.7px;
+    fill: transparent;
+    commands: root.left ? "M 10 3 L 5 8 L 10 13" : "M 6 3 L 11 8 L 6 13";
+}
+
+// One of the two tab-strip scroll buttons. Only shown while the tabs overflow the strip.
+component ScrollBtn inherits Rectangle {
+    in property <bool> left;
+    in property <bool> enabled: true;   // false at that end of the strip — dimmed, inert
+    callback scroll();
+    width: 20px;
+    height: 24px;
+    border-radius: 5px;
+    background: (sa.has-hover && root.enabled) ? Theme.surface2 : transparent;
+    ChevronIcon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        left: root.left;
+        ink: !root.enabled ? Theme.faint.with-alpha(0.5)
+           : sa.has-hover ? Theme.text : Theme.subtext;
+    }
+    sa := TipArea {
+        tip: root.left ? "Scroll the tabs left" : "Scroll the tabs right";
+        clicked => { if (root.enabled) { root.scroll(); } }
+    }
+}
+
 // ---- one Chrome-style tab ----
 
 component TabChip inherits Rectangle {
@@ -123,7 +159,6 @@ component TabChip inherits Rectangle {
     callback grab();                         // a press on the tab — arm a reorder drag
     callback context(length, length);        // right-click → open the tab menu at (x, y)
     callback report-geom(length, length);    // window-x + width, for hit-testing
-
     // Report this tab's window geometry to the controller so the drag pump can hit-test
     // the strip without Slint pointer delivery. Read from a Timer (imperatively, outside
     // the layout pass) — reading `absolute-position` inside a reactive *binding* during
@@ -136,8 +171,11 @@ component TabChip inherits Rectangle {
 
     // While renaming, grow the tab so the inline editor fits inside it (was a fixed
     // 150px overlay that overflowed a narrow tab); the strip reflows to accommodate.
-    min-width: root.editing ? 166px : 96px;
-    max-width: root.editing ? 320px : 200px;
+    // Otherwise a tab asks for its whole title (preferred = text + padding + ×, capped at
+    // max) and gives it back down to `min` when the strip is crowded — past that the strip
+    // scrolls instead of squeezing tabs into unreadable slivers.
+    min-width: root.editing ? 166px : 64px;
+    max-width: root.editing ? 320px : 240px;
     horizontal-stretch: 0;
     // active tab adopts the pane-area bg (reads connected); hover lifts to surface; a
     // spring-hover (dragged pane resting over it) glows in the brand accent.
@@ -269,6 +307,7 @@ export component TopBar inherits Rectangle {
     in property <bool> macos: false;
     in property <[TabItem]> tabs;
     in property <int> editing-tab: -1;
+    in property <int> active-tab: -1;      // index of the active tab (the strip keeps it in view)
     in property <[LayoutOption]> layouts;
     in property <bool> zoomed: false;
     in property <bool> fullscreen: false;
@@ -358,7 +397,7 @@ export component TopBar inherits Rectangle {
                 // the window. A press that never travels stays an ordinary click.
                 mta := TipArea {
                     property <bool> dragged;
-                    tip: "Application menu — new tab or pane, layouts, preferences. Drag to move the window";
+                    tip: "Application menu — new tab or panel, layouts, preferences. Drag to move the window";
                     pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { self.dragged = false; } }
                     moved => {
                         if (self.pressed && !self.dragged
@@ -415,28 +454,143 @@ export component TopBar inherits Rectangle {
         }
 
         // ===== tab strip (fills the bar; empty area drags the window) =====
-        Rectangle {
+        //
+        //   [‹] [ tab tab tab … (clipped, scrolls) ] [›] [＋] [ bare strip → drags window ]
+        //
+        // Positioned by hand rather than by a layout: whether the arrows show depends on how
+        // wide the tabs want to be, and the arrows take width from the tabs — a layout would
+        // feed that back into itself. Here the decision reads only the strip's own width and
+        // the tab row's min/preferred widths, so nothing loops.
+        //
+        // Not a Flickable: that would swallow the press-and-drag that reorders and tears off
+        // a tab, and the bare-strip drag that moves the window.
+        strip := Rectangle {
             horizontal-stretch: 1;
-            HorizontalLayout {
-                padding-top: 4px;          // bottom-align tabs (28px in the 32px bar)
-                padding-left: 6px;
-                padding-right: 6px;
-                spacing: 2px;
+            // Explicit, so the strip's size never comes from its own (scrolling) contents.
+            min-width: 80px;
+            preferred-width: 100px;
 
-                for tab[idx] in root.tabs : TabChip {
-                    title: tab.title;
-                    active: tab.active;
-                    editing: root.editing-tab == idx;
-                    spring-hover: root.drop-tab-idx == idx;
-                    system: tab.system;
-                    select => { root.select-tab(idx); }
-                    close => { root.close-tab(idx); }
-                    begin-rename => { root.begin-rename(idx); }
-                    commit-rename(t) => { root.rename-tab(idx, t); }
-                    grab => { root.tab-grab(idx); }
-                    context(x, y) => { root.tab-context(idx, x, y); }
-                    report-geom(x, w) => { root.tab-geom(idx, x, w); }
+            property <length> pad: 6px;
+            property <length> arrow-w: 20px;
+            property <length> plus-w: 28px;      // the 20px ＋ and its gaps
+            property <length> grab-min: 28px;    // bare strip always left to move the window by
+            // Room for tabs, with the ＋ and a grab margin always kept on screen.
+            property <length> room: max(0px, self.width - 2 * self.pad - self.plus-w - self.grab-min);
+            // Every tab at its minimum still doesn't fit → scroll instead of squeezing.
+            out property <bool> overflow: row.min-width > self.room;
+            // The visible window onto the tab row: everything the tabs want when that fits,
+            // whatever is left between the arrows when it doesn't.
+            property <length> view-w: self.overflow ? max(0px, self.room - 2 * self.arrow-w)
+                                                    : min(row.preferred-width, self.room);
+            property <length> max-scroll: max(0px, row.width - self.view-w);
+            in-out property <length> scroll: 0px;
+            // The active tab, where the strip lays it out while overflowing: every tab sits at
+            // its min-width (64px, 166px while renaming — keep in step with TabChip) with the
+            // row's 2px spacing between.
+            property <length> active-x: max(0, root.active-tab) * 66px
+                + (root.editing-tab >= 0 && root.editing-tab < root.active-tab ? 102px : 0px);
+            property <length> active-w: root.editing-tab == root.active-tab ? 166px : 64px;
+            // The arrows and the wheel scroll freely, but only until the active tab changes:
+            // `scrolled-at` records which tab was active when the user last scrolled, and any
+            // other tab being active pulls it into view. Declarative, so a tab that is born
+            // active (window open, tabs reinstalled) is shown without a timer or an init hook.
+            in-out property <int> scrolled-at: -1;
+            property <int> active: root.active-tab;
+            changed active => { self.scrolled-at = -1; }
+            property <length> wanted: self.scrolled-at == root.active-tab || root.active-tab < 0
+                ? self.scroll
+                : min(self.active-x, max(self.scroll, self.active-x + self.active-w - self.view-w));
+            // Clamped on read, so a strip that stops overflowing (a tab closed, the window
+            // widened) snaps back without anyone having to reset it.
+            out property <length> offset: clamp(self.wanted, 0px, self.max-scroll);
+
+            // The user scrolled: keep their position for as long as this tab stays active.
+            function scroll-to(v: length) {
+                self.scroll = clamp(v, 0px, self.max-scroll);
+                self.scrolled-at = root.active-tab;
+            }
+
+            if strip.overflow : ScrollBtn {
+                x: strip.pad;
+                y: 6px;                          // centred on the 28px tab band below 4px
+                left: true;
+                enabled: strip.offset > 0px;
+                scroll => { strip.scroll-to(strip.offset - strip.view-w * 0.75); }
+            }
+
+            viewport := Rectangle {
+                x: strip.pad + (strip.overflow ? strip.arrow-w : 0px);
+                y: 0;
+                width: strip.view-w;
+                height: parent.height;
+                clip: true;
+
+                // A wheel or trackpad swipe over the tabs scrolls them. Presses fall through
+                // to the chips, which sit inside.
+                wheel := TouchArea {
+                    scroll-event(e) => {
+                        if (!strip.overflow) {
+                            return reject;
+                        }
+                        strip.scroll-to(
+                            strip.offset - (abs(e.delta-x) > abs(e.delta-y) ? e.delta-x : e.delta-y));
+                        accept
+                    }
+
+                    row := HorizontalLayout {
+                        x: -strip.offset;
+                        y: 0;
+                        width: max(strip.view-w, self.min-width);
+                        height: parent.height;
+                        padding-top: 4px;          // bottom-align tabs (28px in the 32px bar)
+                        spacing: 2px;
+
+                        for tab[idx] in root.tabs : TabChip {
+                            title: tab.title;
+                            active: tab.active;
+                            editing: root.editing-tab == idx;
+                            spring-hover: root.drop-tab-idx == idx;
+                            system: tab.system;
+                            select => { root.select-tab(idx); }
+                            close => { root.close-tab(idx); }
+                            begin-rename => { root.begin-rename(idx); }
+                            commit-rename(t) => { root.rename-tab(idx, t); }
+                            grab => { root.tab-grab(idx); }
+                            context(x, y) => { root.tab-context(idx, x, y); }
+                            // A tab scrolled out of view reports as a zero-width sliver at
+                            // the far side, so a drop over an arrow lands next to the nearest
+                            // visible tab instead of on one the user can't see.
+                            report-geom(x, w) => {
+                                if (x + w <= viewport.absolute-position.x + 1px) {
+                                    root.tab-geom(idx, -100000px, 0px);
+                                } else if (x >= viewport.absolute-position.x + viewport.width - 1px) {
+                                    root.tab-geom(idx, 100000px, 0px);
+                                } else {
+                                    root.tab-geom(idx, x, w);
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+
+            if strip.overflow : ScrollBtn {
+                x: viewport.x + viewport.width;
+                y: 6px;
+                left: false;
+                enabled: strip.offset < strip.max-scroll;
+                scroll => { strip.scroll-to(strip.offset + strip.view-w * 0.75); }
+            }
+
+            // ＋ and the bare strip, after the tabs and outside the scroll, so both stay put.
+            HorizontalLayout {
+                x: viewport.x + viewport.width + (strip.overflow ? strip.arrow-w : 0px);
+                y: 0;
+                width: max(0px, parent.width - self.x);
+                height: parent.height;
+                padding-top: 4px;
+                padding-left: 4px;
+                spacing: 2px;
 
                 // new tab
                 VerticalLayout {

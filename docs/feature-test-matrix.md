@@ -22,16 +22,16 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 180 |
-| …bound to Rust | 106 |
-| …proven end-to-end | 106 |
+| callbacks declared | 183 |
+| …bound to Rust | 107 |
+| …proven end-to-end | 107 |
 | …bound but unproven | 0 |
-| …ui-local or dead | 74 |
-| Command variants | 145 |
+| …ui-local or dead | 76 |
+| Command variants | 148 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
-End-to-end coverage of the Rust-reaching UI surface is **100%** (106 of 106). "Named by a test" is an *upper* bound on proven:
+End-to-end coverage of the Rust-reaching UI surface is **100%** (107 of 107). "Named by a test" is an *upper* bound on proven:
 a test may mention a callback while asserting something else about it, and a proven
 callback can still front a feature whose real work happens past a boundary the harness
 cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
@@ -104,6 +104,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `max_window` | `app.slint` | `e2e` |
 | `menu_click` | `newgoal.slint` | `ui-local` |
 | `min_window` | `app.slint` | `e2e` |
+| `module_arg_submit` | `overlays.slint` | `ui-local` |
 | `move_pane` | `types.slint` | `e2e` |
 | `move_pane_new_window` | `app.slint` | `ui-local` |
 | `move_tab` | `contextmenu.slint` | `ui-local` |
@@ -187,6 +188,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `resume_session` | `app.slint` | `e2e` |
 | `row_activate` | `types.slint` | `e2e` |
 | `row_context` | `types.slint` | `e2e` |
+| `scroll` | `topbar.slint` | `ui-local` |
 | `segment_changed` | `sidebar.slint` | `ui-local` |
 | `select` | `sidebar.slint` | `ui-local` |
 | `select_module` | `types.slint` | `e2e` |
@@ -204,6 +206,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `start_drag` | `app.slint` | `e2e` |
 | `submit` | `addproject.slint` | `ui-local` |
 | `submit_add_project` | `app.slint` | `e2e` |
+| `submit_module_arg` | `app.slint` | `e2e` |
 | `submit_new_pane` | `app.slint` | `e2e` |
 | `swatch` | `contextmenu.slint` | `ui-local` |
 | `swatch_none` | `contextmenu.slint` | `ui-local` |
@@ -258,6 +261,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `FontZoom` | key |
 | `FullscreenPane` | — |
 | `GitDiff` | — |
+| `GoToTab` | — |
 | `GoalAttachImage` | — |
 | `GoalCollapse` | — |
 | `GoalFieldClick` | — |
@@ -277,6 +281,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `LeftMovePane` | — |
 | `LeftReorderPane` | — |
 | `LeftSaveWorkspace` | — |
+| `ModuleCommand` | — |
 | `ModulePaneRow` | — |
 | `MovePaneToNewTab` | — |
 | `MovePaneToNewWindow` | — |
@@ -356,6 +361,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `SpeechToggleFocusedOnly` | — |
 | `SpeechToggleMuted` | — |
 | `SubmitAddProject` | — |
+| `SubmitModuleArg` | — |
 | `SubmitNewPane` | — |
 | `SwitchTab` | — |
 | `TerminalAt` | — |

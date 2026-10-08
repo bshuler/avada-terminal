@@ -231,3 +231,139 @@ fn right_clicking_a_taskbar_button_opens_that_panes_menu() {
         );
     });
 }
+
+// ===== tab overflow =====
+//
+// Tabs take their full title while it fits, squeeze toward a minimum when it does not,
+// and past that the strip scrolls behind ‹ › arrows. Each test pins one of the three
+// regimes against real laid-out widths, because every one of them failed silently before:
+// a strip that never scrolled just pushed tabs off the window's right edge.
+
+/// The visible right edge of the tab strip: the › arrow when it shows, else the window.
+fn strip_right(w: &crate::AppWindow) -> f32 {
+    match by_label(w, "Scroll the tabs right").first() {
+        Some(r) => r.absolute_position().x,
+        None => w.window().size().width as f32 / w.window().scale_factor(),
+    }
+}
+
+/// A few tabs get their whole title and no arrows.
+#[test]
+fn a_few_tabs_show_their_whole_titles_without_arrows() {
+    ui(|| {
+        let w = window();
+        install_tabs(
+            &w,
+            &["cargo test --workspace", "ssh build-host", "notes"],
+            0,
+            None,
+        );
+        settle();
+
+        assert!(
+            by_label(&w, "Scroll the tabs left").is_empty()
+                && by_label(&w, "Scroll the tabs right").is_empty(),
+            "three tabs fit — the scroll arrows must stay hidden"
+        );
+        let ta = chips(&w);
+        let long = ta[0].size().width;
+        let short = ta[2].size().width;
+        assert!(
+            long > 120.0,
+            "a 22-character title has room to show in full, but its tab is {long}px"
+        );
+        assert!(
+            long > short,
+            "tabs size to their titles: the long one is {long}px, the short one {short}px"
+        );
+    });
+}
+
+/// Too many full titles to fit, but not too many tabs: every tab narrows, none hides.
+#[test]
+fn tabs_compress_before_they_scroll() {
+    ui(|| {
+        let w = window();
+        let titles: Vec<String> = (0..8)
+            .map(|i| format!("a long and descriptive title {i}"))
+            .collect();
+        let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+        install_tabs(&w, &titles, 0, None);
+        settle();
+
+        assert!(
+            by_label(&w, "Scroll the tabs right").is_empty(),
+            "eight tabs fit at their minimum — compress, don't scroll"
+        );
+        let right = strip_right(&w);
+        for (i, ta) in chips(&w).iter().enumerate() {
+            let (x, width) = (ta.absolute_position().x, ta.size().width);
+            assert!(width >= 63.5, "tab {i} squeezed to {width}px, below its minimum");
+            assert!(
+                x + width <= right + 0.5,
+                "tab {i} ends at {} — past the window's edge at {right}",
+                x + width
+            );
+        }
+    });
+}
+
+/// Far too many tabs: arrows appear, tabs hold their minimum, and › scrolls the row.
+#[test]
+fn too_many_tabs_scroll_behind_arrows() {
+    ui(|| {
+        let w = window();
+        let titles: Vec<String> = (0..40).map(|i| format!("tab {i}")).collect();
+        let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+        install_tabs(&w, &titles, 0, None);
+        settle();
+
+        let right = by_label(&w, "Scroll the tabs right");
+        assert_eq!(right.len(), 1, "forty tabs overflow — the › arrow must show");
+        assert_eq!(
+            by_label(&w, "Scroll the tabs left").len(),
+            1,
+            "the ‹ arrow shows with it, so the strip doesn't jump when it enables"
+        );
+        let ta = chips(&w);
+        assert!(ta[0].size().width >= 63.5, "tabs hold their minimum width");
+
+        let before = ta[0].absolute_position().x;
+        click(&w, &right[0]);
+        settle();
+        let after = ta[0].absolute_position().x;
+        assert!(
+            after < before - 50.0,
+            "› must scroll the row left, but the first tab moved from {before} to {after}"
+        );
+
+        click(&w, &by_label(&w, "Scroll the tabs left")[0]);
+        settle();
+        assert_eq!(
+            ta[0].absolute_position().x,
+            before,
+            "‹ must scroll back to the start"
+        );
+    });
+}
+
+/// The selected tab is always on screen, even when it sits far past the strip's edge.
+#[test]
+fn the_active_tab_scrolls_into_view() {
+    ui(|| {
+        let w = window();
+        let titles: Vec<String> = (0..40).map(|i| format!("tab {i}")).collect();
+        let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+        install_tabs(&w, &titles, 39, None);
+        settle();
+
+        let last = chips(&w).pop().unwrap();
+        let (x, width) = (last.absolute_position().x, last.size().width);
+        let right = strip_right(&w);
+        assert!(
+            x + width <= right + 0.5,
+            "the active (last) tab ends at {} but the strip shows only up to {right}",
+            x + width
+        );
+    });
+}

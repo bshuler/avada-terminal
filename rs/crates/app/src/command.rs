@@ -31,9 +31,9 @@ pub const GOAL_MODEL_LABELS: [&str; 4] = ["opus[1m]", "sonnet[1m]", "fable[1m]",
 #[derive(Debug, Clone)]
 pub enum Command {
     // panes
-    /// Immediately spawn a default pane (the plain ＋ click / palette "New pane").
+    /// Immediately spawn a default pane (the plain ＋ click / palette "New panel").
     NewPane,
-    /// Open the "New pane" options dialog (Shift+＋ / the menus' "New pane…").
+    /// Open the "New panel" options dialog (Shift+＋ / the menus' "New panel…").
     OpenNewPane,
     /// Submit the New Pane dialog: spawn a pane from the configured options + close the dialog.
     /// Boxed: `NewPaneOpts` is ~288 bytes and would otherwise size the whole enum.
@@ -351,6 +351,8 @@ pub enum Command {
     SetTabLayout(usize, Layout),
     /// Move the whole of tab `0` to a new OS window.
     MoveTabToNewWindow(usize),
+    /// Show tab `tab` of a window and bring that window forward (`window: None` = this one).
+    GoToTab { window: Option<usize>, tab: usize },
     // ---- context-menu lifecycle ----
     /// Open the pane context menu for pane `0` at window-logical `(1, 2)`.
     OpenPaneContext(usize, f32, f32),
@@ -489,6 +491,8 @@ pub enum Effect {
         tab: DetachedTab,
         source_alive: bool,
     },
+    /// Show tab `tab` of another window and raise that window.
+    GoToWindowTab { window: usize, tab: usize },
     /// Speech commands route through the `ControlHost`'s `SpeechService` (owned above `State`),
     /// so `dispatch` bubbles them up as effects rather than mutating state directly.
     SpeechStopNow,
@@ -1018,6 +1022,11 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         }
         Command::SetConfirmClose(on) => state.set_confirm_close(on),
         Command::SetTabLayout(i, l) => state.set_tab_layout(i, l),
+        Command::GoToTab { window: None, tab } => state.switch_tab(tab),
+        Command::GoToTab {
+            window: Some(window),
+            tab,
+        } => return Effect::GoToWindowTab { window, tab },
         Command::MoveTabToNewWindow(i) => {
             if let Some((tab, source_alive)) = state.detach_tab(i) {
                 return Effect::MoveTabToNewWindow { tab, source_alive };

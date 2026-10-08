@@ -378,6 +378,7 @@ export component ContextMenu inherits Rectangle {
     in property <bool> dot-on;
     in property <[CtxTab]> tabs;           // Move-to-Tab destinations
     in property <[string]> openwith;       // "Open With" applications, in command order
+    in property <[MenuEntry]> goto;        // "Windows & tabs" rows, in command order
     in property <[LayoutOption]> layouts;  // Layout submenu (checkmark on current)
 
     callback pick(int);          // a plain top-level row
@@ -509,7 +510,7 @@ export component ContextMenu inherits Rectangle {
                                     stroke-width: 1.6px;
                                     commands: "M 4 16 L 16 4";
                                 }
-                                TipArea { tip: "No colour — hide this pane's frame and dot"; clicked => { root.swatch-none(); } }
+                                TipArea { tip: "No colour — hide this panel's frame and dot"; clicked => { root.swatch-none(); } }
                             }
                             for c[ci] in root.swatches : Rectangle {
                                 width: 20px;
@@ -518,7 +519,7 @@ export component ContextMenu inherits Rectangle {
                                 background: c;
                                 border-width: (ci == root.cur-swatch && root.frame-on) ? 2px : 0px;
                                 border-color: Theme.text;
-                                TipArea { tip: "Tint this pane's frame and dot"; clicked => { root.swatch(ci); } }
+                                TipArea { tip: "Tint this panel's frame and dot"; clicked => { root.swatch(ci); } }
                             }
                         }
                         CtxToggle { label: "Show Frame"; on: root.frame-on; toggled(v) => { root.set-frame(v); } }
@@ -556,6 +557,28 @@ export component ContextMenu inherits Rectangle {
                         for name[j] in root.openwith : CtxRow {
                             e: { label: name, shortcut: "", icon: 0, kind: 0, checked: false, show-check: false, disabled: false, danger: false };
                             clicked => { root.pick(root.entries.length + j); }
+                        }
+                    }
+                }
+
+                // ---- Windows & tabs flyout ----
+                // Every window and its tabs, run through the same past-the-visible-rows
+                // channel as Open With. A long list scrolls inside a capped card.
+                if entry.kind == 7 && root.open-sub == i : Flyout {
+                    x: root.open-left ? -self.width + 2px : parent.width - 2px;
+                    y: -4px;
+                    width: 260px;
+                    height: min(vbox-goto.preferred-height, 420px);
+                    clip: true;
+                    Flickable {
+                        viewport-height: vbox-goto.preferred-height;
+                        vbox-goto := VerticalLayout {
+                            padding: 5px;
+                            spacing: 1px;
+                            for e[j] in root.goto : CtxRow {
+                                e: e;
+                                clicked => { root.pick(root.entries.length + j); }
+                            }
                         }
                     }
                 }

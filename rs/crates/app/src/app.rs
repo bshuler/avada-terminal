@@ -222,7 +222,7 @@ pub struct App {
     first_seed: Cell<bool>,
     /// Guards the one-shot `AVADA_MULTIWIN` screenshot scaffold.
     scaffold_done: Cell<bool>,
-    /// True once the always-on **Hyperpane** tab has been accounted for — either found on a
+    /// True once the always-on **Avada** tab has been accounted for — either found on a
     /// restored window or created. App-wide rather than per-window: it is one console for the
     /// whole workspace, and a second copy would only be a second agent contending for the
     /// same control API.
@@ -290,7 +290,7 @@ pub struct App {
     last_autosave_json: RefCell<String>,
     /// Throttle for the queued-prompt delivery tick (claude-resume speak-first).
     last_prompt_delivery: Cell<Option<std::time::Instant>>,
-    /// The Hyperpane status / restart-all-agents schedules (see `crate::loops`).
+    /// The Avada status / restart-all-agents schedules (see `crate::loops`).
     loops: crate::loops::Loops,
     /// Throttle for the foreground-process sniff (D5): when the panes' foreground programs
     /// were last read. On the daemon backend the read is a shadow-map lookup, but the
@@ -843,7 +843,7 @@ impl App {
     /// learn it, so draining per window would give the first window everything and the
     /// rest nothing. Then each window folds that tick in and hands back whatever the human
     /// did to a module's rail. Last, the panes a module asked for are opened on the first
-    /// window, the same place the Hyperpane tab and the scheduler loops use when a
+    /// window, the same place the Avada tab and the scheduler loops use when a
     /// window-less choice has to be made.
     #[tracing::instrument(level = "debug", skip_all)]
     fn service_modules(&self, windows: &[Rc<Window>]) {
@@ -1051,7 +1051,7 @@ impl App {
         }
     }
 
-    /// The two Hyperpane scheduler loops (see [`crate::loops`]): ask the persisted schedule
+    /// The two Avada scheduler loops (see [`crate::loops`]): ask the persisted schedule
     /// which are due at the configured intervals, and do their work. A throttled clock
     /// compare in the common case.
     #[tracing::instrument(level = "debug", ret, skip(self, windows))]
@@ -1070,13 +1070,13 @@ impl App {
         for kind in self.loops.poll(status_secs, restart_secs) {
             match kind {
                 crate::loops::LoopKind::Status => {
-                    // The Hyperpane tab is unique across windows; prompt wherever it lives.
+                    // The Avada tab is unique across windows; prompt wherever it lives.
                     match windows
                         .iter()
                         .find(|w| w.state.borrow().hyperpane_pane_uid().is_some())
                     {
                         Some(w) => self.fire_status_loop(w, &prompt),
-                        None => tracing::warn!("status loop: no Hyperpane pane to prompt"),
+                        None => tracing::warn!("status loop: no Avada panel to prompt"),
                     }
                 }
                 crate::loops::LoopKind::Restart => {
@@ -1093,7 +1093,7 @@ impl App {
         self.loops.publish(status_secs, restart_secs);
     }
 
-    /// The status loop: put the status prompt to the Hyperpane pane's agent. Through the
+    /// The status loop: put the status prompt to the Avada panel's agent. Through the
     /// resume queue when the pane's claude has written its session marker — the queue's
     /// delivery pass already waits out option forms and paces the submitting Enter — and
     /// typed straight into the pane otherwise (the same cadence), unless a form is up, in
@@ -1106,7 +1106,7 @@ impl App {
             prompt
         };
         let Some(uid) = w.state.borrow().hyperpane_pane_uid() else {
-            tracing::warn!("status loop: no Hyperpane pane to prompt");
+            tracing::warn!("status loop: no Avada panel to prompt");
             return;
         };
         let pane_id = self
@@ -1126,19 +1126,19 @@ impl App {
             }
             match avada_core::resume_queue::enqueue(&s.session_id, prompt) {
                 Ok(()) => {
-                    tracing::info!(uid = %uid, session = %s.session_id, "status loop: prompt queued for the Hyperpane agent")
+                    tracing::info!(uid = %uid, session = %s.session_id, "status loop: prompt queued for the Avada agent")
                 }
                 Err(e) => tracing::warn!(uid = %uid, error = %e, "status loop: prompt not queued"),
             }
             return;
         }
         if !self.mgr.has(&uid) {
-            tracing::warn!(uid = %uid, "status loop: Hyperpane pane has no live session");
+            tracing::warn!(uid = %uid, "status loop: Avada panel has no live session");
             return;
         }
         if let Some(screen) = self.mgr.render_screen(&uid) {
             if screen_shows_option_form(&screen) {
-                tracing::warn!(uid = %uid, "status loop: Hyperpane pane is showing a form; this round is skipped");
+                tracing::warn!(uid = %uid, "status loop: Avada panel is showing a form; this round is skipped");
                 return;
             }
             // Typing at a working claude loses the text. Returning here is not a dropped
@@ -1149,7 +1149,7 @@ impl App {
                 return;
             }
         }
-        tracing::info!(uid = %uid, "status loop: typing the prompt into the Hyperpane pane");
+        tracing::info!(uid = %uid, "status loop: typing the prompt into the Avada panel");
         let mgr = self.mgr.clone();
         let text = prompt.to_string();
         std::thread::spawn(move || {
@@ -1266,13 +1266,13 @@ impl App {
     /// own binary, optionally shut the session daemon down (scope "full" — every pane dies
     /// and the restore path resurrects the workspace), then quit the event loop.
     /// The "last session" snapshot of `wins`: one [`WindowSpec`] per window that has any
-    /// content, the window holding the Hyperpane tab FIRST, with the top-level
+    /// content, the window holding the Avada tab FIRST, with the top-level
     /// `name`/`groups`/`active` mirroring that first window. `None` when no window has a
     /// group (a transient mid-close state that must never clobber a good save).
     ///
     /// The mirror matters because `windows` is only honoured by loaders that walk it: the
     /// launch restore (`PendingSeed::Workspace` → `State::load_workspace`) reads the first
-    /// window only, so at least the Hyperpane window comes back from a bare relaunch; the
+    /// window only, so at least the Avada tab's window comes back from a bare relaunch; the
     /// second-instance hand-off spawns a window per spec and restores all of them. A single
     /// window writes no `windows` list, keeping that file byte-identical to before.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1566,6 +1566,32 @@ impl App {
         self.windows.borrow().iter().find(|w| w.id == id).cloned()
     }
 
+    /// Give `win` the list of every window and its tabs, for its application menu's
+    /// "Windows & tabs" flyout. `win`'s own entry is left for its state to fill live.
+    fn publish_window_directory(&self, win: &Rc<Window>) {
+        let dir: Vec<crate::state::WindowSummary> = self
+            .windows
+            .borrow()
+            .iter()
+            .map(|w| {
+                if Rc::ptr_eq(w, win) {
+                    return crate::state::WindowSummary {
+                        window: None,
+                        tabs: Vec::new(),
+                        active: 0,
+                    };
+                }
+                let st = w.state.borrow();
+                crate::state::WindowSummary {
+                    window: Some(w.id),
+                    tabs: st.tabs.iter().map(|t| t.title.clone()).collect(),
+                    active: st.active,
+                }
+            })
+            .collect();
+        win.state.borrow_mut().windows = dir;
+    }
+
     /// Run `cmd` against `win`'s state and apply any window-level [`Effect`].
     #[tracing::instrument(level = "debug", skip_all)]
     fn run_command(self: &Rc<Self>, win: &Rc<Window>, cmd: Command) {
@@ -1573,6 +1599,9 @@ impl App {
         // result renders immediately even if we'd dropped to the idle cadence.
         self.wake();
         tracing::debug!("cmd[{}] {cmd:?}", win.id);
+        if matches!(cmd, Command::OpenAppContext(..)) {
+            self.publish_window_directory(win);
+        }
         let eff = {
             let mut st = win.state.borrow_mut();
             dispatch(&mut st, cmd, &self.mgr)
@@ -1594,6 +1623,14 @@ impl App {
                 self.spawn_window(PendingSeed::Adopt(det));
                 if !source_alive {
                     win.closing.set(true);
+                }
+            }
+            Effect::GoToWindowTab { window: id, tab } => {
+                // The window may have closed while the menu was open — then there is
+                // nothing to go to.
+                if let Some(target) = self.window_by_id(id) {
+                    self.run_command(&target, Command::SwitchTab(tab));
+                    window::raise(target.hwnd.get());
                 }
             }
             Effect::MoveTabToNewWindow { tab, source_alive } => {
@@ -1850,7 +1887,7 @@ impl App {
             crate::leftpanel::publish_window_claims(&self.mgr, claims);
         }
 
-        // 2g. Hyperpane invariants. (a) Creation failed on every seed so far (its directory
+        // 2g. Avada-tab invariants. (a) Creation failed on every seed so far (its directory
         //     could not be prepared): retry on the first window — `State` rate-limits the
         //     filesystem attempt, so this is a cheap latch check per tick. (b) A pane path
         //     without a `SessionManager` (drag-out, `detach_uid`) can leave the system tab
@@ -1925,14 +1962,14 @@ impl App {
             let all: Vec<Rc<Window>> = self.windows.borrow().clone();
             let (closing, survivors): (Vec<Rc<Window>>, Vec<Rc<Window>>) =
                 all.into_iter().partition(|w| w.closing.get());
-            // The Hyperpane tab outlives its window: before the closing window's sessions
+            // The Avada tab outlives its window: before the closing window's sessions
             // die, lift the tab out and re-home it at index 0 of the first survivor. With
             // no survivor the process is quitting and the snapshot below carries it.
             if let Some(home) = survivors.first() {
                 for w in &closing {
                     let taken = w.state.borrow_mut().take_system_tab();
                     if let Some(det) = taken {
-                        tracing::info!(from = w.id, to = home.id, "re-homing the Hyperpane tab");
+                        tracing::info!(from = w.id, to = home.id, "re-homing the Avada tab");
                         home.state.borrow_mut().adopt_system_tab(&self.mgr, det);
                     }
                 }
@@ -1981,7 +2018,7 @@ impl App {
         self.adopt_tool_sessions(&windows);
         self.deliver_pending_goals();
         self.service_restart_request();
-        // 5e. The Hyperpane scheduler loops: a throttled clock compare unless one is due.
+        // 5e. The Avada scheduler loops: a throttled clock compare unless one is due.
         self.service_loops(&windows);
         // 5f. One-shot repair after escaping a dead-session daemon. Not behind the loops'
         //     startup grace: this is a repair of a known-broken state, not a schedule.
@@ -2505,7 +2542,7 @@ impl App {
         self.ensure_hyperpane_tab(st);
     }
 
-    /// Make sure the always-on **Hyperpane** tab exists somewhere, creating it on this window
+    /// Make sure the always-on **Avada** tab exists somewhere, creating it on this window
     /// if it doesn't.
     ///
     /// Runs at the tail of every seed, because the window that ends up owning the tab depends
@@ -3579,13 +3616,17 @@ impl App {
             if strip_active && spring_tab < 0 {
                 let g = w.tab_geom.borrow();
                 let n = w.state.borrow().tabs.len().min(g.len());
-                let caret = if hover.tab_slot < n {
-                    g[hover.tab_slot].0
-                } else if n > 0 {
-                    let (x, wd) = g[n - 1];
-                    x + wd
+                // Tabs scrolled out of view report zero width (topbar.slint): the caret
+                // sits at the slot's tab when visible, else after the nearest visible one.
+                let slot = hover.tab_slot.min(n);
+                let caret = if slot < n && g[slot].1 > 0.0 {
+                    g[slot].0
                 } else {
-                    0.0
+                    g[..slot]
+                        .iter()
+                        .rev()
+                        .find(|t| t.1 > 0.0)
+                        .map_or(0.0, |&(x, wd)| x + wd)
                 };
                 w.app.set_drop_tab_x(caret);
                 w.app.set_drop_tab_active(true);

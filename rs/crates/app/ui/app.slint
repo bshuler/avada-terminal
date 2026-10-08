@@ -59,6 +59,7 @@ export component AppWindow inherits Window {
     in property <[LayoutOption]> layouts;
     // ---- scalars ----
     in property <int> editing-tab: -1;
+    in property <int> active-tab: -1;
     in property <string> hud: "";
     in property <bool> zoomed: false;
     in property <bool> fullscreen: false;
@@ -177,6 +178,7 @@ export component AppWindow inherits Window {
     in property <bool> ctx-frame: false;
     in property <bool> ctx-dot: false;
     in property <[CtxTab]> ctx-tabs;         // Move-to-Tab destinations
+    in property <[MenuEntry]> ctx-goto;      // "Windows & tabs" rows
     in property <[string]> ctx-openwith;     // "Open With" applications
     in property <[LayoutOption]> ctx-layouts; // Layout submenu (for the target tab)
     // ---- Wave-2 drag / tear-off previews (driven by the drag pump) ----
@@ -247,7 +249,7 @@ export component AppWindow inherits Window {
     callback tab-geom(int, length, length);  // report a tab's window-x + width
     // panes / layout
     callback new-pane();
-    callback open-new-pane();   // Shift+＋ / "New pane…" → open the options dialog
+    callback open-new-pane();   // Shift+＋ / "New panel…" → open the options dialog
     // submit the New Pane dialog: label · color · show-frame · show-dot · command · cwd · shell-idx
     callback submit-new-pane(string, color, bool, bool, string, string, int);
     callback close-focused();
@@ -334,6 +336,7 @@ export component AppWindow inherits Window {
             macos: root.macos;
             tabs: root.tabs;
             editing-tab: root.editing-tab;
+            active-tab: root.active-tab;
             layouts: root.layouts;
             zoomed: root.zoomed;
             fullscreen: root.fullscreen;
@@ -492,7 +495,7 @@ export component AppWindow inherits Window {
             drop-shadow-blur: 24px;
             drop-shadow-color: Theme.scrim;
             drop-shadow-offset-y: 8px;
-            tta := TipArea { tip: "Bring this parked pane back now"; clicked => { RemindersAdapter.restore(t.uid); } }
+            tta := TipArea { tip: "Bring this parked panel back now"; clicked => { RemindersAdapter.restore(t.uid); } }
             tbody := HorizontalLayout {
                 padding: 12px;
                 spacing: 10px;
@@ -542,7 +545,7 @@ export component AppWindow inherits Window {
                             commands: "M 4 4 L 12 12 M 12 4 L 4 12";
                         }
                         xta := TipArea {
-                            tip: "Dismiss — leave the pane parked";
+                            tip: "Dismiss — leave the panel parked";
                             clicked => { RemindersAdapter.toast-dismiss(t.uid); }
                         }
                     }
@@ -699,6 +702,7 @@ export component AppWindow inherits Window {
         dot-on: root.ctx-dot;
         tabs: root.ctx-tabs;
         openwith: root.ctx-openwith;
+        goto: root.ctx-goto;
         layouts: root.ctx-layouts;
         pick(i) => { root.ctx-pick(i); }
         swatch(i) => { root.ctx-swatch(i); }

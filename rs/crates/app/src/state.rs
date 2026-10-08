@@ -44,7 +44,7 @@ pub enum Overlay {
     None,
     Palette,
     Prefs,
-    /// The "New pane" options dialog (Shift+＋ / the menus' "New pane…"). Configures a pane
+    /// The "New panel" options dialog (Shift+＋ / the menus' "New panel…"). Configures a pane
     /// before it spawns; submitting routes through [`State::add_pane_opts`].
     NewPane,
     /// The "Add project" dialog (the ＋ on the sidebar's PROJECTS header): type a directory
@@ -131,7 +131,7 @@ fn exit_banner(program: &str, code: i32) -> String {
     } else {
         format!("{program} exited (code {code})")
     };
-    format!("\r\n\x1b[2m{how} — this pane is a shell now; run `{program}` to start it again.\x1b[0m\r\n")
+    format!("\r\n\x1b[2m{how} — this panel is a shell now; run `{program}` to start it again.\x1b[0m\r\n")
 }
 
 /// A session detached from its window for re-hosting in another (Wave-1 multi-window
@@ -710,12 +710,12 @@ mod goal_defaults_tests {
     }
 }
 
-/// The "New pane" dialog's payload — full spawn options for a configured pane. The simple
+/// The "New panel" dialog's payload — full spawn options for a configured pane. The simple
 /// [`State::add_pane`] / [`State::add_pane_cwd`] paths build a default of this. The native
 /// port of the Electron `addPane({ label, color, showFrame, showDot, command, cwd, shell })`.
 #[derive(Debug, Clone, Default)]
 pub struct NewPaneOpts {
-    /// Label override (empty → the slot default, e.g. "pane 3").
+    /// Label override (empty → the slot default, e.g. "panel 3").
     pub label: Option<String>,
     pub cwd: Option<String>,
     /// A command to run instead of an interactive shell (empty → interactive).
@@ -969,7 +969,7 @@ impl AiLine {
 /// One pane's controller-side state (terminal grid + placement + chrome).
 pub struct PaneState {
     pub uid: String,
-    /// The pane's editable label (the header title): "shell"/"pane N" by default, the
+    /// The pane's editable label (the header title): "shell"/"panel N" by default, the
     /// first word of a launched command, or — once tinted to a git project — the repo
     /// name. Double-click the header to rename (see [`State::begin_rename_pane`]).
     pub title: SharedString,
@@ -1119,17 +1119,24 @@ impl PaneState {
     }
 }
 
-/// Whether `label` is still a default auto-name ("shell" / "pane N"), so a git-project tint
-/// may overwrite it — never a name the user chose. Mirrors the renderer's `/^(shell|pane \d+)$/i`
-/// test. A bare number (e.g. "42") is NOT treated as default: it's a valid user rename, and
-/// silently overwriting it with the repo name on a cwd change would clobber that choice.
+/// Whether `label` is still a default auto-name ("shell" / "panel N", or the legacy "pane N"),
+/// so a git-project tint may overwrite it — never a name the user chose. Mirrors the
+/// renderer's `/^(shell|pane \d+)$/i` test. A bare number (e.g. "42") is NOT treated as
+/// default: it's a valid user rename, and silently overwriting it with the repo name on a cwd change would clobber that choice.
 #[tracing::instrument(level = "debug", ret)]
 fn is_default_label(label: &str) -> bool {
     let l = label.trim();
     if l.eq_ignore_ascii_case("shell") {
         return true;
     }
-    if let Some(rest) = l.strip_prefix("pane ").or_else(|| l.strip_prefix("Pane ")) {
+    // "panel N" is today's default; "pane N" is what labels defaulted to before the rename,
+    // and saved workspaces still carry it.
+    if let Some(rest) = l
+        .strip_prefix("panel ")
+        .or_else(|| l.strip_prefix("Panel "))
+        .or_else(|| l.strip_prefix("pane "))
+        .or_else(|| l.strip_prefix("Pane "))
+    {
         return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
     }
     false
@@ -1370,7 +1377,7 @@ pub struct Tab {
     /// Index of the zoomed (maximised-in-tab) pane, if any.
     pub zoomed: Option<usize>,
     /// Whether this is a SYSTEM tab — the app owns it, the human does not get to close it.
-    /// Exactly one exists today (the always-on "Hyperpane" tab, see [`State::ensure_hyperpane_tab`]),
+    /// Exactly one exists today (the always-on "Avada" tab, see [`State::ensure_hyperpane_tab`]),
     /// but nothing here assumes that. A system tab is ordinary in every other respect: it can be
     /// renamed, reordered, split, and its panes closed like any other. Only the close is refused,
     /// and it is refused at the state layer rather than only in the UI, because the control plane
@@ -1414,6 +1421,15 @@ impl Tab {
     }
 }
 
+/// One window as the application menu's "Windows & tabs" flyout lists it.
+#[derive(Debug, Clone)]
+pub struct WindowSummary {
+    /// The window's id, or `None` for the window this state belongs to.
+    pub window: Option<usize>,
+    pub tabs: Vec<SharedString>,
+    pub active: usize,
+}
+
 /// The whole window's workspace state.
 pub struct State {
     /// The base font (loaded at the configured `font_px`) — the template a new pane copies its
@@ -1425,9 +1441,12 @@ pub struct State {
     pub tabs: Vec<Tab>,
     pub active: usize,
     tab_seq: usize,
-    /// Set when preparing the Hyperpane directory failed; creation/reseed is not retried
+    /// Set when preparing the Avada tab's directory failed; creation/reseed is not retried
     /// before this instant. See [`Self::materialize_hyperpane_dir`].
     hyperpane_retry_at: Option<std::time::Instant>,
+    /// Every window of the app in window order, `window: None` marking this one. Only the
+    /// app sees all windows, so it refreshes this just before the application menu opens.
+    pub windows: Vec<WindowSummary>,
     pub fullscreen: bool,
     /// Index of the tab whose title is being edited inline (-1 = none).
     pub editing_tab: i32,
@@ -1779,6 +1798,7 @@ impl State {
             active: 0,
             tab_seq: 0,
             hyperpane_retry_at: None,
+            windows: Vec::new(),
             fullscreen: false,
             editing_tab: -1,
             editing_pane: -1,
@@ -2272,7 +2292,7 @@ impl State {
         let label = match opts.label {
             Some(l) if !l.trim().is_empty() => l,
             _ if idx == 0 => "shell".to_string(),
-            _ => format!("pane {}", idx + 1),
+            _ => format!("panel {}", idx + 1),
         };
         // Each pane owns its font (per-pane zoom); start at the configured base size.
         let font_px = self.settings.font_px;
@@ -2428,7 +2448,7 @@ impl State {
         self.dirty = true;
         if t.panes.is_empty() {
             if t.system {
-                // The system tab (the always-on "Hyperpane") outlives its panes: it is never
+                // The system tab (the always-on "Avada" tab) outlives its panes: it is never
                 // dropped and never quits the window. It is left EMPTY here — this path has
                 // no `SessionManager` to spawn with — and refilled by
                 // [`Self::reseed_system_tab`], which every caller that owns a manager runs
@@ -2480,7 +2500,7 @@ impl State {
                 tracing::info!(uid = %ps.uid, tab = ti, "pane closed");
                 kill_session_of(mgr, &ps.uid, &ps.kind);
                 // Closing the system tab's last pane leaves the tab, not the window: it gets a
-                // fresh shell in the Hyperpane directory (the user closed the agent on purpose,
+                // fresh shell in the Avada tab's directory (the user closed the agent on purpose,
                 // so it is not relaunched behind their back — they can start it by hand).
                 self.reseed_system_tab(mgr);
                 alive
@@ -2506,7 +2526,7 @@ impl State {
             Some(det) => {
                 self.push_closed(ClosedWhat::Pane(Box::new(det)), mgr);
                 // Parking the system tab's last pane keeps the tab (see `take_pane_inner`);
-                // it is refilled so the strip never shows an empty Hyperpane.
+                // it is refilled so the strip never shows an empty Avada tab.
                 self.reseed_system_tab(mgr);
                 true
             }
@@ -2536,7 +2556,7 @@ impl State {
     pub fn detach_focused(&mut self, mgr: &SessionManager) -> Option<(DetachedPane, bool)> {
         // Sessions are NOT touched here — that's the whole point of detach. The manager is
         // only for the reseed: a pane torn out of the system tab leaves the tab behind, and
-        // the tab gets a fresh shell so it is never an empty Hyperpane.
+        // the tab gets a fresh shell so it is never an empty Avada tab.
         let ti = self.active;
         let idx = self.tabs.get(ti)?.focused;
         let (ps, alive) = self.take_pane_in(ti, idx)?;
@@ -2751,7 +2771,7 @@ impl State {
         self.dirty = true;
     }
 
-    /// Keep the app-owned tab (the always-on "Hyperpane") pinned as tab #1.
+    /// Keep the app-owned tab (the always-on "Avada" tab) pinned as tab #1.
     ///
     /// It is the tab every other tab is driven from, so it has a fixed home the same way a
     /// browser's pinned tab does: you should never have to hunt for it. Called after the tab
@@ -3327,7 +3347,7 @@ impl State {
         self.active
     }
 
-    /// Create the always-on **Hyperpane** tab, unless this window already has one.
+    /// Create the always-on **Avada** tab, unless this window already has one.
     ///
     /// The tab runs the user's coding CLI in [`hyperpane_dir`], the app-managed directory
     /// holding the skills that teach it to drive this workspace over the control API. Returns
@@ -3350,11 +3370,11 @@ impl State {
             return false;
         };
         let opts = self.hyperpane_pane_opts(&dir, true);
-        self.new_tab_with(mgr, Some("Hyperpane"), true, opts);
-        // `new_tab_with` appends; the Hyperpane tab lives at the front. Pinning AFTER the
+        self.new_tab_with(mgr, Some(SYSTEM_TAB_TITLE), true, opts);
+        // `new_tab_with` appends; the Avada tab lives at the front. Pinning AFTER the
         // seed keeps `add_pane_opts`' "active tab" contract intact.
         self.pin_system_tab_first();
-        tracing::info!(dir = %dir.display(), "Hyperpane tab created");
+        tracing::info!(dir = %dir.display(), "Avada tab created");
         true
     }
 
@@ -3364,7 +3384,7 @@ impl State {
     /// transient failure passing) is noticed in the same sitting.
     const HYPERPANE_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
-    /// Refresh the shipped files from the bundle and return the Hyperpane directory.
+    /// Refresh the shipped files from the bundle and return the Avada tab's directory.
     ///
     /// Failing that (a read-only or missing data dir) there is nowhere to put the tab, so
     /// `None` — the caller leaves it uncreated rather than open an agent into some arbitrary
@@ -3385,7 +3405,7 @@ impl State {
             }
             Err(e) => {
                 tracing::warn!(
-                    "could not prepare the Hyperpane directory ({e}); tab not created, \
+                    "could not prepare the Avada tab directory ({e}); tab not created, \
                      retrying in {}s",
                     Self::HYPERPANE_RETRY.as_secs()
                 );
@@ -3395,7 +3415,7 @@ impl State {
         }
     }
 
-    /// Refill an EMPTIED system tab with a plain shell in the Hyperpane directory.
+    /// Refill an EMPTIED system tab with a plain shell in the Avada tab's directory.
     ///
     /// [`Self::take_pane_inner`] never drops the system tab, so the last pane leaving it —
     /// closed, moved to another tab, torn off to another window, parked — leaves it with no
@@ -3404,7 +3424,7 @@ impl State {
     /// callers that don't. Deliberately a SHELL, not the agent: the pane left because the
     /// user sent it away, and an agent that comes straight back would read as ignoring
     /// them. The shell sits in the same directory with the same control-API environment,
-    /// so `claude` typed into it is the Hyperpane again.
+    /// so `claude` typed into it is the Avada tab again.
     ///
     /// The directory is re-materialized each time (the same call the creation uses); if
     /// that fails the shell starts wherever the default cwd lands, because an empty tab is
@@ -3432,15 +3452,15 @@ impl State {
         let added = self.add_pane_opts(mgr, opts).is_some();
         self.active = was;
         if added {
-            tracing::info!(tab = ti, "Hyperpane tab reseeded with a shell");
+            tracing::info!(tab = ti, "Avada tab reseeded with a shell");
         } else {
-            tracing::warn!(tab = ti, "Hyperpane tab could not be reseeded");
+            tracing::warn!(tab = ti, "Avada tab could not be reseeded");
         }
         self.dirty = true;
         added
     }
 
-    /// The pane the Hyperpane tab runs: the user's coding CLI (`agent`) or a plain shell,
+    /// The pane the Avada tab runs: the user's coding CLI (`agent`) or a plain shell,
     /// either way in `dir` with the environment the control-API skills need. Shared by
     /// creation ([`Self::ensure_hyperpane_tab`]) and refill ([`Self::reseed_system_tab`]).
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -3515,7 +3535,7 @@ impl State {
     /// Close tab `idx`, killing its sessions. Returns `false` if nothing remains
     /// (caller quits the window).
     ///
-    /// A system tab (the always-on "Hyperpane") is never closed — every close path funnels
+    /// A system tab (the always-on "Avada" tab) is never closed — every close path funnels
     /// through here or [`Self::close_tab_menu`], so guarding both covers the × button, the
     /// keybinding, the context menu, "close others"/"close to the right", and the control API
     /// alike. The return is `true` ("something remains"), because refusing to close is not a
@@ -3828,7 +3848,7 @@ impl State {
 
     // ---- New Pane dialog ----
 
-    /// Open the "New pane" options dialog (Shift+＋ / the menus' "New pane…").
+    /// Open the "New panel" options dialog (Shift+＋ / the menus' "New panel…").
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn open_new_pane(&mut self) {
         self.overlay = Overlay::NewPane;
@@ -6459,6 +6479,23 @@ impl State {
 
     /// Open the application (hamburger) menu, anchored at window-logical `(x, y)`.
     #[tracing::instrument(level = "debug", ret, skip(self))]
+    /// [`Self::windows`] with this window's own entry read live from its tabs (and supplied
+    /// when nothing has been published, e.g. a state with no app around it).
+    pub fn window_directory(&self) -> Vec<WindowSummary> {
+        let me = WindowSummary {
+            window: None,
+            tabs: self.tabs.iter().map(|t| t.title.clone()).collect(),
+            active: self.active,
+        };
+        if !self.windows.iter().any(|w| w.window.is_none()) {
+            return vec![me];
+        }
+        self.windows
+            .iter()
+            .map(|w| if w.window.is_none() { me.clone() } else { w.clone() })
+            .collect()
+    }
+
     pub fn open_app_context(&mut self, x: f32, y: f32) {
         self.ctx = Some(crate::contextmenu::app_menu(self, x, y));
         self.dirty = true;
@@ -6951,7 +6988,7 @@ impl State {
         self.restart_pane_at(self.active, idx, mgr, None, None)
     }
 
-    /// The Hyperpane tab's own agent pane: the first pty pane of the system tab.
+    /// The Avada tab's own agent pane: the first pty pane of the system tab.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn hyperpane_pane_uid(&self) -> Option<String> {
         self.tabs
@@ -7066,7 +7103,7 @@ impl State {
 
     /// Every pty pane in every tab — the system tab included — as `(tab, pane, uid, tool)`,
     /// `tool` naming the agent of a tool pane. The dead-session recovery restarts all of
-    /// them: unlike [`Self::monitored_panes`] it cannot skip the Hyperpane agent or plain
+    /// them: unlike [`Self::monitored_panes`] it cannot skip the Avada agent or plain
     /// shells, because every one of those processes holds the dead bootstrap port.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn all_pty_panes(&self) -> Vec<(usize, usize, String, Option<String>)> {
@@ -7579,7 +7616,7 @@ impl State {
     /// detached tab + `source_alive` (always `true` here — other tabs remain).
     ///
     /// Refuses the system tab: every consumer of a `DetachedTab` (the closed stack, "Move to
-    /// New Window", tab drag-out) would either lose the Hyperpane or resurrect it as an
+    /// New Window", tab drag-out) would either lose the Avada tab or resurrect it as an
     /// ordinary tab. The one legitimate move — re-homing it when its window closes — goes
     /// through [`Self::take_system_tab`] / [`Self::adopt_system_tab`], which keep the flag.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -7588,7 +7625,7 @@ impl State {
             return None;
         }
         if self.tabs[idx].system {
-            tracing::info!(tab = idx, "refusing to detach the Hyperpane tab");
+            tracing::info!(tab = idx, "refusing to detach the Avada tab");
             return None;
         }
         tracing::info!(tab = idx, title = %self.tabs[idx].title, "tab detached");
@@ -7606,8 +7643,8 @@ impl State {
     }
 
     /// Re-host a system tab lifted by [`Self::take_system_tab`]: it becomes THIS window's
-    /// Hyperpane at index 0, flag intact, sessions alive. The user's current tab stays
-    /// selected — a window closing elsewhere is no reason to yank them to the Hyperpane.
+    /// Avada tab at index 0, flag intact, sessions alive. The user's current tab stays
+    /// selected — a window closing elsewhere is no reason to yank them to the Avada tab.
     /// If this window somehow already has a system tab the incoming one is adopted as an
     /// ordinary tab so two never coexist (its sessions are worth more than the flag).
     #[tracing::instrument(level = "debug", skip_all)]
@@ -7620,16 +7657,17 @@ impl State {
         if had_system {
             tracing::warn!(
                 title = %title,
-                "window already holds a Hyperpane tab; adopting the incoming one as ordinary"
+                "window already holds a Avada tab; adopting the incoming one as ordinary"
             );
             self.active = was_active;
             return;
         }
         self.tabs[ti].system = true;
+        migrate_system_tab_title(&mut self.tabs[ti]);
         // Restore the selection before pinning: the pin rotates indices and fixes `active`.
         self.active = was_active;
         self.pin_system_tab_first();
-        tracing::info!(title = %title, "Hyperpane tab re-homed");
+        tracing::info!(title = %title, "Avada tab re-homed");
     }
 
     /// The take half of [`Self::detach_tab`] without its refusals; `idx` must be in range.
@@ -7753,7 +7791,7 @@ impl State {
         self.tabs[ti].title = det.title;
         self.tabs[ti].layout = det.layout;
         // A moved tab is an ordinary tab in its new window, whatever it was before: the
-        // Hyperpane is created per process (`ensure_hyperpane_tab`) and re-homed only via
+        // Avada tab is created per process (`ensure_hyperpane_tab`) and re-homed only via
         // `adopt_system_tab`. Explicit so a future seed path cannot mint a second one.
         self.tabs[ti].system = false;
         for dp in det.panes {
@@ -7813,7 +7851,7 @@ impl State {
     /// ([`SessionManager::pane_load`]). A stale uid costs nothing: on the in-process backend,
     /// or once the session is gone, `pane_load` falls back to a fresh spawn from the recorded
     /// command/args/shell — exactly the old behaviour.
-    /// Refuse a "save the active tab" action when that tab is the pinned Hyperpane, saying
+    /// Refuse a "save the active tab" action when that tab is the pinned Avada tab, saying
     /// why. It is app-owned: it can't be closed and exactly one may exist, so a workspace
     /// file describing it would only ever be a second one waiting to be opened.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -7821,7 +7859,7 @@ impl State {
         if !self.active_tab().system {
             return false;
         }
-        self.toast_active("the Hyperpane tab can't be saved");
+        self.toast_active("the Avada tab can't be saved");
         true
     }
 
@@ -7878,7 +7916,7 @@ impl State {
     }
 
     /// The library snapshot of tab `i`, or `None` when that tab has no panes — a 0-pane tab
-    /// describes nothing and must never be written as a set member. The pinned Hyperpane is
+    /// describes nothing and must never be written as a set member. The pinned Avada tab is
     /// skipped for a second reason: it is app-owned, can never be closed, and exactly one may
     /// exist, so a member describing it could only ever append a duplicate on open.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -8221,7 +8259,7 @@ impl State {
             // produces a ghost empty "term 1" tab next to the restored session (the live
             // 0-pane-tab sighting that motivated the B6 hardening).
             self.purge_empty_tabs();
-            // The Hyperpane is one per process, and lives at index 0: a file whose groups
+            // The Avada tab is one per process, and lives at index 0: a file whose groups
             // came from another install (or a hand edit) may carry more than one flagged
             // group, and `append_tab_from_group` only skips a flagged group when a system
             // tab ALREADY exists — two flagged groups in the same file both land. Keep the
@@ -8229,8 +8267,9 @@ impl State {
             let mut seen = false;
             for t in &mut self.tabs {
                 if t.system {
+                    migrate_system_tab_title(t);
                     if seen {
-                        tracing::warn!(title = %t.title, "demoting a duplicate Hyperpane tab");
+                        tracing::warn!(title = %t.title, "demoting a duplicate Avada tab");
                         t.system = false;
                     }
                     seen = true;
@@ -8289,7 +8328,7 @@ impl State {
     /// Build a tab from a `GroupSpec` (spawning a pane per spec) and append it.
     #[tracing::instrument(level = "debug", skip_all)]
     fn append_tab_from_group(&mut self, mgr: &SessionManager, g: GroupSpec) {
-        // Exactly one Hyperpane may exist — it is app-owned and can never be closed — so a
+        // Exactly one Avada tab may exist — it is app-owned and can never be closed — so a
         // file that describes one while we already have one must not append a second. This is
         // checked BEFORE any pane is spawned: a duplicate that re-attached the live session
         // would show the same terminal in two tabs, which is how the duplicates got here.
@@ -8328,7 +8367,7 @@ impl State {
         tab.focused = g.focused.map(|f| (f as usize).min(n - 1)).unwrap_or(0);
         tab.zoomed = g.zoomed.map(|z| (z as usize).min(n - 1));
         // Restoring the flag matters as much as writing it: without it the restored
-        // "Hyperpane" would be an ordinary tab, and `ensure_hyperpane_tab` would then find
+        // Avada tab would be an ordinary tab, and `ensure_hyperpane_tab` would then find
         // no system tab and append a second one. A legacy file carries no flag, so the
         // recognizer above supplies it — that is what stops the files already on disk from
         // producing a duplicate on their very next relaunch.
@@ -8644,7 +8683,7 @@ impl State {
         let label = match &spec.label {
             Some(l) if !l.is_empty() => l.clone(),
             _ if idx == 0 => "shell".to_string(),
-            _ => format!("pane {}", idx + 1),
+            _ => format!("panel {}", idx + 1),
         };
         // Restore the pane's persisted per-pane zoom (Task 14); absent → the configured base.
         let font_px = spec
@@ -8724,7 +8763,7 @@ impl State {
             return;
         }
         // The system tab's only pane is not parked either: there is no manager here to
-        // refill the tab with, and a Hyperpane that sits empty until the bell fires is worse
+        // refill the tab with, and an Avada tab that sits empty until the bell fires is worse
         // than a reminder that has to be set on a split. Refused rather than reseeded.
         if self.active_tab().system && self.active_tab().panes.len() < 2 {
             tracing::info!("refusing to park the system tab's only pane as a reminder");
@@ -8866,7 +8905,7 @@ impl State {
         let pending = PendingClose {
             target: CloseTarget::Tab(first.uid.to_string()),
             title: if n > 1 {
-                format!("{} — {n} panes", t.title).into()
+                format!("{} — {n} panels", t.title).into()
             } else {
                 t.title.clone()
             },
@@ -9116,9 +9155,24 @@ pub(crate) fn resume_startup_line(
     }
 }
 
-/// Does this saved group describe the app-owned Hyperpane tab? The `system` flag is
+/// The title the app-owned system tab is created with.
+pub const SYSTEM_TAB_TITLE: &str = "Avada";
+
+/// The system tab's title before the product was renamed. Saved workspaces still carry it.
+const LEGACY_SYSTEM_TAB_TITLE: &str = "Hyperpane";
+
+/// Bring a restored system tab's title up to date: only the exact old default is renamed, so
+/// a title the user chose survives.
+#[tracing::instrument(level = "debug", skip_all)]
+fn migrate_system_tab_title(t: &mut Tab) {
+    if t.system && t.title.as_str() == LEGACY_SYSTEM_TAB_TITLE {
+        t.title = SYSTEM_TAB_TITLE.into();
+    }
+}
+
+/// Does this saved group describe the app-owned Avada tab? The `system` flag is
 /// authoritative; files written before that flag existed carry none, so a group whose panes
-/// all sit in the Hyperpane directory counts too — nothing else opens there by default.
+/// all sit in the Avada tab's directory counts too — nothing else opens there by default.
 #[tracing::instrument(level = "debug", ret)]
 fn group_is_hyperpane(g: &GroupSpec) -> bool {
     if g.system == Some(true) {
@@ -12488,7 +12542,7 @@ mod close_history_tests {
         let mut st = window(&m, &[&["a0", "a1"], &["b0"]]);
         st.request_close_tab(0, &m);
         let title = st.pending_close.as_ref().unwrap().title.to_string();
-        assert!(title.ends_with("— 2 panes"), "{title}");
+        assert!(title.ends_with("— 2 panels"), "{title}");
     }
 
     /// Only the RECENTLY CLOSED section may be open at a time — same rule the bell and the
@@ -12518,7 +12572,7 @@ mod close_history_tests {
 
 #[cfg(test)]
 mod system_tab_pin_tests {
-    //! The always-on "Hyperpane" tab is pinned to slot 0 — it is the tab every other tab is
+    //! The always-on "Avada" tab is pinned to slot 0 — it is the tab every other tab is
     //! driven from, so it has a fixed home the way a browser's pinned tab does. Three rules,
     //! all enforced here rather than only in the UI (the control plane and the keyboard both
     //! reach `reorder_tab` without going near a drag): it starts at the front, it can't be
@@ -12612,7 +12666,7 @@ mod system_tab_pin_tests {
 
 #[cfg(test)]
 mod hyperpane_uniqueness_tests {
-    //! The Hyperpane tab is app-owned: it can never be closed, and exactly one may exist. Two
+    //! The Avada tab is app-owned: it can never be closed, and exactly one may exist. Two
     //! halves enforce that. *Save side* — it is left out of every file the user can write
     //! (workspace, library, set, repo project), because a file describing it could only ever
     //! be a second one waiting to be opened. *Load side* — a group describing it is skipped
@@ -12670,10 +12724,10 @@ mod hyperpane_uniqueness_tests {
         s
     }
 
-    /// A saved group for the Hyperpane as the CURRENT writer would record it.
+    /// A saved group for the Avada tab as the CURRENT writer would record it.
     fn flagged_group() -> GroupSpec {
         GroupSpec {
-            title: Some("Hyperpane".into()),
+            title: Some("Avada".into()),
             panes: vec![PaneSpec {
                 ..Default::default()
             }],
@@ -12682,8 +12736,8 @@ mod hyperpane_uniqueness_tests {
         }
     }
 
-    /// …and as files written before the `system` flag existed recorded it: no flag, but every
-    /// pane sitting in the Hyperpane directory.
+    /// …and as files written before the `system` flag existed recorded it: no flag and the
+    /// pre-rename title, but every pane sitting in the Avada tab's directory.
     fn legacy_group() -> GroupSpec {
         GroupSpec {
             title: Some("Hyperpane".into()),
@@ -12697,10 +12751,10 @@ mod hyperpane_uniqueness_tests {
 
     #[test]
     fn a_set_leaves_the_hyperpane_out() {
-        let s = strip(&[("Hyperpane", true), ("work", false)]);
+        let s = strip(&[("Avada", true), ("work", false)]);
         assert!(
             s.library_workspace_of_tab(0).is_none(),
-            "the pinned Hyperpane is not a saveable member"
+            "the pinned Avada tab is not a saveable member"
         );
         assert!(
             s.library_workspace_of_tab(1).is_some(),
@@ -12710,7 +12764,7 @@ mod hyperpane_uniqueness_tests {
 
     #[test]
     fn saving_the_hyperpane_as_a_workspace_is_refused_with_a_reason() {
-        let mut s = strip(&[("Hyperpane", true), ("work", false)]);
+        let mut s = strip(&[("Avada", true), ("work", false)]);
         s.active = 0;
         assert!(s.refuse_saving_system_tab(), "refused while it is active");
         s.active = 1;
@@ -12736,7 +12790,7 @@ mod hyperpane_uniqueness_tests {
     #[test]
     fn an_ordinary_group_is_not_mistaken_for_it() {
         let g = GroupSpec {
-            title: Some("Hyperpane".into()),
+            title: Some("Avada".into()),
             panes: vec![PaneSpec {
                 cwd: Some("/Users/someone/code".into()),
                 ..Default::default()
@@ -12753,8 +12807,8 @@ mod hyperpane_uniqueness_tests {
         );
     }
 
-    /// Opening a file that carries a Hyperpane while one is already open must not add a
-    /// second — that is the bug: a set saved with the Hyperpane in it re-attached the same
+    /// Opening a file that carries an Avada tab while one is already open must not add a
+    /// second — that is the bug: a set saved with the Avada tab in it re-attached the same
     /// live session into a duplicate tab on every re-open.
     #[test]
     fn loading_a_file_that_carries_a_hyperpane_never_adds_a_second() {
@@ -12763,7 +12817,7 @@ mod hyperpane_uniqueness_tests {
             .unwrap();
         let _guard = rt.enter();
         for g in [flagged_group(), legacy_group()] {
-            let mut s = strip(&[("Hyperpane", true), ("work", false)]);
+            let mut s = strip(&[("Avada", true), ("work", false)]);
             let before = s.tabs.len();
             s.load_workspace(
                 WorkspaceFile {
@@ -12775,12 +12829,12 @@ mod hyperpane_uniqueness_tests {
             assert_eq!(
                 s.tabs.len(),
                 before,
-                "a second Hyperpane must never be appended"
+                "a second Avada tab must never be appended"
             );
         }
     }
 
-    /// …but the restore path still works: with no Hyperpane open yet, the saved one loads.
+    /// …but the restore path still works: with no Avada tab open yet, the saved one loads.
     /// Crash recovery depends on this — `last-workspace.json` keeps it so its conversation
     /// resumes where it was.
     #[test]
@@ -12800,13 +12854,13 @@ mod hyperpane_uniqueness_tests {
         assert_eq!(
             s.tabs.iter().filter(|t| t.system).count(),
             1,
-            "the saved Hyperpane restores, and restores as the system tab"
+            "the saved Avada tab restores, and restores as the system tab"
         );
     }
 
     /// A file written before the flag existed must come back FLAGGED, not as an ordinary tab.
     /// Otherwise `ensure_hyperpane_tab` finds no system tab on the next launch and appends a
-    /// second Hyperpane — which is exactly how the duplicates on disk were made.
+    /// second Avada tab — which is exactly how the duplicates on disk were made.
     #[test]
     fn a_legacy_hyperpane_restores_as_the_system_tab() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -12827,7 +12881,7 @@ mod hyperpane_uniqueness_tests {
         assert_eq!(
             s.tabs.iter().filter(|t| t.system).count(),
             1,
-            "a flagless Hyperpane is recognized and re-flagged on the way in"
+            "a flagless Avada tab is recognized and re-flagged on the way in"
         );
     }
 
@@ -12856,7 +12910,7 @@ mod hyperpane_uniqueness_tests {
         let rt = runtime();
         let _guard = rt.enter();
         let m = mgr();
-        let mut s = strip(&[("Hyperpane", true), ("work", false)]);
+        let mut s = strip(&[("Avada", true), ("work", false)]);
         assert!(s.close_pane_in(0, 0, &m), "the window stays open");
         assert_eq!(s.tabs.len(), 2, "the tab was kept, not dropped");
         assert!(
@@ -12866,7 +12920,7 @@ mod hyperpane_uniqueness_tests {
         assert_eq!(
             s.tabs[0].panes.len(),
             1,
-            "an emptied Hyperpane is reseeded with a shell"
+            "an emptied Avada tab is reseeded with a shell"
         );
         assert!(!s.tabs[1].system);
     }
@@ -12876,11 +12930,11 @@ mod hyperpane_uniqueness_tests {
         let rt = runtime();
         let _guard = rt.enter();
         let m = mgr();
-        let mut s = strip(&[("Hyperpane", true), ("work", false)]);
+        let mut s = strip(&[("Avada", true), ("work", false)]);
         s.active = 0;
         s.move_pane_to_tab(0, 1, &m);
         assert_eq!(s.tabs.len(), 2);
-        assert!(s.tabs[0].system, "the Hyperpane survives its pane leaving");
+        assert!(s.tabs[0].system, "the Avada tab survives its pane leaving");
         assert_eq!(s.tabs[0].panes.len(), 1, "reseeded");
         assert_eq!(
             s.tabs[1].panes.len(),
@@ -12891,11 +12945,11 @@ mod hyperpane_uniqueness_tests {
 
     #[test]
     fn the_hyperpane_cannot_be_detached_but_an_ordinary_tab_can() {
-        let mut s = strip(&[("Hyperpane", true), ("work", false)]);
+        let mut s = strip(&[("Avada", true), ("work", false)]);
         assert!(s.detach_tab(0).is_none(), "Move to New Window is refused");
-        assert_eq!(titles(&s), ["Hyperpane", "work"]);
+        assert_eq!(titles(&s), ["Avada", "work"]);
         assert!(s.detach_tab(1).is_some());
-        assert_eq!(titles(&s), ["Hyperpane"]);
+        assert_eq!(titles(&s), ["Avada"]);
     }
 
     #[test]
@@ -12904,7 +12958,7 @@ mod hyperpane_uniqueness_tests {
         let mut s = fresh();
         // Even if the seed tab were somehow flagged, the moved tab arrives ordinary.
         s.tabs[0].system = true;
-        s.adopt_tab(&m, det_tab("Hyperpane", &["p"]));
+        s.adopt_tab(&m, det_tab("Avada", &["p"]));
         assert!(!s.tabs[0].system);
         assert_eq!(s.tabs[0].panes.len(), 1);
     }
@@ -12924,12 +12978,13 @@ mod hyperpane_uniqueness_tests {
         assert!(survivor.take_system_tab().is_none(), "nothing to take here");
 
         survivor.adopt_system_tab(&m, det);
-        assert_eq!(titles(&survivor), ["Hyperpane", "other", "more"]);
+        // The pre-rename default title is brought up to date on the way in.
+        assert_eq!(titles(&survivor), ["Avada", "other", "more"]);
         assert!(survivor.tabs[0].system, "flag intact, pinned first");
         assert_eq!(survivor.active, 2, "the user's tab stays selected");
 
         // A second arrival can never make two: it lands as an ordinary tab.
-        survivor.adopt_system_tab(&m, det_tab("Hyperpane", &["x"]));
+        survivor.adopt_system_tab(&m, det_tab("Avada", &["x"]));
         assert_eq!(survivor.tabs.iter().filter(|t| t.system).count(), 1);
         assert_eq!(survivor.tabs.len(), 4);
     }
@@ -12960,6 +13015,46 @@ mod hyperpane_uniqueness_tests {
             s.active, 3,
             "landed on the restored tab, index fixed by the pin"
         );
+    }
+
+    #[test]
+    fn loading_renames_the_pre_rename_system_tab_title_but_keeps_a_users_own() {
+        let rt = runtime();
+        let _guard = rt.enter();
+        let m = mgr();
+        let mut s = strip(&[("Hyperpane", true), ("work", false)]);
+        s.load_workspace(
+            WorkspaceFile {
+                groups: Some(vec![GroupSpec {
+                    title: Some("restored".into()),
+                    panes: vec![PaneSpec::default()],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            &m,
+        )
+        .expect("the file restores");
+        assert_eq!(
+            titles(&s)[0],
+            SYSTEM_TAB_TITLE,
+            "the old default is renamed"
+        );
+
+        let mut s = strip(&[("Mine", true), ("work", false)]);
+        s.load_workspace(
+            WorkspaceFile {
+                groups: Some(vec![GroupSpec {
+                    title: Some("restored".into()),
+                    panes: vec![PaneSpec::default()],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            &m,
+        )
+        .expect("the file restores");
+        assert_eq!(titles(&s)[0], "Mine", "a title the user chose stays");
     }
 
     #[test]
