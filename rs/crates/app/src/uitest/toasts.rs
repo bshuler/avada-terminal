@@ -81,7 +81,7 @@ fn the_dismiss_button_carries_its_own_toasts_uid() {
         w.global::<crate::RemindersAdapter>()
             .on_toast_dismiss(move |uid| sink.borrow_mut().push(uid.to_string()));
 
-        let x = by_label(&w, "Dismiss — leave the pane parked");
+        let x = by_label(&w, "Dismiss — leave the panel parked");
         assert_eq!(x.len(), 3, "one × per toast, in stack order");
         click(&w, &x[1]);
         assert_eq!(
@@ -110,7 +110,7 @@ fn the_toast_body_restores_that_reminder() {
         w.global::<crate::RemindersAdapter>()
             .on_restore(move |uid| sink.borrow_mut().push(uid.to_string()));
 
-        let bodies = by_label(&w, "Bring this parked pane back now");
+        let bodies = by_label(&w, "Bring this parked panel back now");
         assert_eq!(bodies.len(), 2, "one clickable card per toast");
         click(&w, &bodies[0]);
         assert_eq!(
@@ -129,7 +129,7 @@ fn with_nothing_fired_there_is_no_toast() {
         let w = window();
         install_toasts(&w, vec![]);
         assert!(
-            by_label(&w, "Dismiss — leave the pane parked").is_empty(),
+            by_label(&w, "Dismiss — leave the panel parked").is_empty(),
             "an empty toast model must draw no cards"
         );
     });

@@ -187,7 +187,7 @@ pub fn item_for(uid: &str, target: Option<&str>) -> ImagePaneItem {
     };
     if target.is_empty() {
         return ImagePaneItem {
-            error: error_caption("this pane", "no file").into(),
+            error: error_caption("this panel", "no file").into(),
             ..base
         };
     }
@@ -322,7 +322,7 @@ fn item_for_module(uid: &str, module: &ModuleId, surface: &str) -> ImagePaneItem
     };
     let Some(img) = crate::module_ui::image::image(module, surface) else {
         return ImagePaneItem {
-            error: error_caption("this pane", "no picture").into(),
+            error: error_caption("this panel", "no picture").into(),
             ..base
         };
     };

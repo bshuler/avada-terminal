@@ -74,11 +74,11 @@ pub struct PlaceholderView {
 }
 
 /// What a disabled or crashed module tells the user to do.
-pub const REOPEN_HINT: &str = "Reopen it, or open another pane like it.";
+pub const REOPEN_HINT: &str = "Reopen it, or open another panel like it.";
 /// What a missing module tells the user to do.
-pub const INSTALL_HINT: &str = "Install it from the marketplace to bring this pane back.";
+pub const INSTALL_HINT: &str = "Install it from the marketplace to bring this panel back.";
 /// What a broken module tells the user to do.
-pub const REINSTALL_HINT: &str = "Reinstall it from the marketplace to bring this pane back.";
+pub const REINSTALL_HINT: &str = "Reinstall it from the marketplace to bring this panel back.";
 
 /// Map a module's status and the pane that shows it to the placeholder's contents.
 /// `name` is the module's display name from its manifest when the host has one.

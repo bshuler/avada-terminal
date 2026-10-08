@@ -4473,7 +4473,7 @@ mod golden {
     #[tokio::test]
     async fn close_tab_refuses_the_app_owned_tab_rather_than_queueing_it() {
         let s = boot(true).await;
-        // Two tabs on a second window: one the app owns (the always-on "Hyperpane"), one not.
+        // Two tabs on a second window: one the app owns (the always-on "Avada" tab), one not.
         // The pair is the point — the refusal has to be about THIS tab, not about the verb.
         s.shared.model.lock().unwrap().add_window(WindowInfo {
             window_id: 2,
@@ -4482,7 +4482,7 @@ mod golden {
             tabs: vec![
                 TabInfo {
                     id: "sys".into(),
-                    title: "Hyperpane".into(),
+                    title: "Avada".into(),
                     layout: "auto".into(),
                     panes: vec![],
                     system: true,

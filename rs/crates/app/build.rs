@@ -29,7 +29,7 @@ fn main() {
     // `State::submit_new_goal`'s `exe_dir/resources/claude/goal-orchestrator` candidate
     // resolves at dev runtime, matching what packaging ships. Best-effort.
     let personas = manifest.join("../../../resources/claude/goal-orchestrator");
-    // The always-on Hyperpane tab's working directory: its README plus the hidden
+    // The always-on Avada tab's working directory: its README plus the hidden
     // `.claude/skills/` tree its agent loads. `hyperpane::source_dir()` looks beside the exe
     // first, so without this a dev build opens the tab into an empty directory and the agent
     // has no idea the app can be driven at all. Packaging ships the same tree.

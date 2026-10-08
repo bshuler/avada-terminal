@@ -262,7 +262,7 @@ pub const MAX_ENTRIES: usize = 2_000;
 #[tracing::instrument(level = "debug", ret)]
 pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<ViewRow> {
     let Some(t) = target.filter(|t| !t.is_empty()) else {
-        return vec![ViewRow::inert(role::NOTICE, "No path set for this pane")];
+        return vec![ViewRow::inert(role::NOTICE, "No path set for this panel")];
     };
     let path = PathBuf::from(t);
     match kind {
@@ -1903,7 +1903,7 @@ mod tests {
         // No target is a notice, not a panic and not an empty pane.
         let none = rows_for(&PaneKind::FileBrowser, None, 0);
         assert_eq!(none[0].role, role::NOTICE);
-        assert_eq!(none[0].text, "No path set for this pane");
+        assert_eq!(none[0].text, "No path set for this panel");
     }
 
     #[test]
@@ -2186,7 +2186,7 @@ mod tests {
         let rows = rows_for(&PaneKind::Table, Some(&d.display().to_string()), 0);
         assert_eq!(rows[0].text, "That is a directory");
         let rows = rows_for(&PaneKind::Table, None, 0);
-        assert_eq!(rows[0].text, "No path set for this pane");
+        assert_eq!(rows[0].text, "No path set for this panel");
     }
 
     #[test]
@@ -2393,7 +2393,7 @@ mod tests {
         assert_eq!(rows[0].role, role::NOTICE);
         assert!(rows[0].text.contains("directory"), "{}", rows[0].text);
         let rows = rows_for(&PaneKind::Data, None, 0);
-        assert_eq!(rows[0].text, "No path set for this pane");
+        assert_eq!(rows[0].text, "No path set for this panel");
     }
 
     #[test]

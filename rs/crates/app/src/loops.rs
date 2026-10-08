@@ -1,7 +1,7 @@
-//! The two app-owned scheduler loops of the Hyperpane tab.
+//! The two app-owned scheduler loops of the Avada tab.
 //!
 //! * The **status loop** (every [`Settings::status_loop_minutes`], 15 by default) asks the
-//!   Hyperpane pane's agent to check on every other pane and recover the stuck ones.
+//!   Avada panel's agent to check on every other pane and recover the stuck ones.
 //! * The **restart loop** (every [`Settings::restart_loop_hours`], 24 by default) respawns
 //!   every monitored agent pane — each tool pane outside the system tab — back into the same
 //!   conversation, so a long-running agent gets a fresh process and a fresh context window.
@@ -20,7 +20,7 @@
 //! [`Loops::publish`] puts on `GET /loops` and `avada ctl loops` for a headless check.
 //!
 //! This module owns the *when*: [`Loops::poll`] is called from the app tick and answers
-//! which loops are due. The *what* — prompting the Hyperpane pane, restarting the monitored
+//! which loops are due. The *what* — prompting the Avada panel, restarting the monitored
 //! panes — lives in the app, which has the windows, the session manager and the control
 //! plane the work needs. The split keeps the schedule itself testable without a GUI.
 //!
@@ -42,7 +42,7 @@ pub const STARTUP_GRACE: Duration = Duration::from_secs(60);
 /// The schedule is consulted at most this often; the app tick runs far more frequently.
 const POLL_EVERY: Duration = Duration::from_secs(1);
 
-/// The prompt the status loop types into the Hyperpane pane. Kept short and imperative: it
+/// The prompt the status loop types into the Avada panel. Kept short and imperative: it
 /// is a standing order the pane's agent already knows from its own instructions, and it lands
 /// every quarter of an hour.
 pub const DEFAULT_STATUS_PROMPT: &str = "Status check: review every pane, report each agent's \
@@ -52,7 +52,7 @@ nobody will answer, or has exited.";
 /// Which loop fired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopKind {
-    /// The Hyperpane status prompt.
+    /// The Avada status prompt.
     Status,
     /// Restart every monitored agent pane.
     Restart,

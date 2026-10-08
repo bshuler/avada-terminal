@@ -1,6 +1,6 @@
 //! `avada ctl …` — the workspace's own command line over the running control API.
 //!
-//! This is the tool surface the always-on **Hyperpane** tab hands its agent (see
+//! This is the tool surface the always-on **Avada** tab hands its agent (see
 //! `resources/claude/hyperpane/`). The MCP server (`avada-mcp`) is a separate npm package
 //! and can't grow with this repo; a subcommand of the binary itself always matches the app it
 //! is talking to, needs no install step, and is reachable from any shell — including one inside

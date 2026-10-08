@@ -423,7 +423,7 @@ pub fn layout_name(l: Layout) -> Cow<'static, str> {
 /// component (`ui/contextmenu.slint`); keep the two lists in lock-step.
 pub mod menu_icon {
     // (0 = no leading icon — rows pass a literal 0 rather than a const.)
-    /// New pane — a drawn "+".
+    /// New panel — a drawn "+".
     pub const NEW_PANE: i32 = 1;
     /// Command palette — a drawn ">_" prompt.
     pub const COMMAND_PALETTE: i32 = 2;

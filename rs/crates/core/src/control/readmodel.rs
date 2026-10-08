@@ -117,7 +117,7 @@ pub struct TabInfo {
     pub title: String,
     pub layout: String,
     pub panes: Vec<PaneInfo>,
-    /// The app owns this tab and refuses to close it — today only the always-on "Hyperpane".
+    /// The app owns this tab and refuses to close it — today only the always-on "Avada" tab.
     /// Published so `closeTab` can refuse it up front, rather than answering 202 for a close
     /// the UI thread will then quietly drop.
     pub system: bool,

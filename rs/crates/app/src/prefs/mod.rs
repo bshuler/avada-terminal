@@ -247,13 +247,13 @@ pub struct Settings {
     /// instrumented function with its parameters and return value. Read at process start;
     /// `AVADA_LOG`/`AVADA_DEBUG` in the environment override it for one launch.
     pub log_level: String,
-    /// Minutes between firings of the Hyperpane **status loop** (the system tab's agent is
+    /// Minutes between firings of the Avada tab **status loop** (the system tab's agent is
     /// asked to check every pane and recover the stuck ones). `0` disables it.
     pub status_loop_minutes: u32,
     /// Hours between firings of the **restart-all-monitored-agents loop** (every tool pane
     /// is respawned into the same session). `0` disables it.
     pub restart_loop_hours: u32,
-    /// What the status loop types into the Hyperpane pane's agent on every firing. Empty =
+    /// What the status loop types into the Avada panel's agent on every firing. Empty =
     /// the built-in prompt ([`crate::loops::DEFAULT_STATUS_PROMPT`]); a single line, since it
     /// is submitted with one Enter. Capped at [`MAX_STATUS_LOOP_PROMPT`] chars.
     pub status_loop_prompt: String,

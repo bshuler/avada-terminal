@@ -51,7 +51,7 @@ fn install_tree(w: &crate::AppWindow) {
 fn rows(w: &crate::AppWindow) -> Vec<ElementHandle> {
     by_label(
         w,
-        "Focus this pane · drag to reorder or move it to another tab",
+        "Focus this panel · drag to reorder or move it to another tab",
     )
 }
 

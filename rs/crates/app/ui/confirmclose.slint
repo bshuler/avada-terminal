@@ -124,7 +124,7 @@ export component ConfirmCloseDialog inherits Rectangle {
 
             Text {
                 text: root.final-close
-                    ? "This is the last pane, so the window closes with it. Its terminal ends — this one can't be undone."
+                    ? "This is the last panel, so the window closes with it. Its terminal ends — this one can't be undone."
                     : "Its terminal keeps running. Bring it back any time from ↩ Recently Closed in the sidebar.";
                 color: root.final-close ? Theme.danger : Theme.subtext;
                 font-size: 12px;

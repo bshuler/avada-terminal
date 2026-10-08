@@ -307,7 +307,7 @@ pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")
 }
 
-/// The always-on **Hyperpane** tab's working directory: the app-managed home of the skills and
+/// The always-on **Avada** tab's working directory: the app-managed home of the skills and
 /// notes its agent works from.
 ///
 /// Durable user data ([`data_dir`]) rather than [`state_dir`], because it is a directory a person

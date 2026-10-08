@@ -229,7 +229,7 @@ pub struct Binding {
 
 /// Category headings, in the order the Preferences keybindings list shows them (an exact
 /// mirror of the renderer's `CATEGORY_ORDER` in `src/renderer/keybindings.ts`).
-pub const CATEGORY_ORDER: [&str; 4] = ["General", "Tabs", "Panes", "Zoom"];
+pub const CATEGORY_ORDER: [&str; 4] = ["General", "Tabs", "Panels", "Zoom"];
 
 /// The default keymap — an exact port of the renderer's `BINDING_DEFS`
 /// (`src/renderer/keybindings.ts`): same ids, labels, categories and default chords. Order
@@ -309,7 +309,7 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             Char('t'),
             "Tabs",
-            "Reopen closed pane or tab",
+            "Reopen closed panel or tab",
             Command::ReopenClosedTab,
         ),
         // Panes
@@ -319,8 +319,8 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             false,
             Left,
-            "Panes",
-            "Focus pane left",
+            "Panels",
+            "Focus panel left",
             Command::FocusDir(Direction::Left),
         ),
         b(
@@ -329,8 +329,8 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             false,
             Right,
-            "Panes",
-            "Focus pane right",
+            "Panels",
+            "Focus panel right",
             Command::FocusDir(Direction::Right),
         ),
         b(
@@ -339,8 +339,8 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             false,
             Up,
-            "Panes",
-            "Focus pane up",
+            "Panels",
+            "Focus panel up",
             Command::FocusDir(Direction::Up),
         ),
         b(
@@ -349,8 +349,8 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             false,
             Down,
-            "Panes",
-            "Focus pane down",
+            "Panels",
+            "Focus panel down",
             Command::FocusDir(Direction::Down),
         ),
         b(
@@ -359,8 +359,8 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             false,
             Char('z'),
-            "Panes",
-            "Zoom / unzoom pane",
+            "Panels",
+            "Zoom / unzoom panel",
             Command::ToggleZoom,
         ),
         b(
@@ -369,8 +369,8 @@ pub fn default_bindings() -> Vec<Binding> {
             false,
             false,
             F11,
-            "Panes",
-            "Fullscreen pane",
+            "Panels",
+            "Fullscreen panel",
             Command::ToggleFullscreen,
         ),
         b(
@@ -379,8 +379,8 @@ pub fn default_bindings() -> Vec<Binding> {
             false,
             false,
             Char('f'),
-            "Panes",
-            "Search in pane",
+            "Panels",
+            "Search in panel",
             Command::SearchFocused,
         ),
         // Ctrl+V pastes via the app (fresh OS-clipboard read + bracketed paste), matching
@@ -391,7 +391,7 @@ pub fn default_bindings() -> Vec<Binding> {
             false,
             false,
             Char('v'),
-            "Panes",
+            "Panels",
             "Paste",
             Command::PasteFocused,
         ),
@@ -406,7 +406,7 @@ pub fn default_bindings() -> Vec<Binding> {
             true,
             false,
             Char('v'),
-            "Panes",
+            "Panels",
             "Paste image (Alt+V)",
             Command::PasteImageFocused,
         ),
@@ -423,7 +423,7 @@ pub fn default_bindings() -> Vec<Binding> {
             false,
             !cfg!(target_os = "macos"),
             Char('c'),
-            "Panes",
+            "Panels",
             "Copy selection",
             Command::CopyFocused,
         ),

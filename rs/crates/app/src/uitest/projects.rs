@@ -78,7 +78,7 @@ fn resuming_a_session_names_both_its_project_and_its_id() {
             &w,
             &only(
                 &w,
-                "Resume this Claude session in a new pane",
+                "Resume this Claude session in a new panel",
                 AccessibleRole::Button,
             ),
         );

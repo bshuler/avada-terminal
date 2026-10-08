@@ -163,7 +163,7 @@ component TaskItem inherits Rectangle {
             }
         }
         Text {
-            text: root.p.title == "" ? "pane" : root.p.title;
+            text: root.p.title == "" ? "panel" : root.p.title;
             color: root.p.focused ? Theme.text : Theme.subtext;
             font-size: 12px;
             vertical-alignment: center;
@@ -574,8 +574,8 @@ export component PaneView inherits Rectangle {
                                 kind: 3;
                                 recording: pane.recording;
                                 tip: pane.recording
-                                    ? "Stop recording — transcribe and type it into this pane"
-                                    : "Dictate into this pane — record speech, then type the transcript";
+                                    ? "Stop recording — transcribe and type it into this panel"
+                                    : "Dictate into this panel — record speech, then type the transcript";
                                 clicked => { root.pane-mic(idx); }
                             }
                         }
@@ -585,8 +585,8 @@ export component PaneView inherits Rectangle {
                                 kind: 0;
                                 active: root.zoomed && pane.focused;
                                 tip: (root.zoomed && pane.focused)
-                                    ? "Unzoom — restore the other panes in this tab"
-                                    : "Zoom this pane to fill the tab";
+                                    ? "Unzoom — restore the other panels in this tab"
+                                    : "Zoom this panel to fill the tab";
                                 clicked => { root.pane-zoom(idx); }
                             }
                         }
@@ -597,7 +597,7 @@ export component PaneView inherits Rectangle {
                                 active: root.fullscreen && pane.focused;
                                 tip: (root.fullscreen && pane.focused)
                                     ? "Leave fullscreen (or hold Esc)"
-                                    : "Fullscreen this pane — the whole window, no chrome";
+                                    : "Fullscreen this panel — the whole window, no chrome";
                                 clicked => { root.pane-fullscreen(idx); }
                             }
                         }
@@ -609,8 +609,8 @@ export component PaneView inherits Rectangle {
                                 // A view pane has no shell to end (D3), so it must not be
                                 // promised one — the tip is the only place the difference shows.
                                 tip: pane.kind < 2
-                                    ? "Close this pane and end its shell"
-                                    : "Close this pane";
+                                    ? "Close this panel and end its shell"
+                                    : "Close this panel";
                                 clicked => { root.pane-close(idx); }
                             }
                         }

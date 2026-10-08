@@ -1,6 +1,6 @@
-// The "New pane" options dialog — the native port of `components/NewPaneDialog.tsx`
+// The "New panel" options dialog — the native port of `components/NewPaneDialog.tsx`
 // (with ColorSwatches + ShellPicker folded in). Opened by Shift-clicking the sidebar ＋
-// and the hamburger / pane menus' "New pane…" entries; a plain ＋ still adds immediately.
+// and the hamburger / panel menus' "New panel…" entries; a plain ＋ still adds immediately.
 //
 // A centred modal card (reusing the prefs/modal Catppuccin look) that configures a pane
 // before it spawns: Label · Color (+ Show-Frame / Show-Dot toggles) · Command · Working
@@ -269,7 +269,7 @@ export component NewPaneDialog inherits Rectangle {
             spacing: 12px;
 
             Text {
-                text: "New pane";
+                text: "New panel";
                 color: Theme.text;
                 font-size: 15px;
                 font-weight: 700;
@@ -280,7 +280,7 @@ export component NewPaneDialog inherits Rectangle {
                 spacing: 5px;
                 Text { text: "Label"; color: Theme.faint; font-size: 11px; }
                 label-input := NpInput {
-                    placeholder: "pane name";
+                    placeholder: "panel name";
                     autofocus: true;
                     submit => { root.do-submit(); }
                     escape => { root.cancel(); }
@@ -311,7 +311,7 @@ export component NewPaneDialog inherits Rectangle {
                             commands: "M 5 17 L 17 5";
                         }
                         TipArea {
-                            tip: "No colour — hide the new pane's frame and dot";
+                            tip: "No colour — hide the new panel's frame and dot";
                             clicked => { root.frame-on = false; root.dot-on = false; }
                         }
                     }
@@ -323,7 +323,7 @@ export component NewPaneDialog inherits Rectangle {
                         border-width: (!root.none-selected && ci == root.color-idx) ? 2px : 0px;
                         border-color: Theme.text;
                         TipArea {
-                            tip: "Tint the new pane's frame and dot";
+                            tip: "Tint the new panel's frame and dot";
                             // picking a color shows it (frame + dot on), like ColorSwatches.pickColor.
                             clicked => { root.color-idx = ci; root.frame-on = true; root.dot-on = true; }
                         }
@@ -383,7 +383,7 @@ export component NewPaneDialog inherits Rectangle {
                 spacing: 8px;
                 Rectangle { horizontal-stretch: 1; }
                 NpButton { label: "Cancel"; clicked => { root.cancel(); } }
-                NpButton { label: "Create pane"; primary: true; clicked => { root.do-submit(); } }
+                NpButton { label: "Create panel"; primary: true; clicked => { root.do-submit(); } }
             }
         }
     }

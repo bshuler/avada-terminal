@@ -414,7 +414,7 @@ fn linger(secs: u64) {
     if secs == 0 {
         return;
     }
-    eprintln!("worker: holding this pane open for {secs}s (--linger)");
+    eprintln!("worker: holding this panel open for {secs}s (--linger)");
     std::thread::sleep(Duration::from_secs(secs));
 }
 

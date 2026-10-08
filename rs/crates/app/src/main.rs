@@ -514,7 +514,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // `ctl <verb>`: the workspace's own command line over the running control API — the tool
-    // surface the always-on Hyperpane tab hands its agent, and a plain shell command anywhere
+    // surface the always-on Avada tab hands its agent, and a plain shell command anywhere
     // else. A client of the HTTP server, so like `attach` it launches no GUI.
     if ctl_cli::wants_ctl(&argv0) {
         return ctl_cli::run(&argv0).map_err(Into::into);

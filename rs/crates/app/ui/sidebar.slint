@@ -457,7 +457,7 @@ component ClaudeSessionRowView inherits Rectangle {
     }
 
     sa := TipArea {
-        tip: "Resume this Claude session in a new pane";
+        tip: "Resume this Claude session in a new panel";
         side: 1;
         mouse-cursor: pointer;
         clicked => { root.resume(); }
@@ -766,7 +766,7 @@ component ReminderRowView inherits Rectangle {
     }
 
     ra := TipArea {
-        tip: "Bring this parked pane back now";
+        tip: "Bring this parked panel back now";
         side: 1;
         mouse-cursor: pointer;
         clicked => { root.restore(); }
@@ -814,8 +814,8 @@ component ClosedRowView inherits Rectangle {
             }
             Text {
                 text: (root.item.is-tab
-                        ? "tab · " + root.item.panes + (root.item.panes == 1 ? " pane" : " panes")
-                        : "pane")
+                        ? "tab · " + root.item.panes + (root.item.panes == 1 ? " panel" : " panels")
+                        : "panel")
                     + " · " + root.item.age;
                 color: Theme.subtext;
                 font-size: 10px;
@@ -936,7 +936,7 @@ export component SidebarRail inherits Rectangle {
         // consumed on the resulting click.
         property <bool> shift-down: false;
         pa := TipArea {
-            tip: "New pane · Shift-click for shell, command and split options";
+            tip: "New panel · Shift-click for shell, command and split options";
             side: 1;
             mouse-cursor: pointer;
             clicked => {
@@ -1033,7 +1033,7 @@ export component SidebarRail inherits Rectangle {
             }
         }
         ba := TipArea {
-            tip: RemindersAdapter.open ? "Hide reminders" : "Reminders — panes you parked for later";
+            tip: RemindersAdapter.open ? "Hide reminders" : "Reminders — panels you parked for later";
             side: 1;
             mouse-cursor: pointer;
             clicked => { RemindersAdapter.toggle(); }
@@ -1073,7 +1073,7 @@ export component SidebarRail inherits Rectangle {
             }
 
             if RemindersAdapter.rows.length == 0 : Text {
-                text: "No parked panes. Right-click a pane header and pick a \"Remind…\" time to park it here.";
+                text: "No parked panels. Right-click a panel header and pick a \"Remind…\" time to park it here.";
                 color: Theme.subtext;
                 font-size: 12px;
                 wrap: word-wrap;
@@ -1136,7 +1136,7 @@ export component SidebarRail inherits Rectangle {
             }
         }
         ua := TipArea {
-            tip: ClosedAdapter.open ? "Hide recently closed" : "Recently closed — reopen a pane or tab";
+            tip: ClosedAdapter.open ? "Hide recently closed" : "Recently closed — reopen a panel or tab";
             side: 1;
             mouse-cursor: pointer;
             clicked => { ClosedAdapter.toggle(); }
@@ -1173,7 +1173,7 @@ export component SidebarRail inherits Rectangle {
             }
 
             if ClosedAdapter.rows.length == 0 : Text {
-                text: "Nothing closed yet. Panes and tabs you close land here with their terminals still running — click one to bring it back.";
+                text: "Nothing closed yet. Panels and tabs you close land here with their terminals still running — click one to bring it back.";
                 color: Theme.subtext;
                 font-size: 12px;
                 wrap: word-wrap;

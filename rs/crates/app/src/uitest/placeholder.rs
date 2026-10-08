@@ -58,7 +58,7 @@ fn buttons(w: &crate::AppWindow) -> Vec<String> {
     for label in [
         format!("Reopen {MODULE}"),
         format!("Install {MODULE} from marketplace"),
-        format!("Open another pane like {MODULE}"),
+        format!("Open another panel like {MODULE}"),
     ] {
         if !by_label(w, &label).is_empty() {
             out.push(label);
@@ -81,13 +81,13 @@ fn a_crashed_module_offers_reopen_and_the_click_reaches_rust_with_its_pane_and_m
         assert_eq!(v.reason, Some(Reason::Crashed));
         assert!(v
             .message
-            .contains("Reopen it, or open another pane like it."));
+            .contains("Reopen it, or open another panel like it."));
 
         assert_eq!(
             buttons(&w),
             vec![
                 format!("Reopen {MODULE}"),
-                format!("Open another pane like {MODULE}")
+                format!("Open another panel like {MODULE}")
             ],
             "crashed offers reopen and open-another, never install"
         );
@@ -133,7 +133,7 @@ fn a_disabled_module_says_why_and_open_another_reaches_its_callback() {
             buttons(&w),
             vec![
                 format!("Reopen {MODULE}"),
-                format!("Open another pane like {MODULE}")
+                format!("Open another panel like {MODULE}")
             ]
         );
         assert_eq!(texts(&w, &v.message), 1, "the disabled sentence renders");
@@ -150,7 +150,7 @@ fn a_disabled_module_says_why_and_open_another_reaches_its_callback() {
             w.global::<crate::ModulePlaceholderAdapter>()
                 .on_open_another(move |uid, id| got.borrow_mut().push((uid.into(), id.into())));
         }
-        let b = by_label(&w, &format!("Open another pane like {MODULE}"));
+        let b = by_label(&w, &format!("Open another panel like {MODULE}"));
         assert_eq!(b.len(), 1);
         click(&w, &b[0]);
         assert_eq!(
@@ -171,7 +171,7 @@ fn a_missing_module_offers_install_from_marketplace_and_the_click_reaches_rust()
             buttons(&w),
             vec![
                 format!("Install {MODULE} from marketplace"),
-                format!("Open another pane like {MODULE}")
+                format!("Open another panel like {MODULE}")
             ],
             "not-installed offers install and open-another, never reopen"
         );
@@ -213,7 +213,7 @@ fn a_broken_module_offers_reinstall_and_shows_the_hash_reason() {
             buttons(&w),
             vec![
                 format!("Install {MODULE} from marketplace"),
-                format!("Open another pane like {MODULE}")
+                format!("Open another panel like {MODULE}")
             ]
         );
         assert_eq!(texts(&w, &v.message), 1);

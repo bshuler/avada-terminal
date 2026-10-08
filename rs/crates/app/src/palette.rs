@@ -88,7 +88,7 @@ pub fn build(state: &State) -> Vec<Entry> {
         ),
         // ---- panes ----
         Entry::new(
-            "New pane",
+            "New panel",
             "Spawn an interactive shell",
             "add create terminal shell",
             Command::NewPane,
@@ -112,18 +112,18 @@ pub fn build(state: &State) -> Vec<Entry> {
     if !t.panes.is_empty() {
         let focused = t.focused;
         cmds.push(Entry::new(
-            "Move pane to new window",
-            "Re-host the focused pane in a new window (keeps its session)",
+            "Move panel to new window",
+            "Re-host the focused panel in a new window (keeps its session)",
             "detach tear-off rehost window",
             Command::MovePaneToNewWindow,
         ));
         cmds.push(Entry::new(
             if t.zoomed.is_some() {
-                "Unzoom pane"
+                "Unzoom panel"
             } else {
-                "Zoom pane"
+                "Zoom panel"
             },
-            "Toggle full-tab zoom of the focused pane",
+            "Toggle full-tab zoom of the focused panel",
             "maximize fullscreen expand",
             Command::ToggleZoom,
         ));
@@ -134,14 +134,14 @@ pub fn build(state: &State) -> Vec<Entry> {
             Command::ToggleFullscreen,
         ));
         cmds.push(Entry::new(
-            &format!("Close pane: {}", focused + 1),
-            "Close the focused pane",
+            &format!("Close panel: {}", focused + 1),
+            "Close the focused panel",
             "remove kill",
             Command::ClosePane(focused),
         ));
         cmds.push(Entry::new(
             "Dictate: Toggle Microphone",
-            "Record speech into the focused pane, then type the transcript",
+            "Record speech into the focused panel, then type the transcript",
             "stt mic microphone voice dictation speak whisper",
             Command::ToggleDictation(focused),
         ));
@@ -156,13 +156,13 @@ pub fn build(state: &State) -> Vec<Entry> {
     ));
     cmds.push(Entry::new(
         "Speech: Toggle Mute",
-        "Mute/unmute all per-pane talk",
+        "Mute/unmute all per-panel talk",
         "talk tts audio silence",
         Command::SpeechToggleMuted,
     ));
     cmds.push(Entry::new(
-        "Speech: Only Focused Pane",
-        "Toggle speaking only the focused pane's replies",
+        "Speech: Only Focused Panel",
+        "Toggle speaking only the focused panel's replies",
         "talk tts audio focus",
         Command::SpeechToggleFocusedOnly,
     ));
@@ -188,7 +188,7 @@ pub fn build(state: &State) -> Vec<Entry> {
     ));
     cmds.push(Entry::new(
         "Open set…",
-        "Load a saved set (re-attaches live panes)",
+        "Load a saved set (re-attaches live panels)",
         "set workspace library collection open load restore",
         Command::OpenSet,
     ));
@@ -235,8 +235,8 @@ pub fn build(state: &State) -> Vec<Entry> {
     // ---- focus a specific pane ----
     for (i, _p) in t.panes.iter().enumerate() {
         cmds.push(Entry::new(
-            &format!("Focus: pane {}", i + 1),
-            &format!("pane {}", i + 1),
+            &format!("Focus: panel {}", i + 1),
+            &format!("panel {}", i + 1),
             "go switch select",
             Command::FocusPane(i),
         ));

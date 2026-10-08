@@ -510,7 +510,7 @@ component PaneRowView inherits Rectangle {
     opacity: root.dragging ? 0.55 : 1.0;
 
     ta := TipArea {
-        tip: "Focus this pane · drag to reorder or move it to another tab";
+        tip: "Focus this panel · drag to reorder or move it to another tab";
         mouse-cursor: pointer;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
@@ -713,7 +713,7 @@ component TabRowView inherits Rectangle {
                         ink: cta.has-hover ? root.tab.tint : Theme.subtext;
                     }
                     cta := TipArea {
-                        tip: root.expanded ? "Collapse this tab's panes" : "Show this tab's panes";
+                        tip: root.expanded ? "Collapse this tab's panels" : "Show this tab's panels";
                         mouse-cursor: pointer;
                         clicked => { root.expanded = !root.expanded; }
                     }
@@ -1092,7 +1092,7 @@ export component LeftPanel inherits Rectangle {
         if RailAdapter.active == "" : SectionHead {
             label: "WORKSPACE";
             open: root.tree-open;
-            tip: root.tree-open ? "Collapse the tab and pane tree" : "Show the tab and pane tree";
+            tip: root.tree-open ? "Collapse the tab and panel tree" : "Show the tab and panel tree";
             toggled => { root.tree-open = !root.tree-open; }
         }
 

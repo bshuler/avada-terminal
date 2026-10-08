@@ -1,4 +1,4 @@
-//! The always-on **Hyperpane** tab's working directory.
+//! The always-on **Avada** tab's working directory.
 //!
 //! The tab runs the user's coding CLI in [`paths::hyperpane_dir`], and the files that make that
 //! directory a useful place to start — the README a human reads, the `.claude/` settings and
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use crate::persistence::paths;
 
-/// The shipped copy of the Hyperpane directory, or `None` when the app is running from a tree
+/// The shipped copy of the Avada tab's directory, or `None` when the app is running from a tree
 /// that doesn't carry it.
 ///
 /// Same packaged layouts [`crate::shell_integration::shell_integration_dir`] handles —

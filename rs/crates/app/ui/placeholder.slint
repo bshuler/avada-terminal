@@ -102,7 +102,7 @@ component PhBody inherits Rectangle {
             }
             PhButton {
                 label: "Open another like it";
-                name: "Open another pane like " + root.item.module-id;
+                name: "Open another panel like " + root.item.module-id;
                 clicked => { ModulePlaceholderAdapter.open-another(root.item.pane-uid, root.item.module-id); }
             }
         }

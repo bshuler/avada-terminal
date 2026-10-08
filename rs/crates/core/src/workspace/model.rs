@@ -140,7 +140,7 @@ pub struct GroupSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoomed: Option<u32>,
     /// Whether the app owns this tab and refuses to close it — today only the always-on
-    /// "Hyperpane" tab. Absent (rather than `false`) in every workspace written before the
+    /// "Avada" tab. Absent (rather than `false`) in every workspace written before the
     /// flag existed, and in every ordinary tab since, so a restore of an older file simply
     /// yields no system tab and the app recreates its own at startup.
     #[serde(skip_serializing_if = "Option::is_none")]

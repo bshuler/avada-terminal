@@ -929,12 +929,12 @@ export component OverlayLayer inherits Rectangle {
 
             // ---- frame / dot toggles ----
             PrefToggle {
-                label: "Pane frame border";
+                label: "Panel frame border";
                 on: root.show-frame;
                 toggled(v) => { root.pref-action(2, v ? 1 : 0); }
             }
             PrefToggle {
-                label: "Pane color dot";
+                label: "Panel color dot";
                 on: root.show-dot;
                 toggled(v) => { root.pref-action(3, v ? 1 : 0); }
             }
@@ -1032,7 +1032,7 @@ export component OverlayLayer inherits Rectangle {
                 toggled(v) => { root.pref-action(13, v ? 1 : 0); }
             }
             Text {
-                text: "a local model labels what each pane is doing (default off, private)";
+                text: "a local model labels what each panel is doing (default off, private)";
                 color: Theme.faint;
                 font-size: 11px;
             }
@@ -1108,7 +1108,7 @@ export component OverlayLayer inherits Rectangle {
             // Mirrors Electron's "Idle glow for AI panes" — only an agent pane (one whose
             // shell title names claude/aider/etc.) glows once it goes output-quiet.
             PrefToggle {
-                label: "Idle glow for AI panes";
+                label: "Idle glow for AI panels";
                 on: root.idle-alert;
                 toggled(v) => { root.pref-action(10, v ? 1 : 0); }
             }
@@ -1138,7 +1138,7 @@ export component OverlayLayer inherits Rectangle {
                             font-size: 13px;
                         }
                         Text {
-                            text: "silence before an agent pane glows";
+                            text: "silence before an agent panel glows";
                             color: Theme.faint;
                             font-size: 11px;
                         }
@@ -1181,7 +1181,7 @@ export component OverlayLayer inherits Rectangle {
                     toggled(v) => { root.pref-action(16, v ? 1 : 0); }
                 }
                 Text {
-                    text: "without this, agents can read panes + run commands but cannot type into them";
+                    text: "without this, agents can read panels + run commands but cannot type into them";
                     color: Theme.faint;
                     font-size: 11px;
                 }
@@ -1513,12 +1513,12 @@ export component OverlayLayer inherits Rectangle {
             // The card itself carries an "Ask before closing" checkbox, but a card that has
             // been switched off never appears again — this is the way back.
             PrefToggle {
-                label: "Ask before closing a pane or a tab";
+                label: "Ask before closing a panel or a tab";
                 on: root.confirm-close;
                 toggled(v) => { root.pref-action(25, v ? 1 : 0); }
             }
             Text {
-                text: "a closed pane or tab is parked with its terminal still running and comes back from ↩ Recently Closed in the sidebar — turn this off to close without being asked (the last pane of the last tab still asks, because closing it ends the window for good)";
+                text: "a closed panel or tab is parked with its terminal still running and comes back from ↩ Recently Closed in the sidebar — turn this off to close without being asked (the last panel of the last tab still asks, because closing it ends the window for good)";
                 color: Theme.faint;
                 font-size: 11px;
                 wrap: word-wrap;
@@ -1639,7 +1639,7 @@ export component OverlayLayer inherits Rectangle {
 
             Text { text: "Opening links"; color: Theme.faint; font-size: 11px; }
             Text {
-                text: "When a tool running in a pane opens a URL, Avada decides where it goes.";
+                text: "When a tool running in a panel opens a URL, Avada decides where it goes.";
                 color: Theme.subtext;
                 font-size: 11px;
                 wrap: word-wrap;

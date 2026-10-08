@@ -51,7 +51,7 @@ fn a_swatch_reports_its_own_palette_index() {
             w.on_ctx_swatch(move |i| saw.set(i));
         }
 
-        let slots = by_label(&w, "Tint this pane's frame and dot");
+        let slots = by_label(&w, "Tint this panel's frame and dot");
         assert_eq!(slots.len(), 3, "three palette colours, three swatches");
         click(&w, &slots[1]);
         assert_eq!(saw.get(), 1, "the swatch must report its own index");
@@ -82,7 +82,7 @@ fn the_no_colour_chip_clears_the_tint() {
             &w,
             &only(
                 &w,
-                "No colour — hide this pane's frame and dot",
+                "No colour — hide this panel's frame and dot",
                 AccessibleRole::Button,
             ),
         );
