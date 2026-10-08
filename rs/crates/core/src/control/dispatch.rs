@@ -352,12 +352,20 @@ fn handle_command_inner(
         return DispatchResult::ok(None, false);
     }
 
-    // Resolve a target window: explicit windowId (number or numeric string), else the pane's window.
-    let window_id = window_id_field(cmd).or_else(|| {
-        cmd.get("paneId")
-            .and_then(Value::as_str)
-            .and_then(|p| model.coords_of(p).map(|c| c.window_id))
-    });
+    // Resolve a target window: explicit windowId (number or numeric string), else the pane's
+    // window, else the tab's — a tab id names its window as surely as a pane id does, and
+    // `ctl layout <tab> <name>` sends nothing else.
+    let window_id = window_id_field(cmd)
+        .or_else(|| {
+            cmd.get("paneId")
+                .and_then(Value::as_str)
+                .and_then(|p| model.coords_of(p).map(|c| c.window_id))
+        })
+        .or_else(|| {
+            cmd.get("tabId")
+                .and_then(Value::as_str)
+                .and_then(|t| model.tab_window(t))
+        });
     if window_id.is_none() {
         return DispatchResult::err(400, "command needs a paneId or windowId");
     }
@@ -1510,6 +1518,19 @@ mod tests {
         );
         assert_eq!(r.status, 400);
         assert_eq!(r.body["error"], json!("command needs a paneId or windowId"));
+    }
+
+    #[test]
+    fn a_tab_id_alone_names_the_window() {
+        // What `ctl layout <tab> <name>` sends: no windowId, no paneId.
+        let mut m = model_one_window();
+        let s = sessions();
+        let cmd = json!({ "type": "setLayout", "tabId": "t1", "layout": "grid" });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 200, "got {:?}", r.body);
+        let unknown = json!({ "type": "setLayout", "tabId": "t9", "layout": "grid" });
+        let r = handle_command(&mut m, &s, None, None, &unknown, &speech());
+        assert_eq!(r.status, 400, "an unknown tab still has no window");
     }
 
     #[tokio::test]
