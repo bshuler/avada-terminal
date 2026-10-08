@@ -1138,6 +1138,22 @@ impl ControlHost {
                         changed = true;
                     }
                 }
+                UiOp::MovePane {
+                    session_uid,
+                    tab_id,
+                } => {
+                    if let Some((w, target)) = resolve_tab(windows, &tab_id) {
+                        let mut st = w.state.borrow_mut();
+                        let from = pane_slot(st.tabs.iter().map(|t| t.panes.iter().map(|p| p.uid.as_str())), &session_uid);
+                        if let Some((from, idx)) = from {
+                            // Appended (`at` past the end): the order a caller issues moves in
+                            // is the order the panes land in.
+                            let at = st.tabs[target].panes.len();
+                            st.move_pane_between_tabs_at(from, idx, target, at, mgr);
+                            changed = true;
+                        }
+                    }
+                }
                 UiOp::SetTabLayout { tab_id, layout } => {
                     if let Some((w, idx)) = resolve_tab(windows, &tab_id) {
                         // An unknown token resolves to `Auto` rather than failing: the command
@@ -1592,6 +1608,20 @@ fn resolve_tab<'a>(windows: &'a [Rc<Window>], tab_id: &str) -> Option<(&'a Rc<Wi
     (idx < w.state.borrow().tabs.len()).then_some((w, idx))
 }
 
+/// `(tab index, pane index)` of the pane hosting session `uid`, given each tab's pane uids in
+/// order. A pane's slot is looked up when its op is applied, not when it was queued: earlier
+/// moves in the same batch shift indices, and can drop a tab outright.
+#[tracing::instrument(level = "debug", ret, skip(tabs))]
+fn pane_slot<'a, T, P>(tabs: T, uid: &str) -> Option<(usize, usize)>
+where
+    T: IntoIterator<Item = P>,
+    P: IntoIterator<Item = &'a str>,
+{
+    tabs.into_iter()
+        .enumerate()
+        .find_map(|(t, panes)| panes.into_iter().position(|p| p == uid).map(|i| (t, i)))
+}
+
 /// Format a Slint color as `#rrggbb` (the read-model's `color` shape).
 #[tracing::instrument(level = "debug", ret)]
 fn color_hex(c: Color) -> String {
@@ -1691,6 +1721,15 @@ mod tests {
         let model = model_with(vec![pane("ctl-1", "u-old")]);
         let lost = lost_control_panes(&ids, &model, &HashSet::new(), &|_| true);
         assert!(lost.is_empty(), "unexpected heal targets: {lost:?}");
+    }
+
+    #[test]
+    fn a_moved_pane_is_found_by_its_session_wherever_it_now_sits() {
+        let tabs = [vec!["a", "b"], vec![], vec!["c", "d", "e"]];
+        let slot = |uid| pane_slot(tabs.iter().map(|t| t.iter().copied()), uid);
+        assert_eq!(slot("a"), Some((0, 0)));
+        assert_eq!(slot("e"), Some((2, 2)), "an empty tab before it must not shift the count");
+        assert_eq!(slot("gone"), None, "a session that exited is skipped, not guessed at");
     }
 
     #[test]

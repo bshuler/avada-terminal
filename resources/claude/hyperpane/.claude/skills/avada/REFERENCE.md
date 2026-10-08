@@ -85,8 +85,9 @@ Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `gr
 | `rename-tab <tab> <title>` | `{"type":"renameTab","tabId":…,"title":…}` |
 | `focus-tab <tab>` | `{"type":"focusTab","tabId":…}` |
 | `move-tab <tab> <index>` | `{"type":"moveTab","tabId":…,"to":N}` |
+| `move-pane <pane> <tab>` | `{"type":"movePane","paneId":…,"tabId":…}` |
 
-All five answer **202** with `{"ok":true,"queued":true}` — they are applied by the UI thread on
+All six answer **202** with `{"ok":true,"queued":true}` — they are applied by the UI thread on
 its next frame. `newTab` also returns the id the new tab will have (`{window}:{count}`, appended
 at the end). Re-read `tabs` to confirm anything else.
 
@@ -97,6 +98,11 @@ The Hyperpane tab is the app's own and refuses to close.
 
 `move-tab`'s index is an insertion slot in the pre-move ordering, so `move-tab 1:3 0` puts the tab
 first and an index equal to the tab count puts it last.
+
+`move-pane` appends the pane to the target tab without restarting it: the session keeps running
+and its scrollback comes along. A tab emptied by the move is dropped, which shifts the ids of
+every tab after it — so re-read `tabs` between moves, or move from the last tab backwards. A
+pane in another window, or already in the target tab, is refused with 409.
 
 ## Preferences
 

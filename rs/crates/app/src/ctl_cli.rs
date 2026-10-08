@@ -62,6 +62,7 @@ usage: avada ctl <verb> [args]
     rename-tab <tab> <title>
     focus-tab <tab>
     move-tab <tab> <index>
+    move-pane <pane> <tab>          re-host a running pane in another tab (no restart)
 
   Preferences
     set <key> <value>               one setting; value is JSON if it parses, else a string
@@ -246,6 +247,15 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
                 &conn,
                 "/command",
                 json!({ "type": "moveTab", "tabId": tab, "to": to }),
+            )?);
+        }
+        "move-pane" => {
+            let pane = need(args.first(), "move-pane <pane> <tab>");
+            let tab = need(args.get(1), "move-pane <pane> <tab>");
+            print_json(post(
+                &conn,
+                "/command",
+                json!({ "type": "movePane", "paneId": pane, "tabId": tab }),
             )?);
         }
 

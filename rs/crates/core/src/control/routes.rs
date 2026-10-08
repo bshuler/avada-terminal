@@ -2013,7 +2013,14 @@ async fn dictation_command(
 }
 
 /// `/command` verbs that edit the tab tree.
-const TAB_VERBS: &[&str] = &["newTab", "closeTab", "renameTab", "focusTab", "moveTab"];
+const TAB_VERBS: &[&str] = &[
+    "newTab",
+    "closeTab",
+    "renameTab",
+    "focusTab",
+    "moveTab",
+    "movePane",
+];
 
 /// Queue a UI op, turning a full queue into a 503 rather than a silent drop.
 #[tracing::instrument(level = "debug", ret, skip(shared))]
@@ -2180,6 +2187,54 @@ fn tab_command(shared: &Arc<Shared>, info: &TokenInfo, ty: &str, cmd: &Value) ->
                     json!({ "ok": true, "queued": true, "tabId": tab_id, "to": to }),
                 ),
             }
+        }
+        "movePane" => {
+            let raw = match cmd.get("paneId").and_then(Value::as_str) {
+                Some(p) if !p.is_empty() => p,
+                _ => return jstatus(400, json!({ "error": "missing string field: paneId" })),
+            };
+            let (tab_id, window_id) = match find_tab(shared, cmd) {
+                Err(e) => return e,
+                Ok(t) => t,
+            };
+            // Resolved here, while the read model can still 404 it, and queued by session uid:
+            // that is the key the UI thread's own pane list carries.
+            let found = {
+                let model = shared.model.lock().unwrap();
+                model.resolve_pane_id(raw).and_then(|id| {
+                    let at = model.coords_of(&id)?;
+                    let uid = model.pane(&id)?.session_uid.clone();
+                    Some((id, at, uid))
+                })
+            };
+            let Some((pane_id, at, session_uid)) = found else {
+                return jstatus(404, json!({ "error": "no such pane", "paneId": raw }));
+            };
+            // 409 rather than a 202 the UI thread would then silently drop, as for closeTab.
+            if at.window_id != window_id {
+                return jstatus(
+                    409,
+                    json!({
+                        "error": "the pane is in another window; drag it across instead",
+                        "paneId": pane_id,
+                        "tabId": tab_id,
+                    }),
+                );
+            }
+            if at.tab_id == tab_id {
+                return jstatus(
+                    409,
+                    json!({ "error": "the pane is already in that tab", "paneId": pane_id, "tabId": tab_id }),
+                );
+            }
+            queue_ui_op(
+                shared,
+                UiOp::MovePane {
+                    session_uid,
+                    tab_id: tab_id.clone(),
+                },
+                json!({ "ok": true, "queued": true, "paneId": pane_id, "tabId": tab_id }),
+            )
         }
         _ => jstatus(400, json!({ "error": format!("unknown command: {ty}") })),
     }
@@ -4521,6 +4576,46 @@ mod golden {
         .await;
         assert_eq!(r.status().as_u16(), 202);
         assert_eq!(r.json::<Value>().await.unwrap()["queued"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn move_pane_queues_by_session_and_refuses_what_the_ui_would_drop() {
+        let s = boot(true).await;
+        let tab = |id: &str, panes| TabInfo {
+            id: id.into(),
+            title: id.into(),
+            layout: "auto".into(),
+            panes,
+            system: false,
+        };
+        s.shared.model.lock().unwrap().add_window(WindowInfo {
+            window_id: 3,
+            active_tab_id: Some("3:0".into()),
+            keyboard_focus_pane: None,
+            tabs: vec![tab("3:0", vec![pane("pane-mv", "uid-mv")]), tab("3:1", vec![])],
+        });
+        // Drain whatever earlier tests left so the assertion below sees only this op.
+        s.shared.ui_ops.lock().unwrap().drain();
+
+        // The bare-uuid spelling of the id resolves, and the op carries the session uid.
+        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"mv","tabId":"3:1"}"#).await;
+        assert_eq!(r.status().as_u16(), 202);
+        assert_eq!(r.json::<Value>().await.unwrap()["paneId"], json!("pane-mv"));
+        assert_eq!(
+            s.shared.ui_ops.lock().unwrap().drain(),
+            vec![UiOp::MovePane {
+                session_uid: "uid-mv".into(),
+                tab_id: "3:1".into()
+            }]
+        );
+
+        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"pane-mv","tabId":"3:0"}"#).await;
+        assert_eq!(r.status().as_u16(), 409, "already in that tab");
+        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"pane-mv","tabId":"t1"}"#).await;
+        assert_eq!(r.status().as_u16(), 409, "another window");
+        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"nope","tabId":"3:1"}"#).await;
+        assert_eq!(r.status().as_u16(), 404);
+        assert!(s.shared.ui_ops.lock().unwrap().drain().is_empty(), "a refusal queues nothing");
     }
 
     // ---- work queue routes -----------------------------------------------------------------
