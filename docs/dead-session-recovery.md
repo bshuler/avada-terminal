@@ -179,11 +179,12 @@ orphans in no tab, alias map, or snapshot). The sweep path itself
 One pre-existing quirk showed up in the check: right after a GUI relaunch every pane
 reads `busy` to `inspect` (40/40 at T+2.5 min against 5/40 before the quit), because the
 fresh GUI has no `last_output_at` for it yet (`activity_for`'s never-output rule,
-unchanged here). By T+6 min only the two panes in the tab on screen had cleared to
-`idle`; the 36 panes in other tabs still read `busy`. That pattern fits the GUI only
-observing output for the visible tab, which was not verified further. Anything gated
-on not-busy (nudges, the speak-first queue) therefore sees every background pane as
-mid-turn after a relaunch until its tab is shown; this is a 0.2.32 item, not fixed here.
+unchanged here). At T+6 min 2 of 40 had cleared to `idle`, at T+10 min 4 of 40; the
+pane in the front tab (`ctl state` reports `activeTabId`) was still `busy`, so tab
+visibility is not what clears it. A Claude prompt that is sitting quiet prints nothing,
+so such a pane keeps reading `busy` indefinitely, and anything gated on not-busy
+(nudges, the speak-first queue) treats it as mid-turn until it next prints. Tracked as
+issue #; not fixed here.
 
 ### Inferred marks are placeholders, never resume targets
 
