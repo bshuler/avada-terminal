@@ -35,6 +35,11 @@ const VIEW_PREFIX: &str = "view:";
 /// `view:*`, `module:*` — are disjoint by construction.
 const MODULE_PREFIX: &str = "module:";
 
+/// A subagent pane's value. Bare, not `view:`-prefixed (the contract fixes it, and it is what
+/// `ctl state` reports as the kind). It shares the tool-id namespace, so no registry tool may
+/// ever be called `subagent` — a test below holds that.
+const SUBAGENT: &str = "subagent";
+
 /// What a module pane points at: one surface of one installed module, optionally pinned
 /// to the version the workspace was saved with.
 ///
@@ -126,6 +131,11 @@ pub enum PaneKind {
     /// Neither a PTY nor a projected row model: the module draws it over the host's
     /// pane protocol, and until the host resolves it the pane shows a placeholder.
     Module(ModulePaneRef),
+    /// A Claude Code subagent of the Claude pane it hangs under, drawn read-only from the
+    /// subagent's transcript (`docs/subagent-panes-design.md`). In-process in Claude, so
+    /// there is no PTY behind it; the app rebuilds these from the hook records rather than
+    /// restoring them from the session file.
+    Subagent,
 }
 
 impl PaneKind {
@@ -166,6 +176,7 @@ impl PaneKind {
                 | PaneKind::Table
                 | PaneKind::Image
                 | PaneKind::Module(_)
+                | PaneKind::Subagent
         )
     }
 
@@ -213,6 +224,7 @@ impl PaneKind {
             PaneKind::Table => Some(format!("{VIEW_PREFIX}table")),
             PaneKind::Image => Some(format!("{VIEW_PREFIX}image")),
             PaneKind::Module(m) => Some(format!("{MODULE_PREFIX}{}", m.body())),
+            PaneKind::Subagent => Some(SUBAGENT.to_string()),
         }
     }
 
@@ -224,6 +236,10 @@ impl PaneKind {
         let v = v.trim();
         if v.is_empty() || v == "terminal" {
             return PaneKind::Terminal;
+        }
+        // Before the tool fallthrough below, which would otherwise read it as an unknown tool.
+        if v == SUBAGENT {
+            return PaneKind::Subagent;
         }
         if let Some(view) = v.strip_prefix(VIEW_PREFIX) {
             return match view {
@@ -266,6 +282,7 @@ impl PaneKind {
             PaneKind::Table => 8,
             PaneKind::Image => 9,
             PaneKind::Module(_) => 10,
+            PaneKind::Subagent => 11,
         }
     }
 
@@ -295,6 +312,7 @@ impl PaneKind {
             // `repo · surface`: the owner is noise in a pane header, the surface is not —
             // a module may contribute several.
             PaneKind::Module(m) => format!("{} · {}", m.id.repo(), m.surface),
+            PaneKind::Subagent => "Subagent".to_string(),
         }
     }
 
@@ -348,6 +366,7 @@ mod tests {
             PaneKind::Table,
             PaneKind::Image,
             PaneKind::Module(module_ref(Some("1.2.0"))),
+            PaneKind::Subagent,
         ]
     }
 
@@ -377,6 +396,22 @@ mod tests {
             PaneKind::Table => 8,
             PaneKind::Image => 9,
             PaneKind::Module(_) => 10,
+            PaneKind::Subagent => 11,
+        }
+    }
+
+    #[test]
+    fn a_subagent_pane_is_a_bare_subagent_view() {
+        let k = PaneKind::Subagent;
+        assert_eq!(k.as_meta_value().as_deref(), Some("subagent"));
+        assert_eq!(PaneKind::from_meta_value("subagent"), k);
+        assert_eq!(PaneKind::from_meta_value(" subagent "), k);
+        assert!(k.is_view() && !k.is_pty());
+        assert!(k.tool().is_none() && k.tool_id().is_none());
+        assert_eq!(k.ui_kind(), 11);
+        assert_eq!(k.ui_name(), "Subagent");
+        for t in registry::TOOLS {
+            assert_ne!(t.id, SUBAGENT, "a tool id would be shadowed by subagent panes");
         }
     }
 

@@ -421,6 +421,7 @@ const GROUP_KEYS: &[&str] = &[
     "focused",
     "zoomed",
     "system",
+    "hideSubagents",
 ];
 const PANE_KEYS: &[&str] = &[
     "label", "color", "command", "args", "cwd", "shell", "fontSize", "meta", "uid", "talk", "note",
@@ -1031,6 +1032,7 @@ mod tests {
             focused: Some(0),
             zoomed: Some(0),
             system: Some(true),
+            hide_subagents: Some(true),
         };
         let window = WindowSpec {
             title: Some("w".into()),

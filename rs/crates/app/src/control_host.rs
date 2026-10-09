@@ -35,7 +35,10 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use avada_core::control::dictation_service;
-use avada_core::control::readmodel::{PaneInfo, PaneStatus, ReadModel, TabInfo, WindowInfo};
+use avada_core::claude_subagents::{SubagentRecord, GROWTH_IDLE};
+use avada_core::control::readmodel::{
+    PaneInfo, PaneStatus, ReadModel, SubagentActivity, TabInfo, WindowInfo,
+};
 use avada_core::control::server::{self, notify_state, Shared};
 use avada_core::control::uiops::UiOp;
 use avada_core::install::dirs::InstallPaths;
@@ -823,6 +826,8 @@ impl ControlHost {
                     // hook marker for the pane's tool mark — and a restart or recovery asks
                     // `State::restart_tool`, which reads the label, the mark and the sniff.
                     kind: PaneKind::Terminal,
+                    parent_pane_id: None,
+                    subagent_activity: None,
                 },
             );
             if inserted {
@@ -1130,6 +1135,11 @@ impl ControlHost {
                         changed = true;
                     }
                 }
+                // Accepted and dropped until the chrome lane wires it to
+                // `Tab::set_hide_subagents` (docs/subagent-panes-design.md §3).
+                UiOp::ToggleSubagents { tab_id } => {
+                    tracing::debug!(%tab_id, "toggleSubagents: not applied in this build");
+                }
                 UiOp::MoveTab { tab_id, to } => {
                     if let Some((w, idx)) = resolve_tab(windows, &tab_id) {
                         let mut st = w.state.borrow_mut();
@@ -1219,6 +1229,7 @@ impl ControlHost {
     ) -> bool {
         let pane_ids = self.pane_ids.borrow();
         let ctl = self.ctl.borrow();
+        let now = std::time::SystemTime::now();
 
         let mut new_windows = Vec::new();
         let mut new_prev = HashMap::new();
@@ -1292,6 +1303,12 @@ impl ControlHost {
                         exit_code,
                         meta: c.meta,
                         kind: p.kind.clone(),
+                        // Published under the parent's control id, the one `/state` names it by.
+                        parent_pane_id: p
+                            .parent_uid
+                            .as_ref()
+                            .map(|u| pane_ids.get(u).cloned().unwrap_or_else(|| u.clone())),
+                        subagent_activity: p.subagent.as_ref().map(|r| subagent_activity(r, now)),
                     });
                 }
                 tabs.push(TabInfo {
@@ -1384,6 +1401,8 @@ impl ControlHost {
             // Likewise no conversation mark: the control model records none, and inventing
             // one would resume a chat this pane was never in.
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             // The control model carries no cwd either; the pane learns its own from OSC 7.
             cwd: None,
         };
@@ -1478,6 +1497,19 @@ struct ModelPane {
     shell: Option<String>,
     cwd: Option<String>,
     meta: Option<BTreeMap<String, String>>,
+}
+
+/// A subagent pane's `/state` activity: `finished` once the hook saw it stop, `active` while
+/// it works by [`SubagentRecord::is_active`], `idle` otherwise.
+#[tracing::instrument(level = "debug", ret, skip(r), fields(agent = %r.agent_id))]
+fn subagent_activity(r: &SubagentRecord, now: std::time::SystemTime) -> SubagentActivity {
+    if r.stopped_at.is_some() {
+        SubagentActivity::Finished
+    } else if r.is_active(now, GROWTH_IDLE) {
+        SubagentActivity::Active
+    } else {
+        SubagentActivity::Idle
+    }
 }
 
 /// The GUI session uid currently mapped to control `pane_id`, if any. A GUI pane's effective
@@ -1668,6 +1700,8 @@ mod tests {
             exit_code: None,
             meta: None,
             kind: PaneKind::Terminal,
+            parent_pane_id: None,
+            subagent_activity: None,
         }
     }
 

@@ -1131,6 +1131,8 @@ mod read_only_menu_tests {
                 spawn_shell: None,
                 kind,
                 tool_session: None,
+                parent_uid: None,
+                subagent: None,
                 cwd: None,
             },
         );
@@ -1219,6 +1221,8 @@ mod read_only_menu_tests {
                     spawn_shell: None,
                     kind: PaneKind::Terminal,
                     tool_session: None,
+                    parent_uid: None,
+                    subagent: None,
                     cwd: None,
                 },
             );
@@ -1492,6 +1496,8 @@ mod module_preset_menu_tests {
                 spawn_shell: None,
                 kind,
                 tool_session: None,
+                parent_uid: None,
+                subagent: None,
                 cwd: None,
             },
         );

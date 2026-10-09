@@ -85,6 +85,9 @@ pub enum UiOp {
     /// session is detached and adopted, never restarted — what dragging a pane onto another
     /// tab in the left panel does. The source tab is dropped if this was its last pane.
     MovePane { session_uid: String, tab_id: String },
+    /// Flip the tab's "hide subagents" toggle (`Tab::hide_subagents` in the app): subagent
+    /// panes drop out of the layout but stay in the tab.
+    ToggleSubagents { tab_id: String },
     /// Mirror of the `setLayout` verb. The dispatch already wrote it to the read model, but the
     /// GUI's `publish` rebuilds every tab from its own state each tick and would snap the layout
     /// back — so the visible change has to be made on the UI thread as well.

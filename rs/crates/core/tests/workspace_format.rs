@@ -47,6 +47,7 @@ fn kitchen_sink() -> WorkspaceFile {
         focused: Some(1),
         zoomed: Some(0),
         system: Some(true),
+        hide_subagents: Some(true),
     };
     WorkspaceFile {
         name: Some("sink".into()),
@@ -154,6 +155,7 @@ fn group_split_state_survives_disk_round_trip() {
             focused: Some(1),
             zoomed: Some(1),
             system: None,
+            hide_subagents: None,
         }]),
         active: Some(0),
         ..Default::default()

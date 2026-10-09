@@ -293,6 +293,8 @@ fn spawn_seed_pane(
         meta: ps.meta.clone().filter(|m| !m.is_empty()),
         talk: false,
         kind,
+        parent_pane_id: None,
+        subagent_activity: None,
     }
 }
 

@@ -1206,6 +1206,8 @@ fn spawn_pane(
         meta: meta.filter(|m| !m.is_empty()),
         talk: false,
         kind,
+        parent_pane_id: None,
+        subagent_activity: None,
     })
 }
 

@@ -129,6 +129,9 @@ pub fn pane_mark_kind(kind: &PaneKind) -> i32 {
         PaneKind::Table => pane_mark::TABLE,
         PaneKind::Image => pane_mark::IMAGE,
         PaneKind::Module(_) => pane_mark::MODULE,
+        // A Claude subagent wears its orchestrator's mark: the tree already nests it under
+        // that pane, and a glyph of its own would need a new `PaneMark` case for no gain.
+        PaneKind::Subagent => PaneKind::Tool("claude".into()).ui_icon(),
         // `ui_icon` answers 0 for a plain shell AND for a tool id with no mark in this
         // build; both are PTY panes, so both get the prompt rather than a gap.
         PaneKind::Terminal | PaneKind::Tool(_) => match kind.ui_icon() {
@@ -891,6 +894,10 @@ mod tests {
             (
                 PaneKind::from_meta_value("module:acme/avada-files#tree"),
                 pane_mark::MODULE,
+            ),
+            (
+                PaneKind::Subagent,
+                PaneKind::Tool("claude".into()).ui_icon(),
             ),
             // A tool id from a build newer than this one: still a terminal running
             // something, so it gets the prompt rather than a gap or a borrowed brand.

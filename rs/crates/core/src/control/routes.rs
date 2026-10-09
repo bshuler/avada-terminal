@@ -2020,6 +2020,7 @@ const TAB_VERBS: &[&str] = &[
     "focusTab",
     "moveTab",
     "movePane",
+    "toggleSubagents",
 ];
 
 /// Queue a UI op, turning a full queue into a 503 rather than a silent drop.
@@ -2156,6 +2157,16 @@ fn tab_command(shared: &Arc<Shared>, info: &TokenInfo, ty: &str, cmd: &Value) ->
                 ),
             }
         }
+        "toggleSubagents" => match find_tab(shared, cmd) {
+            Err(e) => e,
+            Ok((tab_id, _)) => queue_ui_op(
+                shared,
+                UiOp::ToggleSubagents {
+                    tab_id: tab_id.clone(),
+                },
+                json!({ "ok": true, "queued": true, "tabId": tab_id }),
+            ),
+        },
         "focusTab" => match find_tab(shared, cmd) {
             Err(e) => e,
             Ok((tab_id, _)) => queue_ui_op(
@@ -3626,6 +3637,8 @@ mod golden {
             meta: None,
             talk: false,
             kind: crate::tools::PaneKind::Terminal,
+            parent_pane_id: None,
+            subagent_activity: None,
         }
     }
 
@@ -4615,6 +4628,73 @@ mod golden {
         assert_eq!(r.status().as_u16(), 409, "another window");
         let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"nope","tabId":"3:1"}"#).await;
         assert_eq!(r.status().as_u16(), 404);
+        assert!(s.shared.ui_ops.lock().unwrap().drain().is_empty(), "a refusal queues nothing");
+    }
+
+    #[tokio::test]
+    async fn state_carries_a_subagent_pane_and_its_parent_link() {
+        let s = boot(true).await;
+        s.shared.model.lock().unwrap().add_window(WindowInfo {
+            window_id: 4,
+            active_tab_id: Some("4:0".into()),
+            keyboard_focus_pane: None,
+            tabs: vec![TabInfo {
+                id: "4:0".into(),
+                title: "agents".into(),
+                layout: "auto".into(),
+                panes: vec![
+                    PaneInfo {
+                        kind: crate::tools::PaneKind::Tool("claude".into()),
+                        ..pane("pane-orch", "uid-orch")
+                    },
+                    PaneInfo {
+                        kind: crate::tools::PaneKind::Subagent,
+                        parent_pane_id: Some("pane-orch".into()),
+                        subagent_activity: Some(crate::control::readmodel::SubagentActivity::Finished),
+                        ..pane("pane-sub", "")
+                    },
+                ],
+                system: false,
+            }],
+        });
+        let state: Value = client()
+            .get(format!("{}/state", s.base))
+            .header("authorization", format!("Bearer {}", s.token))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let tab = state["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["windowId"] == json!(4))
+            .unwrap()["tabs"][0]
+            .clone();
+        let (orch, sub) = (&tab["panes"][0], &tab["panes"][1]);
+        assert_eq!(orch["kind"], json!("claude"));
+        assert!(orch.get("parentPaneId").is_none(), "a top-level pane has no parent: {orch}");
+        assert_eq!(sub["kind"], json!("subagent"));
+        assert_eq!(sub["parentPaneId"], json!("pane-orch"));
+        assert_eq!(sub["activity"], json!("finished"), "the subagent's own state, not the PTY's");
+    }
+
+    #[tokio::test]
+    async fn toggle_subagents_queues_for_a_known_tab_only() {
+        let s = boot(true).await;
+        s.shared.ui_ops.lock().unwrap().drain();
+        let r = post(&s, "/command", &s.token, r#"{"type":"toggleSubagents","tabId":"t1"}"#).await;
+        assert_eq!(r.status().as_u16(), 202);
+        assert_eq!(
+            s.shared.ui_ops.lock().unwrap().drain(),
+            vec![UiOp::ToggleSubagents { tab_id: "t1".into() }]
+        );
+        let r = post(&s, "/command", &s.token, r#"{"type":"toggleSubagents","tabId":"nope"}"#).await;
+        assert_eq!(r.status().as_u16(), 404);
+        let r = post(&s, "/command", &s.token, r#"{"type":"toggleSubagents"}"#).await;
+        assert_eq!(r.status().as_u16(), 400);
         assert!(s.shared.ui_ops.lock().unwrap().drain().is_empty(), "a refusal queues nothing");
     }
 

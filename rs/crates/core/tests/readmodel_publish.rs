@@ -25,6 +25,8 @@ fn pane(id: &str, uid: &str) -> PaneInfo {
         exit_code: None,
         meta: None,
         kind: avada_core::tools::PaneKind::Terminal,
+        parent_pane_id: None,
+        subagent_activity: None,
     }
 }
 

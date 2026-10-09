@@ -108,6 +108,34 @@ pub struct PaneInfo {
     /// without parsing `command`. Serialised via [`PaneKind::as_meta_value`], which
     /// yields `None` for `Terminal` and so omits the field for ordinary panes.
     pub kind: PaneKind,
+    /// The control id of the pane this one hangs under — set for a subagent pane (its
+    /// orchestrator), `None` otherwise. `ctl tabs` indents a pane under its parent.
+    pub parent_pane_id: Option<String>,
+    /// A subagent pane's own state, which replaces `activity` in `/state`: a subagent has
+    /// no PTY for the liveness monitor to watch. `None` for every other pane.
+    pub subagent_activity: Option<SubagentActivity>,
+}
+
+/// What a subagent pane's agent is doing, as `/state` reports it in `activity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentActivity {
+    /// Running: started and not stopped (or, without the hook, its transcript is growing).
+    Active,
+    /// Not stopped, but its transcript has gone quiet.
+    Idle,
+    /// `SubagentStop` seen. The pane stays until the orchestrator's turn ends.
+    Finished,
+}
+
+impl SubagentActivity {
+    #[tracing::instrument(level = "debug", ret)]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubagentActivity::Active => "active",
+            SubagentActivity::Idle => "idle",
+            SubagentActivity::Finished => "finished",
+        }
+    }
 }
 
 /// One tab (group): a layout + its panes.
@@ -873,6 +901,10 @@ pub struct PaneOut {
     /// `meta["pane.kind"]`; the two encodings are deliberately the same one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The pane this one hangs under (a subagent's orchestrator) — additive, omitted for a
+    /// top-level pane so the legacy shape is untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_pane_id: Option<String>,
 }
 
 #[tracing::instrument(level = "debug", ret)]
@@ -896,12 +928,15 @@ fn pane_out(p: &PaneInfo, activity: Activity, dims: Option<(u16, u16)>) -> PaneO
         exit_code: p.exit_code,
         // Frozen legacy field: AwaitingInput down-maps to "idle" (the precise value rides
         // the new `liveness` frame, not `/state`).
-        activity: activity.legacy_str(),
+        activity: p
+            .subagent_activity
+            .map_or_else(|| activity.legacy_str(), SubagentActivity::as_str),
         meta: p.meta.clone(),
         cols: dims.map(|(c, _)| c),
         rows: dims.map(|(_, r)| r),
         talk: p.talk,
         kind: p.kind.as_meta_value(),
+        parent_pane_id: p.parent_pane_id.clone(),
     }
 }
 
@@ -926,6 +961,8 @@ mod tests {
             meta: None,
             talk: false,
             kind: PaneKind::Terminal,
+            parent_pane_id: None,
+            subagent_activity: None,
         }
     }
 

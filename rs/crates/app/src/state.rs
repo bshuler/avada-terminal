@@ -21,6 +21,7 @@ use avada_core::layout::presets::{
 use avada_core::layout::sizes::{clamp_fraction, equal_sizes, insert_size, remove_size, resize_at};
 use avada_core::persistence::{paths, projects};
 use avada_core::session_manager::{AgentLiveness, SessionManager, SpawnOptions};
+use avada_core::claude_subagents::SubagentRecord;
 use avada_core::tools::{PaneKind, ToolSessionMark};
 use avada_core::workspace::io::{read_workspace, windows_of, write_workspace};
 use avada_core::workspace::model::{GroupSpec, PaneSpec, WorkspaceFile};
@@ -162,6 +163,9 @@ pub struct DetachedPane {
     /// The conversation this pane was resumed into, carried across a re-host for the same
     /// reason as `kind`: a pane moved to another window has to relaunch into the same chat.
     pub tool_session: Option<ToolSessionMark>,
+    /// A subagent pane's orchestrator and record, carried so a moved tab keeps the link.
+    pub parent_uid: Option<String>,
+    pub subagent: Option<SubagentRecord>,
     /// The pane's working directory — and, for the non-pty views, its *target*: the file the
     /// viewer/markdown pane renders, the directory the browser lists (see [`crate::viewpane`]).
     /// That makes it content, not decoration: a re-host that dropped it turned a README
@@ -185,6 +189,8 @@ pub struct DetachedTab {
     /// The zoomed (maximised-in-tab) pane, carried so a reopened/moved tab keeps its
     /// maximized pane instead of dropping the zoom.
     pub zoomed: Option<usize>,
+    /// The tab's "hide subagents" toggle, carried like `zoomed`.
+    pub hide_subagents: bool,
     pub panes: Vec<DetachedPane>,
 }
 
@@ -1118,6 +1124,12 @@ pub struct PaneState {
     /// the tool id itself (`meta["tool.id"]`) so the restore path can still name the
     /// binary to resume.
     pub tool_session: Option<ToolSessionMark>,
+    /// The uid of the Claude pane that spawned this one, for a [`PaneKind::Subagent`] pane;
+    /// `None` for every other pane.
+    pub parent_uid: Option<String>,
+    /// The subagent this pane shows (hook record ∪ transcript scan, see
+    /// [`avada_core::claude_subagents`]); `None` unless `kind` is [`PaneKind::Subagent`].
+    pub subagent: Option<SubagentRecord>,
 }
 
 impl PaneState {
@@ -1397,6 +1409,10 @@ pub struct Tab {
     /// and it is refused at the state layer rather than only in the UI, because the control plane
     /// and the keyboard both reach `close_tab` without going through a × button.
     pub system: bool,
+    /// Whether the tab's subagent panes are hidden (the TopBar toggle). Hidden panes stay in
+    /// `panes` so `focused`, `zoomed` and `sizes` keep indexing one vector; only
+    /// [`Tab::visible_panes`] leaves them out. Persisted through `GroupSpec::hide_subagents`.
+    pub hide_subagents: bool,
 }
 
 impl Tab {
@@ -1411,7 +1427,62 @@ impl Tab {
             focused: 0,
             zoomed: None,
             system: false,
+            hide_subagents: false,
         }
+    }
+
+    /// Every pane with its index in `panes`, minus the subagent panes while they are hidden.
+    /// Layout and the pane-model projections iterate this, so a hidden pane gets no tile.
+    pub fn visible_panes(&self) -> impl Iterator<Item = (usize, &PaneState)> {
+        let hide = self.hide_subagents;
+        self.panes
+            .iter()
+            .enumerate()
+            .filter(move |(_, p)| !(hide && p.kind == PaneKind::Subagent))
+    }
+
+    /// Hide or show the subagent panes. Hiding never leaves focus or zoom on a hidden pane:
+    /// a hidden zoomed or focused pane hands focus to its nearest visible ancestor (pane 0
+    /// when the chain is broken) and the zoom is cleared. Focus on a hidden pane under a
+    /// visible zoom simply moves to the zoomed pane.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn set_hide_subagents(&mut self, hide: bool) {
+        self.hide_subagents = hide;
+        if !hide {
+            return;
+        }
+        let hidden = |i: usize| {
+            self.panes
+                .get(i)
+                .is_some_and(|p| p.kind == PaneKind::Subagent)
+        };
+        let from = match self.zoomed {
+            Some(z) if hidden(z) => z,
+            Some(z) if hidden(self.focused) => {
+                self.focused = z;
+                return;
+            }
+            _ if hidden(self.focused) => self.focused,
+            _ => return,
+        };
+        // Subagents nest (spawn depth), so climb until a visible pane; the step bound turns
+        // a parent cycle into the pane-0 fallback instead of a hang.
+        let mut at = from;
+        for _ in 0..self.panes.len() {
+            let Some(up) = self.panes[at]
+                .parent_uid
+                .as_deref()
+                .and_then(|uid| self.panes.iter().position(|p| p.uid == uid))
+            else {
+                break;
+            };
+            at = up;
+            if !hidden(at) {
+                break;
+            }
+        }
+        self.focused = if hidden(at) { 0 } else { at };
+        self.zoomed = None;
     }
 
     /// Recolor panes so each unpinned pane's accent tracks its creation slot in the
@@ -2369,6 +2440,8 @@ impl State {
             spawn_shell: kind.is_pty().then_some(shell).flatten(),
             kind,
             tool_session,
+            parent_uid: None,
+            subagent: None,
         })
     }
 
@@ -2589,6 +2662,8 @@ impl State {
                 spawn_shell: ps.spawn_shell,
                 kind: ps.kind,
                 tool_session: ps.tool_session,
+                parent_uid: ps.parent_uid,
+                subagent: ps.subagent,
                 cwd: ps.cwd,
             },
             alive,
@@ -2678,6 +2753,8 @@ impl State {
             spawn_shell: det.spawn_shell,
             kind: det.kind,
             tool_session: det.tool_session,
+            parent_uid: det.parent_uid,
+            subagent: det.subagent,
         };
         let auto = self.active_tab().layout == Layout::Auto;
         let t = self.active_tab_mut();
@@ -2730,6 +2807,8 @@ impl State {
                 spawn_shell: ps.spawn_shell,
                 kind: ps.kind,
                 tool_session: ps.tool_session,
+                parent_uid: ps.parent_uid,
+                subagent: ps.subagent,
                 cwd: ps.cwd,
             },
             alive,
@@ -3166,6 +3245,30 @@ impl State {
     /// The identity a pane is **drawn** with: its own `kind` when it has one, else
     /// whatever the title sniff caught it running. `PaneState.kind` — the thing
     /// persistence writes and a relaunch replays — is never written from a sniff.
+    /// `(count, any active)` over tab `tab_idx`'s subagent panes — hidden ones included,
+    /// since the toggle has to know what it would show. `(0, false)` for a bad index.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn tab_subagent_summary(&self, tab_idx: usize) -> (usize, bool) {
+        self.tab_subagent_summary_at(tab_idx, std::time::SystemTime::now())
+    }
+
+    /// [`Self::tab_subagent_summary`] at a given clock, for tests.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn tab_subagent_summary_at(&self, tab_idx: usize, now: std::time::SystemTime) -> (usize, bool) {
+        let Some(tab) = self.tabs.get(tab_idx) else {
+            return (0, false);
+        };
+        tab.panes
+            .iter()
+            .filter(|p| p.kind == PaneKind::Subagent)
+            .fold((0, false), |(n, any), p| {
+                let active = p.subagent.as_ref().is_some_and(|r| {
+                    r.is_active(now, avada_core::claude_subagents::GROWTH_IDLE)
+                });
+                (n + 1, any || active)
+            })
+    }
+
     #[tracing::instrument(level = "debug", ret, skip(self, ps))]
     pub fn effective_kind(&self, ps: &PaneState) -> PaneKind {
         if !matches!(ps.kind, PaneKind::Terminal) {
@@ -7560,6 +7663,8 @@ impl State {
             spawn_shell: ps.spawn_shell,
             kind: ps.kind,
             tool_session: ps.tool_session,
+            parent_uid: ps.parent_uid,
+            subagent: ps.subagent,
             cwd: ps.cwd,
         })
     }
@@ -7643,6 +7748,8 @@ impl State {
             spawn_shell: det.spawn_shell,
             kind: det.kind,
             tool_session: det.tool_session,
+            parent_uid: det.parent_uid,
+            subagent: det.subagent,
         };
         let auto = self.tabs[ti].layout == Layout::Auto;
         let t = &mut self.tabs[ti];
@@ -7962,6 +8069,8 @@ impl State {
                 spawn_shell: p.spawn_shell,
                 kind: p.kind,
                 tool_session: p.tool_session,
+                parent_uid: p.parent_uid,
+                subagent: p.subagent,
                 cwd: p.cwd,
             })
             .collect();
@@ -7972,6 +8081,7 @@ impl State {
             main_fraction: tab.main_fraction,
             focused,
             zoomed,
+            hide_subagents: tab.hide_subagents,
             panes,
         }
     }
@@ -8043,6 +8153,7 @@ impl State {
             self.tabs[ti].focused = det.focused.min(n - 1);
         }
         self.tabs[ti].zoomed = det.zoomed.filter(|&z| z < n);
+        self.tabs[ti].hide_subagents = det.hide_subagents;
         self.dirty = true;
     }
 
@@ -8072,6 +8183,7 @@ impl State {
             self.tabs[ti].focused = det.focused.min(n - 1);
         }
         self.tabs[ti].zoomed = det.zoomed.filter(|&z| z < n);
+        self.tabs[ti].hide_subagents = det.hide_subagents;
         self.dirty = true;
     }
 
@@ -8273,6 +8385,7 @@ impl State {
                     // Only written when set, so an ordinary tab's group is byte-identical to
                     // what earlier versions wrote.
                     system: t.system.then_some(true),
+                    hide_subagents: t.hide_subagents.then_some(true),
                 }
             })
             .collect();
@@ -8635,6 +8748,9 @@ impl State {
         // recognizer above supplies it — that is what stops the files already on disk from
         // producing a duplicate on their very next relaunch.
         tab.system = hyperpane;
+        // The subagent panes themselves are not in the file; reconcile re-creates them, and
+        // they arrive already hidden when the tab was saved that way.
+        tab.hide_subagents = g.hide_subagents == Some(true);
         tab.relabel(palette);
         self.tabs.push(tab);
     }
@@ -8958,6 +9074,8 @@ impl State {
             uid,
             kind,
             tool_session,
+            parent_uid: None,
+            subagent: None,
             title: label.into(),
             subtitle: None,
             show_frame: Some(project),
@@ -9714,6 +9832,8 @@ mod spawn_cells_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -9802,6 +9922,8 @@ mod session_file_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -10211,6 +10333,8 @@ mod reminder_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -11680,6 +11804,8 @@ mod tool_identity_tests {
                 spawn_shell: None,
                 kind: PaneKind::default(),
                 tool_session: None,
+                parent_uid: None,
+                subagent: None,
                 cwd: None,
             },
         );
@@ -12016,6 +12142,8 @@ mod left_panel_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -12239,6 +12367,8 @@ mod set_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -12820,6 +12950,8 @@ mod keyboard_focus_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -13033,6 +13165,8 @@ mod close_history_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -13473,6 +13607,8 @@ mod hyperpane_uniqueness_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -13666,6 +13802,7 @@ mod hyperpane_uniqueness_tests {
             main_fraction: 0.5,
             focused: 0,
             zoomed: None,
+            hide_subagents: false,
             panes: panes.iter().map(|p| det(p)).collect(),
         }
     }
@@ -14247,5 +14384,209 @@ mod module_keymap_routing_tests {
         st.set_module_preset("not a module id", "editor", Some("vscode"));
         assert!(!st.dirty, "a malformed id changes nothing at all");
         assert_eq!(grid::preset_of(&id(), "editor"), None);
+    }
+}
+
+#[cfg(test)]
+mod subagent_tab_tests {
+    //! The discovery lane's app-state seam for subagent panes (docs/subagent-panes-design.md
+    //! §1): `Tab::visible_panes`, the focus/zoom rule of `Tab::set_hide_subagents`, the
+    //! per-tab summary both parallel lanes read, and the toggle's trip through a relaunch.
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn mgr() -> SessionManager {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionManager::new(tx)
+    }
+
+    fn det(uid: &str, kind: PaneKind, parent: Option<&str>) -> DetachedPane {
+        DetachedPane {
+            uid: uid.into(),
+            title: uid.into(),
+            subtitle: None,
+            pinned_accent: None,
+            show_frame: None,
+            show_dot: None,
+            font_px: 14.0,
+            spawn_command: None,
+            spawn_args: None,
+            spawn_shell: None,
+            kind,
+            tool_session: None,
+            parent_uid: parent.map(str::to_string),
+            subagent: None,
+            cwd: None,
+        }
+    }
+
+    fn sub(uid: &str, parent: &str) -> DetachedPane {
+        det(uid, PaneKind::Subagent, Some(parent))
+    }
+
+    /// One tab: `shell`, `orch` (claude), `a` and `b` under orch, `c` under `a` (depth 2).
+    fn tab_with_subagents() -> State {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.adopt_pane(&m, det("shell", PaneKind::Terminal, None));
+        st.adopt_pane(&m, det("orch", PaneKind::Tool("claude".into()), None));
+        st.adopt_pane(&m, sub("a", "orch"));
+        st.adopt_pane(&m, sub("b", "orch"));
+        st.adopt_pane(&m, sub("c", "a"));
+        st
+    }
+
+    fn visible(st: &State) -> Vec<(usize, String)> {
+        st.active_tab()
+            .visible_panes()
+            .map(|(i, p)| (i, p.uid.clone()))
+            .collect()
+    }
+
+    fn at(st: &State, uid: &str) -> usize {
+        st.active_tab()
+            .panes
+            .iter()
+            .position(|p| p.uid == uid)
+            .unwrap()
+    }
+
+    #[test]
+    fn hidden_subagents_leave_the_visible_list_but_keep_their_indices() {
+        let mut st = tab_with_subagents();
+        assert_eq!(visible(&st).len(), 5, "shown by default");
+        st.active_tab_mut().set_hide_subagents(true);
+        assert_eq!(
+            visible(&st),
+            [(0, "shell".to_string()), (1, "orch".to_string())]
+        );
+        assert_eq!(st.active_tab().panes.len(), 5, "hidden panes stay in `panes`");
+        st.active_tab_mut().set_hide_subagents(false);
+        assert_eq!(
+            visible(&st).iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn hiding_moves_focus_and_zoom_off_a_hidden_pane() {
+        // (focused, zoomed) before hiding → (focused, zoomed) after.
+        let cases: [(&str, Option<&str>, &str, Option<&str>); 6] = [
+            // A focused subagent hands focus to its parent.
+            ("b", None, "orch", None),
+            // Nested: climbs past the hidden parent to the first visible ancestor.
+            ("c", None, "orch", None),
+            // A zoomed subagent: focus to its parent, zoom cleared.
+            ("a", Some("a"), "orch", None),
+            ("shell", Some("b"), "orch", None),
+            // Focus on a subagent under a visible zoom: focus joins the zoom, which stays.
+            ("a", Some("shell"), "shell", Some("shell")),
+            // Nothing on a subagent: no change.
+            ("shell", Some("orch"), "shell", Some("orch")),
+        ];
+        for (f, z, want_f, want_z) in cases {
+            let mut st = tab_with_subagents();
+            let (fi, zi) = (at(&st, f), z.map(|z| at(&st, z)));
+            let (wf, wz) = (at(&st, want_f), want_z.map(|z| at(&st, z)));
+            let t = st.active_tab_mut();
+            t.focused = fi;
+            t.zoomed = zi;
+            t.set_hide_subagents(true);
+            assert_eq!((t.focused, t.zoomed), (wf, wz), "focused {f}, zoomed {z:?}");
+        }
+    }
+
+    #[test]
+    fn a_hidden_pane_whose_parent_is_gone_hands_focus_to_pane_zero() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.adopt_pane(&m, det("shell", PaneKind::Terminal, None));
+        st.adopt_pane(&m, sub("orphan", "closed-orchestrator"));
+        st.adopt_pane(&m, sub("loop-a", "loop-b"));
+        st.adopt_pane(&m, sub("loop-b", "loop-a"));
+        for uid in ["orphan", "loop-a"] {
+            let i = at(&st, uid);
+            let t = st.active_tab_mut();
+            t.set_hide_subagents(false);
+            t.focused = i;
+            t.zoomed = Some(i);
+            t.set_hide_subagents(true);
+            assert_eq!((t.focused, t.zoomed), (0, None), "{uid}");
+        }
+    }
+
+    #[test]
+    fn showing_again_leaves_focus_where_it_is() {
+        let mut st = tab_with_subagents();
+        let t = st.active_tab_mut();
+        t.set_hide_subagents(true);
+        t.focused = 0;
+        t.set_hide_subagents(false);
+        assert_eq!((t.focused, t.zoomed), (0, None));
+        assert!(!t.hide_subagents);
+    }
+
+    #[test]
+    fn the_summary_counts_subagent_panes_and_any_activity() {
+        let now = SystemTime::now();
+        let record = |started: bool, stopped: bool| SubagentRecord {
+            agent_id: "x".into(),
+            agent_type: "Explore".into(),
+            description: "Explore".into(),
+            spawn_depth: 1,
+            transcript: "/nowhere/agent-x.jsonl".into(),
+            started_at: started.then_some(now - Duration::from_secs(60)),
+            stopped_at: stopped.then_some(now - Duration::from_secs(5)),
+            last_growth: None,
+        };
+        let mut st = tab_with_subagents();
+        assert_eq!(st.tab_subagent_summary_at(0, now), (3, false), "no records yet");
+        let a = at(&st, "a");
+        let b = at(&st, "b");
+        st.active_tab_mut().panes[a].subagent = Some(record(true, true));
+        assert_eq!(st.tab_subagent_summary_at(0, now), (3, false), "finished is not active");
+        st.active_tab_mut().panes[b].subagent = Some(record(true, false));
+        assert_eq!(st.tab_subagent_summary_at(0, now), (3, true));
+        // Hidden panes still count: the toggle reports what it would show.
+        st.active_tab_mut().set_hide_subagents(true);
+        assert_eq!(st.tab_subagent_summary_at(0, now), (3, true));
+        assert_eq!(st.tab_subagent_summary_at(7, now), (0, false), "bad index");
+    }
+
+    #[test]
+    fn the_hide_toggle_survives_a_relaunch_and_is_absent_when_off() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.adopt_pane(&m, det("files", PaneKind::FileBrowser, None));
+        let g = st.to_session_file().groups.unwrap().swap_remove(0);
+        assert_eq!(g.hide_subagents, None, "an ordinary tab writes nothing new");
+
+        st.active_tab_mut().set_hide_subagents(true);
+        let mut g = st.to_session_file().groups.unwrap().swap_remove(0);
+        assert_eq!(g.hide_subagents, Some(true));
+        g.panes = vec![PaneSpec::default()];
+        g.panes[0].set_pane_kind(&PaneKind::FileBrowser);
+        g.panes[0].cwd = Some("/tmp".into());
+
+        let mut back = State::new(theme::load_font(1.0));
+        back.append_tab_from_group(&m, g);
+        assert!(back.tabs.last().unwrap().hide_subagents);
+    }
+
+    #[test]
+    fn moving_a_tab_keeps_its_toggle_and_the_parent_links() {
+        let m = mgr();
+        let mut st = tab_with_subagents();
+        st.active_tab_mut().set_hide_subagents(true);
+        let det = st.detach_tab_unchecked(st.active);
+        assert!(det.hide_subagents);
+        assert_eq!(det.panes[2].parent_uid.as_deref(), Some("orch"));
+
+        let mut other = State::new(theme::load_font(1.0));
+        other.adopt_tab(&m, det);
+        let t = other.active_tab();
+        assert!(t.hide_subagents);
+        assert_eq!(t.panes[4].parent_uid.as_deref(), Some("a"));
+        assert_eq!(t.panes[4].kind, PaneKind::Subagent);
     }
 }

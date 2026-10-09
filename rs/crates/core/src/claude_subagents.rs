@@ -33,6 +33,11 @@ use crate::claude_history::{claude_projects_root, encode_path_str};
 use crate::claude_panes::read_pane_session;
 use crate::persistence::paths;
 
+/// How recently a fallback-only subagent's transcript must have grown for it to count as
+/// active. The plan leaves N open; a subagent between tool calls is silent for a few seconds
+/// at most, and a hook-tracked one never consults this.
+pub const GROWTH_IDLE: Duration = Duration::from_secs(10);
+
 /// One subagent of a pane's Claude session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentRecord {

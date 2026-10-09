@@ -145,6 +145,10 @@ pub struct GroupSpec {
     /// yields no system tab and the app recreates its own at startup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<bool>,
+    /// Whether the tab's Claude subagent panes are hidden. Absent when they are shown, so
+    /// files written without the toggle and ordinary tabs since both read as "shown".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_subagents: Option<bool>,
 }
 
 /// Saved OS-window geometry.

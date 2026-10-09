@@ -287,7 +287,9 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<Vi
         | PaneKind::Tool(_)
         | PaneKind::Browser
         | PaneKind::Image
-        | PaneKind::Module(_) => Vec::new(),
+        | PaneKind::Module(_)
+        // The transcript viewer is the pane lane's (docs/subagent-panes-design.md §2).
+        | PaneKind::Subagent => Vec::new(),
     }
 }
 

@@ -791,6 +791,17 @@ fn print_json(v: Value) {
 /// each thing's id" — the two questions every other verb needs answered first.
 #[tracing::instrument(level = "debug", ret)]
 fn print_outline(state: &Value) {
+    for line in outline_lines(state) {
+        println!("{line}");
+    }
+}
+
+/// The `ctl tabs` outline. A pane with a `parentPaneId` in the same tab (a subagent) is printed
+/// right under its parent, one level deeper, with its activity in place of the PTY status; one
+/// whose parent is not in the tab is printed at the top level rather than lost.
+#[tracing::instrument(level = "debug", ret)]
+fn outline_lines(state: &Value) -> Vec<String> {
+    let mut out = Vec::new();
     for w in state
         .get("windows")
         .and_then(Value::as_array)
@@ -798,7 +809,7 @@ fn print_outline(state: &Value) {
     {
         let wid = w.get("windowId").and_then(Value::as_i64).unwrap_or(-1);
         let active = w.get("activeTabId").and_then(Value::as_str).unwrap_or("");
-        println!("window {wid}");
+        out.push(format!("window {wid}"));
         for t in w
             .get("tabs")
             .and_then(Value::as_array)
@@ -806,25 +817,55 @@ fn print_outline(state: &Value) {
         {
             let id = t.get("id").and_then(Value::as_str).unwrap_or("?");
             let mark = if id == active { "*" } else { " " };
-            println!(
+            out.push(format!(
                 "{mark} {id}  {}  [{}]",
                 t.get("title").and_then(Value::as_str).unwrap_or(""),
                 t.get("layout").and_then(Value::as_str).unwrap_or("")
-            );
-            for p in t
+            ));
+            let panes = t
                 .get("panes")
                 .and_then(Value::as_array)
-                .map_or(&[][..], |a| a)
-            {
-                println!(
-                    "      {}  {}  ({})",
-                    p.get("id").and_then(Value::as_str).unwrap_or("?"),
-                    p.get("label").and_then(Value::as_str).unwrap_or(""),
-                    p.get("status").and_then(Value::as_str).unwrap_or("?")
-                );
+                .map_or(&[][..], |a| a);
+            let str_of = |p: &Value, k: &str| p.get(k).and_then(Value::as_str).map(str::to_string);
+            let ids: Vec<Option<String>> = panes.iter().map(|p| str_of(p, "id")).collect();
+            let parent_here = |p: &Value| {
+                str_of(p, "parentPaneId").filter(|par| ids.iter().any(|i| i.as_deref() == Some(par)))
+            };
+            // Depth-first from the top-level panes. `seen` stops a parent cycle (which no
+            // well-formed state has) from recursing forever.
+            let mut seen = vec![false; panes.len()];
+            let mut stack: Vec<(usize, usize)> = (0..panes.len())
+                .rev()
+                .filter(|&i| parent_here(&panes[i]).is_none())
+                .map(|i| (i, 0))
+                .collect();
+            while let Some((i, depth)) = stack.pop() {
+                if std::mem::replace(&mut seen[i], true) {
+                    continue;
+                }
+                let p = &panes[i];
+                let shown = if p.get("kind").and_then(Value::as_str) == Some("subagent") {
+                    str_of(p, "activity")
+                } else {
+                    str_of(p, "status")
+                };
+                out.push(format!(
+                    "      {}{}  {}  ({})",
+                    "  ".repeat(depth),
+                    str_of(p, "id").as_deref().unwrap_or("?"),
+                    str_of(p, "label").unwrap_or_default(),
+                    shown.as_deref().unwrap_or("?")
+                ));
+                let me = ids[i].as_deref();
+                for c in (0..panes.len()).rev() {
+                    if !seen[c] && me.is_some() && parent_here(&panes[c]).as_deref() == me {
+                        stack.push((c, depth + 1));
+                    }
+                }
             }
         }
     }
+    out
 }
 
 /// Every pane, flat, with the tab it sits in — the listing to grep when you know a pane by its
@@ -1384,5 +1425,34 @@ mod tests {
         assert_eq!(body["scope"], "panes:read");
         assert_eq!(body["note"], "x");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_outline_indents_a_subagent_under_its_parent() {
+        let state = serde_json::json!({ "windows": [{ "windowId": 1, "activeTabId": "1:0", "tabs": [{
+            "id": "1:0", "title": "work", "layout": "auto", "panes": [
+                { "id": "sub-a", "label": "orch › Explore", "status": "running",
+                  "activity": "active", "kind": "subagent", "parentPaneId": "orch" },
+                { "id": "shell", "label": "zsh", "status": "running", "activity": "idle" },
+                { "id": "orch", "label": "orch", "status": "running", "activity": "busy",
+                  "kind": "claude" },
+                { "id": "sub-b", "label": "orch › Plan", "status": "running",
+                  "activity": "finished", "kind": "subagent", "parentPaneId": "orch" },
+                { "id": "lost", "label": "gone › x", "status": "running",
+                  "activity": "idle", "kind": "subagent", "parentPaneId": "elsewhere" },
+            ]
+        }]}]});
+        assert_eq!(
+            outline_lines(&state),
+            [
+                "window 1",
+                "* 1:0  work  [auto]",
+                "      shell  zsh  (running)",
+                "      orch  orch  (running)",
+                "        sub-a  orch › Explore  (active)",
+                "        sub-b  orch › Plan  (finished)",
+                "      lost  gone › x  (idle)",
+            ]
+        );
     }
 }

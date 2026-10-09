@@ -2202,6 +2202,8 @@ mod pty_resize_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -2373,6 +2375,8 @@ mod image_arm_tests {
             spawn_shell: None,
             kind: PaneKind::Image,
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: Some(target.into()),
         }
     }
@@ -2418,6 +2422,8 @@ mod image_arm_tests {
                 ModulePaneRef::new("bshuler/avada-image", surface, None).expect("a valid pane ref"),
             ),
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
@@ -2516,6 +2522,8 @@ mod grid_resize_tests {
             spawn_shell: None,
             kind,
             tool_session: None,
+            parent_uid: None,
+            subagent: None,
             cwd: None,
         }
     }
