@@ -17,13 +17,16 @@ recover once memory was freed. Evidence gathered without restarting anything:
   app log stops dead between the 17:40 and 17:55 firings of the status loop.
 - The GUI's only daemon reader (`hp-daemon-sm-reader`, `reader_loop`) sleeps in
   `read_frame → recvfrom` with 0 % CPU, while `netstat -f unix` shows that same socket
-  holding a full 8160-byte receive queue, static for over an hour. The daemon's writer
+  holding a full 8160-byte receive queue, unchanged across every `netstat` check since first
+  seen. The main thread was still logging at 17:40:47Z (13:40 local), so onset is bounded to
+  17:40–17:55Z. The daemon's writer
   thread for that connection (`hp-daemon-writer`, `writer_loop → write_all → sendto`) is
   blocked because the GUI is not draining. A sleeping reader on a full queue has no
   userland explanation found so far (no `SO_RCVLOWAT`, one socket, fds 11/12 are dups of
   it, no second reader); root needs `dtrace`/`fs_usage` to settle it.
 - The daemon is healthy: a fresh client (`Hello`, `Ping`, `ListSessions`, `RenderScreen`)
-  gets answers in under 30 ms, 50 sessions listed, pane screens render. Pane PTYs and
+  gets answers in under 30 ms, 50 sessions listed, pane screens render. The daemon log shows
+  those probes as `conn=3` / `conn=4` at 18:16Z, so they reached this daemon, not a stale socket. Pane PTYs and
   their programs are untouched.
 Remedy today: quit and reopen the GUI (the daemon and every pane survive; it also moves the
 GUI onto the installed 0.2.32). Fix direction:
