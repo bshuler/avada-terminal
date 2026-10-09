@@ -100,3 +100,41 @@ Control API next to the GUI), and a pane that loses this race is born dead.
 behind a process-wide mutex. Only the microsecond-long libc call is held; cloning,
 spawning the child and the reader thread stay unlocked. Ten consecutive parallel runs
 of the tool-session tests and the full app and core suites pass with the lock in place.
+
+## 0.2.29: the status loop typed into a bare shell
+
+After 0.2.28 the Avada panel (the app's own Hyperpane pane) came back as a plain `zsh`,
+and every fifteen minutes the status loop typed its prompt into that shell and pressed
+Enter twice, because `fire_status_loop` only checked the pane's *label*, never what the
+pane was running. 0.2.29 classifies the live foreground (`loops::classify_foreground`):
+an agent gets the prompt as before, a shell is relaunched from the pane's recipe
+(`relaunch_hyperpane_pane`, then `rekey_restarted_pane` so the loop follows the new pane
+id), anything else skips the round with a warning. Dead-session recovery routes the
+Hyperpane pane through the same relaunch, and `restart_monitored_pane` no longer dies on
+a stale directory.
+
+Verified live on 2026-10-09T01:55:47Z: the log shows `status loop: the Avada panel is a
+bare shell; relaunching its agent instead of typing` followed by `Avada panel relaunched
+old=… new=…`, and the new pane came up as Claude.
+
+One more thing surfaced by that relaunch: the panel directory moved from
+`~/Library/Application Support/hyperpanes/hyperpane` to `…/avada/hyperpane` on
+2026-10-01, and Claude Code records folder trust per path, so the first launch in the new
+directory parked on the trust dialog. The loop correctly skips every round while a form
+is on screen, but it says nothing, so a parked form looks like a silent panel. Trust was
+accepted by hand on 2026-10-09 and is now in `~/.claude.json`.
+
+### Open follow-ups (not yet done)
+
+- **No backoff on relaunch.** If the relaunched agent exits straight back to a shell,
+  the loop relaunches it again every tick, forever. Add a per-pane failure count and stop
+  (with a visible alert) after a few consecutive failures.
+- **A parked option form is silent.** When `screen_shows_option_form` holds the loop
+  for more than one tick, raise a notification naming the pane, instead of a log line.
+- **`module.activate failed … the host did not provide a …`** WARN seen in
+  `avada-app.log` right after the 0.2.29 relaunch. Not investigated; find which module
+  and which host capability it wants.
+- **Main checkout carries two uncommitted features.** `/Users/bshuler/code/avada/avada-terminal`
+  (13 files: `move-pane … new`, Escape cancels tab rename, two-row tab strip) plus the
+  memory-fix session's edits, including `github.rs` with an empty OAuth client id that
+  must not be committed. Commit the strip on its own branch from a clean worktree.
