@@ -1433,6 +1433,7 @@ impl Tab {
 
     /// Every pane with its index in `panes`, minus the subagent panes while they are hidden.
     /// Layout and the pane-model projections iterate this, so a hidden pane gets no tile.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     pub fn visible_panes(&self) -> impl Iterator<Item = (usize, &PaneState)> {
         let hide = self.hide_subagents;
         self.panes
@@ -1445,6 +1446,7 @@ impl Tab {
     /// a hidden zoomed or focused pane hands focus to its nearest visible ancestor (pane 0
     /// when the chain is broken) and the zoom is cleared. Focus on a hidden pane under a
     /// visible zoom simply moves to the zoomed pane.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn set_hide_subagents(&mut self, hide: bool) {
         self.hide_subagents = hide;
@@ -3242,17 +3244,16 @@ impl State {
         crate::gridpane::forget(uid);
     }
 
-    /// The identity a pane is **drawn** with: its own `kind` when it has one, else
-    /// whatever the title sniff caught it running. `PaneState.kind` — the thing
-    /// persistence writes and a relaunch replays — is never written from a sniff.
     /// `(count, any active)` over tab `tab_idx`'s subagent panes — hidden ones included,
     /// since the toggle has to know what it would show. `(0, false)` for a bad index.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn tab_subagent_summary(&self, tab_idx: usize) -> (usize, bool) {
         self.tab_subagent_summary_at(tab_idx, std::time::SystemTime::now())
     }
 
     /// [`Self::tab_subagent_summary`] at a given clock, for tests.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn tab_subagent_summary_at(&self, tab_idx: usize, now: std::time::SystemTime) -> (usize, bool) {
         let Some(tab) = self.tabs.get(tab_idx) else {
@@ -3269,6 +3270,9 @@ impl State {
             })
     }
 
+    /// The identity a pane is **drawn** with: its own `kind` when it has one, else
+    /// whatever the title sniff caught it running. `PaneState.kind` — the thing
+    /// persistence writes and a relaunch replays — is never written from a sniff.
     #[tracing::instrument(level = "debug", ret, skip(self, ps))]
     pub fn effective_kind(&self, ps: &PaneState) -> PaneKind {
         if !matches!(ps.kind, PaneKind::Terminal) {
@@ -14550,7 +14554,7 @@ mod subagent_tab_tests {
         // Hidden panes still count: the toggle reports what it would show.
         st.active_tab_mut().set_hide_subagents(true);
         assert_eq!(st.tab_subagent_summary_at(0, now), (3, true));
-        assert_eq!(st.tab_subagent_summary_at(7, now), (0, false), "bad index");
+        assert_eq!(st.tab_subagent_summary(7), (0, false), "bad index");
     }
 
     #[test]
