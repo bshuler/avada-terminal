@@ -523,6 +523,38 @@ fn install_panes(w: &crate::AppWindow, kinds: &[i32]) {
     w.set_panes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
 }
 
+/// The header's info button says where the pane came from: its hover text is the origin,
+/// and a click reaches `pane-info` with that pane's own index — the second pane here, so a
+/// handler that reported the first pane's origin cannot pass.
+#[test]
+fn the_pane_info_button_shows_the_origin_and_reaches_rust_with_its_own_index() {
+    ui(|| {
+        let w = window();
+        install_panes(&w, &[0, 0]);
+        use slint::Model;
+        let rows: Vec<crate::PaneItem> = w
+            .get_panes()
+            .iter()
+            .enumerate()
+            .map(|(i, mut p)| {
+                p.origin = format!("opened by test {i}").into();
+                p
+            })
+            .collect();
+        w.set_panes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+
+        let saw = std::rc::Rc::new(std::cell::Cell::new(-1));
+        {
+            let saw = saw.clone();
+            w.on_pane_info(move |i| saw.set(i));
+        }
+        let info = by_label(&w, "opened by test 1");
+        assert_eq!(info.len(), 1, "each pane's info button carries its own origin");
+        click(&w, &info[0]);
+        assert_eq!(saw.get(), 1, "the info click must reach pane-info(1)");
+    });
+}
+
 /// Close carries the index, and closing the wrong pane ends the wrong shell.
 #[test]
 fn the_pane_close_button_reaches_rust_with_its_own_index() {

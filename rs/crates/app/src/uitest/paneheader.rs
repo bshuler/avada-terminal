@@ -176,6 +176,53 @@ fn renaming_a_pane_commits_the_typed_title_for_that_pane() {
     });
 }
 
+/// Escape in the inline editor abandons the rename: it reaches `cancel-rename` and commits
+/// nothing, so a stray Escape cannot rename the pane to whatever was half-typed.
+#[test]
+fn escape_in_the_rename_editor_cancels_without_committing() {
+    ui(|| {
+        let w = window();
+        install_panes(&w, &[0, 0, 0]);
+        let rows: Vec<crate::PaneItem> = w
+            .get_panes()
+            .iter()
+            .enumerate()
+            .map(|(i, mut p)| {
+                p.editing = i == 1;
+                p
+            })
+            .collect();
+        w.set_panes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        settle();
+
+        let cancelled = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let cancelled = cancelled.clone();
+            w.on_cancel_rename(move || cancelled.set(true));
+        }
+        let committed = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let committed = committed.clone();
+            w.on_rename_pane(move |_, _| committed.set(true));
+        }
+        for ch in ["x", "y"] {
+            let text = slint::SharedString::from(ch);
+            w.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+            w.window().dispatch_event(WindowEvent::KeyReleased { text });
+        }
+        let esc = slint::SharedString::from(char::from(slint::platform::Key::Escape));
+        w.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: esc.clone() });
+        w.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: esc });
+        settle();
+
+        assert!(cancelled.get(), "Escape must reach cancel-rename");
+        assert!(!committed.get(), "Escape must not commit the half-typed title");
+    });
+}
+
 /// A resize seam reports a *delta* from the handle's own centre, plus which boundary it is
 /// and which axis. All four matter: the wrong index resizes the wrong boundary, and the
 /// wrong axis turns a horizontal drag into a vertical one.

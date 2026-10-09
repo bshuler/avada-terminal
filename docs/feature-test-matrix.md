@@ -22,16 +22,16 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 183 |
-| …bound to Rust | 107 |
-| …proven end-to-end | 107 |
+| callbacks declared | 185 |
+| …bound to Rust | 109 |
+| …proven end-to-end | 109 |
 | …bound but unproven | 0 |
 | …ui-local or dead | 76 |
-| Command variants | 148 |
+| Command variants | 150 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
-End-to-end coverage of the Rust-reaching UI surface is **100%** (107 of 107). "Named by a test" is an *upper* bound on proven:
+End-to-end coverage of the Rust-reaching UI surface is **100%** (109 of 109). "Named by a test" is an *upper* bound on proven:
 a test may mention a callback while asserting something else about it, and a proven
 callback can still front a feature whose real work happens past a boundary the harness
 cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
@@ -54,6 +54,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `begin_rename_pane` | `app.slint` | `e2e` |
 | `browser_pick` | `overlays.slint` | `ui-local` |
 | `cancel` | `addproject.slint` | `ui-local` |
+| `cancel_rename` | `app.slint` | `e2e` |
 | `cc_confirm` | `overlays.slint` | `ui-local` |
 | `cc_set_ask` | `overlays.slint` | `ui-local` |
 | `clicked` | `addproject.slint` | `ui-local` |
@@ -133,6 +134,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `pane_fullscreen` | `app.slint` | `e2e` |
 | `pane_geometry` | `app.slint` | `ui-local` |
 | `pane_grab` | `app.slint` | `e2e` |
+| `pane_info` | `app.slint` | `e2e` |
 | `pane_jump_bottom` | `app.slint` | `e2e` |
 | `pane_link_activated` | `app.slint` | `e2e` |
 | `pane_link_context` | `app.slint` | `e2e` |
@@ -234,6 +236,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `ApplySetting` | — |
 | `BeginRename` | — |
 | `BeginRenamePane` | — |
+| `CancelRename` | — |
 | `ClearPane` | — |
 | `CloseContext` | — |
 | `CloseFocused` | — |
@@ -245,6 +248,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `ConfirmCloseGo` | — |
 | `CopyFocused` | key |
 | `CopyPane` | — |
+| `CopyPaneOrigin` | — |
 | `CopyPathText` | — |
 | `CycleLayout` | — |
 | `DiscardClosed` | — |
