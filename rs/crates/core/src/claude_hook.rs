@@ -1,11 +1,14 @@
-//! Auto-register the avada Claude Code SessionStart/SessionEnd hook in the user's Claude
-//! settings, so the pane→conversation marker (`<state>/claude-sessions/<pane-id>.json`, written
-//! by `resources/claude/hp-claude-session-hook.sh`) exists reliably — without the user
+//! Auto-register the avada Claude Code session hook in the user's Claude settings, so the
+//! pane→conversation marker (`<state>/claude-sessions/<pane-id>.json`, written by
+//! `resources/claude/hp-claude-session-hook.sh`) exists reliably — without the user
 //! hand-editing `settings.json`. This backs both the claude-resume feature and the goals
-//! system's marker-gated delivery.
+//! system's marker-gated delivery. The same script also records subagents
+//! (`SubagentStart`/`SubagentStop` → `<state>/claude-subagents/<pane-id>/<agent-id>.json`) and
+//! the orchestrator's turn end (`Stop` → `_turn.json`) for subagent panes
+//! ([`crate::claude_subagents`]).
 //!
-//! **Additive + idempotent + best-effort.** It merges the hook command into
-//! `hooks.SessionStart` / `hooks.SessionEnd`, preserving every other setting and never adding a
+//! **Additive + idempotent + best-effort.** It merges the hook command into every event in
+//! [`HOOK_EVENTS`], preserving every other setting and never adding a
 //! duplicate; a malformed or unreadable file is left untouched. Any error is returned/logged and
 //! never fatal. It only touches config dirs that already exist (it never creates a Claude config).
 
@@ -14,6 +17,16 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::persistence::paths::write_atomic;
+
+/// The Claude Code hook events the script is registered for. The script dispatches on
+/// `hook_event_name`; only `SessionStart` writes the session marker.
+pub const HOOK_EVENTS: [&str; 5] = [
+    "SessionStart",
+    "SessionEnd",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+];
 
 /// Resolve the bundled `hp-claude-session-hook.sh`, mirroring the packaged layouts
 /// [`crate::shell_integration::shell_integration_dir`] handles: next to the exe, the macOS
@@ -73,7 +86,7 @@ pub fn ensure_registered(hook_path: &Path) -> usize {
         match ensure_in_file(&file, &cmd) {
             Ok(true) => {
                 eprintln!(
-                    "[claude-hook] registered SessionStart/End in {}",
+                    "[claude-hook] registered session + subagent hooks in {}",
                     file.display()
                 );
                 changed += 1;
@@ -85,7 +98,7 @@ pub fn ensure_registered(hook_path: &Path) -> usize {
     changed
 }
 
-/// Merge the hook command into one `settings.json`'s SessionStart + SessionEnd. Returns whether
+/// Merge the hook command into one `settings.json`'s [`HOOK_EVENTS`]. Returns whether
 /// the file was written. Pure JSON logic in [`ensure_event`] keeps this testable.
 #[tracing::instrument(level = "debug", ret)]
 fn ensure_in_file(file: &Path, cmd: &str) -> Result<bool, String> {
@@ -100,7 +113,7 @@ fn ensure_in_file(file: &Path, cmd: &str) -> Result<bool, String> {
     if !root.is_object() {
         return Err("settings.json is not a JSON object".into());
     }
-    let modified = ["SessionStart", "SessionEnd"]
+    let modified = HOOK_EVENTS
         .iter()
         .fold(false, |acc, ev| ensure_event(&mut root, ev, cmd) | acc);
     if modified {
@@ -194,10 +207,9 @@ mod tests {
             v["hooks"]["SessionStart"][0]["hooks"][0]["command"],
             "/hook.sh"
         );
-        assert_eq!(
-            v["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
-            "/hook.sh"
-        );
+        for ev in HOOK_EVENTS {
+            assert_eq!(v["hooks"][ev][0]["hooks"][0]["command"], "/hook.sh", "{ev}");
+        }
 
         // Second call is a no-op (already registered).
         assert_eq!(ensure_in_file(&file, "/hook.sh"), Ok(false));

@@ -287,6 +287,15 @@ pub fn claude_sessions_dir() -> PathBuf {
     state_dir().join("claude-sessions")
 }
 
+/// Directory of per-pane subagent records (`<pane-id>/<agent-id>.json`, plus `_turn.json` for
+/// the orchestrator's last turn end), written by the same hook on `SubagentStart`,
+/// `SubagentStop` and `Stop` and read by [`crate::claude_subagents`]. Runtime state →
+/// [`state_dir`], beside [`claude_sessions_dir`] and for the same reason.
+#[tracing::instrument(level = "debug", ret)]
+pub fn claude_subagents_dir() -> PathBuf {
+    state_dir().join("claude-subagents")
+}
+
 /// The saved-workspace **library**: the folder the app writes named workspaces into
 /// (`SaveWorkspaceAs`'s default destination, and the one the left panel's LIBRARY drawer
 /// lists). Durable user data → [`data_dir`]. Files here are ordinary

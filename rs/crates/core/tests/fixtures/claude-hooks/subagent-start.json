@@ -1,0 +1,9 @@
+{
+  "session_id": "fd3804e5-9743-4a44-afde-65ea8705ee3c",
+  "transcript_path": "/home/u/.claude/projects/-home-u-proj/fd3804e5-9743-4a44-afde-65ea8705ee3c.jsonl",
+  "cwd": "/home/u/proj",
+  "prompt_id": "e820b522-504f-472a-9796-22ee3fcf00a7",
+  "agent_id": "a401878d07b43ff1c",
+  "agent_type": "Explore",
+  "hook_event_name": "SubagentStart"
+}

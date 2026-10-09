@@ -1,0 +1,15 @@
+{
+  "session_id": "fd3804e5-9743-4a44-afde-65ea8705ee3c",
+  "transcript_path": "/home/u/.claude/projects/-home-u-proj/fd3804e5-9743-4a44-afde-65ea8705ee3c.jsonl",
+  "cwd": "/home/u/proj",
+  "prompt_id": "e820b522-504f-472a-9796-22ee3fcf00a7",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "The Explore subagent reports that the current directory contains two files:\n\n- `a.txt`\n- `b.txt`",
+  "background_tasks": [],
+  "session_crons": []
+}
