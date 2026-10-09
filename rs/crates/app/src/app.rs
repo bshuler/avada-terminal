@@ -1098,6 +1098,17 @@ impl App {
     /// delivery pass already waits out option forms and paces the submitting Enter — and
     /// typed straight into the pane otherwise (the same cadence), unless a form is up, in
     /// which case this round is skipped and logged rather than swallowed by the form.
+    /// Point everything keyed on a restarted pane's old session uid at its replacement:
+    /// the AI feed, the open-url carry, and the control-plane pane-id alias.
+    fn rekey_restarted_pane(&self, old: &str, new: &str) {
+        self.ai.send(crate::ai::AiMsg::Exit {
+            uid: old.to_string(),
+        });
+        self.ai_feed.borrow_mut().remove(old);
+        self.openurl_carry.borrow_mut().remove(old);
+        self.control.rebind_uid(old, new);
+    }
+
     #[tracing::instrument(level = "debug", ret, skip(self, w))]
     fn fire_status_loop(&self, w: &Window, prompt: &str) {
         let prompt = if prompt.trim().is_empty() {
@@ -1135,6 +1146,33 @@ impl App {
         if !self.mgr.has(&uid) {
             tracing::warn!(uid = %uid, "status loop: Avada panel has no live session");
             return;
+        }
+        // What is actually in the foreground decides, never the pane's label or mark: a
+        // panel that came back from a restart as a bare shell would otherwise get the
+        // prompt typed into zsh as a command, round after round.
+        match crate::loops::classify_foreground(self.mgr.foreground_name(&uid).as_deref()) {
+            crate::loops::StatusTarget::Agent(tool) => {
+                tracing::debug!(uid = %uid, tool = %tool, "status loop: an agent holds the Avada panel");
+            }
+            crate::loops::StatusTarget::Shell(shell) => {
+                tracing::warn!(uid = %uid, shell = %shell, "status loop: the Avada panel is a bare shell; relaunching its agent instead of typing");
+                let rebound = w
+                    .state
+                    .borrow_mut()
+                    .relaunch_hyperpane_pane(&self.mgr, None);
+                match rebound {
+                    Some((old, new)) => {
+                        self.rekey_restarted_pane(&old, &new);
+                        tracing::info!(old = %old, new = %new, "status loop: Avada panel relaunched");
+                    }
+                    None => tracing::warn!(uid = %uid, "status loop: Avada panel not relaunched"),
+                }
+                return;
+            }
+            crate::loops::StatusTarget::Unknown(program) => {
+                tracing::warn!(uid = %uid, program = ?program, "status loop: cannot tell what holds the Avada panel; this round is skipped");
+                return;
+            }
         }
         if let Some(screen) = self.mgr.render_screen(&uid) {
             if screen_shows_option_form(&screen) {
@@ -1190,10 +1228,7 @@ impl App {
                     .restart_monitored_pane(ti, pi, &self.mgr, marker.as_ref());
             match rebound {
                 Some((old, new)) => {
-                    self.ai.send(crate::ai::AiMsg::Exit { uid: old.clone() });
-                    self.ai_feed.borrow_mut().remove(&old);
-                    self.openurl_carry.borrow_mut().remove(&old);
-                    self.control.rebind_uid(&old, &new);
+                    self.rekey_restarted_pane(&old, &new);
                     tracing::info!(tool = %tool, old = %old, new = %new, "restart loop: agent pane restarted");
                 }
                 None => {
@@ -1234,6 +1269,7 @@ impl App {
                 "dead login session escaped: restarting every pane"
             );
             for (ti, pi, uid, tool) in targets {
+                let is_hyperpane = w.state.borrow().is_hyperpane_pane(ti, pi);
                 let pane_id = self
                     .control
                     .pane_id_for_uid(&uid)
@@ -1256,12 +1292,17 @@ impl App {
                     }
                 }
                 let tool = tool.or_else(|| marker.as_ref().map(|_| "claude".to_string()));
-                // A tool pane goes back into its conversation; anything that declines that
-                // (or is a plain shell) still gets its process replaced — no pty pane may be
-                // left holding the dead bootstrap port.
-                let rebound = tool
-                    .as_deref()
-                    .and_then(|_| {
+                // A tool pane goes back into its conversation; the Avada panel goes back to
+                // its recipe even when it is a bare shell right now (that is exactly the
+                // state a takeover before 0.2.28 left it in); anything that declines (or is
+                // a plain shell) still gets its process replaced — no pty pane may be left
+                // holding the dead bootstrap port.
+                let rebound = if is_hyperpane {
+                    w.state
+                        .borrow_mut()
+                        .relaunch_hyperpane_pane(&self.mgr, marker.as_ref())
+                } else {
+                    tool.as_deref().and_then(|_| {
                         w.state.borrow_mut().restart_monitored_pane(
                             ti,
                             pi,
@@ -1269,13 +1310,11 @@ impl App {
                             marker.as_ref(),
                         )
                     })
-                    .or_else(|| w.state.borrow_mut().refresh_pane_at(ti, pi, &self.mgr));
+                }
+                .or_else(|| w.state.borrow_mut().refresh_pane_at(ti, pi, &self.mgr));
                 match rebound {
                     Some((old, new)) => {
-                        self.ai.send(crate::ai::AiMsg::Exit { uid: old.clone() });
-                        self.ai_feed.borrow_mut().remove(&old);
-                        self.openurl_carry.borrow_mut().remove(&old);
-                        self.control.rebind_uid(&old, &new);
+                        self.rekey_restarted_pane(&old, &new);
                         tracing::info!(pane = %pane_id, old = %old, new = %new, tool = ?tool, "dead-session recovery: pane restarted");
                     }
                     None => {
@@ -4924,7 +4963,9 @@ impl App {
                         .get(proj_idx as usize)
                         .map(|p| (p.path.clone(), p.color.clone(), st.claude_launcher()))
                 };
-                let Some((cwd, color, launcher)) = target else { return };
+                let Some((cwd, color, launcher)) = target else {
+                    return;
+                };
                 let opts = NewPaneOpts {
                     label: Some("claude".to_string()),
                     cwd: Some(cwd),

@@ -444,9 +444,96 @@ pub fn restart_line(
     }
 }
 
+/// What the status loop found in the foreground of the pane it was about to type into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusTarget {
+    /// A known agent is running (registry id, e.g. `claude`): the prompt may be typed.
+    Agent(String),
+    /// A bare shell holds the pane (program name): the agent is gone and must be relaunched.
+    /// Typing a prompt here would run it as a shell command.
+    Shell(String),
+    /// Nobody could say what is running (`None`), or an unknown program holds the pane
+    /// (`Some(name)`): neither type nor relaunch.
+    Unknown(Option<String>),
+}
+
+/// Classify a daemon-reported foreground process (`None` when the daemon could not answer).
+///
+/// Keyed on the *live* foreground, never on the pane's launch label or its remembered
+/// session mark: both lie after a dead-session restart turned an agent pane into a shell.
+#[tracing::instrument(level = "debug", ret)]
+pub fn classify_foreground(raw: Option<&str>) -> StatusTarget {
+    const SHELLS: &[&str] = &[
+        "zsh",
+        "bash",
+        "sh",
+        "fish",
+        "dash",
+        "nu",
+        "pwsh",
+        "powershell",
+        "cmd",
+        "tcsh",
+        "ksh",
+    ];
+    let Some(raw) = raw else {
+        return StatusTarget::Unknown(None);
+    };
+    if let Some(def) = avada_core::tools::tool_for_foreground_name(raw) {
+        return StatusTarget::Agent(def.id.to_string());
+    }
+    let name = raw
+        .split(['\0', ' ', '\t'])
+        .next()
+        .unwrap_or("")
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('-')
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    if name.is_empty() {
+        StatusTarget::Unknown(None)
+    } else if SHELLS.contains(&name.as_str()) {
+        StatusTarget::Shell(name)
+    } else {
+        StatusTarget::Unknown(Some(name))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classify_foreground_keys_on_the_live_program() {
+        assert_eq!(classify_foreground(None), StatusTarget::Unknown(None));
+        assert_eq!(classify_foreground(Some("")), StatusTarget::Unknown(None));
+        assert_eq!(
+            classify_foreground(Some("claude")),
+            StatusTarget::Agent("claude".into())
+        );
+        assert_eq!(
+            classify_foreground(Some("/Users/x/.local/bin/claude --resume abc")),
+            StatusTarget::Agent("claude".into())
+        );
+        assert_eq!(
+            classify_foreground(Some("-zsh")),
+            StatusTarget::Shell("zsh".into())
+        );
+        assert_eq!(
+            classify_foreground(Some("/bin/zsh")),
+            StatusTarget::Shell("zsh".into())
+        );
+        assert_eq!(
+            classify_foreground(Some("bash")),
+            StatusTarget::Shell("bash".into())
+        );
+        assert_eq!(
+            classify_foreground(Some("less notes.md")),
+            StatusTarget::Unknown(Some("less".into()))
+        );
+    }
 
     /// A fresh scratch directory per test (removed on drop).
     struct Scratch(PathBuf);

@@ -6492,7 +6492,13 @@ impl State {
         }
         self.windows
             .iter()
-            .map(|w| if w.window.is_none() { me.clone() } else { w.clone() })
+            .map(|w| {
+                if w.window.is_none() {
+                    me.clone()
+                } else {
+                    w.clone()
+                }
+            })
             .collect()
     }
 
@@ -7000,6 +7006,84 @@ impl State {
             .map(|p| p.uid.clone())
     }
 
+    /// Whether pane `(ti, pi)` is the Avada tab's own agent pane ([`Self::hyperpane_pane_uid`]).
+    pub fn is_hyperpane_pane(&self, ti: usize, pi: usize) -> bool {
+        let Some(tab) = self.tabs.get(ti) else {
+            return false;
+        };
+        tab.system && tab.panes.get(pi).map(|p| &p.uid) == self.hyperpane_pane_uid().as_ref()
+    }
+
+    /// Put the Avada tab's agent back the way [`Self::ensure_hyperpane_tab`] first launched
+    /// it: the configured agent, in the materialized Avada directory, with the control-plane
+    /// environment — and into its open conversation when a live `marker` names one.
+    ///
+    /// Deliberately NOT keyed on the pane's launch label or its session mark. Both lie once
+    /// a restart has turned the pane into a bare shell (every dead-login takeover before
+    /// 0.2.28 did that), and a relaunch that trusts them puts the shell back; the status
+    /// loop then types its prompt into zsh every 15 minutes. Returns the uid swap.
+    #[tracing::instrument(level = "debug", ret, skip(self, mgr, marker))]
+    pub fn relaunch_hyperpane_pane(
+        &mut self,
+        mgr: &SessionManager,
+        marker: Option<&avada_core::claude_panes::PaneClaudeSession>,
+    ) -> Option<(String, String)> {
+        let dir = self.materialize_hyperpane_dir()?;
+        self.relaunch_hyperpane_pane_in(mgr, &dir, marker)
+    }
+
+    /// [`Self::relaunch_hyperpane_pane`] with the Avada directory explicit, so tests never
+    /// touch the real home.
+    pub fn relaunch_hyperpane_pane_in(
+        &mut self,
+        mgr: &SessionManager,
+        dir: &std::path::Path,
+        marker: Option<&avada_core::claude_panes::PaneClaudeSession>,
+    ) -> Option<(String, String)> {
+        let uid = self.hyperpane_pane_uid()?;
+        let (ti, pi) = self.find_pane(&uid)?;
+        let opts = self.hyperpane_pane_opts(dir, true);
+        let (Some(kind), Some(command)) = (opts.kind.clone(), opts.command.clone()) else {
+            tracing::warn!(uid = %uid, "Avada panel relaunch: no agent resolves on this install");
+            return None;
+        };
+        let tool = match &kind {
+            PaneKind::Tool(id) => id.clone(),
+            PaneKind::Terminal => "claude".to_string(),
+            _ => return None,
+        };
+        // The pane's shell runs this line, so a path with a space has to be one word.
+        let bin = if command.chars().any(char::is_whitespace) {
+            format!("'{command}'")
+        } else {
+            command
+        };
+        let (session, prefix) = match marker.filter(|_| tool == "claude") {
+            Some(m) => (
+                Some(m.session_id.clone()),
+                Some(m.config_dir.as_str())
+                    .filter(|d| !d.is_empty() && avada_core::claude_panes::valid_config_dir(d))
+                    .map(|d| format!("CLAUDE_CONFIG_DIR='{d}' "))
+                    .unwrap_or_default(),
+            ),
+            None => (None, String::new()),
+        };
+        let line = crate::loops::restart_line(&tool, &bin, None, &prefix, session.as_deref());
+        let cwd = opts.cwd.clone();
+        let swap = self.restart_pane_at(ti, pi, mgr, opts.cwd, opts.env)?;
+        if let Some(p) = self.tabs.get_mut(ti).and_then(|t| t.panes.get_mut(pi)) {
+            p.kind = kind;
+            p.startup = Some(line);
+            // The recipe names the directory, so the pane need not wait for OSC 7 to learn
+            // it: both copies, as `set_pane_cwd` keeps them.
+            p.pane.set_cwd(cwd.clone());
+            p.cwd = cwd;
+            // Whatever conversation the shell-era pane remembered is not this agent's.
+            p.tool_session = None;
+        }
+        Some(swap)
+    }
+
     /// The panes the restart loop respawns: every tool pane outside the system tab, as
     /// `(tab, pane, uid, tool id)`. The system tab's own agent is the one doing the
     /// monitoring and is left alone.
@@ -7076,6 +7160,11 @@ impl State {
         mgr: &SessionManager,
         marker: Option<&avada_core::claude_panes::PaneClaudeSession>,
     ) -> Option<(String, String)> {
+        // The Avada panel is relaunched from its recipe, not from what it learned: a mark
+        // or label left over from the pane's shell era would put the wrong thing back.
+        if self.is_hyperpane_pane(ti, pi) {
+            return self.relaunch_hyperpane_pane(mgr, marker);
+        }
         let (tool, labelled, cwd, env, mark) = {
             let p = self.tabs.get(ti)?.panes.get(pi)?;
             // A live Claude marker is proof on its own: the hook removes it on SessionEnd,
@@ -7115,6 +7204,29 @@ impl State {
             ),
             (None, None) => (None, cwd.clone(), String::new()),
         };
+        // A conversation whose directory is gone (a removed worktree, an archived checkout)
+        // cannot be resumed: `cd` would fail and the `&&` would leave a bare shell. Start
+        // the tool fresh in the pane's own cwd instead.
+        let mut spawn_cwd = cwd.clone();
+        let (session, resume_cwd, prefix) = match resume_cwd
+            .as_deref()
+            .filter(|d| session.is_some() && !std::path::Path::new(d).is_dir())
+        {
+            Some(gone) => {
+                tracing::warn!(
+                    dir = %gone,
+                    session = ?session,
+                    "restart: the conversation's directory is gone; starting the tool fresh"
+                );
+                // The pane's own directory may be the same gone one (the marker usually
+                // names where the pane sits); then there is nowhere to `cd` at all and the
+                // tool starts wherever the shell does.
+                let own = cwd.clone().filter(|d| std::path::Path::new(d).is_dir());
+                spawn_cwd = own.clone();
+                (None, own, String::new())
+            }
+            None => (session, resume_cwd, prefix),
+        };
         let line = crate::loops::restart_line(
             &tool,
             &bin,
@@ -7122,7 +7234,7 @@ impl State {
             &prefix,
             session.as_deref(),
         );
-        let swap = self.restart_pane_at(ti, pi, mgr, cwd, env)?;
+        let swap = self.restart_pane_at(ti, pi, mgr, spawn_cwd, env)?;
         if let Some(p) = self.tabs.get_mut(ti).and_then(|t| t.panes.get_mut(pi)) {
             p.startup = Some(line);
             // The pane still IS this tool's pane (the respawn keeps its kind); remember the
@@ -10665,7 +10777,13 @@ mod tool_session_tests {
         // literal `claude`: that was the 0.2.23 loss, kept out for good.
         assert_eq!(
             p.startup.as_deref(),
-            Some(format!("cd '/tmp' && {} --resume aaaa-bbbb-cccc\r", st.claude_launcher()).as_str())
+            Some(
+                format!(
+                    "cd '/tmp' && {} --resume aaaa-bbbb-cccc\r",
+                    st.claude_launcher()
+                )
+                .as_str()
+            )
         );
         // The mark still names the tool afterwards, so the NEXT recovery resolves it too —
         // a pane that forgets after one restart is a pane that only survives one restart.
@@ -10706,7 +10824,13 @@ mod tool_session_tests {
         let p = &st.active_tab().panes[pi];
         assert_eq!(
             p.startup.as_deref(),
-            Some(format!("cd '/var' && {} --resume dddd-eeee-ffff\r", st.claude_launcher()).as_str())
+            Some(
+                format!(
+                    "cd '/var' && {} --resume dddd-eeee-ffff\r",
+                    st.claude_launcher()
+                )
+                .as_str()
+            )
         );
         // ...and now the pane knows, for the next time.
         assert_eq!(
@@ -10735,7 +10859,10 @@ mod tool_session_tests {
             .expect("a labelled tool pane restarts");
         let p = &st.active_tab().panes[pi];
         assert_eq!(p.kind, PaneKind::Tool("copilot".into()));
-        assert_eq!(p.tool_session.as_ref().and_then(|m| m.tool.as_deref()), None);
+        assert_eq!(
+            p.tool_session.as_ref().and_then(|m| m.tool.as_deref()),
+            None
+        );
         assert_eq!(st.restart_tool(p).as_deref(), Some("copilot"));
     }
 
@@ -10784,6 +10911,157 @@ mod tool_session_tests {
             "typed the tool back, fresh: {:?}",
             p.startup
         );
+    }
+
+    // A mark whose directory no longer exists cannot be resumed: `cd '<gone>' && claude
+    // --resume …` would fail the cd and leave a bare shell — the pane would look restarted
+    // and be nothing. The restart starts the tool fresh instead.
+    #[tokio::test]
+    async fn a_conversation_whose_directory_is_gone_restarts_the_tool_fresh() {
+        let gone = std::env::temp_dir()
+            .join(format!("hp-gone-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        assert!(!std::path::Path::new(&gone).is_dir());
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.attach_panes_from_specs(
+            &m,
+            &[spec_with(&[
+                (avada_core::tools::META_KIND_KEY, "claude"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, &gone),
+            ])],
+        );
+        let ti = st.active;
+        let pi = st.active_tab().panes.len() - 1;
+        st.restart_monitored_pane(ti, pi, &m, None)
+            .expect("the pane restarts even though its conversation cannot be resumed");
+        let p = &st.active_tab().panes[pi];
+        let launcher = st.claude_launcher();
+        assert!(
+            p.startup
+                .as_deref()
+                .is_some_and(|l| l.ends_with(&format!("{launcher}\r"))
+                    && !l.contains("--resume")
+                    && !l.contains(&gone)),
+            "fresh start, nowhere near the missing directory: {:?}",
+            p.startup
+        );
+    }
+
+    /// A system tab whose agent pane is a bare shell — exactly what a dead-login takeover
+    /// before 0.2.28 left behind — remembering a conversation from its shell era.
+    fn broken_avada_panel(m: &SessionManager, dir: &std::path::Path) -> (State, usize, usize) {
+        let mut st = State::new(theme::load_font(1.0));
+        st.new_tab_with(
+            m,
+            Some(SYSTEM_TAB_TITLE),
+            true,
+            NewPaneOpts {
+                cwd: Some(dir.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        );
+        let uid = st
+            .hyperpane_pane_uid()
+            .expect("the system tab has an agent pane");
+        let (ti, pi) = st.find_pane(&uid).unwrap();
+        assert!(st.is_hyperpane_pane(ti, pi));
+        assert!(!st.is_hyperpane_pane(ti, pi + 1));
+        let p = &mut st.tabs[ti].panes[pi];
+        assert!(
+            matches!(p.kind, PaneKind::Terminal),
+            "a bare shell, as after the takeover"
+        );
+        p.tool_session = ToolSessionMark::new("stale-shell-era-conv", "/tmp");
+        (st, ti, pi)
+    }
+
+    // The Avada panel is relaunched from its recipe — the configured agent, in the Avada
+    // directory, with the control environment — never from the label or mark the pane
+    // carried while it was a shell. That mark is what resurrected the wrong thing.
+    #[tokio::test]
+    async fn the_avada_panel_relaunches_as_its_agent_not_from_its_shell_era_mark() {
+        let dir = std::env::temp_dir().join(format!("hp-avada-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = mgr();
+        let (mut st, ti, pi) = broken_avada_panel(&m, &dir);
+        let Some(command) = st.hyperpane_pane_opts(&dir, true).command else {
+            // No agent resolves on this machine: there is nothing to put back, and the
+            // relaunch says so instead of inventing one.
+            assert!(st.relaunch_hyperpane_pane_in(&m, &dir, None).is_none());
+            return;
+        };
+        let before = st.tabs[ti].panes[pi].uid.clone();
+        // Through `restart_monitored_pane` too: that is the restart loop's and the
+        // dead-session recovery's entry point, and it must not treat this pane as a lane.
+        let (old, new) = st
+            .restart_monitored_pane(ti, pi, &m, None)
+            .expect("the Avada panel relaunches");
+        assert_eq!(old, before);
+        let p = &st.tabs[ti].panes[pi];
+        assert_eq!(p.uid, new);
+        assert!(
+            matches!(p.kind, PaneKind::Tool(_)),
+            "an agent pane again: {:?}",
+            p.kind
+        );
+        assert!(
+            p.startup.as_deref().is_some_and(|l| l.contains(&command)
+                && l.ends_with('\r')
+                && !l.contains("stale-shell-era-conv")),
+            "the recipe's agent, not the shell-era conversation: {:?}",
+            p.startup
+        );
+        assert_eq!(p.tool_session, None, "the shell-era mark is dropped");
+        // The recipe materializes the app's own panel directory (not the seed this test
+        // started the pane in), and the pane knows it without waiting for OSC 7.
+        assert!(
+            p.cwd.as_deref().is_some_and(|d| Path::new(d).is_dir()),
+            "the relaunch records the directory it materialized: {:?}",
+            p.cwd
+        );
+        let env = p
+            .env
+            .as_ref()
+            .expect("the control environment travels with the relaunch");
+        assert!(env.contains_key("AVADA_CONTROL_FILE") && env.contains_key("HP_CTL"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // With a live Claude marker the relaunch goes back INTO the Avada agent's conversation
+    // (the marker is proof it is open), through the launcher the recipe picked.
+    #[tokio::test]
+    async fn the_avada_panel_resumes_its_own_conversation_when_a_marker_names_one() {
+        let dir = std::env::temp_dir().join(format!("hp-avada-mk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = mgr();
+        let (mut st, ti, pi) = broken_avada_panel(&m, &dir);
+        let claude = matches!(
+            st.hyperpane_pane_opts(&dir, true).kind,
+            Some(PaneKind::Tool(ref t)) if t == "claude"
+        );
+        if !claude {
+            return; // the recipe picked another agent (or none): a Claude marker is not its
+        }
+        let marker = avada_core::claude_panes::PaneClaudeSession {
+            session_id: "dddd-eeee-ffff".into(),
+            cwd: String::new(),
+            config_dir: String::new(),
+        };
+        st.relaunch_hyperpane_pane_in(&m, &dir, Some(&marker))
+            .expect("the Avada panel relaunches");
+        let p = &st.tabs[ti].panes[pi];
+        assert!(
+            p.startup
+                .as_deref()
+                .is_some_and(|l| l.contains("--resume dddd-eeee-ffff")
+                    && !l.contains("stale-shell-era-conv")),
+            "resumes the marker's conversation: {:?}",
+            p.startup
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Restoring a tool pane re-spawns its pty, so this one needs a runtime.
