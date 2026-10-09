@@ -63,8 +63,10 @@ impl Sid {
             authority = (authority << 8) | u64::from(*b);
         }
         let sub_authorities = bytes[8..]
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect::<Vec<_>>();
         debug_assert_eq!(sub_authorities.len(), count);
         Some(Sid {

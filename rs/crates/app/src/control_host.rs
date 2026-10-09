@@ -967,7 +967,7 @@ impl ControlHost {
 
         // Control `closePane` removed it from the model: drop it from the GUI too (the PTY was
         // already killed by `dispatch`, so detach without re-killing).
-        for (uid, _) in prev.iter() {
+        for uid in prev.keys() {
             if state_uids.contains(uid) && !cur.contains_key(uid) {
                 remove_from_gui(windows, uid);
                 structural = true;

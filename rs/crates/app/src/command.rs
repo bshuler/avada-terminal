@@ -430,7 +430,7 @@ pub enum Command {
     SubmitAddProject(String),
     /// Run a module's registered command (a palette entry); one that takes a value opens
     /// the prompt first.
-    ModuleCommand(
+    RunModule(
         avada_core::rights::ModuleId,
         avada_core::module::CommandSpec,
     ),
@@ -1093,7 +1093,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::RemoveProject(i) => state.remove_project(i),
         Command::OpenAddProject => state.open_add_project(),
         Command::SubmitAddProject(path) => state.submit_add_project(&path),
-        Command::ModuleCommand(module, spec) => state.run_module_command(module, spec),
+        Command::RunModule(module, spec) => state.run_module_command(module, spec),
         Command::SubmitModuleArg(text) => state.submit_module_arg(&text),
         // ---- the left slide-out panel ----
         Command::ToggleLeftPanel => state.toggle_left_panel(),

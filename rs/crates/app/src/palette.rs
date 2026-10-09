@@ -256,7 +256,7 @@ pub fn build(state: &State) -> Vec<Entry> {
             &spec.label,
             &subtitle,
             "module",
-            Command::ModuleCommand(module.clone(), spec.clone()),
+            Command::RunModule(module.clone(), spec.clone()),
         ));
     }
 

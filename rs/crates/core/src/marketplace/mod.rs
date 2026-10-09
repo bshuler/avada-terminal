@@ -1456,7 +1456,8 @@ mod options_tests {
 /// The [`policy`] module tests the matrix exhaustively; these tests only prove the
 /// wiring — that the verifier is consulted at all, that a refusal fails the job and
 /// installs nothing, and that what was decided is remembered next to the artifact.
-#[cfg(test)]
+// Unix-only: drives the pipeline through `testing::rig`, whose fakes are shell scripts.
+#[cfg(all(test, unix))]
 mod policy_wiring {
     use super::testing::{files_state, manifest_for, rig, wait, FakeCargo, FILES};
     use super::*;
@@ -1683,7 +1684,8 @@ mod policy_wiring {
 // Each test here pins one behaviour tightly enough that a specific cargo-mutants
 // mutation flips the assertion. They drive the same real install pipeline the
 // `testing` rig provides; the comment on each names the survivor it closes.
-#[cfg(test)]
+// Unix-only: drives the pipeline through `testing::rig`, whose fakes are shell scripts.
+#[cfg(all(test, unix))]
 mod survivor_tests {
     use super::testing::{fake_tools, files_state, manifest_for, reopen, rig, wait, FakeCargo};
     use super::testing::{FILES, GIT};
