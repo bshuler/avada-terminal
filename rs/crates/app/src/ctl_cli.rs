@@ -46,8 +46,12 @@ usage: avada ctl <verb> [args]
     keys <pane> <key>…              named keys, e.g. enter escape ctrl+c up
 
   Panes
-    new-pane [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S]
-             [--project P] [--window N]        (lands in that window's active tab)
+    new-pane --why REASON [--cwd D] [--cmd C] [--label L] [--color #rrggbb]
+             [--shell S] [--project P] [--window N]
+                                    lands in that window's active tab; records who opened it
+                                    (calling pane, Claude session, process) and --why, shown
+                                    on the pane's ⓘ button
+    info <pane>                     who opened a pane, when, from where, and why
     close-pane <pane>
     restart-pane <pane>
     focus-pane <pane>
@@ -169,11 +173,47 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             put_str(&mut spec, "color", flags.get("color"));
             put_str(&mut spec, "shell", flags.get("shell"));
             put_str(&mut spec, "project", flags.get("project"));
+            // Provenance: a pane that appears on its own must be able to say who opened it and
+            // why (the header's ⓘ). Only this process can see the caller's environment. The
+            // reason is the one part nothing can infer, so a pane without one is refused.
+            let Some(why) = flags.get("why").filter(|w| !w.trim().is_empty()) else {
+                usage(
+                    "new-pane --why REASON …\n\
+                     --why is required: one line saying why this pane is being opened. The pane's ⓘ\n\
+                     and `avada ctl info <pane>` show it to the developer.",
+                );
+            };
+            spec["meta"] = Value::Object(caller_origin(&conn, Some(why)).into_iter().map(|(k, v)| (k, json!(v))).collect());
             let mut cmd = json!({ "type": "newPane", "pane": spec });
             if let Some(w) = flags.get("window").and_then(|w| w.parse::<i64>().ok()) {
                 cmd["windowId"] = json!(w);
             }
             print_json(post(&conn, "/command", cmd)?);
+        }
+        "info" => {
+            let pane = need(args.first(), "info <pane>");
+            let state = get(&conn, "/state")?;
+            let Some(p) = find_pane(&state, pane) else {
+                usage(&format!("info <pane>: no such pane: {pane}"));
+            };
+            let meta: BTreeMap<String, String> = p
+                .get("meta")
+                .and_then(Value::as_object)
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            println!(
+                "{}  {}",
+                p.get("id").and_then(Value::as_str).unwrap_or("?"),
+                p.get("label").and_then(Value::as_str).unwrap_or("")
+            );
+            let origin = avada_core::pane_origin::extract(Some(&meta));
+            let text = avada_core::pane_origin::describe(&origin);
+            // "Click to copy." is the GUI's affordance, not this command's.
+            println!("{}", text.trim_end_matches("\nClick to copy."));
         }
         "close-pane" => print_json(pane_verb(&conn, "closePane", &args, "close-pane <pane>")?),
         "restart-pane" => print_json(pane_verb(
@@ -345,6 +385,7 @@ pub const HAND_VERBS: &[&str] = &[
     "submit",
     "keys",
     "new-pane",
+    "info",
     "close-pane",
     "restart-pane",
     "focus-pane",
@@ -996,6 +1037,118 @@ fn split_flags_optional(args: &[String]) -> (Vec<String>, BTreeMap<String, Strin
         }
     }
     (pos, flags)
+}
+
+/// The pane with `id` anywhere in a `/state` tree.
+fn find_pane<'a>(state: &'a Value, id: &str) -> Option<&'a Value> {
+    let arr = |v: &'a Value, k: &str| v.get(k).and_then(Value::as_array).map_or(&[][..], |a| a);
+    arr(state, "windows")
+        .iter()
+        .flat_map(|w| arr(w, "tabs"))
+        .flat_map(|t| arr(t, "panes"))
+        .find(|p| p.get("id").and_then(Value::as_str) == Some(id))
+}
+
+/// The `origin.*` meta this `new-pane` call records about its caller: the calling pane (and
+/// its label), the Claude Code session, the agent, the process chain, the cwd and the time.
+/// Everything is best-effort — a missing piece is simply left out.
+fn caller_origin(conn: &Conn, why: Option<&String>) -> BTreeMap<String, String> {
+    use avada_core::pane_origin as po;
+    let mut o = BTreeMap::new();
+    o.insert(po::VIA.to_string(), "avada ctl new-pane".to_string());
+    o.insert(po::AT.to_string(), local_stamp());
+    if let Some(w) = why {
+        o.insert(po::WHY.to_string(), w.clone());
+    }
+    if let Some(pane) = avada_core::compat::env_var("AVADA_PANE_ID").filter(|v| !v.is_empty()) {
+        if let Some(label) = get(conn, "/state")
+            .ok()
+            .as_ref()
+            .and_then(|s| find_pane(s, &pane))
+            .and_then(|p| p.get("label").and_then(Value::as_str))
+        {
+            o.insert(po::BY_LABEL.to_string(), label.to_string());
+        }
+        o.insert(po::BY_PANE.to_string(), pane);
+    }
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    if let Some(s) = env("CLAUDE_CODE_SESSION_ID") {
+        o.insert(po::BY_SESSION.to_string(), s);
+    }
+    if let Some(a) = env("AI_AGENT") {
+        o.insert(po::BY_AGENT.to_string(), a);
+    }
+    if let Some(chain) = process_chain() {
+        o.insert(po::BY_PROCESS.to_string(), chain);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        o.insert(po::CWD.to_string(), cwd.display().to_string());
+    }
+    o
+}
+
+/// The caller's ancestry, nearest first, as `name(pid) < name(pid) …` — up to five hops
+/// above this process. `ps` keeps it to one portable call per hop on unix.
+#[cfg(unix)]
+fn process_chain() -> Option<String> {
+    let mut pid = std::os::unix::process::parent_id();
+    let mut hops = Vec::new();
+    for _ in 0..5 {
+        if pid <= 1 {
+            break;
+        }
+        let out = std::process::Command::new("ps")
+            .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (ppid, comm) = line.split_once(char::is_whitespace)?;
+        let name = comm.trim().rsplit('/').next().unwrap_or(comm).to_string();
+        hops.push(format!("{name}({pid})"));
+        pid = ppid.trim().parse().ok()?;
+    }
+    (!hops.is_empty()).then(|| hops.join(" < "))
+}
+#[cfg(not(unix))]
+fn process_chain() -> Option<String> {
+    None
+}
+
+/// The local wall-clock time with its zone abbreviation, e.g. `2026-10-09 12:23:40 EDT`.
+#[cfg(unix)]
+fn local_stamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as libc::time_t)
+        .unwrap_or(0);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&now, &mut tm) };
+    let zone = if tm.tm_zone.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {zone}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
+    .trim_end()
+    .to_string()
+}
+#[cfg(windows)]
+fn local_stamp() -> String {
+    let st = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+    )
 }
 
 #[tracing::instrument(level = "debug", ret)]

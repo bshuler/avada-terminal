@@ -481,6 +481,7 @@ fn pane_item(
         talk: ps.talk,
         // Lights the header microphone while this pane's dictation recorder is live.
         recording: ps.recording,
+        origin: avada_core::pane_origin::describe(&ps.origin).into(),
         show_frame: ps.frame_on(show_frame),
         show_dot: ps.dot_on(show_dot),
         editing,
@@ -2202,6 +2203,7 @@ mod pty_resize_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -2373,6 +2375,7 @@ mod image_arm_tests {
             spawn_shell: None,
             kind: PaneKind::Image,
             tool_session: None,
+            origin: Default::default(),
             cwd: Some(target.into()),
         }
     }
@@ -2418,6 +2421,7 @@ mod image_arm_tests {
                 ModulePaneRef::new("bshuler/avada-image", surface, None).expect("a valid pane ref"),
             ),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -2516,6 +2520,7 @@ mod grid_resize_tests {
             spawn_shell: None,
             kind,
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }

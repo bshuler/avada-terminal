@@ -27,6 +27,7 @@ pub mod logging;
 pub mod marketplace;
 pub mod module;
 pub mod open;
+pub mod pane_origin;
 pub mod paths;
 pub mod permissions;
 pub mod persistence;

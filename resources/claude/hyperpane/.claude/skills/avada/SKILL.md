@@ -80,6 +80,12 @@ Panes: `new-pane`, `close-pane`, `restart-pane`, `focus-pane`, `rename-pane`, `r
 `move-pane` (re-hosts a running pane in another tab, or in a new tab with
 `move-pane <pane> new --title T`, without restarting it).
 
+**`new-pane` requires `--why "<one line>"`** (it refuses without one). A pane that appears on its own is a mystery
+to the user. Every pane header has an ⓘ button that shows who opened it: `ctl` records your pane,
+Claude session, process chain and cwd automatically, but only you can say *why*. Write the reason
+the user would want to read ("run the release test suite for B7"), not the command. `avada ctl info
+<pane>` prints any pane's origin.
+
 Tab verbs answer `202 Accepted` with `{"queued": true}`: they are applied by the UI thread on its
 next frame, not while your command is still running. Re-read `tabs` to confirm, don't assume.
 

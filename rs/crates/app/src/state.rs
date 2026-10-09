@@ -168,6 +168,10 @@ pub struct DetachedPane {
     /// preview into "No path set for this pane". For a terminal it is what the left panel's
     /// file tree follows, so dropping it there un-anchored the tree instead.
     pub cwd: Option<String>,
+    /// Where the pane came from — the `origin.*` subset of its control-API meta (who opened
+    /// it, from which pane/session/process, when and why; see `avada_core::pane_origin`).
+    /// Shown on the header's ⓘ; carried across re-hosts and persisted in the snapshot.
+    pub origin: std::collections::BTreeMap<String, String>,
 }
 
 /// A whole tab detached for re-hosting (the tab menu's "Move to New Window") or parked on the
@@ -1118,6 +1122,10 @@ pub struct PaneState {
     /// the tool id itself (`meta["tool.id"]`) so the restore path can still name the
     /// binary to resume.
     pub tool_session: Option<ToolSessionMark>,
+    /// Where the pane came from — the `origin.*` subset of its control-API meta (who opened
+    /// it, from which pane/session/process, when and why; see `avada_core::pane_origin`).
+    /// Shown on the header's ⓘ; carried across re-hosts and persisted in the snapshot.
+    pub origin: std::collections::BTreeMap<String, String>,
 }
 
 impl PaneState {
@@ -2369,6 +2377,7 @@ impl State {
             spawn_shell: kind.is_pty().then_some(shell).flatten(),
             kind,
             tool_session,
+            origin: Default::default(),
         })
     }
 
@@ -2589,6 +2598,7 @@ impl State {
                 spawn_shell: ps.spawn_shell,
                 kind: ps.kind,
                 tool_session: ps.tool_session,
+                origin: ps.origin,
                 cwd: ps.cwd,
             },
             alive,
@@ -2678,6 +2688,7 @@ impl State {
             spawn_shell: det.spawn_shell,
             kind: det.kind,
             tool_session: det.tool_session,
+            origin: det.origin,
         };
         let auto = self.active_tab().layout == Layout::Auto;
         let t = self.active_tab_mut();
@@ -2730,6 +2741,7 @@ impl State {
                 spawn_shell: ps.spawn_shell,
                 kind: ps.kind,
                 tool_session: ps.tool_session,
+                origin: ps.origin,
                 cwd: ps.cwd,
             },
             alive,
@@ -7560,6 +7572,7 @@ impl State {
             spawn_shell: ps.spawn_shell,
             kind: ps.kind,
             tool_session: ps.tool_session,
+            origin: ps.origin,
             cwd: ps.cwd,
         })
     }
@@ -7643,6 +7656,7 @@ impl State {
             spawn_shell: det.spawn_shell,
             kind: det.kind,
             tool_session: det.tool_session,
+            origin: det.origin,
         };
         let auto = self.tabs[ti].layout == Layout::Auto;
         let t = &mut self.tabs[ti];
@@ -7992,6 +8006,7 @@ impl State {
                 spawn_shell: p.spawn_shell,
                 kind: p.kind,
                 tool_session: p.tool_session,
+                origin: p.origin,
                 cwd: p.cwd,
             })
             .collect();
@@ -8197,6 +8212,12 @@ impl State {
                 if let Some(m) = &p.tool_session {
                     m.write_into(spec.meta.get_or_insert_with(Default::default));
                 }
+                // Provenance (the header's ⓘ) outlives the session that opened the pane.
+                if !p.origin.is_empty() {
+                    spec.meta
+                        .get_or_insert_with(Default::default)
+                        .extend(p.origin.clone());
+                }
                 spec
             })
             .collect();
@@ -8288,6 +8309,12 @@ impl State {
                         // chat it was in instead of opening an empty one.
                         if let Some(m) = &p.tool_session {
                             m.write_into(spec.meta.get_or_insert_with(Default::default));
+                        }
+                        // Provenance (the header's ⓘ) outlives the session that opened the pane.
+                        if !p.origin.is_empty() {
+                            spec.meta
+                                .get_or_insert_with(Default::default)
+                                .extend(p.origin.clone());
                         }
                         spec
                     })
@@ -8988,6 +9015,8 @@ impl State {
             uid,
             kind,
             tool_session,
+            // Who opened it and why survives a relaunch (see `avada_core::pane_origin`).
+            origin: avada_core::pane_origin::extract(spec.meta.as_ref()),
             title: label.into(),
             subtitle: None,
             show_frame: Some(project),
@@ -9744,6 +9773,7 @@ mod spawn_cells_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -9832,6 +9862,7 @@ mod session_file_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -10241,6 +10272,7 @@ mod reminder_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -10802,6 +10834,42 @@ mod tool_session_tests {
             ),
             ..Default::default()
         }
+    }
+
+    // Who opened a pane, and why, is not session state: it has to outlive a relaunch or the
+    // header's ⓘ goes blank on every restart. Restore reads it, the next snapshot writes it
+    // back, and keys that are not provenance are not swept up with it.
+    #[tokio::test]
+    async fn a_panes_origin_survives_a_relaunch() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.attach_panes_from_specs(
+            &m,
+            &[spec_with(&[
+                (avada_core::pane_origin::VIA, "avada ctl new-pane"),
+                (avada_core::pane_origin::WHY, "probe op session reuse"),
+                ("role", "worker"),
+            ])],
+        );
+        let p = st.active_tab().panes.last().unwrap();
+        assert_eq!(
+            p.origin.get(avada_core::pane_origin::WHY).map(String::as_str),
+            Some("probe op session reuse")
+        );
+        assert!(!p.origin.contains_key("role"));
+        let meta = snapshot_panes(&st)
+            .pop()
+            .expect("the pane is in the snapshot")
+            .meta
+            .expect("a pane with an origin carries meta");
+        assert_eq!(
+            meta.get(avada_core::pane_origin::VIA).map(String::as_str),
+            Some("avada ctl new-pane")
+        );
+        assert_eq!(
+            meta.get(avada_core::pane_origin::WHY).map(String::as_str),
+            Some("probe op session reuse")
+        );
     }
 
     // Spawns a real pty — a `Tool` pane is a terminal pane, that is the whole D1 premise.
@@ -11710,6 +11778,7 @@ mod tool_identity_tests {
                 spawn_shell: None,
                 kind: PaneKind::default(),
                 tool_session: None,
+                origin: Default::default(),
                 cwd: None,
             },
         );
@@ -12046,6 +12115,7 @@ mod left_panel_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -12269,6 +12339,7 @@ mod set_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -12850,6 +12921,7 @@ mod keyboard_focus_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -13063,6 +13135,7 @@ mod close_history_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }
@@ -13503,6 +13576,7 @@ mod hyperpane_uniqueness_tests {
             spawn_shell: None,
             kind: PaneKind::default(),
             tool_session: None,
+            origin: Default::default(),
             cwd: None,
         }
     }

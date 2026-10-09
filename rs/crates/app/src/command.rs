@@ -204,6 +204,9 @@ pub enum Command {
     /// Copy an arbitrary path to the clipboard (the row menu). Goes through the focused
     /// pane's clipboard so it raises the same "Copied …" toast as a Ctrl+click does.
     CopyPathText(String),
+    /// Copy pane `0`'s origin — who opened it, from where, when and why — to the clipboard
+    /// (the header's info button). Raises the pane's own "Copied" toast.
+    CopyPaneOrigin(usize),
     /// Show `path` in the OS file explorer (the row menu's "Reveal in Finder").
     RevealPath(String),
     FocusPane(usize),
@@ -934,6 +937,13 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::CopyPathText(path) => {
             let f = state.active_tab().focused;
             state.copy_link_text(f, &path);
+        }
+        Command::CopyPaneOrigin(i) => {
+            if let Some(p) = state.active_tab().panes.get(i) {
+                let text = avada_core::pane_origin::describe(&p.origin);
+                let text = text.trim_end_matches("\nClick to copy.").to_string();
+                state.copy_link_text(i, &text);
+            }
         }
         Command::OpenPathInApp { path, app } => {
             if let Err(e) = avada_core::open::open_path_with(&app, std::path::Path::new(&path)) {

@@ -1131,6 +1131,7 @@ mod read_only_menu_tests {
                 spawn_shell: None,
                 kind,
                 tool_session: None,
+                origin: Default::default(),
                 cwd: None,
             },
         );
@@ -1219,6 +1220,7 @@ mod read_only_menu_tests {
                     spawn_shell: None,
                     kind: PaneKind::Terminal,
                     tool_session: None,
+                    origin: Default::default(),
                     cwd: None,
                 },
             );
@@ -1492,6 +1494,7 @@ mod module_preset_menu_tests {
                 spawn_shell: None,
                 kind,
                 tool_session: None,
+                origin: Default::default(),
                 cwd: None,
             },
         );

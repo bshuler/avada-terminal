@@ -206,6 +206,7 @@ export component AppWindow inherits Window {
     callback pane-fullscreen(int);
     callback pane-close(int);
     callback pane-mic(int);
+    callback pane-info(int);
     // pane-header inline rename (double-click the header label)
     callback begin-rename-pane(int);
     callback rename-pane(int, string);
@@ -419,6 +420,7 @@ export component AppWindow inherits Window {
                 pane-fullscreen(i) => { root.pane-fullscreen(i); }
                 pane-close(i) => { root.pane-close(i); }
                 pane-mic(i) => { root.pane-mic(i); }
+                pane-info(i) => { root.pane-info(i); }
                 begin-rename-pane(i) => { root.begin-rename-pane(i); }
                 rename-pane(i, t) => { root.rename-pane(i, t); }
                 cancel-rename => { root.cancel-rename(); }
