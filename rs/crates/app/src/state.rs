@@ -967,6 +967,20 @@ impl AiLine {
 }
 
 /// One pane's controller-side state (terminal grid + placement + chrome).
+/// What the adoption pump still has to find for one pane — [`State::tool_session_wanted`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionWanted {
+    /// The tool the pane is labelled with or sniffed to be running, when one is. `None`
+    /// for a plain terminal pane, which still gets its hook markers read — a hook does
+    /// not need the chrome to have noticed the tool — but is never guessed about.
+    pub tool: Option<String>,
+    /// The pane's live cwd, once its shell has reported one.
+    pub cwd: Option<String>,
+    /// Whether the scan-and-diff inference may be started for this pane: it looks like a
+    /// tool pane and holds no conversation, reported or inferred.
+    pub infer: bool,
+}
+
 pub struct PaneState {
     pub uid: String,
     /// The pane's editable label (the header title): "shell"/"panel N" by default, the
@@ -3044,9 +3058,9 @@ impl State {
     }
 
     /// Record `mark` as the conversation running in pane `uid` — **only if the pane has
-    /// no conversation recorded yet**.
+    /// no reported conversation yet**.
     ///
-    /// # Why this fills an empty slot instead of taking the best answer
+    /// # Why a reported mark is never replaced, and an inferred one always is
     ///
     /// Three things can name a pane's conversation, and they do not deserve equal trust:
     ///
@@ -3056,14 +3070,21 @@ impl State {
     /// 3. an **inference** from watching new conversations appear in the tool's history
     ///    store (`tools::session_infer`), which is a deduction, not a report.
     ///
-    /// Ranking them at the moment of adoption would need a stored provenance per pane. It
-    /// is not needed, because the three cannot tie: (1) is set when the pane is born, and
-    /// (2) lands within a second of the tool starting, whereas (3) cannot adopt before its
-    /// second look — a full scan interval later — and only after a baseline taken at the
-    /// first. So "first writer wins" *is* "the most authoritative writer wins", and it has
-    /// the property that matters more than either: an id already on a pane is never
-    /// silently swapped for a different one, which is the failure that would resume the
-    /// user into somebody else's conversation.
+    /// Until 0.2.30 this was "first writer wins", on the argument that the three cannot
+    /// tie: (1) is set at birth and (2) lands within a second of the tool starting, whereas
+    /// (3) needs a baseline and a second look a scan interval later. That argument fails
+    /// for a pane whose hook never fires — a plain shell sitting in a project directory
+    /// while a *sibling* pane starts a conversation in the same project. The inference
+    /// watched the shared store, saw a new conversation, and pinned it on the shell. From
+    /// then on the shell carried a stranger's id, and because the slot was full the real
+    /// hook report (when the human did start a tool there) could never correct it. Six
+    /// panes on one machine were marked that way after a month.
+    ///
+    /// So the rule now reads the mark's provenance ([`ToolSessionMark::inferred`]): a
+    /// reported mark (1 or 2) is never silently swapped — that would be the failure that
+    /// resumes the user into somebody else's conversation — but an inferred mark is a
+    /// placeholder, replaced the moment anything reports. An inferred mark never replaces
+    /// another: a second guess is no better than the first.
     ///
     /// Returns whether the mark was taken, so a caller can stop looking.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -3072,17 +3093,25 @@ impl State {
             return false;
         };
         let p = &mut self.tabs[ti].panes[pi];
-        if p.tool_session.is_some() {
-            return false;
+        match &p.tool_session {
+            Some(have) if !have.inferred || mark.inferred => return false,
+            Some(have) => tracing::info!(
+                uid,
+                inferred = %have.id,
+                reported = %mark.id,
+                "inferred conversation replaced by a reported one"
+            ),
+            None => {}
         }
         p.tool_session = Some(mark);
         self.dirty = true;
         true
     }
 
-    /// Whether pane `uid` still needs a conversation found for it, and — once the pane has
-    /// said where it is — the directory to look in. `None` means "do not look": the pane is
-    /// gone, is not a tool pane, or already knows its conversation.
+    /// Whether pane `uid` still needs a conversation found for it. `None` means "do not
+    /// look": the pane is gone or already holds a *reported* conversation (a spawn's or a
+    /// hook's — an inferred one keeps the pane open to correction, see
+    /// [`Self::adopt_tool_session`]).
     ///
     /// Reads `effective_kind`, not `kind`, on purpose — the hand-started pane this exists
     /// for is precisely the one whose persisted kind is still `Terminal`.
@@ -3093,17 +3122,24 @@ impl State {
     /// moment the tool starts. Only the scan-and-diff fallback needs a directory to scope
     /// by, and it would rather wait for a real one than search every project on the disk.
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn tool_session_wanted(&self, uid: &str) -> Option<(String, Option<String>)> {
+    pub fn tool_session_wanted(&self, uid: &str) -> Option<SessionWanted> {
         let p = self
             .tabs
             .iter()
             .flat_map(|t| t.panes.iter())
             .find(|p| p.uid == uid)?;
-        if p.tool_session.is_some() {
+        if p.tool_session.as_ref().is_some_and(|m| !m.inferred) {
             return None;
         }
-        let tool = self.effective_kind(p).tool_id()?.to_string();
-        Some((tool, p.cwd.clone()))
+        let tool = self.effective_kind(p).tool_id().map(str::to_string);
+        Some(SessionWanted {
+            // Only a pane that looks like a tool pane and holds nothing at all is worth
+            // guessing about. One already holding a guess has had its guess; a plain shell
+            // never gets one — that is the pollution 0.2.31 exists to stop.
+            infer: tool.is_some() && p.tool_session.is_none(),
+            tool,
+            cwd: p.cwd.clone(),
+        })
     }
 
     /// Drop every runtime-only fact keyed by `uid`. Called wherever a pane leaves this
@@ -7132,12 +7168,76 @@ impl State {
     /// replaced by a bare shell in the dead-session recovery while the app held its
     /// session id in meta the whole time. Precedence is the same as adoption's: the label,
     /// then the mark, then the sniff.
+    /// The pane's tool mark out of its snapshot meta, with the marks a pre-0.2.31 build
+    /// wrote brought up to date.
+    ///
+    /// Those builds inferred freely and recorded no provenance, so a legacy mark (no
+    /// `tool.inferred` key) might be a spawn's exact answer or a guess pinned on a
+    /// neighbouring shell — the file cannot say. What it CAN say is whether Claude's own
+    /// hook knew the pane's conversation when the snapshot was taken (`claude.session`,
+    /// embedded from the live marker). Three cases:
+    ///
+    /// - a legacy mark and a `claude.session` naming the **same** conversation: the hook
+    ///   agrees, so the mark is reported — keep it as is;
+    /// - a legacy mark and a `claude.session` naming a **different** one: the hook is the
+    ///   live truth and the mark a stale guess — rebuild the mark from the hook's record,
+    ///   so the pane never has an empty slot the inference could refill;
+    /// - a legacy mark with **no** `claude.session`: nothing vouches for it, so it is
+    ///   demoted to inferred — still labelling the chrome, never resumed, and replaced by
+    ///   the first hook report. A Claude pane whose marker is live is re-reported by the
+    ///   adoption pump within seconds of the first paint; a bare shell stays a bare shell.
+    ///
+    /// A mark with provenance recorded is returned untouched.
+    #[tracing::instrument(level = "debug", ret)]
+    fn migrate_tool_session(
+        meta: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Option<ToolSessionMark> {
+        use avada_core::claude_panes;
+        let mark = ToolSessionMark::read(meta)?;
+        if ToolSessionMark::provenance_recorded(meta) {
+            return Some(mark);
+        }
+        let m = meta?;
+        let hook_id = m
+            .get(claude_panes::META_KEY)
+            .filter(|id| claude_panes::valid_session_id(id));
+        match hook_id {
+            Some(id) if *id == mark.id => Some(mark),
+            Some(id) => {
+                let cwd = m
+                    .get(claude_panes::META_CWD_KEY)
+                    .filter(|c| claude_panes::valid_resume_cwd(c))
+                    .map(String::as_str)
+                    .unwrap_or(mark.cwd.as_str());
+                tracing::info!(
+                    stale = %mark.id,
+                    live = %id,
+                    "legacy tool mark disagrees with the Claude hook; taking the hook's"
+                );
+                Some(
+                    ToolSessionMark::new(id, cwd)
+                        .map(|m| m.with_tool("claude"))
+                        .unwrap_or(mark),
+                )
+            }
+            None => Some(mark.as_inferred()),
+        }
+    }
+
     #[tracing::instrument(level = "debug", ret, skip(self, p))]
     pub fn restart_tool(&self, p: &PaneState) -> Option<String> {
         if let PaneKind::Tool(tool) = &p.kind {
             return Some(tool.clone());
         }
-        if let Some(tool) = p.tool_session.as_ref().and_then(|m| m.tool.clone()) {
+        // An inferred mark names a tool it only guessed the pane was running; the sniff
+        // below is the better witness for what to put back (and says nothing when the pane
+        // was a bare shell all along).
+        if let Some(tool) = p
+            .tool_session
+            .as_ref()
+            .filter(|m| !m.inferred)
+            .and_then(|m| m.tool.clone())
+        {
             return Some(tool);
         }
         self.sniffed_tool.get(&p.uid).cloned()
@@ -7178,7 +7278,9 @@ impl State {
                 matches!(p.kind, PaneKind::Tool(_)),
                 p.cwd.clone(),
                 p.env.clone(),
-                p.tool_session.clone(),
+                // A guessed conversation is never resumed: `--resume` into the wrong
+                // conversation is worse than a fresh start. The tool still comes back.
+                p.tool_session.clone().filter(|m| !m.inferred),
             )
         };
         // The user's Preferences → Tools override, when they set one, so a wrapper script
@@ -7206,11 +7308,13 @@ impl State {
         };
         // A conversation whose directory is gone (a removed worktree, an archived checkout)
         // cannot be resumed: `cd` would fail and the `&&` would leave a bare shell. Start
-        // the tool fresh in the pane's own cwd instead.
+        // the tool fresh in the pane's own cwd instead. The same `cd` fails with no
+        // conversation at all — a pane whose own directory was removed under it — so the
+        // check does not wait for a session to be in play.
         let mut spawn_cwd = cwd.clone();
         let (session, resume_cwd, prefix) = match resume_cwd
             .as_deref()
-            .filter(|d| session.is_some() && !std::path::Path::new(d).is_dir())
+            .filter(|d| !std::path::Path::new(d).is_dir())
         {
             Some(gone) => {
                 tracing::warn!(
@@ -7399,6 +7503,14 @@ impl State {
             p.pty_since = std::time::Instant::now();
             p.started = false;
             p.startup = None;
+            // A guessed conversation described the pane's old shell era; whatever the fresh
+            // shell runs next starts a new one, and its hook reports it. Keeping the guess
+            // would label the chrome with a conversation the pane is known not to be in. A
+            // reported mark stays: it is what the restart resumes, and
+            // `restart_monitored_pane` re-sets it to the conversation it puts back.
+            if p.tool_session.as_ref().is_some_and(|m| m.inferred) {
+                p.tool_session = None;
+            }
             p.shell_title = String::new();
             // The restart re-resolves the shell → refresh the cached header badge.
             p.shell_label = shell_label(&shell_path);
@@ -8688,7 +8800,7 @@ impl State {
         //
         // The mark is read even when it isn't used, so a pane that came back by re-attach
         // still carries it into the NEXT snapshot instead of forgetting after one restart.
-        let tool_session = ToolSessionMark::read(spec.meta.as_ref());
+        let tool_session = Self::migrate_tool_session(spec.meta.as_ref());
         // Kept for the `PaneState` below: a tool pane never re-learns its directory the way
         // a shell does — a process parked in a TUI stops emitting OSC 7 — so without this
         // the pane's cwd stays empty, the next snapshot writes `cwd: null`, and the pane
@@ -10736,6 +10848,11 @@ mod tool_session_tests {
     // with `tool.id` naming the tool, precisely because the kind does not. A restart
     // decision that reads the label alone sees a plain shell and replaces the conversation
     // with bare zsh; one that reads the mark puts the conversation back.
+    //
+    // The mark carries its provenance (`tool.inferred = 0`), as every mark written since
+    // 0.2.31 does: a legacy mark with nothing vouching for it is demoted to a guess by
+    // `migrate_tool_session`, and a guess is never resumed — see
+    // `legacy_marks_are_migrated_by_what_the_claude_hook_knew`.
     #[tokio::test]
     async fn a_hand_started_claude_pane_is_restarted_into_its_conversation() {
         let m = mgr();
@@ -10746,6 +10863,7 @@ mod tool_session_tests {
                 (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
                 (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
                 (avada_core::tools::META_SESSION_TOOL_KEY, "claude"),
+                (avada_core::tools::META_SESSION_INFERRED_KEY, "0"),
             ])],
         );
         let ti = st.active;
@@ -10931,6 +11049,8 @@ mod tool_session_tests {
                 (avada_core::tools::META_KIND_KEY, "claude"),
                 (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
                 (avada_core::tools::META_SESSION_CWD_KEY, &gone),
+                // Reported, so the restart would resume it if only it could.
+                (avada_core::tools::META_SESSION_INFERRED_KEY, "0"),
             ])],
         );
         let ti = st.active;
@@ -11292,6 +11412,156 @@ mod tool_session_tests {
 
     // Spawns a real pty.
     #[tokio::test]
+    async fn an_inferred_conversation_is_a_placeholder_a_report_replaces() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        let uid = st
+            .add_pane_opts(
+                &m,
+                NewPaneOpts {
+                    cwd: Some("/tmp".to_string()),
+                    command: Some("/bin/cat".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("the pane spawns");
+        st.note_pane_foreground(&uid, Some("claude"));
+        let guess = ToolSessionMark::new("aaaa-bbbb-cccc", "/tmp")
+            .unwrap()
+            .with_tool("claude")
+            .as_inferred();
+        assert!(st.adopt_tool_session(&uid, guess.clone()));
+        let (ti, pi) = st.find_pane(&uid).unwrap();
+        // A guess labels the chrome but the pane is still open to correction — and only
+        // from a report: it is not guessed about a second time.
+        assert_eq!(
+            st.tool_session_wanted(&uid),
+            Some(SessionWanted {
+                tool: Some("claude".to_string()),
+                cwd: None,
+                infer: false
+            })
+        );
+        let second_guess = ToolSessionMark::new("1111-2222-3333", "/tmp")
+            .unwrap()
+            .with_tool("claude")
+            .as_inferred();
+        assert!(!st.adopt_tool_session(&uid, second_guess));
+        assert_eq!(st.tabs[ti].panes[pi].tool_session, Some(guess));
+        // A guess is never what a restart resumes: the sniff still names the tool to put
+        // back, but the conversation is left to the tool to pick up.
+        assert_eq!(
+            st.restart_tool(&st.tabs[ti].panes[pi]).as_deref(),
+            Some("claude")
+        );
+        st.sniffed_tool.remove(&uid);
+        assert_eq!(st.restart_tool(&st.tabs[ti].panes[pi]), None);
+        // The hook reports the real conversation: it replaces the guess and closes the slot.
+        let report = ToolSessionMark::new("dddd-eeee-ffff", "/tmp")
+            .unwrap()
+            .with_tool("claude");
+        assert!(st.adopt_tool_session(&uid, report.clone()));
+        assert_eq!(st.tabs[ti].panes[pi].tool_session, Some(report));
+        assert_eq!(st.tool_session_wanted(&uid), None);
+        // And provenance rides out through the serializer, so the next launch knows too.
+        let meta = snapshot_panes(&st)
+            .pop()
+            .expect("the pane is in the snapshot")
+            .meta
+            .expect("an adopted pane carries meta");
+        assert_eq!(
+            meta.get(avada_core::tools::META_SESSION_INFERRED_KEY)
+                .map(String::as_str),
+            Some("0")
+        );
+    }
+
+    // Spawns a real pty.
+    #[tokio::test]
+    async fn a_restart_never_resumes_a_guessed_conversation() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        let uid = st
+            .add_pane_opts(
+                &m,
+                NewPaneOpts {
+                    cwd: Some("/tmp".to_string()),
+                    command: Some("/bin/cat".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("the pane spawns");
+        st.note_pane_foreground(&uid, Some("claude"));
+        let (ti, pi) = st.find_pane(&uid).unwrap();
+        st.tabs[ti].panes[pi].tool_session = Some(
+            ToolSessionMark::new("aaaa-bbbb-cccc", "/tmp")
+                .unwrap()
+                .with_tool("claude")
+                .as_inferred(),
+        );
+        st.restart_monitored_pane(ti, pi, &m, None)
+            .expect("a sniffed claude pane restarts as claude");
+        let p = &st.tabs[ti].panes[pi];
+        let line = p.startup.as_deref().expect("the tool is typed back");
+        assert!(
+            !line.contains("--resume") && !line.contains("aaaa-bbbb-cccc"),
+            "a guess is not resumed: {line}"
+        );
+        assert_eq!(p.tool_session, None, "the guess does not survive the restart");
+    }
+
+    #[test]
+    fn legacy_marks_are_migrated_by_what_the_claude_hook_knew() {
+        use avada_core::tools::{META_SESSION_CWD_KEY, META_SESSION_INFERRED_KEY, META_SESSION_KEY};
+        let meta = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        // Provenance recorded: returned as written, either way.
+        let m = meta(&[
+            (META_SESSION_KEY, "aaaa-bbbb-cccc"),
+            (META_SESSION_CWD_KEY, "/tmp"),
+            (META_SESSION_INFERRED_KEY, "1"),
+        ]);
+        assert!(State::migrate_tool_session(Some(&m)).unwrap().inferred);
+        // Legacy, and the hook agreed at snapshot time: reported.
+        let m = meta(&[
+            (META_SESSION_KEY, "aaaa-bbbb-cccc"),
+            (META_SESSION_CWD_KEY, "/tmp"),
+            (avada_core::claude_panes::META_KEY, "aaaa-bbbb-cccc"),
+        ]);
+        let got = State::migrate_tool_session(Some(&m)).unwrap();
+        assert!(!got.inferred);
+        assert_eq!(got.id, "aaaa-bbbb-cccc");
+        // Legacy, and the hook named a DIFFERENT conversation: the hook's is the live
+        // truth; the mark was a guess pinned on a neighbour.
+        let m = meta(&[
+            (META_SESSION_KEY, "aaaa-bbbb-cccc"),
+            (META_SESSION_CWD_KEY, "/tmp"),
+            (avada_core::claude_panes::META_KEY, "dddd-eeee-ffff"),
+            (avada_core::claude_panes::META_CWD_KEY, "/tmp/real"),
+        ]);
+        let got = State::migrate_tool_session(Some(&m)).unwrap();
+        assert_eq!(got.id, "dddd-eeee-ffff");
+        assert_eq!(got.cwd, "/tmp/real");
+        assert_eq!(got.tool.as_deref(), Some("claude"));
+        assert!(!got.inferred);
+        // Legacy with nothing vouching for it: demoted to a guess.
+        let m = meta(&[
+            (META_SESSION_KEY, "aaaa-bbbb-cccc"),
+            (META_SESSION_CWD_KEY, "/tmp"),
+        ]);
+        let got = State::migrate_tool_session(Some(&m)).unwrap();
+        assert_eq!(got.id, "aaaa-bbbb-cccc");
+        assert!(got.inferred);
+        // No mark at all stays no mark.
+        assert_eq!(State::migrate_tool_session(Some(&meta(&[]))), None);
+    }
+
+    // Spawns a real pty.
+    #[tokio::test]
     async fn a_shell_pane_seen_running_a_tool_is_looked_for_under_that_tool() {
         let m = mgr();
         let mut st = State::new(theme::load_font(1.0));
@@ -11305,8 +11575,18 @@ mod tool_session_tests {
                 },
             )
             .expect("the pane spawns");
-        // A plain shell has no conversation to find and no tool to find one under.
-        assert_eq!(st.tool_session_wanted(&uid), None);
+        // A plain shell has no tool to guess under — but its hook markers are still read,
+        // because a hook fires whether or not the chrome has noticed the tool. The pane is
+        // born without a cwd (it learns one from the shell's OSC 7, below).
+        assert_eq!(
+            st.tool_session_wanted(&uid),
+            Some(SessionWanted {
+                tool: None,
+                cwd: None,
+                infer: false
+            })
+        );
+        let (ti, pi) = st.find_pane(&uid).expect("the pane is laid out");
 
         // The human types `claude`. The persisted kind stays `Terminal` — only the sniff
         // moves — so the search has to read the EFFECTIVE kind or it would never look for
@@ -11316,15 +11596,22 @@ mod tool_session_tests {
         // directory to scope a scan by. The hook path can still run; the scan waits.
         assert_eq!(
             st.tool_session_wanted(&uid),
-            Some(("claude".to_string(), None))
+            Some(SessionWanted {
+                tool: Some("claude".to_string()),
+                cwd: None,
+                infer: true
+            })
         );
 
         // OSC 7 lands (see the cwd arm of the pane-event pump) and now both halves are known.
-        let (ti, pi) = st.find_pane(&uid).expect("the pane is laid out");
         st.tabs[ti].panes[pi].cwd = Some("/tmp".to_string());
         assert_eq!(
             st.tool_session_wanted(&uid),
-            Some(("claude".to_string(), Some("/tmp".to_string())))
+            Some(SessionWanted {
+                tool: Some("claude".to_string()),
+                cwd: Some("/tmp".to_string()),
+                infer: true
+            })
         );
         assert!(matches!(
             st.active_tab().panes.last().unwrap().kind,

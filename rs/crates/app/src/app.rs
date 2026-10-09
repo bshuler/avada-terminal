@@ -227,6 +227,11 @@ pub struct App {
     /// whole workspace, and a second copy would only be a second agent contending for the
     /// same control API.
     hyperpane_done: Cell<bool>,
+    /// Whether the once-per-launch prune of stale session markers has run — see
+    /// [`Self::prune_session_markers`].
+    markers_pruned: Cell<bool>,
+    /// When the app came up; the marker prune waits a grace period after it.
+    started_at: std::time::Instant,
     /// Monotonic tick counter (only used to delay the screenshot scaffold).
     ticks: Cell<u64>,
     /// When to restart every pane because this launch escaped a daemon whose login session
@@ -310,6 +315,10 @@ const AI_FEED_INTERVAL: Duration = Duration::from_millis(400);
 /// How long after launch (and never before the first window is seeded) the dead-session
 /// recovery waits before restarting every pane (see [`App::service_dead_session_restart`]).
 const DEAD_SESSION_RESTART_DELAY: Duration = Duration::from_secs(3);
+
+/// How long after launch the stale-marker prune waits: long enough for every pane to have
+/// re-attached and the control alias map to be loaded, so nothing live reads as gone.
+const MARKER_PRUNE_DELAY: Duration = Duration::from_secs(60);
 /// How long a pane drag must rest over a tab before it springs open (Chrome/Finder).
 const SPRING_DELAY: std::time::Duration = std::time::Duration::from_millis(450);
 
@@ -350,6 +359,8 @@ impl App {
             ),
             scaffold_done: Cell::new(false),
             hyperpane_done: Cell::new(false),
+            markers_pruned: Cell::new(false),
+            started_at: std::time::Instant::now(),
             ticks: Cell::new(0),
             drag: RefCell::new(None),
             ghost: RefCell::new(None),
@@ -535,7 +546,7 @@ impl App {
         for w in windows {
             // Collect under a short borrow, act after it: reading a marker touches the
             // filesystem and `adopt` takes the state mutably.
-            let wants: Vec<(String, String, Option<String>)> = {
+            let wants: Vec<(String, crate::state::SessionWanted)> = {
                 let st = w.state.borrow();
                 overrides = st.settings.tool_paths.clone();
                 let uids: Vec<String> = st
@@ -546,61 +557,63 @@ impl App {
                     .map(|p| p.uid.clone())
                     .collect();
                 uids.into_iter()
-                    .filter_map(|uid| {
-                        st.tool_session_wanted(&uid)
-                            .map(|(tool, cwd)| (uid, tool, cwd))
-                    })
+                    .filter_map(|uid| st.tool_session_wanted(&uid).map(|w| (uid, w)))
                     .collect()
             };
-            for (uid, tool, cwd) in wants {
-                alive.insert(uid.clone());
+            for (uid, want) in wants {
                 // The hook writes its marker under the PANE id the tool inherited, which is
                 // the daemon-facing id, not necessarily the local uid.
                 let pane_id = self
                     .control
                     .pane_id_for_uid(&uid)
                     .unwrap_or_else(|| uid.clone());
-                let mark = match tool.as_str() {
-                    // Claude's marker predates the shared one and has its own shape and its
-                    // own reader; it is the same fact.
-                    "claude" => {
-                        self.pane_claude_marker(&uid).and_then(|s| {
-                            // The marker's own cwd is the authority; the pane's live one is
-                            // only a stand-in for the markers written before it carried one.
-                            let dir = if s.cwd.is_empty() {
-                                cwd.as_deref().unwrap_or_default()
-                            } else {
-                                s.cwd.as_str()
-                            };
-                            avada_core::tools::ToolSessionMark::new(&s.session_id, dir)
-                                .map(|m| m.with_tool("claude"))
-                        })
-                    }
-                    other => avada_core::tools::session_hook::read_pane_mark(other, &pane_id),
-                };
+                // Claude's marker predates the shared one and has its own shape and its
+                // own reader; it is the same fact. Every pane's markers are read, whatever
+                // the chrome thinks the pane is running: a hook fires whether or not the
+                // title sniff has caught up, and before 0.2.31 an unlabelled pane whose
+                // sniff had missed was never asked — its conversation went unrecorded until
+                // the dead-session sweep read the marker file directly.
+                let claude = self.pane_claude_marker(&uid).and_then(|s| {
+                    // The marker's own cwd is the authority; the pane's live one is only a
+                    // stand-in for the markers written before it carried one.
+                    let dir = if s.cwd.is_empty() {
+                        want.cwd.as_deref().unwrap_or_default()
+                    } else {
+                        s.cwd.as_str()
+                    };
+                    avada_core::tools::ToolSessionMark::new(&s.session_id, dir)
+                        .map(|m| m.with_tool("claude"))
+                });
+                let mark = claude.or_else(|| {
+                    avada_core::tools::session_hook::read_any_pane_mark(&pane_id)
+                });
                 match mark {
                     Some(mark) => {
                         if w.state.borrow_mut().adopt_tool_session(&uid, mark) {
                             crate::history_scan::forget_pane(&uid);
-                            alive.remove(&uid);
                         }
                     }
-                    // No hook spoke for this pane. Watch the tool's store instead; the call
-                    // is idempotent, so re-asking every pass keeps the baseline it took the
+                    // No hook spoke for this pane. For a pane that looks like a tool pane
+                    // and holds nothing yet, watch the tool's store instead; the call is
+                    // idempotent, so re-asking every pass keeps the baseline it took the
                     // first time. A pane that has not reported its cwd yet is left alone for
                     // now — a baseline taken against the wrong directory would be worse than
-                    // a baseline taken a couple of seconds late.
-                    None => {
-                        if let Some(cwd) = cwd.as_deref() {
-                            crate::history_scan::watch_pane(&uid, &tool, cwd);
+                    // a baseline taken a couple of seconds late. A plain shell is never
+                    // guessed about: that is how a sibling's conversation got pinned on it.
+                    None if want.infer => {
+                        alive.insert(uid.clone());
+                        if let (Some(tool), Some(cwd)) = (want.tool.as_deref(), want.cwd.as_deref()) {
+                            crate::history_scan::watch_pane(&uid, tool, cwd);
                         }
                     }
+                    None => {}
                 }
             }
         }
         // Panes that closed, or that now know their conversation, stop being watched —
         // otherwise the watch map grows with every pane the session ever opened.
         crate::history_scan::retain_panes(&alive);
+        self.prune_session_markers(windows);
 
         for (uid, mark) in crate::history_scan::poll_inference(&overrides) {
             for w in windows {
@@ -609,6 +622,49 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Once per launch, after the workspace is up, delete the session markers of panes
+    /// that no longer exist (Claude's and every hooked tool's).
+    ///
+    /// Gated the same way as the dead-session sweep: not while the first seed is pending
+    /// (a half-loaded workspace would make every pane look gone), not without a window,
+    /// and not within the first [`MARKER_PRUNE_DELAY`] of launch — a pane that is still
+    /// re-attaching has a marker that must survive. The live set is every uid any window
+    /// claims (laid out, parked, reopenable) and every control alias of those uids, since
+    /// a hook writes under whichever id the tool inherited. An empty live set is a sign
+    /// something is wrong, not a licence to wipe the directory, so it skips the prune.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn prune_session_markers(&self, windows: &[Rc<Window>]) {
+        if self.markers_pruned.get()
+            || self.first_seed.get()
+            || windows.is_empty()
+            || self.started_at.elapsed() < MARKER_PRUNE_DELAY
+        {
+            return;
+        }
+        self.markers_pruned.set(true);
+        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for w in windows {
+            for uid in w.state.borrow().claimed_uids() {
+                if let Some(alias) = self.control.pane_id_for_uid(&uid) {
+                    live.insert(alias);
+                }
+                live.insert(uid);
+            }
+        }
+        if live.is_empty() {
+            tracing::warn!("marker prune skipped: no live panes known");
+            return;
+        }
+        let claude = avada_core::claude_panes::prune_markers(&live);
+        let hooked = avada_core::tools::session_hook::prune_markers(&live);
+        tracing::info!(
+            live = live.len(),
+            claude = claude.len(),
+            hooked = hooked.len(),
+            "stale session markers pruned"
+        );
     }
 
     /// Deliver queued speak-first prompts (see `avada_core::resume_queue`): for each

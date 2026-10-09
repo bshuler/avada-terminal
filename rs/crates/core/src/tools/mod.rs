@@ -37,5 +37,6 @@ pub use kind::{PaneKind, META_KIND_KEY};
 pub use registry::{by_bin, by_id, by_title, HistoryKind, ToolDef, TOOLS, TOOL_ICON_BASE};
 pub use session_infer::{Outcome as InferOutcome, PaneWatch};
 pub use session_mark::{
-    resume_args, ToolSessionMark, META_SESSION_CWD_KEY, META_SESSION_KEY, META_SESSION_TOOL_KEY,
+    resume_args, ToolSessionMark, META_SESSION_CWD_KEY, META_SESSION_INFERRED_KEY, META_SESSION_KEY,
+    META_SESSION_TOOL_KEY,
 };

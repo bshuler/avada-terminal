@@ -280,8 +280,11 @@ pub fn poll_inference(overrides: &BTreeMap<String, String>) -> Vec<(String, Tool
                 let pairs = rows.iter().map(|(id, dir)| (id.as_str(), dir.as_str()));
                 match watch.observe(now, pairs) {
                     InferOutcome::Watching => true,
+                    // Stamped as a deduction on the way out: this is the one source whose
+                    // answer a later hook report is allowed to replace, and the one a
+                    // restart must never `--resume`.
                     InferOutcome::Adopted(mark) => {
-                        adopted.push((uid.clone(), mark));
+                        adopted.push((uid.clone(), mark.as_inferred()));
                         false
                     }
                     // Ambiguous or out of budget: this pane's conversation will not be

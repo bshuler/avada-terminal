@@ -163,10 +163,85 @@ pub fn remove_pane_markers<'a>(ids: impl IntoIterator<Item = &'a str>) {
     }
 }
 
+/// Delete every marker in `dir` whose stem names no pane in `live`, returning the stems
+/// removed. The shared body of [`prune_markers`] and the per-tool prune in
+/// [`crate::tools::session_hook`]: one rule, two directories.
+///
+/// Only `*.json` files are candidates (the hook writes `<id>.json.tmp` first and renames
+/// it, so a `.tmp` is a write in flight, not a marker). A missing directory is the normal
+/// case on a fresh install. Errors are logged and skipped, never fatal: the markers that
+/// matter are the live ones, and this touches none of them.
+#[tracing::instrument(level = "debug", ret, skip(live))]
+pub fn prune_marker_dir(dir: &std::path::Path, live: &std::collections::HashSet<String>) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if live.contains(stem) {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::info!(path = %path.display(), "stale session marker pruned");
+                removed.push(stem.to_string());
+            }
+            Err(e) => tracing::debug!(path = %path.display(), error = %e, "marker not pruned"),
+        }
+    }
+    removed
+}
+
+/// Remove the Claude markers of panes that no longer exist, returning the pane ids pruned.
+///
+/// `SessionEnd` only fires on a clean exit, so a pane killed by a restart, a crash, or a
+/// dead login session leaves its marker behind. One stale marker is harmless on its own —
+/// nothing reads it, because no pane carries its id any more — but they accumulate (85 of
+/// 90 files on one machine after a month), and a pane id a later build happens to re-use
+/// would read a stranger's conversation. `live` is every pane id anything could still
+/// write a marker under: the uids of every pane the app currently knows about (laid out,
+/// parked, reopenable) AND their control aliases, since the hook writes under whichever
+/// one the tool inherited.
+#[tracing::instrument(level = "debug", ret, skip(live))]
+pub fn prune_markers(live: &std::collections::HashSet<String>) -> Vec<String> {
+    prune_marker_dir(&paths::claude_sessions_dir(), live)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn prune_keeps_live_and_in_flight_markers_and_drops_the_rest() {
+        let dir = std::env::temp_dir().join(format!("avada-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("live.json"), "{}").unwrap();
+        fs::write(dir.join("alias.json"), "{}").unwrap();
+        fs::write(dir.join("gone.json"), "{}").unwrap();
+        fs::write(dir.join("writing.json.tmp"), "{}").unwrap();
+        fs::write(dir.join("notes.txt"), "").unwrap();
+        let live: std::collections::HashSet<String> =
+            ["live", "alias"].iter().map(|s| s.to_string()).collect();
+        let removed = prune_marker_dir(&dir, &live);
+        assert_eq!(removed, vec!["gone".to_string()]);
+        assert!(dir.join("live.json").is_file());
+        assert!(dir.join("alias.json").is_file());
+        assert!(!dir.join("gone.json").exists());
+        assert!(dir.join("writing.json.tmp").is_file());
+        assert!(dir.join("notes.txt").is_file());
+        // A directory that does not exist is a fresh install, not an error.
+        assert!(prune_marker_dir(&dir.join("missing"), &live).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn newest_marker_wins_and_first_takes_a_tie() {

@@ -49,6 +49,15 @@ pub const META_SESSION_CWD_KEY: &str = "tool.cwd";
 /// reads back as `Option`.
 pub const META_SESSION_TOOL_KEY: &str = "tool.id";
 
+/// Pane-meta key for the mark's provenance: `"1"` when the conversation was *deduced* by
+/// the scan-and-diff inference, `"0"` when something reported it (a spawn or a hook).
+///
+/// Written explicitly both ways since 0.2.31, so a mark with the key absent is one an
+/// older build wrote — before provenance was recorded at all. The snapshot loader treats
+/// those legacy marks specially (see the app's restore path); nothing else should read the
+/// absent case as meaning anything.
+pub const META_SESSION_INFERRED_KEY: &str = "tool.inferred";
+
 /// One pane's remembered conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSessionMark {
@@ -59,6 +68,11 @@ pub struct ToolSessionMark {
     /// The registry id of the tool holding the conversation, when the pane's kind does
     /// not already say. `None` is the ordinary case: ask the kind.
     pub tool: Option<String>,
+    /// Whether the conversation was deduced rather than reported. An inferred mark is a
+    /// best guess from watching a tool's history store: good enough to label the pane's
+    /// chrome, never good enough to `--resume` on a restart, and always overridden by a
+    /// hook's or a spawn's report of the real conversation (see the app's adoption rule).
+    pub inferred: bool,
 }
 
 impl ToolSessionMark {
@@ -71,7 +85,23 @@ impl ToolSessionMark {
             id: id.to_string(),
             cwd: cwd.to_string(),
             tool: None,
+            inferred: false,
         })
+    }
+
+    /// Flag the mark as a deduction (see [`Self::inferred`]). Only the scan-and-diff
+    /// inference calls this; a hook or a spawn reports, it does not guess.
+    #[tracing::instrument(level = "debug", ret)]
+    pub fn as_inferred(mut self) -> Self {
+        self.inferred = true;
+        self
+    }
+
+    /// Whether `meta` records the mark's provenance at all. `false` means the mark was
+    /// written by a build older than 0.2.31, which inferred freely and never said so.
+    #[tracing::instrument(level = "debug", ret)]
+    pub fn provenance_recorded(meta: Option<&BTreeMap<String, String>>) -> bool {
+        meta.is_some_and(|m| m.contains_key(META_SESSION_INFERRED_KEY))
     }
 
     /// Name the tool this conversation belongs to. Only for a mark learned from OUTSIDE a
@@ -93,7 +123,10 @@ impl ToolSessionMark {
     #[tracing::instrument(level = "debug", ret)]
     pub fn read(meta: Option<&BTreeMap<String, String>>) -> Option<Self> {
         let m = meta?;
-        let mark = Self::new(m.get(META_SESSION_KEY)?, m.get(META_SESSION_CWD_KEY)?)?;
+        let mut mark = Self::new(m.get(META_SESSION_KEY)?, m.get(META_SESSION_CWD_KEY)?)?;
+        // Absent reads as "reported": a legacy mark is handled by the snapshot loader,
+        // which is the only place that knows whether the pane has better evidence.
+        mark.inferred = m.get(META_SESSION_INFERRED_KEY).is_some_and(|v| v == "1");
         Some(match m.get(META_SESSION_TOOL_KEY) {
             Some(t) => mark.with_tool(t),
             None => mark,
@@ -108,6 +141,10 @@ impl ToolSessionMark {
         if let Some(t) = &self.tool {
             meta.insert(META_SESSION_TOOL_KEY.to_string(), t.clone());
         }
+        meta.insert(
+            META_SESSION_INFERRED_KEY.to_string(),
+            if self.inferred { "1" } else { "0" }.to_string(),
+        );
     }
 
     /// The program to run to re-enter this conversation when the pane's kind is silent:
@@ -152,6 +189,39 @@ mod tests {
         let mut meta = BTreeMap::new();
         m.write_into(&mut meta);
         assert_eq!(ToolSessionMark::read(Some(&meta)), Some(m));
+        // Provenance is written explicitly both ways, so a reader can tell "reported"
+        // from "written before provenance existed".
+        assert_eq!(meta.get(META_SESSION_INFERRED_KEY).map(String::as_str), Some("0"));
+        assert!(ToolSessionMark::provenance_recorded(Some(&meta)));
+    }
+
+    #[test]
+    fn an_inferred_mark_round_trips_as_inferred() {
+        let m = ToolSessionMark::new("aaaa-bbbb-cccc", "/tmp/proj")
+            .unwrap()
+            .with_tool("claude")
+            .as_inferred();
+        assert!(m.inferred);
+        let mut meta = BTreeMap::new();
+        m.write_into(&mut meta);
+        assert_eq!(meta.get(META_SESSION_INFERRED_KEY).map(String::as_str), Some("1"));
+        assert_eq!(ToolSessionMark::read(Some(&meta)), Some(m));
+    }
+
+    #[test]
+    fn a_legacy_mark_reads_as_reported_but_without_provenance() {
+        // A mark an older build wrote: no provenance key at all. It reads as reported
+        // (the safe reading for a mark that may well have come from a hook), and the
+        // snapshot loader can see that nothing recorded how it was learned.
+        let mut meta = BTreeMap::new();
+        meta.insert(META_SESSION_KEY.to_string(), "aaaa-bbbb-cccc".to_string());
+        meta.insert(META_SESSION_CWD_KEY.to_string(), "/tmp/proj".to_string());
+        let m = ToolSessionMark::read(Some(&meta)).unwrap();
+        assert!(!m.inferred);
+        assert!(!ToolSessionMark::provenance_recorded(Some(&meta)));
+        // Anything but "1" is "reported" — a hand-edited value cannot promote a mark.
+        meta.insert(META_SESSION_INFERRED_KEY.to_string(), "yes".to_string());
+        assert!(!ToolSessionMark::read(Some(&meta)).unwrap().inferred);
     }
 
     #[test]

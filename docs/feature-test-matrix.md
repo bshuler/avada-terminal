@@ -281,7 +281,6 @@ a menu, or the control plane — not being on a key is not a gap.
 | `LeftMovePane` | — |
 | `LeftReorderPane` | — |
 | `LeftSaveWorkspace` | — |
-| `ModuleCommand` | — |
 | `ModulePaneRow` | — |
 | `MovePaneToNewTab` | — |
 | `MovePaneToNewWindow` | — |
@@ -341,6 +340,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `RevealPaneCwd` | — |
 | `RevealPath` | — |
 | `Rights` | — |
+| `RunModule` | — |
 | `RunPath` | — |
 | `SaveProject` | — |
 | `SaveSet` | — |

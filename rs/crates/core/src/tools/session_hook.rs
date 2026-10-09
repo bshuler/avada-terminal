@@ -276,6 +276,21 @@ pub fn read_any_pane_mark(pane_id: &str) -> Option<ToolSessionMark> {
         .find_map(|t| read_pane_mark(t.id, pane_id))
 }
 
+/// Remove, for every hooked tool, the markers of panes that no longer exist — the shared
+/// counterpart of [`crate::claude_panes::prune_markers`], one directory per tool. Returns
+/// `(tool id, pane id)` for each marker pruned.
+#[tracing::instrument(level = "debug", ret, skip(live))]
+pub fn prune_markers(live: &std::collections::HashSet<String>) -> Vec<(String, String)> {
+    HOOKED_TOOLS
+        .iter()
+        .flat_map(|t| {
+            crate::claude_panes::prune_marker_dir(&marker_dir(t.id), live)
+                .into_iter()
+                .map(move |pane| (t.id.to_string(), pane))
+        })
+        .collect()
+}
+
 /// Resolve a bundled hook script, mirroring the packaged layouts
 /// [`crate::claude_hook::bundled_hook_path`] handles: next to the exe, the macOS `.app`
 /// `Contents/Resources`, and the FHS `share`/`lib` install prefixes.
