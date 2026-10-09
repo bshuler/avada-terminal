@@ -236,6 +236,10 @@ pub enum Command {
     PrevTab,
     BeginRename(i32),
     RenameTab(i32, String),
+    /// Escape in an inline editor (tab title or pane label): close it, keeping the old name.
+    /// Empty on purpose — `dispatch` already ends both edits for any command that is not a
+    /// rename, so this only has to exist.
+    CancelRename,
     /// Begin editing pane `0`'s label inline (double-click on its header).
     BeginRenamePane(i32),
     /// Commit pane `0`'s label to `1` (blank keeps the prior label).
@@ -618,6 +622,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::PrevTab => state.cycle_tab(-1),
         Command::BeginRename(i) => state.begin_rename(i),
         Command::RenameTab(i, t) => state.rename_tab(i, &t),
+        Command::CancelRename => {}
         Command::BeginRenamePane(i) => state.begin_rename_pane(i),
         Command::RenamePane(i, t) => state.rename_pane(i, &t),
         // ---- pane context-menu actions ----
@@ -1235,6 +1240,20 @@ mod rename_from_menu_tests {
         assert_eq!(st.editing_tab, 0, "the pick itself opens the editor");
         dispatch(&mut st, Command::CloseContext, &mgr);
         assert_eq!(st.editing_tab, 0, "dismissing the menu must not cancel it");
+    }
+
+    /// Escape in the inline editor closes it and the title it was editing survives.
+    #[test]
+    fn escape_cancels_a_tab_rename_and_keeps_the_title() {
+        let mgr = mgr();
+        let mut st = fresh();
+        let before = st.tabs[0].title.clone();
+
+        dispatch(&mut st, Command::BeginRename(0), &mgr);
+        assert_eq!(st.editing_tab, 0);
+        dispatch(&mut st, Command::CancelRename, &mgr);
+        assert_eq!(st.editing_tab, -1, "Escape closes the editor");
+        assert_eq!(st.tabs[0].title, before, "and commits nothing");
     }
 
     // Needs a reactor: `add_pane` spawns the pty read loop.

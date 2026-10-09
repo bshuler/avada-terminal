@@ -4372,6 +4372,7 @@ impl App {
         cb_usize!(on_select_tab, Command::SwitchTab);
         cb_usize!(on_close_tab, Command::CloseTab);
         cb_i32!(on_begin_rename, Command::BeginRename);
+        cb0!(on_cancel_rename, Command::CancelRename);
         {
             let app = app.clone();
             let id = win.id;

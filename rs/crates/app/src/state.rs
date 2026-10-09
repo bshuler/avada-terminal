@@ -7675,6 +7675,36 @@ impl State {
         self.adopt_pane(mgr, dp);
     }
 
+    /// Move pane `idx` of tab `from` into a new tab appended to this window, optionally titled,
+    /// without switching to it — the control API's `movePane {newTab}`. Unlike the menu path
+    /// it works on any tab, but it keeps the same guard: a pane alone in its tab stays put.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn move_pane_to_new_tab_in(
+        &mut self,
+        from: usize,
+        idx: usize,
+        title: Option<&str>,
+        mgr: &SessionManager,
+    ) {
+        if from >= self.tabs.len() || self.tabs[from].panes.len() < 2 {
+            return;
+        }
+        if idx >= self.tabs[from].panes.len() {
+            return;
+        }
+        let Some(dp) = self.detach_pane_in(from, idx) else {
+            return;
+        };
+        let mut tab = self.fresh_tab();
+        if let Some(t) = title {
+            tab.title = t.to_string().into();
+        }
+        tracing::info!(title = %tab.title, "tab created (pane moved out by control)");
+        self.tabs.push(tab);
+        let target = self.tabs.len() - 1;
+        self.adopt_into_tab(mgr, dp, target);
+    }
+
     /// Move active-tab pane `idx` into existing tab `target` (the "Move to Tab" submenu), without
     /// switching away from the current tab. Handles the source tab being dropped when its last
     /// pane leaves (which shifts `target` when the source sat before it).

@@ -1147,12 +1147,36 @@ impl ControlHost {
                 } => {
                     if let Some((w, target)) = resolve_tab(windows, &tab_id) {
                         let mut st = w.state.borrow_mut();
-                        let from = pane_slot(st.tabs.iter().map(|t| t.panes.iter().map(|p| p.uid.as_str())), &session_uid);
+                        let from = pane_slot(
+                            st.tabs
+                                .iter()
+                                .map(|t| t.panes.iter().map(|p| p.uid.as_str())),
+                            &session_uid,
+                        );
                         if let Some((from, idx)) = from {
                             // Appended (`at` past the end): the order a caller issues moves in
                             // is the order the panes land in.
                             let at = st.tabs[target].panes.len();
                             st.move_pane_between_tabs_at(from, idx, target, at, mgr);
+                            changed = true;
+                        }
+                    }
+                }
+                UiOp::MovePaneToNewTab {
+                    session_uid,
+                    window_id,
+                    title,
+                } => {
+                    if let Some(w) = window_by_id(windows, window_id) {
+                        let mut st = w.state.borrow_mut();
+                        let from = pane_slot(
+                            st.tabs
+                                .iter()
+                                .map(|t| t.panes.iter().map(|p| p.uid.as_str())),
+                            &session_uid,
+                        );
+                        if let Some((from, idx)) = from {
+                            st.move_pane_to_new_tab_in(from, idx, title.as_deref(), mgr);
                             changed = true;
                         }
                     }
@@ -1733,8 +1757,16 @@ mod tests {
         let tabs = [vec!["a", "b"], vec![], vec!["c", "d", "e"]];
         let slot = |uid| pane_slot(tabs.iter().map(|t| t.iter().copied()), uid);
         assert_eq!(slot("a"), Some((0, 0)));
-        assert_eq!(slot("e"), Some((2, 2)), "an empty tab before it must not shift the count");
-        assert_eq!(slot("gone"), None, "a session that exited is skipped, not guessed at");
+        assert_eq!(
+            slot("e"),
+            Some((2, 2)),
+            "an empty tab before it must not shift the count"
+        );
+        assert_eq!(
+            slot("gone"),
+            None,
+            "a session that exited is skipped, not guessed at"
+        );
     }
 
     #[test]

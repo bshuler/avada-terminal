@@ -156,6 +156,7 @@ component TabChip inherits Rectangle {
     callback close();
     callback begin-rename();
     callback commit-rename(string);
+    callback cancel-rename();                // Escape in the inline editor — keep the old title
     callback grab();                         // a press on the tab — arm a reorder drag
     callback context(length, length);        // right-click → open the tab menu at (x, y)
     callback report-geom(length, length);    // window-x + width, for hit-testing
@@ -296,6 +297,13 @@ component TabChip inherits Rectangle {
             single-line: true;
             init => { ti.select-all(); ti.focus(); }
             accepted => { root.commit-rename(self.text); }
+            key-pressed(e) => {
+                if (e.text == Key.Escape) {
+                    root.cancel-rename();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
         }
     }
 }
@@ -324,6 +332,7 @@ export component TopBar inherits Rectangle {
     callback new-tab();
     callback begin-rename(int);
     callback rename-tab(int, string);
+    callback cancel-rename();
     callback tab-grab(int);
     callback tab-geom(int, length, length);
     callback new-window();
@@ -555,6 +564,7 @@ export component TopBar inherits Rectangle {
                             close => { root.close-tab(idx); }
                             begin-rename => { root.begin-rename(idx); }
                             commit-rename(t) => { root.rename-tab(idx, t); }
+                            cancel-rename => { root.cancel-rename(); }
                             grab => { root.tab-grab(idx); }
                             context(x, y) => { root.tab-context(idx, x, y); }
                             // A tab scrolled out of view reports as a zero-width sliver at

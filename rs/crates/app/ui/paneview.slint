@@ -292,6 +292,7 @@ export component PaneView inherits Rectangle {
     // pane-header inline rename (double-click the header label).
     callback begin-rename-pane(int);
     callback rename-pane(int, string);
+    callback cancel-rename();
     // clickable-paths: surface geometry (for hit-testing) + hover/click reports.
     callback pane-geometry(int, length, length);
     callback pane-link-moved(int, length, length);
@@ -560,6 +561,13 @@ export component PaneView inherits Rectangle {
                                     single-line: true;
                                     init => { lti.select-all(); lti.focus(); }
                                     accepted => { root.rename-pane(idx, self.text); }
+                                    key-pressed(e) => {
+                                        if (e.text == Key.Escape) {
+                                            root.cancel-rename();
+                                            return EventResult.accept;
+                                        }
+                                        return EventResult.reject;
+                                    }
                                 }
                             }
                         }

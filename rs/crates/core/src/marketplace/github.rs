@@ -184,13 +184,21 @@ pub struct GitHubConfig {
 pub const API_BASE_ENV: &str = "AVADA_GITHUB_API_BASE";
 /// Same for the device-flow web base.
 pub const WEB_BASE_ENV: &str = "AVADA_GITHUB_WEB_BASE";
+/// Overrides [`CLIENT_ID`] (a test app, a fork's own registration).
+pub const CLIENT_ID_ENV: &str = "AVADA_GITHUB_CLIENT_ID";
+/// The "Avada Marketplace" OAuth app (device flow). A client id is public by design;
+/// there is no client secret in the device flow.
+pub const CLIENT_ID: &str = "";
 
 impl Default for GitHubConfig {
     fn default() -> Self {
         GitHubConfig {
             api_base: env_base(API_BASE_ENV, "https://api.github.com"),
             web_base: env_base(WEB_BASE_ENV, "https://github.com"),
-            client_id: std::env::var("AVADA_GITHUB_CLIENT_ID").unwrap_or_default(),
+            client_id: std::env::var(CLIENT_ID_ENV)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| CLIENT_ID.to_string()),
             ttl: Duration::from_secs(5 * 60),
             user_agent: format!("avada-terminal/{}", env!("CARGO_PKG_VERSION")),
         }

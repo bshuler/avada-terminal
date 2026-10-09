@@ -62,7 +62,8 @@ usage: avada ctl <verb> [args]
     rename-tab <tab> <title>
     focus-tab <tab>
     move-tab <tab> <index>
-    move-pane <pane> <tab>          re-host a running pane in another tab (no restart)
+    move-pane <pane> <tab|new> [--title T]
+                                    re-host a running pane in another tab, or a new one (no restart)
 
   Preferences
     set <key> <value>               one setting; value is JSON if it parses, else a string
@@ -250,13 +251,18 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             )?);
         }
         "move-pane" => {
-            let pane = need(args.first(), "move-pane <pane> <tab>");
-            let tab = need(args.get(1), "move-pane <pane> <tab>");
-            print_json(post(
-                &conn,
-                "/command",
-                json!({ "type": "movePane", "paneId": pane, "tabId": tab }),
-            )?);
+            let (pos, flags) = split_flags_optional(&args);
+            let usage = "move-pane <pane> <tab|new> [--title T]";
+            let pane = need(pos.first(), usage);
+            let tab = need(pos.get(1), usage);
+            // `new` makes the pane the only pane of a fresh tab instead of joining one.
+            let mut cmd = if tab == "new" {
+                json!({ "type": "movePane", "paneId": pane, "newTab": true })
+            } else {
+                json!({ "type": "movePane", "paneId": pane, "tabId": tab })
+            };
+            put_str(&mut cmd, "title", flags.get("title"));
+            print_json(post(&conn, "/command", cmd)?);
         }
 
         // ---- preferences ----

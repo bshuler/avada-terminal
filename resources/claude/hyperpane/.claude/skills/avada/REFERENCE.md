@@ -86,10 +86,11 @@ Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `gr
 | `focus-tab <tab>` | `{"type":"focusTab","tabId":…}` |
 | `move-tab <tab> <index>` | `{"type":"moveTab","tabId":…,"to":N}` |
 | `move-pane <pane> <tab>` | `{"type":"movePane","paneId":…,"tabId":…}` |
+| `move-pane <pane> new [--title T]` | `{"type":"movePane","paneId":…,"newTab":true,"title":…}` |
 
 All six answer **202** with `{"ok":true,"queued":true}` — they are applied by the UI thread on
-its next frame. `newTab` also returns the id the new tab will have (`{window}:{count}`, appended
-at the end). Re-read `tabs` to confirm anything else.
+its next frame. `newTab`, and `movePane` with `newTab`, also return the id the new tab will
+have (`{window}:{count}`, appended at the end). Re-read `tabs` to confirm anything else.
 
 Tab ids are positional (`{window}:{index}`), so they shift when tabs close or move. A stale id
 that no longer names a tab is refused with 404 rather than hitting whatever moved into that slot.
@@ -103,6 +104,12 @@ first and an index equal to the tab count puts it last.
 and its scrollback comes along. A tab emptied by the move is dropped, which shifts the ids of
 every tab after it — so re-read `tabs` between moves, or move from the last tab backwards. A
 pane in another window, or already in the target tab, is refused with 409.
+
+`move-pane <pane> new` splits a pane out into a new tab of its own window, appended last; the
+active tab does not change. A pane already alone in its tab is refused with 409 (the move would
+only rename it — use `rename-tab`), and giving both a tab and `new` is a 400.
+
+`layout <tab> <name>` needs only the tab id; the window is the tab's own.
 
 ## Preferences
 

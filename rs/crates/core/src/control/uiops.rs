@@ -85,6 +85,15 @@ pub enum UiOp {
     /// session is detached and adopted, never restarted — what dragging a pane onto another
     /// tab in the left panel does. The source tab is dropped if this was its last pane.
     MovePane { session_uid: String, tab_id: String },
+    /// Re-host the pane whose session is `session_uid` as the only pane of a new tab appended
+    /// to `window_id`, optionally titled — "Move to New Tab" for any tab, not just the active
+    /// one. The active tab does not change. The route refuses a pane alone in its tab, so the
+    /// source tab survives and the new tab's id is the window's tab count at queue time.
+    MovePaneToNewTab {
+        session_uid: String,
+        window_id: i64,
+        title: Option<String>,
+    },
     /// Mirror of the `setLayout` verb. The dispatch already wrote it to the read model, but the
     /// GUI's `publish` rebuilds every tab from its own state each tick and would snap the layout
     /// back — so the visible change has to be made on the UI thread as well.

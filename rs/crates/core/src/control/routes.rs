@@ -2193,10 +2193,6 @@ fn tab_command(shared: &Arc<Shared>, info: &TokenInfo, ty: &str, cmd: &Value) ->
                 Some(p) if !p.is_empty() => p,
                 _ => return jstatus(400, json!({ "error": "missing string field: paneId" })),
             };
-            let (tab_id, window_id) = match find_tab(shared, cmd) {
-                Err(e) => return e,
-                Ok(t) => t,
-            };
             // Resolved here, while the read model can still 404 it, and queued by session uid:
             // that is the key the UI thread's own pane list carries.
             let found = {
@@ -2204,11 +2200,48 @@ fn tab_command(shared: &Arc<Shared>, info: &TokenInfo, ty: &str, cmd: &Value) ->
                 model.resolve_pane_id(raw).and_then(|id| {
                     let at = model.coords_of(&id)?;
                     let uid = model.pane(&id)?.session_uid.clone();
-                    Some((id, at, uid))
+                    let alone = model.tab(&at.tab_id).map_or(true, |t| t.panes.len() < 2);
+                    let tabs = model.tab_count(at.window_id)?;
+                    Some((id, at, uid, alone, tabs))
                 })
             };
-            let Some((pane_id, at, session_uid)) = found else {
+            let Some((pane_id, at, session_uid, alone, tabs)) = found else {
                 return jstatus(404, json!({ "error": "no such pane", "paneId": raw }));
+            };
+            // `newTab: true` instead of a `tabId`: the pane becomes the only pane of a tab
+            // appended to its own window — the scripted form of "Move to New Tab", and the way
+            // to make a tab without a throwaway seed shell in it.
+            if cmd.get("newTab").and_then(Value::as_bool) == Some(true) {
+                if cmd.get("tabId").is_some() {
+                    return jstatus(400, json!({ "error": "give tabId or newTab, not both" }));
+                }
+                // A pane alone in its tab would only trade one tab for another — and the id
+                // reported below assumes the source tab survives the move.
+                if alone {
+                    return jstatus(
+                        409,
+                        json!({ "error": "the pane is already alone in its tab", "paneId": pane_id, "tabId": at.tab_id }),
+                    );
+                }
+                let title = cmd
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .filter(|t| !t.is_empty());
+                let tab_id = format!("{}:{tabs}", at.window_id);
+                return queue_ui_op(
+                    shared,
+                    UiOp::MovePaneToNewTab {
+                        session_uid,
+                        window_id: at.window_id,
+                        title,
+                    },
+                    json!({ "ok": true, "queued": true, "paneId": pane_id, "tabId": tab_id }),
+                );
+            }
+            let (tab_id, window_id) = match find_tab(shared, cmd) {
+                Err(e) => return e,
+                Ok(t) => t,
             };
             // 409 rather than a 202 the UI thread would then silently drop, as for closeTab.
             if at.window_id != window_id {
@@ -4592,13 +4625,22 @@ mod golden {
             window_id: 3,
             active_tab_id: Some("3:0".into()),
             keyboard_focus_pane: None,
-            tabs: vec![tab("3:0", vec![pane("pane-mv", "uid-mv")]), tab("3:1", vec![])],
+            tabs: vec![
+                tab("3:0", vec![pane("pane-mv", "uid-mv")]),
+                tab("3:1", vec![]),
+            ],
         });
         // Drain whatever earlier tests left so the assertion below sees only this op.
         s.shared.ui_ops.lock().unwrap().drain();
 
         // The bare-uuid spelling of the id resolves, and the op carries the session uid.
-        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"mv","tabId":"3:1"}"#).await;
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"mv","tabId":"3:1"}"#,
+        )
+        .await;
         assert_eq!(r.status().as_u16(), 202);
         assert_eq!(r.json::<Value>().await.unwrap()["paneId"], json!("pane-mv"));
         assert_eq!(
@@ -4609,13 +4651,99 @@ mod golden {
             }]
         );
 
-        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"pane-mv","tabId":"3:0"}"#).await;
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"pane-mv","tabId":"3:0"}"#,
+        )
+        .await;
         assert_eq!(r.status().as_u16(), 409, "already in that tab");
-        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"pane-mv","tabId":"t1"}"#).await;
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"pane-mv","tabId":"t1"}"#,
+        )
+        .await;
         assert_eq!(r.status().as_u16(), 409, "another window");
-        let r = post(&s, "/command", &s.token, r#"{"type":"movePane","paneId":"nope","tabId":"3:1"}"#).await;
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"nope","tabId":"3:1"}"#,
+        )
+        .await;
         assert_eq!(r.status().as_u16(), 404);
-        assert!(s.shared.ui_ops.lock().unwrap().drain().is_empty(), "a refusal queues nothing");
+        assert!(
+            s.shared.ui_ops.lock().unwrap().drain().is_empty(),
+            "a refusal queues nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_pane_to_a_new_tab_predicts_its_id_and_refuses_a_lone_pane() {
+        let s = boot(true).await;
+        let tab = |id: &str, panes| TabInfo {
+            id: id.into(),
+            title: id.into(),
+            layout: "auto".into(),
+            panes,
+            system: false,
+        };
+        s.shared.model.lock().unwrap().add_window(WindowInfo {
+            window_id: 4,
+            active_tab_id: Some("4:0".into()),
+            keyboard_focus_pane: None,
+            tabs: vec![
+                tab(
+                    "4:0",
+                    vec![pane("pane-a", "uid-a"), pane("pane-b", "uid-b")],
+                ),
+                tab("4:1", vec![pane("pane-solo", "uid-solo")]),
+            ],
+        });
+        s.shared.ui_ops.lock().unwrap().drain();
+
+        // The new tab lands at the window's tab count, so the route can name it up front.
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"pane-b","newTab":true,"title":"Split"}"#,
+        )
+        .await;
+        assert_eq!(r.status().as_u16(), 202);
+        assert_eq!(r.json::<Value>().await.unwrap()["tabId"], json!("4:2"));
+        assert_eq!(
+            s.shared.ui_ops.lock().unwrap().drain(),
+            vec![UiOp::MovePaneToNewTab {
+                session_uid: "uid-b".into(),
+                window_id: 4,
+                title: Some("Split".into())
+            }]
+        );
+
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"pane-solo","newTab":true}"#,
+        )
+        .await;
+        assert_eq!(r.status().as_u16(), 409, "already alone in its tab");
+        let r = post(
+            &s,
+            "/command",
+            &s.token,
+            r#"{"type":"movePane","paneId":"pane-a","newTab":true,"tabId":"4:1"}"#,
+        )
+        .await;
+        assert_eq!(r.status().as_u16(), 400, "tabId and newTab together");
+        assert!(
+            s.shared.ui_ops.lock().unwrap().drain().is_empty(),
+            "a refusal queues nothing"
+        );
     }
 
     // ---- work queue routes -----------------------------------------------------------------

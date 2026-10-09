@@ -240,6 +240,8 @@ export component AppWindow inherits Window {
     callback new-tab();
     callback begin-rename(int);
     callback rename-tab(int, string);
+    // Escape in either inline editor (tab title or pane label): drop the edit unsaved.
+    callback cancel-rename();
     // multi-window
     callback new-window();
     callback move-pane-new-window();
@@ -355,6 +357,7 @@ export component AppWindow inherits Window {
             new-tab => { root.new-tab(); }
             begin-rename(i) => { root.begin-rename(i); }
             rename-tab(i, t) => { root.rename-tab(i, t); }
+            cancel-rename => { root.cancel-rename(); }
             new-window => { root.new-window(); }
             move-pane-new-window => { root.move-pane-new-window(); }
             set-layout(l) => { root.set-layout(l); }
@@ -418,6 +421,7 @@ export component AppWindow inherits Window {
                 pane-mic(i) => { root.pane-mic(i); }
                 begin-rename-pane(i) => { root.begin-rename-pane(i); }
                 rename-pane(i, t) => { root.rename-pane(i, t); }
+                cancel-rename => { root.cancel-rename(); }
                 pane-geometry(i, w, h) => { root.pane-geometry(i, w, h); }
                 pane-link-moved(i, x, y) => { root.pane-link-moved(i, x, y); }
                 pane-link-exited(i) => { root.pane-link-exited(i); }
