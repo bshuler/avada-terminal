@@ -393,11 +393,7 @@ impl App {
                 let Some(uid) = p.uid.as_deref() else {
                     continue;
                 };
-                let pane_id = self
-                    .control
-                    .pane_id_for_uid(uid)
-                    .unwrap_or_else(|| uid.to_string());
-                if let Some(s) = claude_panes::read_pane_session(&pane_id) {
+                if let Some(s) = self.pane_claude_marker(uid) {
                     let meta = p.meta.get_or_insert_with(Default::default);
                     meta.insert(claude_panes::META_KEY.to_string(), s.session_id);
                     // The hook-reported cwd is authoritative for a claude pane: `--resume`
@@ -568,7 +564,7 @@ impl App {
                     // Claude's marker predates the shared one and has its own shape and its
                     // own reader; it is the same fact.
                     "claude" => {
-                        avada_core::claude_panes::read_pane_session(&pane_id).and_then(|s| {
+                        self.pane_claude_marker(&uid).and_then(|s| {
                             // The marker's own cwd is the authority; the pane's live one is
                             // only a stand-in for the markers written before it carried one.
                             let dir = if s.cwd.is_empty() {
@@ -1106,7 +1102,32 @@ impl App {
         });
         self.ai_feed.borrow_mut().remove(old);
         self.openurl_carry.borrow_mut().remove(old);
+        // The killed process never ran its SessionEnd hook, so its marker — under the old
+        // uid, or under the alias that is about to point at the replacement — would
+        // outlive it and be read as live. The replacement writes its own on start.
+        avada_core::claude_panes::remove_pane_markers(self.pane_marker_ids(old).iter().map(String::as_str));
         self.control.rebind_uid(old, new);
+    }
+
+    /// Every id the Claude hook may have written a marker under for the pane hosting
+    /// session `uid`: the control alias first (a control-spawned lane inherits it as
+    /// `AVADA_PANE_ID`), then the uid itself (a GUI-spawned pane, or any pane after a
+    /// GUI-side restart, which hands the replacement its new uid).
+    fn pane_marker_ids(&self, uid: &str) -> Vec<String> {
+        let mut ids = Vec::with_capacity(2);
+        if let Some(alias) = self.control.pane_id_for_uid(uid) {
+            ids.push(alias);
+        }
+        ids.push(uid.to_string());
+        ids
+    }
+
+    /// The live Claude marker for the pane hosting session `uid`, whichever id it was
+    /// written under; the newest wins, so a stale alias marker cannot shadow the one the
+    /// running process wrote. See [`Self::pane_marker_ids`].
+    fn pane_claude_marker(&self, uid: &str) -> Option<avada_core::claude_panes::PaneClaudeSession> {
+        let ids = self.pane_marker_ids(uid);
+        avada_core::claude_panes::read_newest_pane_session(ids.iter().map(String::as_str))
     }
 
     #[tracing::instrument(level = "debug", ret, skip(self, w))]
@@ -1120,11 +1141,7 @@ impl App {
             tracing::warn!("status loop: no Avada panel to prompt");
             return;
         };
-        let pane_id = self
-            .control
-            .pane_id_for_uid(&uid)
-            .unwrap_or_else(|| uid.clone());
-        if let Some(s) = avada_core::claude_panes::read_pane_session(&pane_id) {
+        if let Some(s) = self.pane_claude_marker(&uid) {
             // Still holding the last round's prompt means delivery is not happening — the
             // pane is gone, or wedged behind a form. The queue collapses the repeat, so
             // nothing piles up; this line is the only place that failure becomes visible.
@@ -1215,12 +1232,8 @@ impl App {
             "restart loop: restarting the monitored agents"
         );
         for (ti, pi, uid, tool) in targets {
-            let pane_id = self
-                .control
-                .pane_id_for_uid(&uid)
-                .unwrap_or_else(|| uid.clone());
             let marker = (tool == "claude")
-                .then(|| avada_core::claude_panes::read_pane_session(&pane_id))
+                .then(|| self.pane_claude_marker(&uid))
                 .flatten();
             let rebound =
                 w.state
@@ -1277,7 +1290,7 @@ impl App {
                 // Read the marker for every pane, not only the ones already known to be
                 // Claude: for a control-spawned lane it is the proof the label never gives.
                 let marker = match tool.as_deref() {
-                    Some("claude") | None => avada_core::claude_panes::read_pane_session(&pane_id),
+                    Some("claude") | None => self.pane_claude_marker(&uid),
                     Some(_) => None,
                 };
                 // A marker on a pane that has not learned its mark yet: adopt it through

@@ -124,6 +124,45 @@ directory parked on the trust dialog. The loop correctly skips every round while
 is on screen, but it says nothing, so a parked form looks like a silent panel. Trust was
 accepted by hand on 2026-10-09 and is now in `~/.claude.json`.
 
+## 0.2.30: why the panes stayed bare after the 2026-10-08 crash, and the two-id marker lookup
+
+### The sweep that ran was older than the fix
+
+The dead-login escape fired at 21:35:52Z on 2026-10-08 (17:35 EDT). The GUI that ran it
+had launched at 20:49Z with build `191ef33b` — before 0.2.28 (commit `6ff472b`, 20:22 EDT
+= 00:22Z next day) existed. In that sweep (`service_dead_session_restart` at `6ff472b^`),
+a pane whose `restart_tool` was `None` went straight to `refresh_pane_at`: a bare shell,
+no marker read at all. Only panes already labelled or marked as Claude were resumed.
+The sessions were handed over intact by the takeover and then killed by the sweep itself.
+
+The markers were there. The six control-spawned Divi lanes had alias-keyed markers with
+mtimes 00:00–01:24Z, hours before the sweep; the GUI panes had uid-keyed ones. The old
+code simply never looked. 0.2.28 fixed exactly this path (marker read for every
+`tool == None` pane), but the 23:45Z relaunch onto 0.2.28 was a takeover without a sweep,
+so the 35 bare shells stayed bare until they were resumed by hand with
+`recoverPane { action: "resume", sessionId }` on 2026-10-09.
+
+### The remaining bug: one pane, two marker ids
+
+A control-spawned lane inherits its control alias as `AVADA_PANE_ID`, so its hook writes
+`<alias>.json`. After any GUI-side restart (`restart_pane_at`), the replacement inherits
+the new session uid, so the new hook writes `<uid>.json`. Every lookup preferred the alias
+(`pane_id_for_uid(uid).unwrap_or(uid)` in the app; `pane.id` in the dispatcher), so:
+
+- a stale alias marker — never removed, because a killed process never runs
+  `SessionEnd` — shadowed the live uid marker. Seen live: alias `3388d9f9` said cwd
+  `…/IronDivi-swap-engine/crates/divi-swap` while the running session's uid marker and
+  its transcript both said `…/IronDivi-swap-engine`; a resume through the alias would
+  have landed where `--resume` cannot find the transcript;
+- an aliased GUI pane with a uid-only marker (TG-A, alias `2eb875d2`) got no
+  `claude.session` in the snapshot at all, so a cold restore would have lost it.
+
+0.2.30 reads **both** ids and takes the newest marker by mtime
+(`claude_panes::read_newest_pane_session`; `App::pane_claude_marker` on the GUI side,
+`[pane.id, pane.session_uid]` in `restartPane`/`recoverPane`), and
+`rekey_restarted_pane` now deletes the dead incarnation's markers (old uid and alias)
+so a kill no longer leaves a marker that reads as live.
+
 ### Open follow-ups (not yet done)
 
 - **No backoff on relaunch.** If the relaunched agent exits straight back to a shell,
@@ -138,3 +177,32 @@ accepted by hand on 2026-10-09 and is now in `~/.claude.json`.
   (13 files: `move-pane … new`, Escape cancels tab rename, two-row tab strip) plus the
   memory-fix session's edits, including `github.rs` with an empty OAuth client id that
   must not be committed. Commit the strip on its own branch from a clean worktree.
+- **Marker freshness is mtime-only.** `read_newest_pane_session` picks the newest of
+  two files; it cannot tell a marker older than the pane's current pty session from a
+  live one when only one file exists. Record the session start time in the manager and
+  ignore markers older than it.
+- **Inferred marks pollute parent-directory panes.** `history_scan` newest-for-cwd
+  inference gives a bare shell in `~` or `~/code` the newest transcript of that project
+  dir as its mark (seen on 25747ef3, 40e5cc6b, 71287852, 269d8474, 114d7c4c, 9a0f06bd).
+  `restart_monitored_pane`'s `(None, Some(mark))` branch would resume it on the next
+  sweep. Record mark provenance and let the sweep ignore inferred marks, or skip
+  inference for cwds that are the home dir or a top-level projects dir.
+- **`tool_session_wanted` skips unlabelled panes.** A Terminal pane with no label, mark
+  or sniff is never polled for a Claude marker, so it only learns its mark at sweep
+  time. Widen the poll to every pty pane.
+- **Stale markers on disk.** `~/Library/Application Support/avada/claude-sessions/`
+  holds 85 files for 34 live claude processes; alias markers survive every restart that
+  predates 0.2.30. Add a startup prune: delete markers whose session id has no live
+  process and whose pane is not in the workspace.
+- **Stale hook entries in `~/.claude/settings.json`.** `SessionStart`/`SessionEnd`
+  each list the hook twice: once under `/Applications/Hyperpanes.app/…` (gone) and once
+  under Avada. Harmless (the missing path fails quietly) but every Claude start pays
+  for a dead exec; drop the Hyperpanes entries.
+- **Three orphan claude processes** (pids 89932, 90268, 90270; sessions 68d6673a,
+  e2cc5cb8, c16470b0; markers pane-7900f837, 31b547ed, d8dc156d from 2026-10-06
+  13:15Z) belong to no pane. Decide with the owner whether to kill them.
+- **`pane-20de33e6` hosts two claude processes** (pid 15233 from Oct 7 and 82883 from
+  Oct 8 16:00 local); the newer one is the pane's, the older is a leak.
+- **Bare shells left after the manual resume**: term 3, IronDivi (term 6),
+  Divi Browser Extension, divi-infrastructure, and the old Chat Bot pane in the Divi tab
+  (its session now runs in the new Chat Bot pane). Close them once confirmed unwanted.

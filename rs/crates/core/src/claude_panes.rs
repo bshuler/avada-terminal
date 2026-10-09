@@ -22,6 +22,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use serde::Deserialize;
 
@@ -106,9 +107,78 @@ pub fn read_pane_session(pane_id: &str) -> Option<PaneClaudeSession> {
     valid_session_id(&parsed.session_id).then_some(parsed)
 }
 
+/// The marker file's mtime — the only ordering two markers for one pane can be given.
+#[tracing::instrument(level = "debug", ret)]
+fn marker_mtime(pane_id: &str) -> Option<SystemTime> {
+    fs::metadata(marker_path(pane_id)).ok()?.modified().ok()
+}
+
+/// The newest of several dated candidates; the first one wins a tie.
+fn newest<T>(cands: impl IntoIterator<Item = (SystemTime, T)>) -> Option<T> {
+    let mut best: Option<(SystemTime, T)> = None;
+    for (at, item) in cands {
+        best = Some(match best.take() {
+            Some((best_at, kept)) if best_at >= at => (best_at, kept),
+            _ => (at, item),
+        });
+    }
+    best.map(|(_, item)| item)
+}
+
+/// Read the newest live-session marker among several ids that name the same pane.
+///
+/// One pane can own two marker files: a control-spawned lane's hook writes under the
+/// control alias, and after a GUI-side restart the replacement process inherits the new
+/// session uid instead. Only the newest describes the process running now — an older one
+/// is a dead incarnation whose `SessionEnd` never fired (a kill skips it). Duplicate ids
+/// and ids without a marker are skipped; on an equal mtime the earlier id wins.
+#[tracing::instrument(level = "debug", ret, skip(ids))]
+pub fn read_newest_pane_session<'a>(
+    ids: impl IntoIterator<Item = &'a str>,
+) -> Option<PaneClaudeSession> {
+    let mut seen: Vec<&str> = Vec::new();
+    let cands = ids.into_iter().filter_map(|id| {
+        if seen.contains(&id) {
+            return None;
+        }
+        seen.push(id);
+        let session = read_pane_session(id)?;
+        Some((marker_mtime(id).unwrap_or(SystemTime::UNIX_EPOCH), session))
+    });
+    newest(cands)
+}
+
+/// Remove the markers of ids whose process is gone. `SessionEnd` runs only on a clean
+/// exit; a session a restart killed leaves its marker behind, where the next lookup would
+/// read it as live and resume a stale conversation (or its stale cwd) into the pane.
+/// A missing file is the normal case, not an error.
+#[tracing::instrument(level = "debug", skip(ids))]
+pub fn remove_pane_markers<'a>(ids: impl IntoIterator<Item = &'a str>) {
+    for id in ids {
+        match fs::remove_file(marker_path(id)) {
+            Ok(()) => tracing::debug!(pane_id = id, "claude marker removed"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::debug!(pane_id = id, error = %e, "claude marker not removed"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn newest_marker_wins_and_first_takes_a_tie() {
+        let t0 = SystemTime::UNIX_EPOCH;
+        let t1 = t0 + Duration::from_secs(10);
+        // A stale alias marker (older) loses to the uid marker the restart wrote later.
+        assert_eq!(newest([(t0, "alias"), (t1, "uid")]), Some("uid"));
+        assert_eq!(newest([(t1, "alias"), (t0, "uid")]), Some("alias"));
+        // Same second: the id asked for first (the alias) keeps its precedence.
+        assert_eq!(newest([(t1, "alias"), (t1, "uid")]), Some("alias"));
+        assert_eq!(newest(Vec::<(SystemTime, &str)>::new()), None);
+    }
 
     #[test]
     fn accepts_uuid_shaped_ids_only() {

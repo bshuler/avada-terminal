@@ -537,7 +537,11 @@ fn exec(
                 model.respawn_pane(&pane_id, &new_uid);
                 return Ok((None, true));
             }
-            let marker = crate::claude_panes::read_pane_session(&pane_id).ok_or_else(|| {
+            let marker = crate::claude_panes::read_newest_pane_session([
+                pane_id.as_str(),
+                pane.session_uid.as_str(),
+            ])
+            .ok_or_else(|| {
                 format!("resume requested but no live Claude marker for pane {pane_id}")
             })?;
             let target = ResumeTarget::from_marker(&marker);
@@ -718,7 +722,11 @@ fn recover_inspect(sessions: &SessionManager, pane: &PaneInfo) -> Result<Value, 
         .as_ref()
         .map(|s| json!({ "code": s.code, "detail": s.detail, "retrying": s.retrying }));
 
-    let session = if let Some(marker) = crate::claude_panes::read_pane_session(&pane.id) {
+    // The hook writes under whichever id the process inherited: the control id, or — after
+    // a GUI-side restart — the session uid. Ask for both; the newest marker is the live one.
+    let session = if let Some(marker) =
+        crate::claude_panes::read_newest_pane_session([pane.id.as_str(), pane.session_uid.as_str()])
+    {
         json!({
             "source": "marker",
             "sessionId": marker.session_id,
@@ -787,7 +795,9 @@ fn resolve_recover_target(pane: &PaneInfo, cmd: &Value) -> Result<RecoverTarget,
         });
     }
 
-    if let Some(marker) = crate::claude_panes::read_pane_session(&pane.id) {
+    if let Some(marker) =
+        crate::claude_panes::read_newest_pane_session([pane.id.as_str(), pane.session_uid.as_str()])
+    {
         let config_dir = (!marker.config_dir.is_empty()).then(|| marker.config_dir.clone());
         let projects_root = match &config_dir {
             Some(dir) => PathBuf::from(dir).join("projects"),
