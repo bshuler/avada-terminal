@@ -7003,6 +7003,12 @@ impl State {
     /// The panes the restart loop respawns: every tool pane outside the system tab, as
     /// `(tab, pane, uid, tool id)`. The system tab's own agent is the one doing the
     /// monitoring and is left alone.
+    ///
+    /// Reads the launch-time label only, on purpose: the periodic loop is something a pane
+    /// is opted into by being launched as a tool pane, and a Claude the user started by
+    /// hand in a shell is not volunteered for a scheduled restart by having been noticed.
+    /// The dead-session recovery is the opposite case — every pane is being restarted
+    /// anyway — so it resolves the tool with [`Self::restart_tool`] instead.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn monitored_panes(&self) -> Vec<(usize, usize, String, String)> {
         let mut out = Vec::new();
@@ -7028,12 +7034,40 @@ impl State {
             .unwrap_or_else(|| "claude".to_string())
     }
 
-    /// Restart-loop respawn of the monitored tool pane `(ti, pi)`: a fresh shell in the
-    /// same directory with the same env overrides, and the tool typed back into its
-    /// conversation at the shell's first output. The conversation comes from `marker`
-    /// (the pane's Claude session marker, when the hook wrote one) or else the pane's own
-    /// tool mark; with neither, the tool is started fresh. Returns the `(old, new)` uid
-    /// swap for the caller to re-key, like [`Self::pane_exited`] does.
+    /// The tool a restart of pane `p` has to put back, or `None` for a plain shell.
+    ///
+    /// A pane's identity is split in two, and a restart must read both halves. `kind` is
+    /// the launch-time label: only the in-app tool launcher writes `Tool(_)`, and every
+    /// pane the Control API creates (`avada ctl new-pane`, orphan adoption, self-heal) is
+    /// born `Terminal` and stays so for life, because detection deliberately never
+    /// rewrites the persisted kind. What the pane is *actually* running is learned
+    /// afterwards: the hook marker gives [`PaneState::tool_session`] (with the tool named
+    /// in [`ToolSessionMark::tool`] precisely because the kind does not say), and the title
+    /// sniff gives `sniffed_tool` for the chrome. Until 0.2.28 every restart decision read
+    /// the label alone, so a Claude lane started by hand or by an orchestrator was
+    /// replaced by a bare shell in the dead-session recovery while the app held its
+    /// session id in meta the whole time. Precedence is the same as adoption's: the label,
+    /// then the mark, then the sniff.
+    #[tracing::instrument(level = "debug", ret, skip(self, p))]
+    pub fn restart_tool(&self, p: &PaneState) -> Option<String> {
+        if let PaneKind::Tool(tool) = &p.kind {
+            return Some(tool.clone());
+        }
+        if let Some(tool) = p.tool_session.as_ref().and_then(|m| m.tool.clone()) {
+            return Some(tool);
+        }
+        self.sniffed_tool.get(&p.uid).cloned()
+    }
+
+    /// Respawn the tool pane `(ti, pi)` — one whose [`Self::restart_tool`] is `Some` — into
+    /// a fresh shell in the same directory with the same env overrides, and the tool typed
+    /// back into its conversation at the shell's first output. Used by the restart loop and
+    /// the dead-session recovery. The conversation comes from `marker` (the pane's Claude
+    /// session marker, when the hook wrote one) or else the pane's own tool mark; with
+    /// neither, the tool is started fresh. `None` for a plain shell — no label, no mark,
+    /// no sniff and no marker — which the caller restarts with [`Self::refresh_pane_at`]
+    /// instead. Returns the `(old, new)` uid swap for the caller to re-key, like
+    /// [`Self::pane_exited`] does.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn restart_monitored_pane(
         &mut self,
@@ -7042,13 +7076,17 @@ impl State {
         mgr: &SessionManager,
         marker: Option<&avada_core::claude_panes::PaneClaudeSession>,
     ) -> Option<(String, String)> {
-        let (tool, cwd, env, mark) = {
+        let (tool, labelled, cwd, env, mark) = {
             let p = self.tabs.get(ti)?.panes.get(pi)?;
-            let PaneKind::Tool(tool) = &p.kind else {
-                return None;
-            };
+            // A live Claude marker is proof on its own: the hook removes it on SessionEnd,
+            // so one that exists names a conversation open right now, whatever the pane
+            // has or has not learned about itself yet.
+            let tool = self
+                .restart_tool(p)
+                .or_else(|| marker.map(|_| "claude".to_string()))?;
             (
-                tool.clone(),
+                tool,
+                matches!(p.kind, PaneKind::Tool(_)),
                 p.cwd.clone(),
                 p.env.clone(),
                 p.tool_session.clone(),
@@ -7089,10 +7127,12 @@ impl State {
             p.startup = Some(line);
             // The pane still IS this tool's pane (the respawn keeps its kind); remember the
             // conversation it is being put back into so a later relaunch resumes it too.
+            // When the kind does not name the tool, the mark has to — that is the only
+            // persisted place a hand-started pane's tool survives for the next restart.
             if let (Some(id), Some(cwd)) = (&session, &resume_cwd) {
                 if let Some(m) = ToolSessionMark::new(id, cwd) {
                     p.tool_session = Some(ToolSessionMark {
-                        tool: mark.and_then(|m| m.tool),
+                        tool: (!labelled).then(|| tool.clone()),
                         ..m
                     });
                 }
@@ -7102,9 +7142,11 @@ impl State {
     }
 
     /// Every pty pane in every tab — the system tab included — as `(tab, pane, uid, tool)`,
-    /// `tool` naming the agent of a tool pane. The dead-session recovery restarts all of
-    /// them: unlike [`Self::monitored_panes`] it cannot skip the Avada agent or plain
-    /// shells, because every one of those processes holds the dead bootstrap port.
+    /// `tool` being [`Self::restart_tool`]: the agent a restart has to put back, whether
+    /// the pane was launched as that tool or merely learned to be running it. The
+    /// dead-session recovery restarts all of them: unlike [`Self::monitored_panes`] it
+    /// cannot skip the Avada agent or plain shells, because every one of those processes
+    /// holds the dead bootstrap port.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn all_pty_panes(&self) -> Vec<(usize, usize, String, Option<String>)> {
         let mut out = Vec::new();
@@ -7113,10 +7155,7 @@ impl State {
                 if !p.kind.is_pty() {
                     continue;
                 }
-                let tool = match &p.kind {
-                    PaneKind::Tool(tool) => Some(tool.clone()),
-                    _ => None,
-                };
+                let tool = self.restart_tool(p);
                 out.push((ti, pi, p.uid.clone(), tool));
             }
         }
@@ -10576,6 +10615,174 @@ mod tool_session_tests {
         assert_eq!(
             p.tool_session.as_ref().map(|m| m.id.as_str()),
             Some("aaaa-bbbb-cccc")
+        );
+    }
+
+    // The 2026-10-08 recovery loss, pinned. A pane the Control API created runs Claude:
+    // its persisted kind is `Terminal` for life (only the in-app launcher writes `Tool`),
+    // and everything it knows about what it runs is the mark the hook marker taught it —
+    // with `tool.id` naming the tool, precisely because the kind does not. A restart
+    // decision that reads the label alone sees a plain shell and replaces the conversation
+    // with bare zsh; one that reads the mark puts the conversation back.
+    #[tokio::test]
+    async fn a_hand_started_claude_pane_is_restarted_into_its_conversation() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.attach_panes_from_specs(
+            &m,
+            &[spec_with(&[
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+                (avada_core::tools::META_SESSION_TOOL_KEY, "claude"),
+            ])],
+        );
+        let ti = st.active;
+        let pi = st.active_tab().panes.len() - 1;
+        let p = &st.active_tab().panes[pi];
+        assert!(
+            matches!(p.kind, PaneKind::Terminal),
+            "the launch-time label never learns; that is the premise"
+        );
+        assert_eq!(st.restart_tool(p).as_deref(), Some("claude"));
+        let reported = st
+            .all_pty_panes()
+            .into_iter()
+            .find(|(t, i, ..)| (*t, *i) == (ti, pi))
+            .map(|(_, _, _, tool)| tool);
+        assert_eq!(
+            reported,
+            Some(Some("claude".to_string())),
+            "the dead-session recovery must see this pane as a Claude pane"
+        );
+        let before = p.uid.clone();
+        let (old, new) = st
+            .restart_monitored_pane(ti, pi, &m, None)
+            .expect("a pane that learned its tool restarts as that tool's pane");
+        assert_eq!(old, before);
+        let p = &st.active_tab().panes[pi];
+        assert_eq!(p.uid, new);
+        // Through this install's launcher (claude_auto where configured), never a
+        // literal `claude`: that was the 0.2.23 loss, kept out for good.
+        assert_eq!(
+            p.startup.as_deref(),
+            Some(format!("cd '/tmp' && {} --resume aaaa-bbbb-cccc\r", st.claude_launcher()).as_str())
+        );
+        // The mark still names the tool afterwards, so the NEXT recovery resolves it too —
+        // a pane that forgets after one restart is a pane that only survives one restart.
+        assert_eq!(
+            p.tool_session.as_ref().and_then(|m| m.tool.as_deref()),
+            Some("claude")
+        );
+        assert_eq!(st.restart_tool(p).as_deref(), Some("claude"));
+    }
+
+    // The marker alone is enough. A pane restored from a snapshot whose mark does not name
+    // its tool (an older install wrote none), with no sniff yet (sniffs are runtime-only
+    // and empty right after a relaunch): the live hook marker still says a Claude
+    // conversation is open here, and the recovery resumes it — into the marker's session.
+    #[tokio::test]
+    async fn a_live_marker_resumes_a_pane_that_has_not_learned_its_tool() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.attach_panes_from_specs(
+            &m,
+            &[spec_with(&[
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+            ])],
+        );
+        let ti = st.active;
+        let pi = st.active_tab().panes.len() - 1;
+        let p = &st.active_tab().panes[pi];
+        assert!(matches!(p.kind, PaneKind::Terminal));
+        assert_eq!(st.restart_tool(p), None, "nothing learned names the tool");
+        let marker = avada_core::claude_panes::PaneClaudeSession {
+            session_id: "dddd-eeee-ffff".into(),
+            cwd: "/var".into(),
+            config_dir: String::new(),
+        };
+        st.restart_monitored_pane(ti, pi, &m, Some(&marker))
+            .expect("a live marker is proof enough to resume");
+        let p = &st.active_tab().panes[pi];
+        assert_eq!(
+            p.startup.as_deref(),
+            Some(format!("cd '/var' && {} --resume dddd-eeee-ffff\r", st.claude_launcher()).as_str())
+        );
+        // ...and now the pane knows, for the next time.
+        assert_eq!(
+            p.tool_session.as_ref().and_then(|m| m.tool.as_deref()),
+            Some("claude")
+        );
+    }
+
+    // A tool pane the launcher labelled keeps `tool` empty on its mark after a restart:
+    // the kind says, so the mark need not, exactly as before.
+    #[tokio::test]
+    async fn a_labelled_tool_pane_leaves_the_tool_to_its_kind() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.attach_panes_from_specs(
+            &m,
+            &[spec_with(&[
+                (avada_core::tools::kind::META_KIND_KEY, "copilot"),
+                (avada_core::tools::META_SESSION_KEY, "aaaa-bbbb-cccc"),
+                (avada_core::tools::META_SESSION_CWD_KEY, "/tmp"),
+            ])],
+        );
+        let ti = st.active;
+        let pi = st.active_tab().panes.len() - 1;
+        st.restart_monitored_pane(ti, pi, &m, None)
+            .expect("a labelled tool pane restarts");
+        let p = &st.active_tab().panes[pi];
+        assert_eq!(p.kind, PaneKind::Tool("copilot".into()));
+        assert_eq!(p.tool_session.as_ref().and_then(|m| m.tool.as_deref()), None);
+        assert_eq!(st.restart_tool(p).as_deref(), Some("copilot"));
+    }
+
+    // A pane that learned nothing is a plain shell to every restart path.
+    #[tokio::test]
+    async fn a_plain_shell_is_not_restarted_as_a_tool() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.add_pane(&m);
+        let ti = st.active;
+        let pi = st.active_tab().panes.len() - 1;
+        assert_eq!(st.restart_tool(&st.active_tab().panes[pi]), None);
+        let reported = st
+            .all_pty_panes()
+            .into_iter()
+            .find(|(t, i, ..)| (*t, *i) == (ti, pi))
+            .map(|(_, _, _, tool)| tool);
+        assert_eq!(reported, Some(None));
+        assert_eq!(st.restart_monitored_pane(ti, pi, &m, None), None);
+    }
+
+    // The title sniff is the weakest evidence but it is still evidence: a pane seen running
+    // a tool is relaunched as that tool (fresh, since a sniff carries no conversation id)
+    // rather than as a shell with nothing in it.
+    #[tokio::test]
+    async fn a_sniffed_tool_is_put_back_by_a_restart() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.add_pane(&m);
+        let ti = st.active;
+        let pi = st.active_tab().panes.len() - 1;
+        let uid = st.active_tab().panes[pi].uid.clone();
+        st.sniffed_tool.insert(uid, "claude".to_string());
+        assert_eq!(
+            st.restart_tool(&st.active_tab().panes[pi]).as_deref(),
+            Some("claude")
+        );
+        st.restart_monitored_pane(ti, pi, &m, None)
+            .expect("a sniffed tool pane restarts as a tool pane");
+        let p = &st.active_tab().panes[pi];
+        let launcher = st.claude_launcher();
+        assert!(
+            p.startup
+                .as_deref()
+                .is_some_and(|l| l.ends_with(&format!("{launcher}\r")) && !l.contains("--resume")),
+            "typed the tool back, fresh: {:?}",
+            p.startup
         );
     }
 

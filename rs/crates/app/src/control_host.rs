@@ -817,8 +817,11 @@ impl ControlHost {
                     exit_code: None,
                     meta: Some(meta),
                     // Same reasoning as `talk` above: the healed pane's kind died with its
-                    // read-model entry and `Terminal` is the honest default. Detection
-                    // re-upgrades it the moment the adopted session shows a tool running.
+                    // read-model entry and `Terminal` is the honest default. It is only the
+                    // launch-time label, though, and nothing ever rewrites it: what the pane
+                    // is running is learned afterwards — the title sniff for the chrome, the
+                    // hook marker for the pane's tool mark — and a restart or recovery asks
+                    // `State::restart_tool`, which reads the label, the mark and the sniff.
                     kind: PaneKind::Terminal,
                 },
             );
@@ -1373,8 +1376,10 @@ impl ControlHost {
             spawn_args: None,
             spawn_shell: None,
             // No spawn spec means no program to name a kind from. `Terminal` is the honest
-            // answer, not a lossy one: detection upgrades the pane the moment the adopted
-            // session's output shows a known tool running in it.
+            // answer for the launch-time label, and the label is never rewritten: the tool
+            // the pane turns out to run is learned afterwards (title sniff → chrome, hook
+            // marker → tool mark), and a restart or recovery asks `State::restart_tool`,
+            // which reads the label, the mark and the sniff — not the label alone.
             kind: PaneKind::Terminal,
             // Likewise no conversation mark: the control model records none, and inventing
             // one would resume a chat this pane was never in.

@@ -322,6 +322,9 @@ impl StartupQueryFilter {
     }
 }
 
+/// Guards the `openpty(3)` call in [`spawn_pty`]; see the comment there.
+static OPENPTY_SERIAL: Mutex<()> = Mutex::new(());
+
 /// Spawn a pty running `spec`, delivering output and exit via `on_event`. The returned
 /// handle drives write/resize/kill; output flows on a background thread until the
 /// child exits (then a single [`PtyEvent::Exit`] is sent and the thread ends).
@@ -331,14 +334,24 @@ pub fn spawn_pty(
     on_event: impl Fn(PtyEvent) + Send + 'static,
 ) -> io::Result<Box<dyn Pty>> {
     let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: spec.rows.max(1),
-            cols: spec.cols.max(1),
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    // `openpty(3)` is serialized process-wide. On macOS the libc call is not safe to run
+    // from several threads at once: a plain C probe (16 threads × 200 calls) fails a few
+    // of them with an errno of -6 and no master/slave pair, and the same failure surfaced
+    // as `failed to restart <pane>: failed to openpty` whenever the test suite spawned
+    // panes in parallel. The call itself takes microseconds, so holding one lock across
+    // it costs nothing measurable; everything after it (clone, spawn, the reader thread)
+    // is per-pair state and runs unlocked.
+    let pair = {
+        let _serial = OPENPTY_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        pty_system
+            .openpty(PtySize {
+                rows: spec.rows.max(1),
+                cols: spec.cols.max(1),
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| io::Error::other(e.to_string()))?
+    };
 
     let mut cmd = CommandBuilder::new(&spec.file);
     cmd.args(&spec.args);

@@ -1210,6 +1210,13 @@ impl App {
     /// conversation the way the restart loop does it; plain shells come back in the same
     /// directory with the same env. Busy panes are restarted too: a process in a dead session
     /// cannot finish its work anyway, and an agent's transcript is on disk.
+    ///
+    /// "Agent pane" is decided by [`State::restart_tool`] — label, mark or sniff — and,
+    /// independently, by the Claude hook marker: the hook removes the marker on SessionEnd,
+    /// so one that exists is a conversation open at this moment, whatever the pane is
+    /// labelled. A pane whose marker is its only evidence (the 2 s adoption tick has not
+    /// run, or the pane was restored unmarked) is given the mark here, through the same
+    /// adoption path, before it is restarted — so the next recovery knows it too.
     #[tracing::instrument(level = "debug", skip_all)]
     fn service_dead_session_restart(&self, windows: &[Rc<Window>]) {
         let Some(due) = self.dead_session_restart.get() else {
@@ -1231,20 +1238,38 @@ impl App {
                     .control
                     .pane_id_for_uid(&uid)
                     .unwrap_or_else(|| uid.clone());
-                let rebound = match tool.as_deref() {
-                    Some(tool) => {
-                        let marker = (tool == "claude")
-                            .then(|| avada_core::claude_panes::read_pane_session(&pane_id))
-                            .flatten();
+                // Read the marker for every pane, not only the ones already known to be
+                // Claude: for a control-spawned lane it is the proof the label never gives.
+                let marker = match tool.as_deref() {
+                    Some("claude") | None => avada_core::claude_panes::read_pane_session(&pane_id),
+                    Some(_) => None,
+                };
+                // A marker on a pane that has not learned its mark yet: adopt it through
+                // the ordinary path so the mark is persisted for the next time. (Adoption
+                // declines when a mark is already held; the marker still drives this
+                // restart below either way.)
+                if let (None, Some(m)) = (&tool, &marker) {
+                    let mark = avada_core::tools::ToolSessionMark::new(&m.session_id, &m.cwd)
+                        .map(|mark| mark.with_tool("claude"));
+                    if let Some(mark) = mark {
+                        w.state.borrow_mut().adopt_tool_session(&uid, mark);
+                    }
+                }
+                let tool = tool.or_else(|| marker.as_ref().map(|_| "claude".to_string()));
+                // A tool pane goes back into its conversation; anything that declines that
+                // (or is a plain shell) still gets its process replaced — no pty pane may be
+                // left holding the dead bootstrap port.
+                let rebound = tool
+                    .as_deref()
+                    .and_then(|_| {
                         w.state.borrow_mut().restart_monitored_pane(
                             ti,
                             pi,
                             &self.mgr,
                             marker.as_ref(),
                         )
-                    }
-                    None => w.state.borrow_mut().refresh_pane_at(ti, pi, &self.mgr),
-                };
+                    })
+                    .or_else(|| w.state.borrow_mut().refresh_pane_at(ti, pi, &self.mgr));
                 match rebound {
                     Some((old, new)) => {
                         self.ai.send(crate::ai::AiMsg::Exit { uid: old.clone() });
