@@ -15079,7 +15079,7 @@ mod subagent_pane_tests {
     }
 
     #[test]
-    fn only_panes_with_a_claude_marker_are_asked_and_view_panes_never() {
+    fn every_terminal_pane_is_asked_and_view_panes_never() {
         let mut st = two_tabs();
         let m = mgr();
         st.adopt_pane(&m, det("doc", PaneKind::Markdown));
