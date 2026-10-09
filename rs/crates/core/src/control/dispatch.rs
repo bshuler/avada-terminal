@@ -428,6 +428,9 @@ fn exec(
             // bump the project's recency, mirroring the GUI sidebar's "open project". An unknown
             // handle fails the command rather than silently spawning a homeless pane.
             resolve_project_into_spec(&mut spec)?;
+            // Every control-spawned pane says it came through the API (and when), even from a
+            // caller that recorded nothing itself — the GUI's ⓘ reads this.
+            crate::pane_origin::stamp_spec(&mut spec);
             let pane = spawn_pane(sessions, control_file, &spec)?;
             let pane_id = pane.id.clone();
             if !model.insert_pane(window_id, pane) {

@@ -42,6 +42,7 @@ use avada_core::install::dirs::InstallPaths;
 use avada_core::license::LicenseService;
 use avada_core::marketplace::github::GitHubConfig;
 use avada_core::marketplace::Marketplace;
+use avada_core::pane_origin;
 use avada_core::persistence::{control_settings, paths};
 use avada_core::session_manager::{SessionEvent, SessionManager};
 use avada_core::tools::PaneKind;
@@ -72,6 +73,8 @@ struct PaneSnap {
     color: String,
     subtitle: Option<String>,
     talk: bool,
+    /// The pane's `origin.*` provenance as the GUI holds it (see `avada_core::pane_origin`).
+    origin: BTreeMap<String, String>,
 }
 
 /// Hand the control plane the two per-machine services its routes answer through: the
@@ -954,11 +957,13 @@ impl ControlHost {
                 }
                 structural = true;
             } else if let Some(p) = prev.get(uid) {
-                // Present on both sides: apply a control rename / recolor / subtitle / talk change.
+                // Present on both sides: apply a control rename / recolor / subtitle / talk /
+                // provenance (`setMeta origin.*`) change.
                 if c.label != p.label
                     || c.color != p.color
                     || c.subtitle != p.subtitle
                     || c.talk != p.talk
+                    || pane_origin::extract(c.meta.as_ref()) != p.origin
                 {
                     apply_pane_chrome(windows, uid, c);
                 }
@@ -1287,7 +1292,16 @@ impl ControlHost {
                     let color = color_hex(p.accent);
                     let subtitle = p.subtitle.as_ref().map(|s| s.to_string());
                     let talk = p.talk;
-                    let c = ctl.get(&uid).cloned().unwrap_or_default();
+                    let mut c = ctl.get(&uid).cloned().unwrap_or_default();
+                    // The GUI's provenance survives a relaunch (it rides the snapshot) while
+                    // the model's meta starts empty: put it back so `/state` and `ctl info`
+                    // still answer who opened the pane.
+                    if !p.origin.is_empty() {
+                        let meta = c.meta.get_or_insert_with(BTreeMap::new);
+                        for (k, v) in &p.origin {
+                            meta.entry(k.clone()).or_insert_with(|| v.clone());
+                        }
+                    }
                     new_prev.insert(
                         uid.clone(),
                         PaneSnap {
@@ -1295,6 +1309,7 @@ impl ControlHost {
                             color: color.clone(),
                             subtitle: subtitle.clone(),
                             talk,
+                            origin: p.origin.clone(),
                         },
                     );
                     panes.push(PaneInfo {
@@ -1408,6 +1423,9 @@ impl ControlHost {
             // Likewise no conversation mark: the control model records none, and inventing
             // one would resume a chat this pane was never in.
             tool_session: None,
+            // Who opened it and why — `origin.*` meta stamped by `avada ctl new-pane` and the
+            // control server; the header's ⓘ shows it.
+            origin: pane_origin::extract(c.meta.as_ref()),
             // The control model carries no cwd either; the pane learns its own from OSC 7.
             cwd: None,
         };
@@ -1595,6 +1613,7 @@ fn apply_pane_chrome(windows: &[Rc<Window>], uid: &str, c: &ModelPane) {
             p.pinned_accent = Some(accent);
             p.subtitle = c.subtitle.clone().map(Into::into);
             p.talk = c.talk;
+            p.origin = pane_origin::extract(c.meta.as_ref());
             st.dirty = true;
             return;
         }

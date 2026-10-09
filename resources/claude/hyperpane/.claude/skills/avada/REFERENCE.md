@@ -59,7 +59,8 @@ reported back — all of them at once, not just the first.
 
 | Verb | `/command` body |
 |---|---|
-| `new-pane [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N]` | `{"type":"newPane","pane":{…}}` |
+| `new-pane --why R [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
+| `info <pane>` | reads `/state`: who opened the pane, when, from where, and why |
 | `close-pane <pane>` | `{"type":"closePane","paneId":…}` |
 | `restart-pane <pane>` | `{"type":"restartPane","paneId":…}` |
 | `focus-pane <pane>` | `{"type":"focusPane","paneId":…}` |
@@ -75,6 +76,17 @@ Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `gr
 (e.g. `grid-2x3`). An unknown name falls back to `auto`.
 
 `new-pane` returns the new pane's id as the command result.
+
+### Pane origin
+
+Every pane records where it came from under `origin.*` keys in its `meta`, and the pane header's ⓘ
+shows it (hover to read, click to copy). `ctl new-pane` writes `origin.via`, `origin.at`,
+`origin.why` (from `--why`), `origin.by.pane` + `origin.by.label` (the calling pane, from
+`AVADA_PANE_ID`), `origin.by.session` (`CLAUDE_CODE_SESSION_ID`), `origin.by.agent` (`AI_AGENT`),
+`origin.by.process` (the caller's process chain) and `origin.cwd`. A raw `/command newPane` gets
+`origin.via = control-api` and a UTC `origin.at` from the server if it sent neither; send your own
+`origin.why` in `pane.meta`. `ctl new-pane` without a non-empty `--why` exits 2 and opens nothing. Fix or add to a
+pane's origin afterwards with `setMeta`.
 
 ## Tabs
 

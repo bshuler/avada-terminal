@@ -3920,6 +3920,16 @@ impl App {
                 }
             });
         }
+        // Pane-header info: copy who opened the pane, and why, to the clipboard.
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app.on_pane_info(move |i| {
+                if let Some(w) = app.window_by_id(id) {
+                    app.run_command(&w, Command::CopyPaneOrigin(i as usize));
+                }
+            });
+        }
         // Pane-header zoom/fullscreen act on that pane: focus it first, then the action.
         {
             let app = app.clone();

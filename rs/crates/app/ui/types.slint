@@ -107,6 +107,9 @@ export struct PaneItem {
     // draws a red dot beside it. Projected from the control server's DictationService each
     // sync tick; never persisted.
     recording: bool,
+    // Who opened this pane, from where, when and why (`avada_core::pane_origin::describe`):
+    // the hover text of the header's info button. Never empty — an unrecorded origin says so.
+    origin: string,
     accent: color,
     // The pane's session uid — the stable identity behind the row. Used to report keyboard
     // focus back to the controller, where a row index would go stale (see `focus-changed`).
