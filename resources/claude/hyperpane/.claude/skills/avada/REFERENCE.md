@@ -86,8 +86,9 @@ Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `gr
 | `focus-tab <tab>` | `{"type":"focusTab","tabId":…}` |
 | `move-tab <tab> <index>` | `{"type":"moveTab","tabId":…,"to":N}` |
 | `move-pane <pane> <tab>` | `{"type":"movePane","paneId":…,"tabId":…}` |
+| `toggle-subagents [tab]` | `{"type":"toggleSubagents","tabId":…}` — hide/show the tab's Claude subagent panes; with no tab, the calling pane's tab (`$AVADA_PANE_ID`), else the focused window's active tab |
 
-All six answer **202** with `{"ok":true,"queued":true}` — they are applied by the UI thread on
+All seven answer **202** with `{"ok":true,"queued":true}` — they are applied by the UI thread on
 its next frame. `newTab` also returns the id the new tab will have (`{window}:{count}`, appended
 at the end). Re-read `tabs` to confirm anything else.
 

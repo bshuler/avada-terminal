@@ -61,6 +61,7 @@ usage: avada ctl <verb> [args]
     close-tab <tab>
     rename-tab <tab> <title>
     focus-tab <tab>
+    toggle-subagents [tab]          hide/show a tab's subagent panes (default: this pane's tab)
     move-tab <tab> <index>
     move-pane <pane> <tab>          re-host a running pane in another tab (no restart)
 
@@ -226,6 +227,24 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
         }
         "close-tab" => print_json(tab_verb(&conn, "closeTab", &args, "close-tab <tab>")?),
         "focus-tab" => print_json(tab_verb(&conn, "focusTab", &args, "focus-tab <tab>")?),
+        "toggle-subagents" => {
+            let tab = match args.first().filter(|a| !a.is_empty()) {
+                Some(t) => t.clone(),
+                None => {
+                    let state = get(&conn, "/state")?;
+                    let here = std::env::var("AVADA_PANE_ID").ok();
+                    match current_tab_id(&state, here.as_deref()) {
+                        Some(t) => t,
+                        None => usage("toggle-subagents [tab]   (no current tab found)"),
+                    }
+                }
+            };
+            print_json(post(
+                &conn,
+                "/command",
+                json!({ "type": "toggleSubagents", "tabId": tab }),
+            )?);
+        }
         "rename-tab" => {
             let tab = need(args.first(), "rename-tab <tab> <title>");
             let title = args[1..].join(" ");
@@ -349,6 +368,7 @@ pub const HAND_VERBS: &[&str] = &[
     "close-tab",
     "rename-tab",
     "focus-tab",
+    "toggle-subagents",
     "move-tab",
     "set",
     "set-json",
@@ -1046,6 +1066,40 @@ fn pane_verb(conn: &Conn, ty: &str, args: &[String], msg: &str) -> std::io::Resu
     post(conn, "/command", json!({ "type": ty, "paneId": pane }))
 }
 
+/// The tab a tab-less verb means, from a `/state` snapshot: the tab holding the calling pane
+/// (`AVADA_PANE_ID`, matched against pane id or session uid), else the active tab of the
+/// window with keyboard focus, else the first window's active tab.
+#[tracing::instrument(level = "debug", ret, skip(state))]
+fn current_tab_id(state: &Value, here: Option<&str>) -> Option<String> {
+    let windows = state.get("windows")?.as_array()?;
+    let tabs = || {
+        windows
+            .iter()
+            .flat_map(|w| w.get("tabs").and_then(Value::as_array).into_iter().flatten())
+    };
+    if let Some(here) = here.filter(|h| !h.is_empty()) {
+        let hosts = |t: &&Value| {
+            t.get("panes").and_then(Value::as_array).is_some_and(|ps| {
+                ps.iter().any(|p| {
+                    p.get("id").and_then(Value::as_str) == Some(here)
+                        || p.get("sessionUid").and_then(Value::as_str) == Some(here)
+                })
+            })
+        };
+        if let Some(t) = tabs().find(hosts) {
+            return t.get("id")?.as_str().map(str::to_string);
+        }
+    }
+    let focused = windows.iter().find(|w| {
+        w.get("keyboardFocusPaneId").and_then(Value::as_str).is_some()
+    });
+    focused
+        .or(windows.first())?
+        .get("activeTabId")?
+        .as_str()
+        .map(str::to_string)
+}
+
 #[tracing::instrument(level = "debug", ret, skip(conn))]
 fn tab_verb(conn: &Conn, ty: &str, args: &[String], msg: &str) -> std::io::Result<Value> {
     let tab = need(args.first(), msg);
@@ -1058,6 +1112,36 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    fn two_windows() -> Value {
+        json!({ "windows": [
+            { "windowId": 1, "activeTabId": "1:0", "keyboardFocusPaneId": null, "tabs": [
+                { "id": "1:0", "panes": [{ "id": "p1", "sessionUid": "u1" }] },
+            ]},
+            { "windowId": 2, "activeTabId": "2:1", "keyboardFocusPaneId": "p3", "tabs": [
+                { "id": "2:0", "panes": [{ "id": "p2", "sessionUid": "u2" }] },
+                { "id": "2:1", "panes": [{ "id": "p3", "sessionUid": "u3" }] },
+            ]},
+        ]})
+    }
+
+    #[test]
+    fn toggle_subagents_defaults_to_the_calling_panes_tab() {
+        let st = two_windows();
+        assert_eq!(current_tab_id(&st, Some("p2")).as_deref(), Some("2:0"));
+        assert_eq!(current_tab_id(&st, Some("u1")).as_deref(), Some("1:0"));
+    }
+
+    #[test]
+    fn toggle_subagents_falls_back_to_the_focused_window_then_the_first() {
+        let st = two_windows();
+        assert_eq!(current_tab_id(&st, None).as_deref(), Some("2:1"));
+        assert_eq!(current_tab_id(&st, Some("gone")).as_deref(), Some("2:1"));
+        let mut unfocused = st.clone();
+        unfocused["windows"][1]["keyboardFocusPaneId"] = Value::Null;
+        assert_eq!(current_tab_id(&unfocused, None).as_deref(), Some("1:0"));
+        assert_eq!(current_tab_id(&json!({ "windows": [] }), None), None);
     }
 
     #[test]

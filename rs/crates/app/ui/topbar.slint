@@ -341,6 +341,12 @@ export component TopBar inherits Rectangle {
     // panel's own × uses — one command, three entry points (button, Ctrl+B, app menu).
     in property <bool> left-panel-open: false;
     callback toggle-left-panel();
+    // The current tab's subagent panes (design §3). The button only exists while the tab has
+    // any; `subagent-breath` is the shared Pulse glow alpha, 0 when no subagent is working.
+    in property <bool> has-subagents: false;
+    in property <bool> subagents-hidden: false;
+    in property <float> subagent-breath: 0;
+    callback toggle-subagents();
     callback toggle-zoom();
     callback toggle-fullscreen();
     callback start-drag();
@@ -449,6 +455,50 @@ export component TopBar inherits Rectangle {
                         }
                     }
                     clicked => { if (!self.dragged) { root.toggle-left-panel(); } }
+                }
+            }
+        }
+
+        // ===== subagent toggle =====
+        // Only while the current tab has subagent panes. While any of them is working the
+        // chip breathes on the panes' own Pulse curve — hidden or not, so a hidden subagent
+        // that is busy still shows. The breath tints on top of a legible resting chip.
+        if root.has-subagents : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 22px;
+                border-radius: 6px;
+                background: sta.has-hover ? Theme.surface2
+                    : Theme.brand.with-alpha(root.subagent-breath * 0.35);
+                border-width: 1px;
+                border-color: root.subagent-breath > 0 ? Theme.brand.with-alpha(root.subagent-breath)
+                    : Theme.border;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    Text {
+                        text: root.subagents-hidden ? "show subagents" : "hide subagents";
+                        color: sta.has-hover ? Theme.text : Theme.subtext;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+                // A drag handle too — see the hamburger above.
+                sta := TipArea {
+                    property <bool> dragged;
+                    tip: root.subagents-hidden
+                        ? "Show this tab's subagent panes. Drag to move the window"
+                        : "Hide this tab's subagent panes. Drag to move the window";
+                    pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { self.dragged = false; } }
+                    moved => {
+                        if (self.pressed && !self.dragged
+                            && (abs(self.mouse-x - self.pressed-x) > root.drag-slop
+                                || abs(self.mouse-y - self.pressed-y) > root.drag-slop)) {
+                            self.dragged = true;
+                            root.start-drag();
+                        }
+                    }
+                    clicked => { if (!self.dragged) { root.toggle-subagents(); } }
                 }
             }
         }

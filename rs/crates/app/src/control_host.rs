@@ -1135,10 +1135,11 @@ impl ControlHost {
                         changed = true;
                     }
                 }
-                // Accepted and dropped until the chrome lane wires it to
-                // `Tab::set_hide_subagents` (docs/subagent-panes-design.md §3).
                 UiOp::ToggleSubagents { tab_id } => {
-                    tracing::debug!(%tab_id, "toggleSubagents: not applied in this build");
+                    if let Some((w, idx)) = resolve_tab(windows, &tab_id) {
+                        w.state.borrow_mut().toggle_subagents_in(idx);
+                        changed = true;
+                    }
                 }
                 UiOp::MoveTab { tab_id, to } => {
                     if let Some((w, idx)) = resolve_tab(windows, &tab_id) {

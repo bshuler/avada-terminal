@@ -22,16 +22,16 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 183 |
-| …bound to Rust | 107 |
-| …proven end-to-end | 107 |
+| callbacks declared | 184 |
+| …bound to Rust | 108 |
+| …proven end-to-end | 108 |
 | …bound but unproven | 0 |
 | …ui-local or dead | 76 |
-| Command variants | 148 |
+| Command variants | 149 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
-End-to-end coverage of the Rust-reaching UI surface is **100%** (107 of 107). "Named by a test" is an *upper* bound on proven:
+End-to-end coverage of the Rust-reaching UI surface is **100%** (108 of 108). "Named by a test" is an *upper* bound on proven:
 a test may mention a callback while asserting something else about it, and a proven
 callback can still front a feature whose real work happens past a boundary the harness
 cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
@@ -221,6 +221,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `toggle_left_panel` | `topbar.slint` | `ui-local` |
 | `toggle_projects` | `app.slint` | `e2e` |
 | `toggle_sidebar` | `app.slint` | `ui-local` |
+| `toggle_subagents` | `app.slint` | `e2e` |
 | `toggle_zoom` | `app.slint` | `ui-local` |
 | `toggled` | `contextmenu.slint` | `ui-local` |
 
@@ -373,6 +374,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `ToggleProjects` | — |
 | `ToggleReminders` | — |
 | `ToggleSidebar` | — |
+| `ToggleSubagents` | — |
 | `ToggleTalk` | — |
 | `ToggleZoom` | key |
 | `ViewNavigate` | — |

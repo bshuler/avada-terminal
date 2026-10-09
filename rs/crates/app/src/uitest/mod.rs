@@ -381,6 +381,112 @@ fn the_left_panel_toggle_reaches_rust() {
     });
 }
 
+/// The subagent toggle exists only while the current tab has subagent panes, reads the way
+/// a click would take it, and its click reaches `toggle-subagents` (`Command::ToggleSubagents`).
+#[test]
+fn the_subagent_toggle_reaches_rust() {
+    ui(|| {
+        let w = window();
+        install_tabs(&w, &["one"], 0, None);
+        let hide = "Hide this tab's subagent panes. Drag to move the window";
+        let show = "Show this tab's subagent panes. Drag to move the window";
+        assert!(by_label(&w, hide).is_empty(), "no subagent panes, no button");
+
+        w.set_has_subagents(true);
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        {
+            let fired = fired.clone();
+            w.on_toggle_subagents(move || fired.set(true));
+        }
+        let found = by_label(&w, hide);
+        assert_eq!(found.len(), 1, "shown subagents offer one Hide button");
+        click(&w, &found[0]);
+        assert!(fired.get(), "the toggle must reach AppWindow.toggle-subagents");
+
+        w.set_subagents_hidden(true);
+        assert_eq!(by_label(&w, show).len(), 1, "hidden subagents offer Show");
+        assert!(by_label(&w, hide).is_empty());
+    });
+}
+
+/// The toggle breathes on the Pulse curve while a subagent of the current tab is working —
+/// hidden or shown — and holds still at 0 once none is. Drives the pump's own helper.
+#[test]
+fn the_subagent_toggle_breathes_only_while_a_subagent_works() {
+    use avada_core::claude_subagents::SubagentRecord;
+    use avada_core::tools::PaneKind;
+    use std::time::{Duration, Instant, SystemTime};
+
+    fn pane(uid: &str, kind: PaneKind, parent: Option<&str>, rec: Option<SubagentRecord>)
+        -> crate::state::DetachedPane {
+        crate::state::DetachedPane {
+            uid: uid.into(),
+            title: uid.into(),
+            subtitle: None,
+            pinned_accent: None,
+            show_frame: None,
+            show_dot: None,
+            font_px: 14.0,
+            spawn_command: None,
+            spawn_args: None,
+            spawn_shell: None,
+            kind,
+            tool_session: None,
+            parent_uid: parent.map(str::to_string),
+            subagent: rec,
+            cwd: None,
+        }
+    }
+
+    ui(|| {
+        // (subagent stopped, panes hidden)
+        for (stopped, hidden) in [(false, true), (false, false), (true, true)] {
+            let w = window();
+            let mut state = crate::state::State::new(crate::theme::load_font(1.0));
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let mgr = avada_core::session_manager::SessionManager::new(tx);
+            let rec = SubagentRecord {
+                agent_id: "a1".into(),
+                agent_type: "general-purpose".into(),
+                description: "survey".into(),
+                spawn_depth: 1,
+                transcript: std::path::PathBuf::from("agent-a1.jsonl"),
+                started_at: Some(SystemTime::now()),
+                stopped_at: stopped.then(SystemTime::now),
+                last_growth: None,
+            };
+            state.adopt_pane(&mgr, pane("orch", PaneKind::Tool("claude".into()), None, None));
+            state.adopt_pane(&mgr, pane("a1", PaneKind::Subagent, Some("orch"), Some(rec)));
+            state.active_tab_mut().set_hide_subagents(hidden);
+
+            let t0 = Instant::now();
+            let breaths: Vec<f32> = [0u64, 0, 400, 800, 1100, 1600]
+                .iter()
+                .map(|ms| {
+                    crate::paneview::drive_subagent_breath(
+                        &w,
+                        &mut state,
+                        t0 + Duration::from_millis(*ms),
+                    );
+                    w.get_subagent_breath()
+                })
+                .collect();
+
+            let case = format!("stopped {stopped}, hidden {hidden}: {breaths:?}");
+            assert!(w.get_has_subagents(), "{case}");
+            assert_eq!(w.get_subagents_hidden(), hidden, "{case}");
+            if stopped {
+                assert!(breaths.iter().all(|b| *b == 0.0), "static when idle — {case}");
+            } else {
+                let mut distinct: Vec<f32> = breaths[2..].to_vec();
+                distinct.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+                assert!(distinct.len() >= 3, "breathes across ticks — {case}");
+                assert!(breaths[2..].iter().all(|b| *b > 0.0), "{case}");
+            }
+        }
+    });
+}
+
 /// The hamburger is the discoverable route to everything that has no icon of its own —
 /// preferences, layouts, new pane. It opens the shared context menu at the app root.
 #[test]
