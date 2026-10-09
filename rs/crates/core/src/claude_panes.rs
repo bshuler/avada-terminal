@@ -208,9 +208,10 @@ pub fn prune_marker_dir(dir: &std::path::Path, live: &std::collections::HashSet<
 /// would read a stranger's conversation. `live` is every pane id anything could still
 /// write a marker under: the uids of every pane the app currently knows about (laid out,
 /// parked, reopenable) AND their control aliases, since the hook writes under whichever
-/// one the tool inherited.
+/// one the tool inherited. The same panes' subagent hook directories go with them.
 #[tracing::instrument(level = "debug", ret, skip(live))]
 pub fn prune_markers(live: &std::collections::HashSet<String>) -> Vec<String> {
+    crate::claude_subagents::prune_dirs_in(&paths::claude_subagents_dir(), live);
     prune_marker_dir(&paths::claude_sessions_dir(), live)
 }
 
