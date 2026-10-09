@@ -287,9 +287,8 @@ pub fn rows_for(kind: &PaneKind, target: Option<&str>, palette: usize) -> Vec<Vi
         | PaneKind::Tool(_)
         | PaneKind::Browser
         | PaneKind::Image
-        | PaneKind::Module(_)
-        // The transcript viewer is the pane lane's (docs/subagent-panes-design.md §2).
-        | PaneKind::Subagent => Vec::new(),
+        | PaneKind::Module(_) => Vec::new(),
+        PaneKind::Subagent => tail_rows(&path, TAIL_ROWS),
     }
 }
 
@@ -490,6 +489,112 @@ pub fn read_lines(file: &Path) -> Vec<ViewRow> {
         ));
     }
     rows
+}
+
+/// How many rows a subagent pane keeps: the end of the conversation is what a watcher wants.
+pub const TAIL_ROWS: usize = 400;
+
+/// How much of a transcript's end is read per projection. A subagent transcript runs to
+/// several MB; the tail is all a pane shows, and the fingerprint re-projects on every write.
+const TAIL_BYTES: u64 = 256 * 1024;
+
+/// The last `max` rows of a subagent transcript (`agent-<id>.jsonl`): the prompt, assistant
+/// text, each tool call by name, and each tool result collapsed to its first line. Thinking
+/// blocks and attachment lines are skipped. Only the file's last [`TAIL_BYTES`] are read, so
+/// the cost per tick is bounded however long the conversation runs.
+#[tracing::instrument(level = "debug", skip_all, fields(file = %file.display()))]
+pub fn tail_rows(file: &Path, max: usize) -> Vec<ViewRow> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = match fs::File::open(file) {
+        Ok(f) => f,
+        // `SubagentStart` fires before the transcript's first write.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return vec![ViewRow::inert(role::NOTICE, "Waiting for the subagent to start…")];
+        }
+        Err(e) => return vec![ViewRow::inert(role::NOTICE, format!("Cannot read: {e}"))],
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(TAIL_BYTES);
+    let mut buf = Vec::new();
+    if let Err(e) = f
+        .seek(SeekFrom::Start(start))
+        .and_then(|_| f.take(TAIL_BYTES).read_to_end(&mut buf))
+    {
+        return vec![ViewRow::inert(role::NOTICE, format!("Cannot read: {e}"))];
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
+    // Mid-file, the first line is a fragment of a record that began before the window.
+    if start > 0 {
+        lines.next();
+    }
+    let mut rows: Vec<ViewRow> = Vec::new();
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        transcript_rows(&v, &mut rows);
+    }
+    let skipped = rows.len().saturating_sub(max);
+    let mut rows = rows.split_off(skipped);
+    if start > 0 || skipped > 0 {
+        rows.insert(0, ViewRow::inert(role::NOTICE, "… earlier messages not shown"));
+    }
+    if rows.is_empty() {
+        rows.push(ViewRow::inert(role::NOTICE, "No messages yet"));
+    }
+    rows
+}
+
+/// The rows one transcript record contributes (see [`tail_rows`]).
+fn transcript_rows(v: &serde_json::Value, rows: &mut Vec<ViewRow>) {
+    let content = &v["message"]["content"];
+    match v["type"].as_str() {
+        Some("user") => {
+            if let Some(prompt) = content.as_str() {
+                rows.extend(prompt.lines().map(|l| ViewRow::inert(role::QUOTE, clip(l))));
+                return;
+            }
+            for item in content.as_array().into_iter().flatten() {
+                if item["type"] != "tool_result" {
+                    continue;
+                }
+                let body = match &item["content"] {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(|p| p["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => String::new(),
+                };
+                let first = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                let more = body.lines().filter(|l| !l.trim().is_empty()).count() > 1;
+                let error = if item["is_error"] == true { "error: " } else { "" };
+                let text = format!("  ↳ {error}{}{}", first.trim(), if more { " …" } else { "" });
+                rows.push(ViewRow::inert(role::NOTICE, clip(&text)));
+            }
+        }
+        Some("assistant") => {
+            for item in content.as_array().into_iter().flatten() {
+                match item["type"].as_str() {
+                    Some("text") => rows.extend(
+                        item["text"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .lines()
+                            .map(|l| ViewRow::inert(role::LINE, clip(l))),
+                    ),
+                    Some("tool_use") => {
+                        let name = item["name"].as_str().unwrap_or("tool");
+                        rows.push(ViewRow::inert(role::CODE, format!("▸ {name}")));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A source file's lines, numbered like [`read_lines`] and coloured.
@@ -1327,6 +1432,98 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).expect("scratch dir");
         d
+    }
+
+    fn fixture_transcript() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../core/tests/fixtures/claude-hooks/projects/-home-u-proj/\
+             fd3804e5-9743-4a44-afde-65ea8705ee3c/subagents/agent-a401878d07b43ff1c.jsonl",
+        )
+    }
+
+    fn texts(rows: &[ViewRow]) -> Vec<(i32, String)> {
+        rows.iter().map(|r| (r.role, r.text.clone())).collect()
+    }
+
+    #[test]
+    fn a_subagent_transcript_shows_prompt_tools_and_text() {
+        let rows = rows_for(
+            &PaneKind::Subagent,
+            fixture_transcript().to_str(),
+            0,
+        );
+        assert_eq!(
+            texts(&rows),
+            [
+                (
+                    role::QUOTE,
+                    "List the files in the current working directory: /home/u/proj".into()
+                ),
+                (role::CODE, "▸ Bash".into()),
+                (role::LINE, "a.txt (file)".into()),
+                (role::LINE, "b.txt (file)".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_results_collapse_to_one_line_and_thinking_is_skipped() {
+        let d = scratch("tail-results");
+        let f = d.join("agent-x.jsonl");
+        let lines = [
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"tool_use","name":"Read","input":{}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"\nfirst\nsecond"}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":[{"type":"text","text":"boom"}]}]}}"#,
+            r#"{"type":"attachment","attachment":{"x":1}}"#,
+            "not json",
+        ];
+        fs::write(&f, lines.join("\n")).unwrap();
+        assert_eq!(
+            texts(&tail_rows(&f, TAIL_ROWS)),
+            [
+                (role::CODE, "▸ Read".into()),
+                (role::NOTICE, "  ↳ first …".into()),
+                (role::NOTICE, "  ↳ error: boom".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_transcript_is_read_from_the_end_and_capped() {
+        let d = scratch("tail-long");
+        let f = d.join("agent-long.jsonl");
+        let mut out = fs::File::create(&f).unwrap();
+        // ~600 KB: more than the read window, so the head is never parsed.
+        for i in 0..6_000 {
+            writeln!(
+                out,
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"line {i} {}"}}]}}}}"#,
+                "x".repeat(60)
+            )
+            .unwrap();
+        }
+        drop(out);
+        assert!(fs::metadata(&f).unwrap().len() > TAIL_BYTES);
+        let rows = tail_rows(&f, 50);
+        assert_eq!(rows.len(), 51, "the cap plus one notice");
+        assert_eq!(rows[0].role, role::NOTICE);
+        assert!(rows[50].text.starts_with("line 5999 "), "{}", rows[50].text);
+        assert!(rows[1].text.starts_with("line 5950 "), "{}", rows[1].text);
+        // Uncapped, the window still holds only the tail — and no half-record from its cut.
+        let all = tail_rows(&f, usize::MAX);
+        assert!(all.len() < 6_000, "{}", all.len());
+        assert!(all[1..].iter().all(|r| r.text.starts_with("line ")));
+    }
+
+    #[test]
+    fn a_transcript_not_yet_written_says_so() {
+        let d = scratch("tail-missing");
+        let rows = tail_rows(&d.join("agent-none.jsonl"), TAIL_ROWS);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, role::NOTICE);
+        let empty = d.join("agent-empty.jsonl");
+        fs::write(&empty, b"").unwrap();
+        assert_eq!(texts(&tail_rows(&empty, TAIL_ROWS)), [(role::NOTICE, "No messages yet".into())]);
     }
 
     #[test]
