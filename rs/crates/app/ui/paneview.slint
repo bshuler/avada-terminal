@@ -139,8 +139,11 @@ component TaskItem inherits Rectangle {
     callback close();
     callback context(length, length);
 
-    min-width: 78px;
-    max-width: 220px;
+    // A hidden subagent pane keeps its model row (indices stay those of `Tab::panes`) but
+    // takes no room in the strip.
+    visible: !root.p.hidden;
+    min-width: root.p.hidden ? 0px : 78px;
+    max-width: root.p.hidden ? 0px : 220px;
     horizontal-stretch: 0;
     height: 26px;
     border-radius: 6px;

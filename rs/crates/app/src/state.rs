@@ -18,7 +18,9 @@ use avada_core::layout::navigate::{neighbor_index, Direction};
 use avada_core::layout::presets::{
     compute_dividers, compute_tiles, effective_layout, DividerKind, Layout,
 };
-use avada_core::layout::sizes::{clamp_fraction, equal_sizes, insert_size, remove_size, resize_at};
+use avada_core::layout::sizes::{
+    clamp_fraction, equal_sizes, insert_size, normalize, remove_size, resize_at,
+};
 use avada_core::persistence::{paths, projects};
 use avada_core::session_manager::{AgentLiveness, SessionManager, SpawnOptions};
 use avada_core::claude_subagents::SubagentRecord;
@@ -1433,7 +1435,6 @@ impl Tab {
 
     /// Every pane with its index in `panes`, minus the subagent panes while they are hidden.
     /// Layout and the pane-model projections iterate this, so a hidden pane gets no tile.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     pub fn visible_panes(&self) -> impl Iterator<Item = (usize, &PaneState)> {
         let hide = self.hide_subagents;
         self.panes
@@ -1442,11 +1443,35 @@ impl Tab {
             .filter(move |(_, p)| !(hide && p.kind == PaneKind::Subagent))
     }
 
+    /// Whether pane `i` is a subagent pane the toggle currently hides.
+    pub fn is_hidden(&self, i: usize) -> bool {
+        self.hide_subagents && self.panes.get(i).is_some_and(|p| p.kind == PaneKind::Subagent)
+    }
+
+    /// What the tiler sees: the visible panes' indices in `panes`, their slice of `sizes`
+    /// (`compute_tiles` normalizes it, so the hidden panes' share goes back to the rest), and
+    /// the focused pane's position in that list. A tile's `index` is a position in the
+    /// returned list; map it back through `indices`. With nothing hidden this is the identity.
+    pub fn visible_layout(&self) -> VisibleLayout {
+        let indices: Vec<usize> = self.visible_panes().map(|(i, _)| i).collect();
+        let sizes = if self.sizes.len() == self.panes.len() {
+            indices.iter().map(|&i| self.sizes[i]).collect()
+        } else {
+            Vec::new()
+        };
+        let focused = indices.iter().position(|&i| i == self.focused).unwrap_or(0);
+        VisibleLayout {
+            indices,
+            sizes,
+            focused,
+        }
+    }
+
     /// Hide or show the subagent panes. Hiding never leaves focus or zoom on a hidden pane:
     /// a hidden zoomed or focused pane hands focus to its nearest visible ancestor (pane 0
     /// when the chain is broken) and the zoom is cleared. Focus on a hidden pane under a
     /// visible zoom simply moves to the zoomed pane.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "the chrome lane calls it"))]
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn set_hide_subagents(&mut self, hide: bool) {
         self.hide_subagents = hide;
@@ -1504,8 +1529,70 @@ impl Tab {
     /// The concrete preset this tab currently tiles with (auto resolved).
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn effective(&self) -> Layout {
-        effective_layout(self.layout, self.panes.len())
+        effective_layout(self.layout, self.visible_panes().count())
     }
+}
+
+/// The tiler's view of a tab with hidden panes taken out (see [`Tab::visible_layout`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleLayout {
+    /// Visible panes' indices in `Tab::panes`, in order.
+    pub indices: Vec<usize>,
+    /// Their sizes, unnormalized; empty when the tab's sizes are stale (an equal split).
+    pub sizes: Vec<f64>,
+    /// The focused pane's position in `indices`.
+    pub focused: usize,
+}
+
+/// A tab's panes as the session file records them: subagent panes left out, and the
+/// indexing state (`sizes`, `focused`, `zoomed`) remapped to what is left.
+#[derive(Debug, Clone, PartialEq)]
+struct SavedPanes {
+    indices: Vec<usize>,
+    sizes: Vec<f64>,
+    focused: usize,
+    zoomed: Option<usize>,
+}
+
+impl SavedPanes {
+    fn of(t: &Tab) -> Self {
+        let indices: Vec<usize> = (0..t.panes.len())
+            .filter(|&i| t.panes[i].kind != PaneKind::Subagent)
+            .collect();
+        if indices.len() == t.panes.len() {
+            return SavedPanes {
+                indices,
+                sizes: t.sizes.clone(),
+                focused: t.focused,
+                zoomed: t.zoomed,
+            };
+        }
+        let sizes = if t.sizes.len() == t.panes.len() {
+            normalize(&indices.iter().map(|&i| t.sizes[i]).collect::<Vec<_>>())
+        } else {
+            equal_sizes(indices.len())
+        };
+        // A focused subagent hands focus to the nearest kept pane before it — its
+        // orchestrator, as panes are laid out.
+        let before = indices.iter().filter(|&&i| i < t.focused).count();
+        let focused = indices
+            .iter()
+            .position(|&i| i == t.focused)
+            .unwrap_or(before.saturating_sub(1));
+        let zoomed = t.zoomed.and_then(|z| indices.iter().position(|&i| i == z));
+        SavedPanes {
+            indices,
+            sizes,
+            focused,
+            zoomed,
+        }
+    }
+}
+
+/// The subtitle a subagent pane carries: what kind of agent, and whether it has finished.
+fn subagent_subtitle(rec: &SubagentRecord) -> Option<SharedString> {
+    let state = if rec.stopped_at.is_some() { " · finished" } else { "" };
+    Some(format!("{}{state}", rec.agent_type).into())
 }
 
 /// One window as the application menu's "Windows & tabs" flyout lists it.
@@ -1822,7 +1909,23 @@ pub struct State {
     /// when the command ends or the shell returns to a prompt, because a stale "busy" badge
     /// is worse than none. Runtime-only, same as `sniffed_tool`.
     pub agent_live: std::collections::HashMap<String, AgentLiveness>,
+    /// Agent ids of the subagent panes the user closed by hand, which
+    /// [`Self::reconcile_subagents`] never re-creates. Runtime-only.
+    pub closed_subagents: std::collections::HashSet<String>,
+    /// When [`Self::reconcile_subagents`] last ran, for its once-a-second throttle.
+    subagents_reconciled_at: Option<std::time::Instant>,
 }
+
+/// What [`State::reconcile_subagents`] learns about one Claude pane: the subagents its
+/// session spawned and when its last turn ended.
+#[derive(Debug, Clone, Default)]
+pub struct SubagentScan {
+    pub records: Vec<SubagentRecord>,
+    pub last_turn_end: Option<std::time::SystemTime>,
+}
+
+/// How often [`State::reconcile_subagents`] actually scans.
+const SUBAGENT_RECONCILE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A pane parked by "Remind at…" — the detached pane (its session alive centrally) plus
 /// when it's due back. `fired` flips once the due time passes (set by the app tick) and
@@ -1973,6 +2076,8 @@ impl State {
             reminders_open: false,
             sniffed_tool: std::collections::HashMap::new(),
             agent_live: std::collections::HashMap::new(),
+            closed_subagents: std::collections::HashSet::new(),
+            subagents_reconciled_at: None,
         };
         let tab = s.fresh_tab();
         s.tabs.push(tab);
@@ -2584,6 +2689,19 @@ impl State {
     /// quits). Works for background tabs too (used by self-exiting shells).
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn close_pane_in(&mut self, ti: usize, idx: usize, mgr: &SessionManager) -> bool {
+        // A subagent pane closed by hand stays closed; an orchestrator takes its subagent
+        // panes with it.
+        let pane = self.tabs.get(ti).and_then(|t| t.panes.get(idx));
+        let idx = match pane.map(|p| (p.kind == PaneKind::Subagent, p.uid.clone())) {
+            Some((true, uid)) => {
+                if let Some(id) = uid.strip_prefix("sub:") {
+                    self.closed_subagents.insert(id.to_string());
+                }
+                idx
+            }
+            Some((false, _)) => self.close_subagents_of(ti, idx),
+            None => idx,
+        };
         match self.take_pane_in(ti, idx) {
             Some((ps, alive)) => {
                 tracing::info!(uid = %ps.uid, tab = ti, "pane closed");
@@ -2608,9 +2726,17 @@ impl State {
     /// irreversible one, which is why it is also the one always confirmed.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn close_pane_menu(&mut self, ti: usize, idx: usize, mgr: &SessionManager) -> bool {
-        if self.ends_window_pane(ti, idx) {
+        // A subagent pane has no session to keep alive, and reconcile would not bring a
+        // parked one back up to date, so its close is final.
+        let subagent = self
+            .tabs
+            .get(ti)
+            .and_then(|t| t.panes.get(idx))
+            .is_some_and(|p| p.kind == PaneKind::Subagent);
+        if subagent || self.ends_window_pane(ti, idx) {
             return self.close_pane_in(ti, idx, mgr);
         }
+        let idx = self.close_subagents_of(ti, idx);
         match self.detach_pane_in(ti, idx) {
             Some(det) => {
                 self.push_closed(ClosedWhat::Pane(Box::new(det)), mgr);
@@ -2628,13 +2754,18 @@ impl State {
     ///
     /// Never true for the system tab: its last pane is replaced, not fatal (see
     /// [`Self::take_pane_inner`]), so the window does not end and the close is parkable.
+    /// Subagent panes do not count as company: they close with their orchestrator.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn ends_window_pane(&self, ti: usize, idx: usize) -> bool {
         self.tabs.len() <= 1
-            && self
-                .tabs
-                .get(ti)
-                .is_some_and(|t| !t.system && t.panes.len() <= 1 && idx < t.panes.len())
+            && self.tabs.get(ti).is_some_and(|t| {
+                !t.system
+                    && idx < t.panes.len()
+                    && t.panes
+                        .iter()
+                        .enumerate()
+                        .all(|(i, p)| i == idx || p.kind == PaneKind::Subagent)
+            })
     }
 
     /// Detach the focused pane of the active tab for re-hosting in another window:
@@ -2685,6 +2816,18 @@ impl State {
     /// `at` is clamped to `0..=len`, so a stitch can insert the pane at a hovered slot.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn adopt_pane_at(&mut self, mgr: &SessionManager, det: DetachedPane, at: usize) {
+        let ps = self.pane_from_detached(mgr, det, at);
+        let ti = self.active;
+        let at = self.insert_pane_at(ti, at, ps);
+        let t = self.active_tab_mut();
+        t.focused = at;
+        t.zoomed = None;
+    }
+
+    /// The live pane for a detached session (see [`Self::adopt_pane_at`]), accented for slot
+    /// `at`. A uid the manager does not know (a view pane) gets a blank 80×24 grid.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn pane_from_detached(&self, mgr: &SessionManager, det: DetachedPane, at: usize) -> PaneState {
         let palette = self.settings.frame_palette;
         // Born at the pty's own size (as a relaunch re-host is): the seed ends with an
         // absolutely-positioned repaint of the daemon's screen, written for that geometry.
@@ -2706,7 +2849,7 @@ impl State {
         }
         let glow = Glow::new(crate::glow::seed_from(&det.uid));
         let font = theme::load_font_at(&self.settings.font_path(), det.font_px, self.last_scale);
-        let ps = PaneState {
+        PaneState {
             uid: det.uid,
             title: det.title,
             subtitle: det.subtitle,
@@ -2757,20 +2900,190 @@ impl State {
             tool_session: det.tool_session,
             parent_uid: det.parent_uid,
             subagent: det.subagent,
-        };
-        let auto = self.active_tab().layout == Layout::Auto;
-        let t = self.active_tab_mut();
+        }
+    }
+
+    /// Insert `ps` into tab `ti` at `at` (clamped; returned) **without** moving focus or zoom
+    /// off the pane that had them — a pane that arrives on its own (a subagent) must not
+    /// steal the keyboard.
+    #[tracing::instrument(level = "debug", skip(self, ps))]
+    fn insert_pane_at(&mut self, ti: usize, at: usize, ps: PaneState) -> usize {
+        let palette = self.settings.frame_palette;
+        let t = &mut self.tabs[ti];
         let at = at.min(t.panes.len());
-        t.sizes = if auto {
+        t.sizes = if t.layout == Layout::Auto {
             equal_sizes(t.panes.len() + 1)
         } else {
             insert_size(&t.sizes, at)
         };
+        let had_panes = !t.panes.is_empty();
         t.panes.insert(at, ps);
-        t.focused = at;
-        t.zoomed = None;
+        if had_panes && t.focused >= at {
+            t.focused += 1;
+        }
+        t.zoomed = t.zoomed.map(|z| if z >= at { z + 1 } else { z });
         t.relabel(palette);
         self.dirty = true;
+        at
+    }
+
+    /// One pass of the subagent panes, at most once a second (`now` is the throttle's clock;
+    /// a throttled call returns `false` at once). `lookup(uid)` answers for a pty pane what its
+    /// Claude session has spawned — `None` for a pane with no Claude marker, which is left be.
+    ///
+    /// Each subagent gets a `sub:<agent_id>` pane in its **orchestrator's** tab, right after
+    /// the orchestrator and its earlier subagents, without taking focus; an existing one gets
+    /// the fresh record. A subagent that stopped before the orchestrator's last turn ended is
+    /// done — its result is in the conversation — so its pane closes, and is never created in
+    /// the first place; nor is one the user closed. A subagent pane whose orchestrator is no
+    /// longer in this window closes too: the window the orchestrator went to rebuilds it.
+    /// Returns whether a pane was added or removed.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn reconcile_subagents(
+        &mut self,
+        mgr: &SessionManager,
+        now: std::time::Instant,
+        mut lookup: impl FnMut(&str) -> Option<SubagentScan>,
+    ) -> bool {
+        if self
+            .subagents_reconciled_at
+            .is_some_and(|at| now.saturating_duration_since(at) < SUBAGENT_RECONCILE_EVERY)
+        {
+            return false;
+        }
+        self.subagents_reconciled_at = Some(now);
+        let orchestrators: Vec<(String, SharedString)> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter(|p| p.kind.is_pty())
+            .map(|p| (p.uid.clone(), p.title.clone()))
+            .collect();
+        let mut changed = false;
+        for (orch_uid, orch_title) in &orchestrators {
+            let Some(scan) = lookup(orch_uid) else {
+                continue;
+            };
+            for rec in scan.records {
+                let uid = format!("sub:{}", rec.agent_id);
+                let done = rec
+                    .stopped_at
+                    .zip(scan.last_turn_end)
+                    .is_some_and(|(stopped, turn_end)| turn_end > stopped);
+                if let Some((ti, idx)) = self.find_pane(&uid) {
+                    if done {
+                        changed |= self.drop_subagent_pane(ti, idx, mgr);
+                    } else {
+                        let p = &mut self.tabs[ti].panes[idx];
+                        let subtitle = subagent_subtitle(&rec);
+                        let repaint = p.subtitle != subtitle;
+                        p.subtitle = subtitle;
+                        p.subagent = Some(rec);
+                        self.dirty |= repaint;
+                    }
+                    continue;
+                }
+                if done || self.closed_subagents.contains(&rec.agent_id) {
+                    continue;
+                }
+                let Some((ti, oi)) = self.find_pane(orch_uid) else {
+                    break;
+                };
+                let at = self.tabs[ti]
+                    .panes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.parent_uid.as_deref() == Some(orch_uid.as_str()))
+                    .map(|(i, _)| i + 1)
+                    .fold(oi + 1, usize::max);
+                let what = if rec.description.is_empty() {
+                    &rec.agent_type
+                } else {
+                    &rec.description
+                };
+                tracing::info!(uid = %uid, orchestrator = %orch_uid, "subagent pane opened");
+                let det = DetachedPane {
+                    uid,
+                    title: format!("{orch_title} › {what}").into(),
+                    subtitle: subagent_subtitle(&rec),
+                    pinned_accent: None,
+                    show_frame: None,
+                    show_dot: None,
+                    font_px: self.settings.font_px,
+                    spawn_command: None,
+                    spawn_args: None,
+                    spawn_shell: None,
+                    kind: PaneKind::Subagent,
+                    tool_session: None,
+                    parent_uid: Some(orch_uid.clone()),
+                    cwd: Some(rec.transcript.to_string_lossy().into_owned()),
+                    subagent: Some(rec),
+                };
+                let ps = self.pane_from_detached(mgr, det, at);
+                self.insert_pane_at(ti, at, ps);
+                changed = true;
+            }
+        }
+        let here: std::collections::HashSet<&str> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .map(|p| p.uid.as_str())
+            .collect();
+        let orphans: Vec<String> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter(|p| p.kind == PaneKind::Subagent)
+            .filter(|p| p.parent_uid.as_deref().is_none_or(|parent| !here.contains(parent)))
+            .map(|p| p.uid.clone())
+            .collect();
+        for uid in orphans {
+            if let Some((ti, idx)) = self.find_pane(&uid) {
+                changed |= self.drop_subagent_pane(ti, idx, mgr);
+            }
+        }
+        changed
+    }
+
+    /// Close subagent pane `idx` of tab `ti` on reconcile's say-so — not remembered as the
+    /// user's close. Never the window's last pane (the window outlives a finished subagent).
+    #[tracing::instrument(level = "debug", skip(self, mgr))]
+    fn drop_subagent_pane(&mut self, ti: usize, idx: usize, mgr: &SessionManager) -> bool {
+        if self.ends_window_pane(ti, idx) {
+            return false;
+        }
+        let gone = self.take_pane_in(ti, idx).is_some();
+        self.reseed_system_tab(mgr);
+        gone
+    }
+
+    /// Drop the subagent panes of pane `idx` of tab `ti`, whose orchestrator is about to
+    /// close, and return the orchestrator's index after the removals. Not remembered as the
+    /// user's close: a parked orchestrator that comes back gets its live subagents back.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn close_subagents_of(&mut self, ti: usize, idx: usize) -> usize {
+        let Some(uid) = self
+            .tabs
+            .get(ti)
+            .and_then(|t| t.panes.get(idx))
+            .map(|p| p.uid.clone())
+        else {
+            return idx;
+        };
+        let children: Vec<usize> = self.tabs[ti]
+            .panes
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.kind == PaneKind::Subagent && p.parent_uid.as_deref() == Some(uid.as_str())
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for &c in children.iter().rev() {
+            self.take_pane_in(ti, c);
+        }
+        idx - children.iter().filter(|&&c| c < idx).count()
     }
 
     /// Re-host a detached session as a **brand-new tab** (dock-as-tab on a tear-off drop):
@@ -3313,7 +3626,8 @@ impl State {
             self.dirty = true;
         }
         let t = self.active_tab_mut();
-        if idx < t.panes.len() && t.focused != idx {
+        // A hidden subagent pane has no tile to click; a stale index must not focus it.
+        if idx < t.panes.len() && t.focused != idx && !t.is_hidden(idx) {
             t.focused = idx;
             if t.zoomed.is_some() {
                 t.zoomed = Some(idx); // zoom follows focus
@@ -3351,7 +3665,10 @@ impl State {
     pub fn focus_dir(&mut self, dir: Direction) {
         let fullscreen = self.fullscreen;
         let t = self.active_tab_mut();
-        let n = t.panes.len();
+        // Over the visible panes only, so neither the cycle nor a neighbour lands on a hidden
+        // subagent pane.
+        let vis = t.visible_layout();
+        let n = vis.indices.len();
         if n < 2 {
             return;
         }
@@ -3359,15 +3676,15 @@ impl State {
         let next = if t.zoomed.is_some() || fullscreen || eff == Layout::Single {
             let delta = matches!(dir, Direction::Right | Direction::Down);
             Some(if delta {
-                (t.focused + 1) % n
+                (vis.focused + 1) % n
             } else {
-                (t.focused + n - 1) % n
+                (vis.focused + n - 1) % n
             })
         } else {
-            let tiles = compute_tiles(eff, n, &t.sizes, t.main_fraction, t.focused as i32);
-            neighbor_index(&tiles, t.focused, dir)
+            let tiles = compute_tiles(eff, n, &vis.sizes, t.main_fraction, vis.focused as i32);
+            neighbor_index(&tiles, vis.focused, dir)
         };
-        if let Some(next) = next {
+        if let Some(next) = next.map(|v| vis.indices[v]) {
             t.focused = next;
             if t.zoomed.is_some() {
                 t.zoomed = Some(next);
@@ -3391,7 +3708,7 @@ impl State {
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn toggle_zoom(&mut self) {
         let t = self.active_tab_mut();
-        if t.panes.is_empty() {
+        if t.panes.is_empty() || t.is_hidden(t.focused) {
             return;
         }
         let f = t.focused;
@@ -3405,6 +3722,7 @@ impl State {
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn resize_divider(&mut self, kind: DividerKind, index: i32, delta: f64) {
         let n = self.active_tab().panes.len();
+        let vis = self.active_tab().visible_layout();
         let eff = self.active_tab().effective();
         let t = self.active_tab_mut();
         if t.layout == Layout::Auto {
@@ -3426,7 +3744,21 @@ impl State {
             DividerKind::Size => {
                 if index >= 0 {
                     let before = t.sizes.clone();
-                    t.sizes = resize_at(&t.sizes, index as usize, delta);
+                    t.sizes = if vis.indices.len() == n {
+                        resize_at(&t.sizes, index as usize, delta)
+                    } else {
+                        // `index` is a seam between visible panes: resize their normalized
+                        // slice, then write it back at the same total so hidden panes keep
+                        // their share for when they are shown again.
+                        let at: Vec<f64> = vis.indices.iter().map(|&i| t.sizes[i]).collect();
+                        let total: f64 = at.iter().sum();
+                        let moved = resize_at(&normalize(&at), index as usize, delta);
+                        let mut sizes = t.sizes.clone();
+                        for (&i, s) in vis.indices.iter().zip(moved) {
+                            sizes[i] = s * total;
+                        }
+                        sizes
+                    };
                     tracing::debug!("    resize sizes[{index}] delta={delta:.4}: {before:?} -> {:?} (layout={:?})",
                         t.sizes, t.layout);
                 }
@@ -3450,7 +3782,8 @@ impl State {
         if t.zoomed.is_some() || self.fullscreen {
             return Vec::new();
         }
-        compute_dividers(t.effective(), t.panes.len(), &t.sizes, t.main_fraction)
+        let vis = t.visible_layout();
+        compute_dividers(t.effective(), vis.indices.len(), &vis.sizes, t.main_fraction)
     }
 
     // ---- tabs ----
@@ -8211,7 +8544,7 @@ impl State {
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn taskbar_visible(&self) -> bool {
         let t = self.active_tab();
-        t.layout == Layout::Single && t.panes.len() > 1 && !self.fullscreen
+        t.layout == Layout::Single && t.visible_panes().count() > 1 && !self.fullscreen
     }
 
     /// Snapshot the **active tab** into the persistable file shape — the native port of
@@ -8257,6 +8590,8 @@ impl State {
         let panes: Vec<PaneSpec> = t
             .panes
             .iter()
+            // Subagent panes are rebuilt from the hook records, never saved.
+            .filter(|p| p.kind != PaneKind::Subagent)
             .map(|p| {
                 let px = p.font_px.round() as u32;
                 let mut spec = PaneSpec {
@@ -8337,15 +8672,19 @@ impl State {
             .tabs
             .iter()
             .enumerate()
-            .filter(|(_, t)| !t.panes.is_empty())
+            // Subagent panes are never saved — the startup reconcile rebuilds the live ones —
+            // so a tab of nothing else is as empty as a 0-pane one.
+            .filter(|(_, t)| t.panes.iter().any(|p| p.kind != PaneKind::Subagent))
             .enumerate()
             .map(|(out_i, (i, t))| {
                 if i == self.active {
                     active_out = out_i as u32;
                 }
-                let panes: Vec<PaneSpec> = t
-                    .panes
+                let kept = SavedPanes::of(t);
+                let panes: Vec<PaneSpec> = kept
+                    .indices
                     .iter()
+                    .map(|&k| &t.panes[k])
                     .map(|p| {
                         let px = p.font_px.round() as u32;
                         let mut spec = PaneSpec {
@@ -8382,10 +8721,10 @@ impl State {
                     title: Some(t.title.to_string()),
                     layout: Some(theme::layout_name(t.layout).to_string()),
                     panes,
-                    sizes: Some(t.sizes.clone()),
+                    sizes: Some(kept.sizes),
                     main_fraction: Some(t.main_fraction),
-                    focused: Some(t.focused as u32),
-                    zoomed: t.zoomed.map(|z| z as u32),
+                    focused: Some(kept.focused as u32),
+                    zoomed: kept.zoomed.map(|z| z as u32),
                     // Only written when set, so an ordinary tab's group is byte-identical to
                     // what earlier versions wrote.
                     system: t.system.then_some(true),
@@ -14592,5 +14931,362 @@ mod subagent_tab_tests {
         assert!(t.hide_subagents);
         assert_eq!(t.panes[4].parent_uid.as_deref(), Some("a"));
         assert_eq!(t.panes[4].kind, PaneKind::Subagent);
+    }
+}
+
+#[cfg(test)]
+mod subagent_pane_tests {
+    //! The pane lane (docs/subagent-panes-design.md §2): `reconcile_subagents` and the
+    //! subagent pane lifecycle, the session-file skip, and the tiler's view of a hidden pane.
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn mgr() -> SessionManager {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        SessionManager::new(tx)
+    }
+
+    fn det(uid: &str, kind: PaneKind) -> DetachedPane {
+        DetachedPane {
+            uid: uid.into(),
+            title: uid.into(),
+            subtitle: None,
+            pinned_accent: None,
+            show_frame: None,
+            show_dot: None,
+            font_px: 14.0,
+            spawn_command: None,
+            spawn_args: None,
+            spawn_shell: None,
+            kind,
+            tool_session: None,
+            parent_uid: None,
+            subagent: None,
+            cwd: None,
+        }
+    }
+
+    fn rec(id: &str, description: &str, depth: u32) -> SubagentRecord {
+        SubagentRecord {
+            agent_id: id.into(),
+            agent_type: "general-purpose".into(),
+            description: description.into(),
+            spawn_depth: depth,
+            transcript: PathBuf::from(format!("/t/subagents/agent-{id}.jsonl")),
+            started_at: None,
+            stopped_at: None,
+            last_growth: None,
+        }
+    }
+
+    fn scan(records: Vec<SubagentRecord>) -> SubagentScan {
+        SubagentScan {
+            records,
+            last_turn_end: None,
+        }
+    }
+
+    /// Tab 0: `shell`, `orch` (claude), `after`, with `after` focused and zoomed. Tab 1:
+    /// `other`, active — reconcile has to find the orchestrator's tab itself.
+    fn two_tabs() -> State {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.adopt_pane(&m, det("shell", PaneKind::Terminal));
+        st.adopt_pane(&m, det("orch", PaneKind::Tool("claude".into())));
+        st.adopt_pane(&m, det("after", PaneKind::Terminal));
+        st.tabs[0].zoomed = Some(2);
+        st.adopt_pane_as_tab(&m, det("other", PaneKind::Terminal));
+        st
+    }
+
+    /// A clock a second past the previous call, so every call gets past the throttle.
+    struct Clock(Instant);
+
+    impl Clock {
+        fn tick(&mut self) -> Instant {
+            self.0 += Duration::from_secs(1);
+            self.0
+        }
+    }
+
+    /// Reconcile with `s` as `orch`'s session; every other pane has no Claude marker.
+    fn reconcile(st: &mut State, clock: &mut Clock, s: &SubagentScan) -> bool {
+        st.reconcile_subagents(&mgr(), clock.tick(), |uid| (uid == "orch").then(|| s.clone()))
+    }
+
+    fn uids(st: &State, ti: usize) -> Vec<&str> {
+        st.tabs[ti].panes.iter().map(|p| p.uid.as_str()).collect()
+    }
+
+    fn pane<'a>(st: &'a State, uid: &str) -> &'a PaneState {
+        st.tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .find(|p| p.uid == uid)
+            .unwrap()
+    }
+
+    #[test]
+    fn reconcile_opens_subagent_panes_after_the_orchestrator_without_taking_focus() {
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        let mut s = scan(vec![rec("a", "Explore the repo", 1), rec("b", "Write tests", 1)]);
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "sub:b", "after"]);
+        assert_eq!(uids(&st, 1), ["other"]);
+        assert_eq!(st.active, 1, "the active tab stays active");
+        let t = &st.tabs[0];
+        assert_eq!((t.focused, t.zoomed), (4, Some(4)), "focus and zoom stay on `after`");
+        assert_eq!(t.sizes.len(), 5);
+        let a = pane(&st, "sub:a");
+        assert_eq!(a.kind, PaneKind::Subagent);
+        assert_eq!(a.title.as_str(), "orch › Explore the repo");
+        assert_eq!(a.parent_uid.as_deref(), Some("orch"));
+        assert_eq!(a.cwd.as_deref(), Some("/t/subagents/agent-a.jsonl"));
+        assert_eq!(a.subagent.as_ref().map(|r| r.spawn_depth), Some(1));
+
+        // A nested subagent arrives later: it goes after the orchestrator's earlier ones and
+        // carries its depth.
+        s.records.push(rec("c", "", 2));
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "sub:b", "sub:c", "after"]);
+        let c = pane(&st, "sub:c");
+        assert_eq!(c.title.as_str(), "orch › general-purpose", "no description → the type");
+        assert_eq!(c.subagent.as_ref().map(|r| r.spawn_depth), Some(2));
+
+        // Nothing new: nothing changes.
+        assert!(!reconcile(&mut st, &mut clock, &s));
+        assert_eq!(st.tabs[0].panes.len(), 6);
+    }
+
+    #[test]
+    fn reconcile_runs_at_most_once_a_second() {
+        let mut st = two_tabs();
+        let m = mgr();
+        let now = Instant::now();
+        let s = scan(vec![rec("a", "x", 1)]);
+        let calls = std::cell::Cell::new(0);
+        let lookup = |uid: &str| {
+            calls.set(calls.get() + 1);
+            (uid == "orch").then(|| s.clone())
+        };
+        assert!(st.reconcile_subagents(&m, now, lookup));
+        let after_first = calls.get();
+        assert!(!st.reconcile_subagents(&m, now + Duration::from_millis(900), lookup));
+        assert_eq!(calls.get(), after_first, "a throttled call reads nothing");
+        st.reconcile_subagents(&m, now + Duration::from_secs(1), lookup);
+        assert!(calls.get() > after_first);
+    }
+
+    #[test]
+    fn only_panes_with_a_claude_marker_are_asked_and_view_panes_never() {
+        let mut st = two_tabs();
+        let m = mgr();
+        st.adopt_pane(&m, det("doc", PaneKind::Markdown));
+        let mut asked = Vec::new();
+        st.reconcile_subagents(&m, Instant::now(), |uid| {
+            asked.push(uid.to_string());
+            None
+        });
+        asked.sort();
+        assert_eq!(asked, ["after", "orch", "other", "shell"]);
+        assert_eq!(uids(&st, 0), ["shell", "orch", "after"], "no marker → no panes");
+    }
+
+    #[test]
+    fn the_seam_reads_the_fixture_transcript_dir() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../core/tests/fixtures/claude-hooks/projects/-home-u-proj/\
+             fd3804e5-9743-4a44-afde-65ea8705ee3c/subagents",
+        );
+        let records = avada_core::claude_subagents::subagents_from(&dir.join("no-hooks"), Some(&dir));
+        let mut st = two_tabs();
+        assert!(reconcile(&mut st, &mut Clock(Instant::now()), &scan(records)));
+        let p = pane(&st, "sub:a401878d07b43ff1c");
+        assert!(p.cwd.as_deref().is_some_and(|c| c.ends_with("agent-a401878d07b43ff1c.jsonl")));
+        let rows = crate::viewpane::tail_rows(Path::new(p.cwd.as_deref().unwrap()), 50);
+        assert!(rows.iter().any(|r| r.text.as_str() == "▸ Bash"), "the viewer reads it");
+    }
+
+    #[test]
+    fn a_subagent_closes_once_the_orchestrator_ends_a_turn_after_it_stopped() {
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let mut s = scan(vec![rec("a", "x", 1)]);
+        reconcile(&mut st, &mut clock, &s);
+
+        // Stopped, but the turn that started it has not ended: marked, kept.
+        s.records[0].stopped_at = Some(t0);
+        s.last_turn_end = Some(t0 - Duration::from_secs(5));
+        assert!(!reconcile(&mut st, &mut clock, &s));
+        let a = pane(&st, "sub:a");
+        assert_eq!(a.subtitle.as_deref(), Some("general-purpose · finished"));
+        assert_eq!(a.subagent.as_ref().and_then(|r| r.stopped_at), Some(t0));
+
+        // The orchestrator ends a turn after it: closed, and not re-created.
+        s.last_turn_end = Some(t0 + Duration::from_secs(1));
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
+        assert!(!reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
+        assert!(st.closed_subagents.is_empty(), "not the user's close");
+        assert_eq!(st.tabs[0].focused, 2, "focus stays on `after`");
+    }
+
+    #[test]
+    fn a_subagent_the_user_closed_is_never_reopened() {
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        let m = mgr();
+        let mut s = scan(vec![rec("a", "x", 1)]);
+        reconcile(&mut st, &mut clock, &s);
+        let parked = st.closed.len();
+        assert!(st.close_pane_menu(0, 2, &m));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
+        assert_eq!(st.closed.len(), parked, "nothing to park: the close is final");
+        assert!(st.closed_subagents.contains("a"));
+
+        s.records.push(rec("b", "y", 1));
+        reconcile(&mut st, &mut clock, &s);
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:b", "after"]);
+    }
+
+    #[test]
+    fn closing_the_orchestrator_closes_its_subagent_panes() {
+        let m = mgr();
+        for park in [true, false] {
+            let mut st = two_tabs();
+            let mut clock = Clock(Instant::now());
+            reconcile(&mut st, &mut clock, &scan(vec![rec("a", "x", 1), rec("b", "y", 1)]));
+            st.tabs[0].focused = 3; // sub:b
+            let alive = if park {
+                st.close_pane_menu(0, 1, &m)
+            } else {
+                st.close_pane_in(0, 1, &m)
+            };
+            assert!(alive);
+            assert_eq!(uids(&st, 0), ["shell", "after"], "park {park}");
+            assert!(st.closed_subagents.is_empty(), "park {park}");
+            assert_eq!(st.tabs[0].sizes.len(), 2);
+        }
+    }
+
+    #[test]
+    fn the_orchestrator_alone_with_its_subagents_is_the_windows_last_pane() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.adopt_pane(&m, det("orch", PaneKind::Tool("claude".into())));
+        reconcile(&mut st, &mut Clock(Instant::now()), &scan(vec![rec("a", "x", 1)]));
+        assert_eq!(uids(&st, 0), ["orch", "sub:a"]);
+        assert!(st.ends_window_pane(0, 0), "closing it would leave only its subagent");
+    }
+
+    #[test]
+    fn a_subagent_pane_whose_orchestrator_left_the_window_closes() {
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        reconcile(&mut st, &mut clock, &scan(vec![rec("a", "x", 1)]));
+        st.detach_uid("orch").unwrap();
+        assert!(st.reconcile_subagents(&mgr(), clock.tick(), |_| None));
+        assert_eq!(uids(&st, 0), ["shell", "after"]);
+    }
+
+    #[test]
+    fn subagent_panes_are_not_saved_and_the_indices_are_remapped() {
+        let mut st = two_tabs();
+        reconcile(&mut st, &mut Clock(Instant::now()), &scan(vec![rec("a", "x", 1), rec("b", "y", 1)]));
+        let t = &mut st.tabs[0];
+        t.sizes = vec![0.1, 0.3, 0.2, 0.2, 0.2];
+        t.focused = 3; // sub:b → its orchestrator
+        t.zoomed = Some(4); // after
+        // A tab holding nothing but a (stray) subagent pane is not saved at all.
+        let m = mgr();
+        let mut lone = det("sub:z", PaneKind::Subagent);
+        lone.parent_uid = Some("orch".into());
+        st.adopt_pane_as_tab(&m, lone);
+
+        let file = st.to_session_file();
+        let groups = file.groups.unwrap();
+        assert_eq!(groups.len(), 2, "tab 0 and `other`; the subagent-only tab is dropped");
+        let g = &groups[0];
+        let labels: Vec<_> = g.panes.iter().map(|p| p.label.clone().unwrap()).collect();
+        assert_eq!(labels, ["shell", "orch", "after"]);
+        assert_eq!(g.focused, Some(1));
+        assert_eq!(g.zoomed, Some(2));
+        let sizes = g.sizes.clone().unwrap();
+        assert_eq!(sizes.len(), 3);
+        assert!((sizes[0] - 1.0 / 6.0).abs() < 1e-9 && (sizes[1] - 0.5).abs() < 1e-9);
+
+        let lib = st.library_workspace_of(&st.tabs[0]);
+        assert_eq!(lib.panes.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_hidden_subagent_gives_the_orchestrator_its_space_back() {
+        let mut st = two_tabs();
+        reconcile(&mut st, &mut Clock(Instant::now()), &scan(vec![rec("a", "x", 1)]));
+        st.active = 0;
+        let t = &mut st.tabs[0];
+        t.sizes = vec![0.25, 0.25, 0.25, 0.25];
+        t.focused = 1;
+        t.zoomed = None;
+        t.layout = Layout::Columns;
+        assert_eq!(st.dividers().len(), 3);
+        let t = &mut st.tabs[0];
+        t.set_hide_subagents(true);
+        let vis = t.visible_layout();
+        assert_eq!(vis.indices, [0, 1, 3]);
+        assert_eq!(vis.focused, 1);
+        let tiles = compute_tiles(t.effective(), 3, &vis.sizes, t.main_fraction, 1);
+        let area: f64 = tiles.iter().map(|x| x.rect.w * x.rect.h).sum();
+        assert!((area - 1.0).abs() < 1e-9, "the three shown panes fill the tab: {area}");
+        assert_eq!(st.dividers().len(), 2, "no divider for the hidden pane");
+    }
+
+    #[test]
+    fn focus_and_zoom_never_land_on_a_hidden_pane() {
+        let mut st = two_tabs();
+        reconcile(&mut st, &mut Clock(Instant::now()), &scan(vec![rec("a", "x", 1)]));
+        st.active = 0;
+        st.tabs[0].zoomed = None;
+        st.tabs[0].focused = 1;
+        st.tabs[0].set_hide_subagents(true);
+
+        st.focus_pane(2);
+        assert_eq!(st.tabs[0].focused, 1, "clicking a hidden pane's slot does nothing");
+        for dir in [Direction::Left, Direction::Right, Direction::Up, Direction::Down] {
+            for start in [0, 1, 3] {
+                st.tabs[0].focused = start;
+                st.focus_dir(dir);
+                assert_ne!(st.tabs[0].focused, 2, "{dir:?} from {start}");
+            }
+        }
+        st.tabs[0].focused = 2; // forced: zoom still refuses it
+        st.toggle_zoom();
+        assert_eq!(st.tabs[0].zoomed, None);
+
+        // Shown again, the same pane takes focus and zoom normally.
+        st.tabs[0].set_hide_subagents(false);
+        st.focus_pane(2);
+        st.toggle_zoom();
+        assert_eq!((st.tabs[0].focused, st.tabs[0].zoomed), (2, Some(2)));
+    }
+
+    #[test]
+    fn resizing_with_hidden_panes_keeps_their_share() {
+        let mut st = two_tabs();
+        reconcile(&mut st, &mut Clock(Instant::now()), &scan(vec![rec("a", "x", 1)]));
+        st.active = 0;
+        let t = &mut st.tabs[0];
+        t.layout = Layout::Columns;
+        t.sizes = vec![0.25, 0.25, 0.25, 0.25];
+        t.zoomed = None;
+        t.set_hide_subagents(true);
+        st.resize_divider(DividerKind::Size, 0, 0.1);
+        let sizes = &st.tabs[0].sizes;
+        assert_eq!(sizes.len(), 4);
+        assert!((sizes[2] - 0.25).abs() < 1e-9, "the hidden pane's share is untouched: {sizes:?}");
+        assert!(sizes[0] > 0.25 && sizes[1] < 0.25, "{sizes:?}");
     }
 }

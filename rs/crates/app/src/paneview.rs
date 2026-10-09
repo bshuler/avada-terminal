@@ -491,6 +491,8 @@ fn pane_item(
         w,
         h,
         visible: ps.visible,
+        // Set by the callers, which know the tab's toggle.
+        hidden: false,
         focused,
         glow: ps.glow.alpha,
         link_visible: link.is_some(),
@@ -643,14 +645,17 @@ fn relayout_active(state: &mut State, area: (f32, f32), scale: f32) {
         return;
     }
 
-    let eff = effective_layout(tab.layout, n);
-    let tiles = compute_tiles(eff, n, &tab.sizes, tab.main_fraction, tab.focused as i32);
+    // Hidden subagent panes get no tile; their share goes to the panes still shown.
+    let vis = tab.visible_layout();
+    let nv = vis.indices.len();
+    let eff = effective_layout(tab.layout, nv);
+    let tiles = compute_tiles(eff, nv, &vis.sizes, tab.main_fraction, vis.focused as i32);
     for t in &tiles {
         let x = (t.rect.x * aw as f64) as f32;
         let y = (t.rect.y * ah as f64) as f32;
         let w = (t.rect.w * aw as f64) as f32;
         let h = (t.rect.h * ah as f64) as f32;
-        let p = &mut tab.panes[t.index];
+        let p = &mut tab.panes[vis.indices[t.index]];
         if t.visible {
             place(p, x, y, w, h);
         } else {
@@ -699,8 +704,10 @@ fn relayout_background(state: &mut State, area: (f32, f32), scale: f32) {
             fit_grid(&mut tab.panes[z], gw, gh, scale, now);
             continue;
         }
-        let eff = effective_layout(tab.layout, n);
-        let tiles = compute_tiles(eff, n, &tab.sizes, tab.main_fraction, tab.focused as i32);
+        let vis = tab.visible_layout();
+        let nv = vis.indices.len();
+        let eff = effective_layout(tab.layout, nv);
+        let tiles = compute_tiles(eff, nv, &vis.sizes, tab.main_fraction, vis.focused as i32);
         for t in &tiles {
             // Same rule as the active pass: a tile the layout hides gets no grid of its own.
             if !t.visible {
@@ -709,7 +716,7 @@ fn relayout_background(state: &mut State, area: (f32, f32), scale: f32) {
             let w = (t.rect.w * aw as f64) as f32;
             let h = (t.rect.h * ah as f64) as f32;
             let (_, _, gw, gh) = pane_box(0.0, 0.0, w, h);
-            fit_grid(&mut tab.panes[t.index], gw, gh, scale, now);
+            fit_grid(&mut tab.panes[vis.indices[t.index]], gw, gh, scale, now);
         }
     }
 }
@@ -980,8 +987,9 @@ pub fn resync(
         .panes
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            pane_item(
+        .map(|(i, p)| PaneItem {
+            hidden: t.is_hidden(i),
+            ..pane_item(
                 p,
                 i == focused,
                 i as i32 == editing_pane,
@@ -2043,6 +2051,7 @@ pub fn pump(
     let view_ui = state.appearance_view().3;
     let tab = &mut state.tabs[active_idx];
     let n = tab.panes.len();
+    let hidden: Vec<bool> = (0..n).map(|i| tab.is_hidden(i)).collect();
     let mut rendered = 0usize;
     for (i, tool) in tool_row.iter().enumerate().take(n) {
         let ps = &mut tab.panes[i];
@@ -2128,17 +2137,20 @@ pub fn pump(
         if i < ui.panes.row_count() {
             ui.panes.set_row_data(
                 i,
-                pane_item(
-                    ps,
-                    i == focused,
-                    i as i32 == editing_pane,
-                    show_frame,
-                    show_dot,
-                    ps.font_px,
-                    &tool.0,
-                    tool.1,
-                    view_ui,
-                ),
+                PaneItem {
+                    hidden: hidden[i],
+                    ..pane_item(
+                        ps,
+                        i == focused,
+                        i as i32 == editing_pane,
+                        show_frame,
+                        show_dot,
+                        ps.font_px,
+                        &tool.0,
+                        tool.1,
+                        view_ui,
+                    )
+                },
             );
         }
     }

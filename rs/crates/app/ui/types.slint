@@ -122,6 +122,8 @@ export struct PaneItem {
     w: length,
     h: length,
     visible: bool,
+    // A subagent pane the tab's toggle hides: no tile and no taskbar entry.
+    hidden: bool,
     focused: bool,
     // idle-glow opacity (0 = no glow): the animated alpha of the pane's accent ring once
     // it has been output-quiet past the idle threshold (driven by the controller per tick).

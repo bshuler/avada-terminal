@@ -33,7 +33,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::command::{dispatch, set_layout_from_id, Command, Effect};
 use crate::drag::{self, DragKind, DragState, Hover};
 use crate::paneview::{self, Ui};
-use crate::state::{DetachedPane, DetachedTab, EscOutcome, NewPaneOpts, Overlay, State};
+use crate::state::{
+    DetachedPane, DetachedTab, EscOutcome, NewPaneOpts, Overlay, State, SubagentScan,
+};
 use crate::{filedrop, theme, window, AppWindow, KeyMsg};
 
 /// The GitHub releases page the NotifyOnly update flow (Linux/macOS) points the user at —
@@ -1186,6 +1188,23 @@ impl App {
         avada_core::claude_panes::read_newest_pane_session(ids.iter().map(String::as_str))
     }
 
+    /// What [`State::reconcile_subagents`] needs for the pane hosting session `uid`: its live
+    /// Claude conversation's subagents and last turn end, read under the id the newest marker
+    /// was written under. `None` without a marker.
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn pane_subagents(&self, uid: &str) -> Option<SubagentScan> {
+        use avada_core::{claude_panes, claude_subagents};
+        let ids = self.pane_marker_ids(uid);
+        let newest = claude_panes::read_newest_pane_session(ids.iter().map(String::as_str))?;
+        let id = ids.iter().find(|id| {
+            claude_panes::read_pane_session(id).is_some_and(|s| s.session_id == newest.session_id)
+        })?;
+        Some(SubagentScan {
+            records: claude_subagents::subagents_for_pane(id),
+            last_turn_end: claude_subagents::last_turn_end(id),
+        })
+    }
+
     #[tracing::instrument(level = "debug", ret, skip(self, w))]
     fn fire_status_loop(&self, w: &Window, prompt: &str) {
         let prompt = if prompt.trim().is_empty() {
@@ -2035,6 +2054,14 @@ impl App {
         }
         for w in &windows {
             w.state.borrow_mut().reseed_system_tab(&self.mgr);
+        }
+        // Subagent panes follow their orchestrators' Claude sessions (at most once a second;
+        // the throttle is the state's own).
+        let now = std::time::Instant::now();
+        for w in &windows {
+            w.state
+                .borrow_mut()
+                .reconcile_subagents(&self.mgr, now, |uid| self.pane_subagents(uid));
         }
 
         // 3. Render each window from its own state. Aggregate per-window activity so the
