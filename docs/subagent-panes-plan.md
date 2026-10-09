@@ -1,6 +1,7 @@
 # Subagent panes and the breathing "hide subagents" toggle — plan
 
-Status (2026-10-09): **requested, not started.** Tracked as issue #. Written at the end
+Status (2026-10-09): **requested, not started.** Tracked as B2 in
+[`backlog.md`](backlog.md). Written at the end
 of the 0.2.31 session so the next session starts from a spec instead of a chat message.
 
 ## 1. The request (Bert, 2026-10-09)

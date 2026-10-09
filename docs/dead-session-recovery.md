@@ -184,7 +184,7 @@ pane in the front tab (`ctl state` reports `activeTabId`) was still `busy`, so t
 visibility is not what clears it. A Claude prompt that is sitting quiet prints nothing,
 so such a pane keeps reading `busy` indefinitely, and anything gated on not-busy
 (nudges, the speak-first queue) treats it as mid-turn until it next prints. Tracked as
-issue #; not fixed here.
+B1 in [`backlog.md`](backlog.md); not fixed here.
 
 ### Inferred marks are placeholders, never resume targets
 
