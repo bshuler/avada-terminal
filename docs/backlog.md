@@ -7,8 +7,8 @@ next-session command line at the end of every session points at the entry it wil
 ## Open
 
 ### B2 · Subagent panes and the breathing "hide subagents" toggle (2026-10-09)
-Spec: [`subagent-panes-plan.md`](subagent-panes-plan.md). Waiting on the §6 answer, then
-the lanes in §5.
+Spec: [`subagent-panes-plan.md`](subagent-panes-plan.md). §6 decided (viewer panes); build via the
+lanes in §5.
 
 ### B1 · Pane activity reads `busy` after a GUI relaunch until the pane prints (2026-10-09)
 Pre-existing `activity_for` rule (`rs/crates/core/src/control/server.rs`): no liveness marker

@@ -1,6 +1,6 @@
 # Subagent panes and the breathing "hide subagents" toggle — plan
 
-Status (2026-10-09): **requested, not started.** Tracked as B2 in
+Status (2026-10-09): **approved (§6), not started.** Tracked as B2 in
 [`backlog.md`](backlog.md). Written at the end
 of the 0.2.31 session so the next session starts from a spec instead of a chat message.
 
@@ -84,9 +84,9 @@ Coordinator in one pane of a new "Subagents" tab; one lane per worktree, each la
 The discovery lane goes first (the other two depend on its model); pane and chrome run in
 parallel; proof runs last.
 
-## 6. Open question for Bert
+## 6. Decision (Bert, 2026-10-09): option 1, transcript-tail viewer panes
 
-In-process subagents are not terminals, so "appear as panels" needs one of:
+In-process subagents are not terminals, so "appear as panels" needed one of:
 
 1. **Transcript-tail viewer panes** (recommended, §3.2): no change to how orchestrators spawn
    subagents; works for every Claude session automatically; read-only.
