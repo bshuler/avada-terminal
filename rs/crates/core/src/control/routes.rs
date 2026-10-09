@@ -2200,7 +2200,7 @@ fn tab_command(shared: &Arc<Shared>, info: &TokenInfo, ty: &str, cmd: &Value) ->
                 model.resolve_pane_id(raw).and_then(|id| {
                     let at = model.coords_of(&id)?;
                     let uid = model.pane(&id)?.session_uid.clone();
-                    let alone = model.tab(&at.tab_id).map_or(true, |t| t.panes.len() < 2);
+                    let alone = model.tab(&at.tab_id).is_none_or(|t| t.panes.len() < 2);
                     let tabs = model.tab_count(at.window_id)?;
                     Some((id, at, uid, alone, tabs))
                 })
