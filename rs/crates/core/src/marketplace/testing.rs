@@ -971,9 +971,15 @@ fn an_uninjected_path_detects_the_process_toolchain_and_not_an_empty_one() {
         mp.options().path.is_none(),
         "the production wiring injects no PATH"
     );
+    // Production also sets `login_path`, so "the process" means the login shell's
+    // `PATH`, not this test binary's. They differ where `/etc/profile` resets `PATH`
+    // (the Linux CI image drops `/usr/local/cargo/bin`), so compare against that one.
+    let login_path = crate::session::env::fresh_env()
+        .get("PATH")
+        .map(std::ffi::OsString::from);
     assert_eq!(
         mp.toolchain(),
-        super::toolchain::Toolchain::detect(),
+        super::toolchain::Toolchain::detect_in(login_path.as_deref()),
         "an uninjected marketplace has to see the same tools the process does"
     );
 }
