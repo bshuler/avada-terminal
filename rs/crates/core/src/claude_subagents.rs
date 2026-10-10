@@ -202,6 +202,11 @@ pub fn subagents_from(hook_dir: &Path, transcript_dir: Option<&Path>) -> Vec<Sub
         let mut r = record(h.agent_id.clone(), h.agent_type, transcript);
         r.started_at = h.started_at.map(from_ms);
         r.stopped_at = h.stopped_at.map(from_ms);
+        // Claude Code fires a bare SubagentStop for its own internal agents: no start, no type,
+        // no transcript. They are not the user's subagents, so they get no pane.
+        if r.started_at.is_none() && r.agent_type.is_empty() && r.last_growth.is_none() {
+            continue;
+        }
         by_id.insert(h.agent_id, (r.started_at, r));
     }
 
@@ -446,6 +451,21 @@ mod tests {
         assert_eq!(got.iter().map(|r| r.agent_id.as_str()).collect::<Vec<_>>(), ["early", "late"]);
         assert_eq!(got[0].description, "general-purpose");
         assert_eq!(got[0].last_growth, None);
+        let _ = fs::remove_dir_all(&hook);
+    }
+
+    #[test]
+    fn a_bare_stop_with_no_type_or_transcript_is_an_internal_agent_and_dropped() {
+        let hook = tmp("bare-stop");
+        write(
+            &hook.join("internal.json"),
+            serde_json::json!({
+                "agentId": "internal", "agentType": "", "event": "SubagentStop",
+                "transcript": format!("/nowhere/{SESSION}/subagents/agent-internal.jsonl"),
+                "startedAt": null, "stoppedAt": 2_000,
+            }),
+        );
+        assert!(subagents_from(&hook, None).is_empty());
         let _ = fs::remove_dir_all(&hook);
     }
 
