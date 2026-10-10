@@ -3932,6 +3932,7 @@ impl App {
         cb_usize!(on_goal_remove_image, Command::GoalRemoveImage);
         cb0!(on_close_focused, Command::CloseFocused);
         cb0!(on_toggle_zoom, Command::ToggleZoom);
+        cb0!(on_toggle_subagents, Command::ToggleSubagents);
         cb0!(on_toggle_fullscreen, Command::ToggleFullscreen);
         cb_i32!(on_set_layout, set_layout_from_id);
         cb_usize!(on_pane_close, Command::ClosePane);

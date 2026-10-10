@@ -77,7 +77,8 @@ Rules that matter:
 
 Panes: `new-pane`, `close-pane`, `restart-pane`, `focus-pane`, `rename-pane`, `recolor-pane`,
 `layout`. Tabs: `new-tab`, `close-tab`, `rename-tab`, `focus-tab`, `move-tab`,
-`move-pane` (re-hosts a running pane in another tab without restarting it).
+`move-pane` (re-hosts a running pane in another tab without restarting it), `toggle-subagents
+[tab]` (hides/shows the tab's Claude subagent panes; defaults to your own tab).
 
 Tab verbs answer `202 Accepted` with `{"queued": true}`: they are applied by the UI thread on its
 next frame, not while your command is still running. Re-read `tabs` to confirm, don't assume.

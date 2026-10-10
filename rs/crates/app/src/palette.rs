@@ -213,6 +213,12 @@ pub fn build(state: &State) -> Vec<Entry> {
         Command::ToggleLeftPanel,
     ));
     cmds.push(Entry::new(
+        "Toggle subagent panes",
+        "Hide/show this tab's subagent panes",
+        "subagents agents hide show claude task",
+        Command::ToggleSubagents,
+    ));
+    cmds.push(Entry::new(
         "Save workspace to library",
         "Save this tab into the left panel's workspace library",
         "save workspace library snapshot",

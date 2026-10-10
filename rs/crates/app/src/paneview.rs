@@ -2159,6 +2159,11 @@ pub fn pump(
     }
 
     // ---- HUD ----
+    // ---- TopBar subagent toggle: presence, hidden state, breath ----
+    if drive_subagent_breath(app, state, Instant::now()) {
+        active = true;
+    }
+
     if state.last_hud.elapsed() >= Duration::from_millis(500) {
         let fps = state.frames as f32 / state.last_hud.elapsed().as_secs_f32();
         let t = state.active_tab();
@@ -2176,6 +2181,31 @@ pub fn pump(
     }
 
     PumpResult { rendered, active }
+}
+
+/// Project the current tab's subagent state onto the TopBar toggle: whether it shows, which
+/// way it reads, and its breath — the Pulse glow while `toggle_breathes` holds (hidden or
+/// not), 0 otherwise. Returns whether the breath moved enough to warrant the fast cadence.
+#[tracing::instrument(level = "trace", ret, skip(app, state))]
+pub(crate) fn drive_subagent_breath(app: &AppWindow, state: &mut State, now: Instant) -> bool {
+    let (count, any_active) = state.tab_subagent_summary(state.active);
+    let hidden = state.active_tab().hide_subagents;
+    let breathes = avada_core::claude_subagents::toggle_breathes(true, any_active, hidden);
+    let breath = state
+        .subagent_glow
+        .update(crate::glow::IdleEffect::Pulse, breathes, now);
+    if app.get_has_subagents() != (count > 0) {
+        app.set_has_subagents(count > 0);
+    }
+    if app.get_subagents_hidden() != hidden {
+        app.set_subagents_hidden(hidden);
+    }
+    let moved = (app.get_subagent_breath() - breath).abs() > 0.004;
+    if moved || (breath == 0.0 && app.get_subagent_breath() != 0.0) {
+        app.set_subagent_breath(breath);
+    }
+    // Armed but not yet glowing is still an animation in flight.
+    moved || breathes
 }
 
 #[cfg(test)]

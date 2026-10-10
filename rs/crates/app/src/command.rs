@@ -439,6 +439,8 @@ pub enum Command {
     // ---- the left slide-out panel (mux plan M5) ----
     /// Show/hide the left panel (workspace tree · library · detached sessions).
     ToggleLeftPanel,
+    /// Hide/show the current tab's subagent panes (the TopBar toggle).
+    ToggleSubagents,
     /// Workspace tree: focus pane `1` of tab `0` (switching to that tab first).
     LeftFocusPane(usize, usize),
     /// Workspace tree: drag pane `1` of tab `0` onto tab `2`, landing at insertion index `3`
@@ -1097,6 +1099,7 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::SubmitModuleArg(text) => state.submit_module_arg(&text),
         // ---- the left slide-out panel ----
         Command::ToggleLeftPanel => state.toggle_left_panel(),
+        Command::ToggleSubagents => state.toggle_subagents(),
         Command::LeftFocusPane(ti, i) => state.focus_pane_in_tab(ti, i),
         Command::LeftMovePane(from, i, to, at) => {
             state.move_pane_between_tabs_at(from, i, to, at, mgr)

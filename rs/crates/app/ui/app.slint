@@ -73,6 +73,12 @@ export component AppWindow inherits Window {
     in property <bool> macos: false;
     // Briefly true after entering fullscreen → flashes the "hold Esc to exit" hint.
     in property <bool> fullscreen-hint: false;
+    // The current tab's subagent toggle (TopBar): shown while the tab has subagent panes,
+    // labelled by whether they are hidden, and breathing (0..1, from a Pulse `Glow` driven in
+    // `paneview::pump`) while any of them is working. Pushed every tick, not via resync.
+    in property <bool> has-subagents: false;
+    in property <bool> subagents-hidden: false;
+    in property <float> subagent-breath: 0;
     // True while Esc is held → keeps the hint up and fills its progress bar.
     in property <bool> esc-holding: false;
     // Terminal font zoom factor (current font px / 14px base; 1.0 at default zoom). The
@@ -256,6 +262,7 @@ export component AppWindow inherits Window {
     callback set-layout(int);
     callback toggle-zoom();
     callback toggle-fullscreen();
+    callback toggle-subagents();
     // window controls (→ Win32)
     callback start-drag();
     callback min-window();
@@ -346,6 +353,9 @@ export component AppWindow inherits Window {
             drop-tab-active: root.drop-tab-active;
             drop-tab-idx: root.drop-tab-idx;
             left-panel-open: LeftPanelAdapter.open;
+            has-subagents: root.has-subagents;
+            subagents-hidden: root.subagents-hidden;
+            subagent-breath: root.subagent-breath;
 
             tab-grab(i) => { root.tab-grab(i); }
             tab-geom(i, x, w) => { root.tab-geom(i, x, w); }
@@ -364,6 +374,7 @@ export component AppWindow inherits Window {
             open-prefs => { root.open-prefs(); }
             toggle-sidebar => { root.toggle-sidebar(); }
             toggle-left-panel => { LeftPanelAdapter.toggle(); }
+            toggle-subagents => { root.toggle-subagents(); }
             toggle-zoom => { root.toggle-zoom(); }
             toggle-fullscreen => { root.toggle-fullscreen(); }
             start-drag => { root.start-drag(); }

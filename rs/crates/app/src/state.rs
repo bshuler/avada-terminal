@@ -1471,7 +1471,6 @@ impl Tab {
     /// a hidden zoomed or focused pane hands focus to its nearest visible ancestor (pane 0
     /// when the chain is broken) and the zoom is cleared. Focus on a hidden pane under a
     /// visible zoom simply moves to the zoomed pane.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the chrome lane calls it"))]
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn set_hide_subagents(&mut self, hide: bool) {
         self.hide_subagents = hide;
@@ -1708,6 +1707,9 @@ pub struct State {
     /// Animates the idle-glow demo on the AI-features preview (always "idle" so the chosen
     /// effect plays continuously while Preferences is open).
     pub preview_glow: Glow,
+    /// Breathes the TopBar's subagent toggle while the current tab has a working subagent
+    /// (same Pulse curve as the panes; driven by `paneview::drive_subagent_breath`).
+    pub subagent_glow: Glow,
     /// The self-playing Tetris shown in the preview pane (ambient animation).
     pub preview_tetris: crate::tetris::Tetris,
     /// When the Tetris last advanced a frame (it steps on a fixed cadence, not every tick).
@@ -2023,6 +2025,7 @@ impl State {
             preview_cursor: false,
             preview_surface: Image::default(),
             preview_glow: Glow::new(0x9E37_79B9_7F4A_7C15),
+            subagent_glow: Glow::new(0xC2B2_AE3D_27D4_EB4F),
             preview_tetris: crate::tetris::Tetris::new(0x5DEE_CE2F_1234_ABCD),
             preview_tetris_last: Instant::now(),
             // Seed the rail's badge with the remembered projects up front (so the count
@@ -3559,14 +3562,12 @@ impl State {
 
     /// `(count, any active)` over tab `tab_idx`'s subagent panes — hidden ones included,
     /// since the toggle has to know what it would show. `(0, false)` for a bad index.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn tab_subagent_summary(&self, tab_idx: usize) -> (usize, bool) {
         self.tab_subagent_summary_at(tab_idx, std::time::SystemTime::now())
     }
 
     /// [`Self::tab_subagent_summary`] at a given clock, for tests.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the pane and chrome lanes call it"))]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn tab_subagent_summary_at(&self, tab_idx: usize, now: std::time::SystemTime) -> (usize, bool) {
         let Some(tab) = self.tabs.get(tab_idx) else {
@@ -6128,6 +6129,24 @@ impl State {
     pub fn toggle_left_panel(&mut self) {
         self.left_panel_open = !self.left_panel_open;
         self.dirty = true;
+    }
+
+    /// Hide or show the subagent panes of tab `ti` (the TopBar toggle, `ctl toggle-subagents`).
+    /// A bad index is ignored — control-plane ids are resolved before this, the button only
+    /// ever names the current tab.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn toggle_subagents_in(&mut self, ti: usize) {
+        let Some(tab) = self.tabs.get_mut(ti) else {
+            return;
+        };
+        tab.set_hide_subagents(!tab.hide_subagents);
+        self.dirty = true;
+    }
+
+    /// [`Self::toggle_subagents_in`] on the current tab.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn toggle_subagents(&mut self) {
+        self.toggle_subagents_in(self.active);
     }
 
     /// Focus pane `idx` of tab `ti` from the panel's workspace tree: switch to that tab
@@ -14792,6 +14811,19 @@ mod subagent_tab_tests {
             .iter()
             .position(|p| p.uid == uid)
             .unwrap()
+    }
+
+    #[test]
+    fn toggle_subagents_flips_the_named_tab_and_ignores_a_bad_index() {
+        let mut st = tab_with_subagents();
+        st.dirty = false;
+        st.toggle_subagents();
+        assert!(st.active_tab().hide_subagents && st.dirty);
+        st.toggle_subagents_in(st.active);
+        assert!(!st.active_tab().hide_subagents);
+        st.dirty = false;
+        st.toggle_subagents_in(99);
+        assert!(!st.dirty, "a bad index changes nothing");
     }
 
     #[test]
