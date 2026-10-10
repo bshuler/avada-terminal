@@ -54,7 +54,9 @@ the brand-new-pane rule, add the resumed-pane test beside
 `activity_is_busy_for_a_never_output_running_pane`. Context:
 [`dead-session-recovery.md`](dead-session-recovery.md) §0.2.31 last paragraph.
 
-### B5 · Recently Closed is emptied by a GUI relaunch, orphaning parked sessions (2026-10-10)
+## Closed
+
+### B5 · Recently Closed is emptied by a GUI relaunch, orphaning parked sessions (2026-10-10, fixed 2026-10-10)
 `State::closed` (`rs/crates/app/src/state.rs`) is not persisted, on the stale premise "sessions
 don't survive a relaunch". Since the session daemon they do: the 15:28Z relaunch on 2026-10-10
 started with an empty list, so the parked Subagents tab could not be reopened. Its two
@@ -64,6 +66,11 @@ which `gui_uids_with_parked` says must not happen. Fix direction: persist the hi
 uids) with the workspace, re-adopt on restore, kill only what the daemon no longer has; add a
 relaunch test beside the restore-workspace tests.
 
-## Closed
+**Fixed:** the relaunch snapshot now carries the history (`WorkspaceFile.closed`, one
+`ClosedSpec` per entry: kind, close time, and the pane/tab as a `GroupSpec` with session uids).
+`App::session_snapshot` merges every window's entries; the restore seeds them back after the
+tabs load (`State::restore_closed_from`), keeping only panes whose session the daemon still runs
+and no restored tab already shows, and ends whatever falls past the 20-entry cap. It never spawns, so without the daemon (or after a
+plain window close, which kills parked sessions) nothing comes back. Restored entries sit in
+`st.closed`, so the self-heal's `gui_uids_with_parked` exclusion covers them again.
 
-(none yet)

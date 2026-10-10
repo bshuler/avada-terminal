@@ -65,7 +65,12 @@ fn kitchen_sink() -> WorkspaceFile {
                 maximized: Some(false),
                 fullscreen: Some(true),
             }),
-            groups: vec![group],
+            groups: vec![group.clone()],
+        }]),
+        closed: Some(vec![avada_core::workspace::model::ClosedSpec {
+            kind: "tab".into(),
+            at_ms: 1_760_000_000_000,
+            group,
         }]),
     }
 }

@@ -410,7 +410,9 @@ fn for_each_pane_mut(file: &mut WorkspaceFile, mut f: impl FnMut(&mut PaneSpec))
 // fails the build if a field is added to the model without being added here.
 
 const ENVELOPE_KEYS: &[&str] = &["format", "version", "workspace"];
-const WORKSPACE_KEYS: &[&str] = &["name", "layout", "panes", "groups", "active", "windows"];
+const WORKSPACE_KEYS: &[&str] = &[
+    "name", "layout", "panes", "groups", "active", "windows", "closed",
+];
 const WINDOW_KEYS: &[&str] = &["title", "active", "bounds", "groups"];
 const GROUP_KEYS: &[&str] = &[
     "title",
@@ -1045,6 +1047,11 @@ mod tests {
             groups: Some(vec![group.clone()]),
             active: Some(0),
             windows: Some(vec![window.clone()]),
+            closed: Some(vec![crate::workspace::model::ClosedSpec {
+                kind: "tab".into(),
+                at_ms: 1,
+                group: group.clone(),
+            }]),
         };
 
         let cases: [(&str, Value, &[&str]); 6] = [

@@ -23,7 +23,7 @@ use avada_core::persistence::{paths, projects};
 use avada_core::session_manager::{AgentLiveness, SessionManager, SpawnOptions};
 use avada_core::tools::{PaneKind, ToolSessionMark};
 use avada_core::workspace::io::{read_workspace, windows_of, write_workspace};
-use avada_core::workspace::model::{GroupSpec, PaneSpec, WorkspaceFile};
+use avada_core::workspace::model::{ClosedSpec, GroupSpec, PaneSpec, WorkspaceFile};
 use avada_core::workspace::sets;
 use avada_terminal_widget::{Font, RenderOpts, SoftwareRenderer, TerminalPane};
 
@@ -1679,7 +1679,9 @@ pub struct State {
     /// because "reopen the last thing I closed" is only answerable if both kinds share an
     /// order: with separate stacks, closing a pane after a tab makes the tab unreachable by
     /// the keyboard command. Capped at [`CLOSED_STACK_CAP`] — evicted entries are killed.
-    /// NOT persisted: sessions don't survive a relaunch, so neither can their history.
+    /// Persisted in the relaunch snapshot ([`State::closed_specs`]) because the session
+    /// daemon keeps the parked sessions alive across a GUI restart; a relaunch puts back the
+    /// entries whose sessions survived ([`State::restore_closed_from`]) and drops the rest.
     pub closed: Vec<ClosedItem>,
     /// Whether the rail's RECENTLY CLOSED section is expanded (mirrors `reminders_open`;
     /// the two are mutually exclusive sections of the same widened rail).
@@ -7920,6 +7922,176 @@ impl State {
         }
     }
 
+    /// The recently-closed history as snapshot entries (oldest first, like `closed`): a pane
+    /// as a one-pane group, a tab as its whole group. Kept out of [`Self::to_session_file`]
+    /// because that also feeds per-project windows, which must not each carry the history;
+    /// the App merges every window's entries into the one relaunch snapshot.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn closed_specs(&self) -> Vec<ClosedSpec> {
+        let base = self.settings.font_px.round() as u32;
+        let spec_of = |p: &DetachedPane| {
+            snapshot_pane_spec(
+                base,
+                SnapPane {
+                    uid: &p.uid,
+                    title: &p.title,
+                    pinned_accent: p.pinned_accent,
+                    command: &p.spawn_command,
+                    args: &p.spawn_args,
+                    shell: &p.spawn_shell,
+                    cwd: &p.cwd,
+                    font_px: p.font_px,
+                    kind: &p.kind,
+                    tool_session: p.tool_session.as_ref(),
+                    origin: &p.origin,
+                },
+            )
+        };
+        self.closed
+            .iter()
+            .map(|c| match &c.what {
+                ClosedWhat::Pane(p) => ClosedSpec {
+                    kind: "pane".to_string(),
+                    at_ms: c.at_ms,
+                    group: GroupSpec {
+                        panes: vec![spec_of(p)],
+                        ..Default::default()
+                    },
+                },
+                ClosedWhat::Tab(t) => ClosedSpec {
+                    kind: "tab".to_string(),
+                    at_ms: c.at_ms,
+                    group: GroupSpec {
+                        title: Some(t.title.to_string()),
+                        layout: Some(theme::layout_name(t.layout).to_string()),
+                        panes: t.panes.iter().map(spec_of).collect(),
+                        sizes: Some(t.sizes.clone()),
+                        main_fraction: Some(t.main_fraction),
+                        focused: Some(t.focused as u32),
+                        zoomed: t.zoomed.map(|z| z as u32),
+                        system: None,
+                    },
+                },
+            })
+            .collect()
+    }
+
+    /// Put a relaunch snapshot's recently-closed history back (see [`surviving_closed`] for
+    /// which entries qualify). Never spawns: an entry is only restored when the daemon still
+    /// runs its sessions, so a reopen re-docks them exactly as before the restart. Call after
+    /// the tabs are loaded, so a uid a tab already re-attached is not parked a second time.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn restore_closed_from(&mut self, specs: Vec<ClosedSpec>, mgr: &SessionManager) {
+        let alive = |uid: &str| mgr.is_daemon() && mgr.has(uid);
+        self.restore_closed_with(specs, &alive, mgr);
+    }
+
+    /// [`Self::restore_closed_from`] with the liveness question passed in, so a test can
+    /// answer it without a daemon.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn restore_closed_with(
+        &mut self,
+        specs: Vec<ClosedSpec>,
+        alive: &dyn Fn(&str) -> bool,
+        mgr: &SessionManager,
+    ) {
+        let hosted = self.claimed_uids();
+        let mut restored: Vec<ClosedItem> = Vec::new();
+        for c in surviving_closed(specs, &hosted, alive) {
+            let panes: Vec<DetachedPane> = c
+                .group
+                .panes
+                .iter()
+                .enumerate()
+                .map(|(i, spec)| self.detached_from_spec(i, spec))
+                .collect();
+            let what = if c.kind == "tab" {
+                let n = panes.len();
+                ClosedWhat::Tab(Box::new(DetachedTab {
+                    title: match c.group.title {
+                        Some(t) if !t.is_empty() => t.into(),
+                        _ => self.fresh_tab_title(),
+                    },
+                    layout: c
+                        .group
+                        .layout
+                        .as_deref()
+                        .map(layout_from_name)
+                        .unwrap_or(Layout::Auto),
+                    sizes: match c.group.sizes {
+                        Some(s) if s.len() == n => s,
+                        _ => equal_sizes(n),
+                    },
+                    main_fraction: c.group.main_fraction.map(clamp_fraction).unwrap_or(0.6),
+                    focused: c
+                        .group
+                        .focused
+                        .map(|f| (f as usize).min(n - 1))
+                        .unwrap_or(0),
+                    zoomed: c.group.zoomed.map(|z| z as usize).filter(|z| *z < n),
+                    panes,
+                }))
+            } else {
+                // A pane entry is one pane; extra panes in a hand-edited file are ignored
+                // rather than turned into a tab the human never closed.
+                ClosedWhat::Pane(Box::new(panes.into_iter().next().expect("non-empty")))
+            };
+            restored.push(ClosedItem {
+                what,
+                id: fresh_closed_id(),
+                at_ms: c.at_ms,
+            });
+        }
+        if restored.is_empty() {
+            return;
+        }
+        tracing::info!(entries = restored.len(), "recently-closed history restored");
+        // Older than anything closed since this launch, so they go first (newest is last).
+        let mut merged = restored;
+        merged.append(&mut self.closed);
+        self.closed = merged;
+        while self.closed.len() > CLOSED_STACK_CAP {
+            let evicted = self.closed.remove(0);
+            for p in evicted.panes() {
+                kill_session_of(mgr, &p.uid, &p.kind);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// A parked pane rebuilt from its snapshot spec with the same chrome rules
+    /// [`Self::make_pane_from_spec`] applies to a loaded one, minus the session decision: the
+    /// caller has already established the session is alive under `spec.uid`.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn detached_from_spec(&self, idx: usize, spec: &PaneSpec) -> DetachedPane {
+        let pinned = spec.color.as_deref().map(parse_hex);
+        let project = pinned.is_some();
+        let title = match &spec.label {
+            Some(l) if !l.is_empty() => l.clone(),
+            _ if idx == 0 => "shell".to_string(),
+            _ => format!("panel {}", idx + 1),
+        };
+        DetachedPane {
+            uid: spec.uid.clone().unwrap_or_default(),
+            title: title.into(),
+            subtitle: None,
+            pinned_accent: pinned,
+            show_frame: Some(project),
+            show_dot: Some(project),
+            font_px: spec
+                .font_size
+                .map(|s| Settings::clamp_font(s as f32))
+                .unwrap_or(self.settings.font_px),
+            spawn_command: spec.command.clone(),
+            spawn_args: spec.args.clone(),
+            spawn_shell: spec.shell.clone(),
+            kind: restored_kind(spec),
+            tool_session: Self::migrate_tool_session(spec.meta.as_ref()),
+            cwd: spec.cwd.clone(),
+            origin: avada_core::pane_origin::extract(spec.meta.as_ref()),
+        }
+    }
+
     /// Detach the whole of tab `idx` (its panes as live [`DetachedPane`]s, plus title/layout/
     /// sizes) for re-hosting or parking. Requires ≥2 tabs; fixes the active index. Returns the
     /// detached tab + `source_alive` (always `true` here — other tabs remain).
@@ -8284,41 +8456,22 @@ impl State {
                     .panes
                     .iter()
                     .map(|p| {
-                        let px = p.font_px.round() as u32;
-                        let mut spec = PaneSpec {
-                            label: Some(p.title.to_string()),
-                            color: p.pinned_accent.map(color_hex),
-                            // The original program (command/args/shell) so restore re-runs it
-                            // instead of a default shell — and the live session uid so a future
-                            // session-daemon relaunch can re-attach a surviving session by uid
-                            // before falling back to a re-spawn (session-daemon plan, M2).
-                            // Live-Claude meta ("claude.session") is embedded at the App layer
-                            // (`App::embed_claude_sessions`) — only the control host knows a
-                            // control-spawned pane's external pane id (the hook-marker key).
-                            command: p.spawn_command.clone(),
-                            args: p.spawn_args.clone(),
-                            shell: p.spawn_shell.clone(),
-                            cwd: p.cwd.clone(),
-                            font_size: (px != base).then_some(px),
-                            uid: Some(p.uid.clone()),
-                            ..Default::default()
-                        };
-                        // Same as the library snapshot: identity survives a relaunch, so a
-                        // restored Claude pane is branded before its first byte of output
-                        // rather than waiting to be re-detected.
-                        spec.set_pane_kind(&p.kind);
-                        // And the conversation with it, so a restarted tool pane resumes the
-                        // chat it was in instead of opening an empty one.
-                        if let Some(m) = &p.tool_session {
-                            m.write_into(spec.meta.get_or_insert_with(Default::default));
-                        }
-                        // Provenance (the header's ⓘ) outlives the session that opened the pane.
-                        if !p.origin.is_empty() {
-                            spec.meta
-                                .get_or_insert_with(Default::default)
-                                .extend(p.origin.clone());
-                        }
-                        spec
+                        snapshot_pane_spec(
+                            base,
+                            SnapPane {
+                                uid: &p.uid,
+                                title: &p.title,
+                                pinned_accent: p.pinned_accent,
+                                command: &p.spawn_command,
+                                args: &p.spawn_args,
+                                shell: &p.spawn_shell,
+                                cwd: &p.cwd,
+                                font_px: p.font_px,
+                                kind: &p.kind,
+                                tool_session: p.tool_session.as_ref(),
+                                origin: &p.origin,
+                            },
+                        )
                     })
                     .collect();
                 GroupSpec {
@@ -8732,14 +8885,7 @@ impl State {
         // Only a spec with no recorded kind — every file written before this feature —
         // falls back to naming the kind from the program. Read here, before the re-attach
         // decision, because a non-pty view pane skips that decision entirely (D3).
-        let kind = match spec.pane_kind() {
-            PaneKind::Terminal => spec
-                .command
-                .as_deref()
-                .map(PaneKind::for_command)
-                .unwrap_or_default(),
-            k => k,
-        };
+        let kind = restored_kind(spec);
         let is_view = !kind.is_pty();
 
         // ---- M2 re-attach decision (session-daemon-plan "Reconnect / re-attach") ----
@@ -9535,6 +9681,125 @@ fn image_rgba_to_png(img: &arboard::ImageData) -> Option<Vec<u8>> {
         writer.write_image_data(&img.bytes).ok()?;
     }
     Some(out)
+}
+
+/// What a restored pane IS. A recorded kind is what the pane was, and outranks re-deriving it
+/// from the command: detection may have upgraded a shell pane to a tool pane after it was
+/// spawned, and that upgrade is precisely what the snapshot exists to preserve. Only a spec
+/// with no recorded kind — every file written before kinds were — falls back to naming the
+/// kind from the program.
+#[tracing::instrument(level = "debug", ret)]
+fn restored_kind(spec: &PaneSpec) -> PaneKind {
+    match spec.pane_kind() {
+        PaneKind::Terminal => spec
+            .command
+            .as_deref()
+            .map(PaneKind::for_command)
+            .unwrap_or_default(),
+        k => k,
+    }
+}
+
+/// The recently-closed entries of a relaunch snapshot that can still be reopened.
+///
+/// A parked entry is only worth listing if reopening it re-docks the session it was keeping
+/// alive, so a pane survives only when its session is `alive` (still running in the daemon),
+/// is not already `hosted` by a restored tab, and appears once. Non-pty view panes never had
+/// a session and are dropped. A tab that lost some panes keeps the rest, with its sizes reset
+/// and focus/zoom clamped; one that lost all of them is dropped. Order is kept (newest last);
+/// the cap is the caller's, because what it evicts is alive and must be ended, not dropped.
+#[tracing::instrument(level = "debug", skip_all)]
+fn surviving_closed(
+    specs: Vec<ClosedSpec>,
+    hosted: &std::collections::HashSet<String>,
+    alive: &dyn Fn(&str) -> bool,
+) -> Vec<ClosedSpec> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<ClosedSpec> = Vec::new();
+    for mut c in specs {
+        let before = c.group.panes.len();
+        c.group.panes.retain(|p| {
+            let Some(uid) = p.uid.as_deref() else {
+                return false;
+            };
+            restored_kind(p).is_pty()
+                && !hosted.contains(uid)
+                && alive(uid)
+                && seen.insert(uid.to_string())
+        });
+        let n = c.group.panes.len();
+        if n == 0 {
+            tracing::info!(
+                at_ms = c.at_ms,
+                "closed entry has no surviving session; dropped"
+            );
+            continue;
+        }
+        if n != before {
+            c.group.sizes = None;
+            c.group.focused = c.group.focused.map(|f| f.min(n as u32 - 1));
+            c.group.zoomed = c.group.zoomed.filter(|z| (*z as usize) < n);
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The snapshot fields a live pane ([`PaneState`]) and a parked one ([`DetachedPane`])
+/// share, borrowed so both are written by the one [`snapshot_pane_spec`] and cannot drift.
+struct SnapPane<'a> {
+    uid: &'a str,
+    title: &'a str,
+    pinned_accent: Option<Color>,
+    command: &'a Option<String>,
+    args: &'a Option<Vec<String>>,
+    shell: &'a Option<String>,
+    cwd: &'a Option<String>,
+    font_px: f32,
+    kind: &'a PaneKind,
+    tool_session: Option<&'a ToolSessionMark>,
+    origin: &'a std::collections::BTreeMap<String, String>,
+}
+
+/// One pane of the relaunch snapshot. `base` is the configured font px: a pane at it records
+/// no `fontSize`.
+#[tracing::instrument(level = "debug", skip_all)]
+fn snapshot_pane_spec(base: u32, p: SnapPane<'_>) -> PaneSpec {
+    let px = p.font_px.round() as u32;
+    let mut spec = PaneSpec {
+        label: Some(p.title.to_string()),
+        color: p.pinned_accent.map(color_hex),
+        // The original program (command/args/shell) so restore re-runs it
+        // instead of a default shell — and the live session uid so a future
+        // session-daemon relaunch can re-attach a surviving session by uid
+        // before falling back to a re-spawn (session-daemon plan, M2).
+        // Live-Claude meta ("claude.session") is embedded at the App layer
+        // (`App::embed_claude_sessions`) — only the control host knows a
+        // control-spawned pane's external pane id (the hook-marker key).
+        command: p.command.clone(),
+        args: p.args.clone(),
+        shell: p.shell.clone(),
+        cwd: p.cwd.clone(),
+        font_size: (px != base).then_some(px),
+        uid: Some(p.uid.to_string()),
+        ..Default::default()
+    };
+    // Same as the library snapshot: identity survives a relaunch, so a
+    // restored Claude pane is branded before its first byte of output
+    // rather than waiting to be re-detected.
+    spec.set_pane_kind(p.kind);
+    // And the conversation with it, so a restarted tool pane resumes the
+    // chat it was in instead of opening an empty one.
+    if let Some(m) = p.tool_session {
+        m.write_into(spec.meta.get_or_insert_with(Default::default));
+    }
+    // Provenance (the header's ⓘ) outlives the session that opened the pane.
+    if !p.origin.is_empty() {
+        spec.meta
+            .get_or_insert_with(Default::default)
+            .extend(p.origin.clone());
+    }
+    spec
 }
 
 /// Parse a `#rrggbb` hex string (the project palette format) into a Slint [`Color`],
@@ -13448,6 +13713,213 @@ mod close_history_tests {
         assert_eq!(rel_age(7_200_000, 0), "2h ago");
         assert_eq!(rel_age(172_800_000, 0), "2d ago");
         assert_eq!(rel_age(0, 5_000), "just now", "a clock that went backwards");
+    }
+    // ---- B5: the history survives a GUI relaunch ----
+
+    /// A snapshot pane spec for `uid`, as the relaunch snapshot writes it.
+    fn pspec(uid: &str) -> PaneSpec {
+        PaneSpec {
+            label: Some(uid.into()),
+            uid: Some(uid.into()),
+            ..Default::default()
+        }
+    }
+
+    fn closed_tab(at_ms: u64, uids: &[&str]) -> ClosedSpec {
+        ClosedSpec {
+            kind: "tab".into(),
+            at_ms,
+            group: GroupSpec {
+                title: Some(format!("tab@{at_ms}")),
+                panes: uids.iter().map(|u| pspec(u)).collect(),
+                sizes: Some(vec![1.0 / uids.len() as f64; uids.len()]),
+                focused: Some(uids.len() as u32 - 1),
+                zoomed: Some(uids.len() as u32 - 1),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn closed_pane(at_ms: u64, uid: &str) -> ClosedSpec {
+        ClosedSpec {
+            kind: "pane".into(),
+            at_ms,
+            group: GroupSpec {
+                panes: vec![pspec(uid)],
+                ..Default::default()
+            },
+        }
+    }
+
+    fn spec_uids(c: &ClosedSpec) -> Vec<&str> {
+        c.group
+            .panes
+            .iter()
+            .filter_map(|p| p.uid.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn an_empty_history_writes_no_entries() {
+        let m = mgr();
+        let st = window(&m, &[&["a0"]]);
+        assert!(st.closed_specs().is_empty());
+    }
+
+    /// Closing writes what reopening needs: kind, order (oldest first), the tab's chrome, and
+    /// every pane's session uid.
+    #[test]
+    fn the_history_is_written_oldest_first_with_its_uids() {
+        let m = mgr();
+        let mut st = window(&m, &[&["a0", "a1"], &["b0", "b1"]]);
+        st.close_tab_menu(0, &m);
+        st.close_pane_menu(st.active, 0, &m);
+
+        let specs = st.closed_specs();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].kind, "tab");
+        assert_eq!(spec_uids(&specs[0]), ["a0", "a1"]);
+        assert!(specs[0].group.title.is_some() && specs[0].group.layout.is_some());
+        assert_eq!(specs[1].kind, "pane");
+        assert_eq!(spec_uids(&specs[1]), ["b0"]);
+        assert!(specs[0].at_ms <= specs[1].at_ms);
+    }
+
+    /// Snapshot → restore puts the same history back: same kinds, same order, same uids, and
+    /// reopening re-docks the sessions as before the restart.
+    #[test]
+    fn a_restored_history_reopens_like_the_original() {
+        let m = mgr();
+        let mut before = window(&m, &[&["a0", "a1"], &["b0", "b1"]]);
+        before.close_tab_menu(0, &m);
+        before.close_pane_menu(before.active, 0, &m);
+        let specs = before.closed_specs();
+
+        let mut st = window(&m, &[&["b1"]]);
+        st.restore_closed_with(specs, &|_| true, &m);
+        assert_eq!(st.closed.len(), 2);
+        assert!(st.closed[0].is_tab() && !st.closed[1].is_tab());
+        assert!(st.dirty);
+
+        st.reopen_closed(&m);
+        assert!(laid_out(&st).contains(&"b0".to_string()), "the pane first");
+        st.reopen_closed(&m);
+        assert_eq!(st.tabs.len(), 2, "then the tab");
+        assert!(laid_out(&st).contains(&"a1".to_string()));
+        assert!(st.closed.is_empty());
+    }
+
+    /// The restored entries are OLDER than anything closed since this launch, and the merged
+    /// list still honours the cap.
+    #[test]
+    fn restored_entries_go_before_this_launchs_closes() {
+        let m = mgr();
+        let mut st = window(&m, &[&["x0", "x1"]]);
+        st.close_pane_menu(0, 0, &m); // x0, closed this launch
+        st.restore_closed_with(vec![closed_pane(1, "old")], &|_| true, &m);
+        assert_eq!(st.closed[0].panes()[0].uid, "old");
+        assert_eq!(st.closed[1].panes()[0].uid, "x0");
+    }
+
+    /// Without the daemon nothing a snapshot names is still running, so nothing comes back —
+    /// and restoring must never spawn a session to make up for it.
+    #[test]
+    fn without_the_daemon_nothing_is_restored_or_spawned() {
+        let m = mgr();
+        let mut st = window(&m, &[&["live"]]);
+        st.restore_closed_from(vec![closed_tab(1, &["a", "b"]), closed_pane(2, "c")], &m);
+        assert!(st.closed.is_empty());
+        assert!(m.uids().is_empty(), "nothing was spawned");
+    }
+
+    #[test]
+    fn a_dead_session_drops_its_pane_and_an_empty_entry() {
+        let out = surviving_closed(
+            vec![closed_pane(1, "dead"), closed_tab(2, &["dead", "live"])],
+            &Default::default(),
+            &|u| u == "live",
+        );
+        assert_eq!(out.len(), 1, "the dead pane's entry is gone");
+        assert_eq!(spec_uids(&out[0]), ["live"]);
+        // A tab that lost a pane gets equal sizes and in-range focus/zoom.
+        assert_eq!(out[0].group.sizes, None);
+        assert_eq!(out[0].group.focused, Some(0));
+        assert_eq!(out[0].group.zoomed, None);
+    }
+
+    /// A uid a restored tab already re-attached would otherwise be on screen AND reopenable;
+    /// a uid listed twice would be re-docked twice.
+    #[test]
+    fn a_hosted_or_repeated_uid_is_not_parked_again() {
+        let hosted: std::collections::HashSet<String> = ["shown".to_string()].into();
+        let out = surviving_closed(
+            vec![
+                closed_pane(1, "shown"),
+                closed_pane(2, "twice"),
+                closed_pane(3, "twice"),
+            ],
+            &hosted,
+            &|_| true,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].at_ms, 2);
+    }
+
+    /// A view pane never had a session to keep alive, and a spec with no uid names none.
+    #[test]
+    fn view_panes_and_uidless_panes_are_dropped() {
+        let mut view = pspec("view-1");
+        view.set_pane_kind(&PaneKind::Markdown);
+        let mut tab = closed_tab(1, &["t0"]);
+        tab.group.panes.push(view);
+        tab.group.panes.push(PaneSpec::default());
+        let out = surviving_closed(vec![tab], &Default::default(), &|_| true);
+        assert_eq!(spec_uids(&out[0]), ["t0"]);
+    }
+
+    /// Over the cap, the oldest go through the eviction path, which ends their sessions: one
+    /// dropped from the history any other way would run on with no way back.
+    #[test]
+    fn only_the_newest_entries_up_to_the_cap_survive() {
+        let m = mgr();
+        let mut st = window(&m, &[&["keep"]]);
+        let specs: Vec<ClosedSpec> = (0..CLOSED_STACK_CAP as u64 + 5)
+            .map(|i| closed_pane(i, &format!("p{i}")))
+            .collect();
+        st.restore_closed_with(specs, &|_| true, &m);
+        assert_eq!(st.closed.len(), CLOSED_STACK_CAP);
+        assert_eq!(st.closed[0].at_ms, 5, "the oldest five went");
+        assert_eq!(st.closed.last().unwrap().at_ms, CLOSED_STACK_CAP as u64 + 4);
+    }
+
+    /// A parked pane comes back with the chrome and spawn spec it was closed with, so a
+    /// later reopen and the snapshot after it describe the same pane.
+    #[test]
+    fn a_parked_pane_survives_the_spec_round_trip() {
+        let original = DetachedPane {
+            kind: PaneKind::for_command("claude"),
+            spawn_command: Some("claude".into()),
+            spawn_shell: Some("/bin/zsh".into()),
+            cwd: Some("/tmp/x".into()),
+            pinned_accent: Some(parse_hex("#336699")),
+            ..det("rt")
+        };
+        let mut st = fresh();
+        st.closed.push(ClosedItem {
+            what: ClosedWhat::Pane(Box::new(original.clone())),
+            id: 1,
+            at_ms: 7,
+        });
+        let spec = st.closed_specs().remove(0);
+        let back = st.detached_from_spec(0, &spec.group.panes[0]);
+        assert_eq!(back.uid, original.uid);
+        assert_eq!(back.title, original.title);
+        assert_eq!(back.kind, original.kind);
+        assert_eq!(back.spawn_command, original.spawn_command);
+        assert_eq!(back.spawn_shell, original.spawn_shell);
+        assert_eq!(back.cwd, original.cwd);
+        assert_eq!(back.pinned_accent, original.pinned_accent);
+        assert_eq!(back.show_frame, Some(true));
     }
 }
 

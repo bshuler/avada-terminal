@@ -196,6 +196,25 @@ pub struct WorkspaceFile {
     pub active: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub windows: Option<Vec<WindowSpec>>,
+    /// The recently-closed history (newest LAST — the order "Reopen Closed" pops), written
+    /// only into the app's own last-session snapshot. A closed pane or tab keeps its session
+    /// alive in the daemon so it can be reopened; recording the entries lets a GUI relaunch
+    /// re-list the ones whose sessions survived. Absent when the history is empty, so every
+    /// other file stays byte-identical to what earlier versions wrote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed: Option<Vec<ClosedSpec>>,
+}
+
+/// One entry of [`WorkspaceFile::closed`]: a closed tab, or a closed pane recorded as a
+/// one-pane group, so both reuse the live-pane shape (`uid`, kind meta, origin meta).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedSpec {
+    /// `"tab"` or `"pane"`; anything else is read as a pane.
+    pub kind: String,
+    /// When it was closed, in epoch ms (the list's relative-age column).
+    pub at_ms: u64,
+    pub group: GroupSpec,
 }
 
 #[cfg(test)]
@@ -229,6 +248,58 @@ mod tests {
     }
   ]
 }"##;
+        assert_round_trips(json);
+    }
+
+    #[test]
+    fn round_trips_the_recently_closed_history() {
+        let json = r#"{
+  "groups": [
+    {
+      "panes": [
+        {
+          "uid": "pane-a"
+        }
+      ]
+    }
+  ],
+  "active": 0,
+  "closed": [
+    {
+      "kind": "pane",
+      "atMs": 1760000000000,
+      "group": {
+        "panes": [
+          {
+            "label": "shell",
+            "uid": "pane-b"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "tab",
+      "atMs": 1760000001000,
+      "group": {
+        "title": "Subagents",
+        "layout": "columns",
+        "panes": [
+          {
+            "uid": "pane-c"
+          },
+          {
+            "uid": "pane-d"
+          }
+        ],
+        "sizes": [
+          0.5,
+          0.5
+        ],
+        "focused": 1
+      }
+    }
+  ]
+}"#;
         assert_round_trips(json);
     }
 

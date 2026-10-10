@@ -1415,9 +1415,15 @@ impl App {
     ) -> Option<avada_core::workspace::model::WorkspaceFile> {
         use avada_core::workspace::model::{WindowSpec, WorkspaceFile};
         let mut files: Vec<(bool, WorkspaceFile)> = Vec::with_capacity(wins.len());
+        // Every window's recently-closed entries, merged into the one history the relaunch
+        // restores into the first window (so they survive the relaunch the daemon keeps their
+        // sessions alive across). Gathered before the empty-window skip: a window whose tabs
+        // were all closed can still hold history.
+        let mut closed = Vec::new();
         for w in wins {
             let st = w.state.borrow();
             let mut f = st.to_session_file();
+            closed.extend(st.closed_specs());
             let holds_system = st.tabs.iter().any(|t| t.system);
             drop(st);
             if f.groups.as_deref().is_none_or(|g| g.is_empty()) {
@@ -1429,8 +1435,15 @@ impl App {
         // Stable: among the rest, window order is preserved.
         files.sort_by_key(|(holds_system, _)| !*holds_system);
         let mut files: Vec<WorkspaceFile> = files.into_iter().map(|(_, f)| f).collect();
+        // Oldest first, as one window keeps it. Not capped here: the restore evicts past the
+        // cap through the path that ends the evicted sessions, which a drop here would orphan.
+        closed.sort_by_key(|c| c.at_ms);
+        let closed = (!closed.is_empty()).then_some(closed);
         if files.len() <= 1 {
-            return files.pop();
+            return files.pop().map(|mut f| {
+                f.closed = closed;
+                f
+            });
         }
         let specs: Vec<WindowSpec> = files
             .iter()
@@ -1443,6 +1456,7 @@ impl App {
             .collect();
         let mut first = files.swap_remove(0);
         first.windows = Some(specs);
+        first.closed = closed;
         Some(first)
     }
 
@@ -2647,8 +2661,14 @@ impl App {
                     }
                 }
             }
-            PendingSeed::Workspace(file) => {
+            PendingSeed::Workspace(mut file) => {
+                // The recently-closed history is restored AFTER the tabs, so an entry whose
+                // session a tab already re-attached is not parked a second time.
+                let closed = file.closed.take();
                 st.load_workspace(*file, &self.mgr);
+                if let Some(closed) = closed {
+                    st.restore_closed_from(closed, &self.mgr);
+                }
                 // A contentless spec (no spawnable panes) would leave the window blank —
                 // fall back to a fresh shell so a launch never yields an empty window.
                 if st.tabs.is_empty() {
