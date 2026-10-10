@@ -34,6 +34,7 @@ mod prefs;
 mod projects;
 mod rail;
 mod rights;
+mod subagents;
 mod table;
 mod tabs;
 mod toasts;

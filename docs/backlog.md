@@ -40,10 +40,6 @@ GUI onto the installed 0.2.32). Fix direction:
    unanswered) for longer than a few seconds while the reader reports idle, drop and redial.
 4. Reproduce under memory pressure (`sample` + `netstat -f unix` script) before closing.
 
-### B2 · Subagent panes and the breathing "hide subagents" toggle (2026-10-09)
-Spec: [`subagent-panes-plan.md`](subagent-panes-plan.md). §6 decided (viewer panes); build via the
-lanes in §5.
-
 ### B1 · Pane activity reads `busy` after a GUI relaunch until the pane prints (2026-10-09)
 Pre-existing `activity_for` rule (`rs/crates/core/src/control/server.rs`): no liveness marker
 seen and `last_output_at == None` → Busy. Observed on the 0.2.31 relaunch: 40/40 busy at
@@ -55,6 +51,28 @@ the brand-new-pane rule, add the resumed-pane test beside
 [`dead-session-recovery.md`](dead-session-recovery.md) §0.2.31 last paragraph.
 
 ## Closed
+
+### B2 · Subagent panes and the breathing "hide subagents" toggle (2026-10-09, built 2026-10-10)
+Spec: [`subagent-panes-plan.md`](subagent-panes-plan.md), design contract
+[`subagent-panes-design.md`](subagent-panes-design.md). Built in four lanes (discovery e8d9ae0,
+panes c521e95/5a4a366, chrome c7c774f, proof), merged with main at a79f05e.
+
+**Built:** a Claude hook plus the session's `subagents/` transcript directory give each pane's
+subagents (`avada_core::claude_subagents`); `State::reconcile_subagents` (1 Hz) opens a read-only
+`sub:<agent id>` viewer pane after the orchestrator, closes it once the orchestrator ends a turn
+after it stopped, never reopens one the user closed, and closes the lot with the orchestrator.
+Subagent panes are not saved in the session file. The TopBar chip (`Command::ToggleSubagents`,
+`ctl toggle-subagents [tab]`) hides them per tab — no tile, the rest take the room — and breathes
+on the Pulse curve while any is working, hidden or not.
+
+**Acceptance (plan §4):**
+- hook payload → record, fallback finds the same set: `claude_subagents::tests::captured_payloads_become_a_record_silently`,
+  `a_hook_record_is_enriched_from_meta_and_matches_the_fallback_set`, `the_transcript_dir_fallback_reads_meta`;
+- breathing predicate: `claude_subagents::tests::toggle_breathes_truth_table`,
+  `uitest::the_subagent_toggle_breathes_only_while_a_subagent_works`;
+- UI end to end: `uitest::subagents::a_sessions_subagents_open_beside_the_orchestrator_and_the_toggle_hides_them`;
+- control API: `control::routes::tests::state_carries_a_subagent_pane_and_its_parent_link`;
+- matrix row `toggle_subagents` (`e2e`) and the `ToggleSubagents` command row.
 
 ### B5 · Recently Closed is emptied by a GUI relaunch, orphaning parked sessions (2026-10-10, fixed 2026-10-10)
 `State::closed` (`rs/crates/app/src/state.rs`) is not persisted, on the stale premise "sessions

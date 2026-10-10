@@ -43,6 +43,10 @@ MCP** lets an agent — or a whole recursive agent org — watch and drive your 
   styles under [Appearance](#customization-preferences)).
 - **Ambient AI subtitles** — an optional local LLM (via Ollama) reads what each pane is doing and
   writes a live one‑line subtitle under its label, revealed with a typewriter effect.
+- **Subagent panes** — when a Claude session spawns subagents, each gets a read‑only pane right
+  after its orchestrator showing its prompt, tool calls and replies; it closes once its result is
+  back in the conversation. A top‑bar **hide/show subagents** chip tucks them away per tab and
+  breathes while any of them is still working (also `avada ctl toggle-subagents [tab]`).
 - **Claude history** — browse past Claude Code conversations per project from the sidebar,
   full‑text search inside them, and click an entry to resume it in a pane.
 - **Control API (MCP)** — an opt‑in loopback HTTP/WebSocket API that lets an agent or a companion

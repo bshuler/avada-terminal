@@ -1,6 +1,7 @@
 # Subagent panes and the breathing "hide subagents" toggle — plan
 
-Status (2026-10-09): **approved (§6), not started.** Tracked as B2 in
+Status (2026-10-10): **built** (B2 closed in [`backlog.md`](backlog.md); acceptance tests listed
+there). Approved 2026-10-09 (§6). Tracked as B2 in
 [`backlog.md`](backlog.md). Written at the end
 of the 0.2.31 session so the next session starts from a spec instead of a chat message.
 
