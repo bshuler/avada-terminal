@@ -54,6 +54,16 @@ the brand-new-pane rule, add the resumed-pane test beside
 `activity_is_busy_for_a_never_output_running_pane`. Context:
 [`dead-session-recovery.md`](dead-session-recovery.md) §0.2.31 last paragraph.
 
+### B5 · Recently Closed is emptied by a GUI relaunch, orphaning parked sessions (2026-10-10)
+`State::closed` (`rs/crates/app/src/state.rs`) is not persisted, on the stale premise "sessions
+don't survive a relaunch". Since the session daemon they do: the 15:28Z relaunch on 2026-10-10
+started with an empty list, so the parked Subagents tab could not be reopened. Its two
+`pane-*` sessions kept running with no pane and no way back (their Claude markers were then
+pruned as stale), and the self-heal re-hosted the tab's two control panes into the *active* tab,
+which `gui_uids_with_parked` says must not happen. Fix direction: persist the history (ids + session
+uids) with the workspace, re-adopt on restore, kill only what the daemon no longer has; add a
+relaunch test beside the restore-workspace tests.
+
 ## Closed
 
 (none yet)
