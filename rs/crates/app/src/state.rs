@@ -3550,9 +3550,11 @@ impl State {
             "HP_HYPERPANE_DIR".to_string(),
             dir.to_string_lossy().into_owned(),
         );
-        // Same Claude Code >= 2.1.x tool-search deferral `submit_new_goal` pins off: with the
-        // default mode every MCP tool needs a ToolSearch round-trip before it can be called.
-        env.insert("ENABLE_TOOL_SEARCH".to_string(), "false".to_string());
+        // No `ENABLE_TOOL_SEARCH=false` here, unlike `submit_new_goal`: a goal pane pairs it
+        // with `--strict-mcp-config`, so only the avada server loads eagerly. This agent gets
+        // every MCP server the user has, and eager loading put ~220k tokens of tool schemas in
+        // its context — it auto-compacted on every turn. It drives Avada through `avada ctl`
+        // in Bash, which needs no deferred tool.
         if let Ok(exe) = std::env::current_exe() {
             env.insert("HP_CTL".to_string(), exe.to_string_lossy().into_owned());
             // Put the app's own directory on PATH so the skills' `avada ctl …` resolves
@@ -11245,6 +11247,10 @@ mod tool_session_tests {
             .as_ref()
             .expect("the control environment travels with the relaunch");
         assert!(env.contains_key("AVADA_CONTROL_FILE") && env.contains_key("HP_CTL"));
+        assert!(
+            !env.contains_key("ENABLE_TOOL_SEARCH"),
+            "tool search stays on: eager MCP schemas fill the panel agent's context"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
