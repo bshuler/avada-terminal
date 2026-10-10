@@ -1,6 +1,15 @@
 # Plan: rename "pane" to "panel" everywhere
 
-Status: plan only, nothing renamed yet. Written 2026-10-10 against `27c93ab`.
+Status: **approved 2026-10-10, scope "everything, in stages"** (all steps in §3, Tier 3
+included). Nothing renamed yet. Written against `27c93ab`.
+
+**Gate (checked 2026-10-10):** unmerged lanes hold the files every step touches.
+`subagent-panes` (14 commits, 47 files, incl. `ctl_cli.rs`, `control_host.rs`,
+`control/dispatch.rs`, `state.rs`, the avada skill docs), `sp-pane`, `sp-chrome` and
+`sp-discovery` (each about 35 files), and the uncommitted session-daemon/launchd work in
+the main checkout (`app.rs`, `state.rs`, `main.rs`, `session/*`). Start step 2 only when
+`git rev-list --count origin/main..<lane>` is 0 for each of them (or the lane is abandoned)
+and the main checkout's `git status` no longer shows the daemon work.
 
 `9917131` (2026-10-08) already changed every string a user *reads* to Window > Tab > Panel.
 This plan covers what is left: the control API, CLI verbs, persisted formats, docs, skill
