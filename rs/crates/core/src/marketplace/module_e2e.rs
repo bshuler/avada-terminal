@@ -60,7 +60,7 @@ fn build_marketplace() -> PathBuf {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .filter(|m| m["target"]["name"] == "avada-marketplace")
         .filter_map(|m| m["executable"].as_str().map(PathBuf::from))
-        .last()
+        .next_back()
         .expect("cargo reported the avada-marketplace executable")
 }
 

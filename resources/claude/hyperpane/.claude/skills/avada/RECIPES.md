@@ -48,7 +48,8 @@ Answer a prompt the same way — `keys p7 enter`, `keys p7 escape`, `keys p7 dow
 When the work is yours rather than the user's, don't borrow their terminal:
 
 ```
-avada ctl new-pane --cwd ~/code/hyperpanes --cmd "cargo test" --label tests --color '#3b82f6'
+avada ctl new-pane --why "run the test suite for the release check" \
+  --cwd ~/code/hyperpanes --cmd "cargo test" --label tests --color '#3b82f6'
 ```
 
 The reply is JSON carrying the new pane's id. The pane lands in the window's **active** tab;
@@ -61,8 +62,8 @@ that one is not undoable, so ask first.
 avada ctl new-tab --title "release" --cwd ~/code/hyperpanes   # 202; reply carries the id
 avada ctl tabs                                                 # confirm it exists
 avada ctl focus-tab 1:4
-avada ctl new-pane --cwd ~/code/hyperpanes --label build
-avada ctl new-pane --cwd ~/code/hyperpanes --label logs
+avada ctl new-pane --why "release build" --cwd ~/code/hyperpanes --label build
+avada ctl new-pane --why "tail release logs" --cwd ~/code/hyperpanes --label logs
 avada ctl layout 1:4 columns
 ```
 

@@ -77,8 +77,15 @@ Rules that matter:
 
 Panes: `new-pane`, `close-pane`, `restart-pane`, `focus-pane`, `rename-pane`, `recolor-pane`,
 `layout`. Tabs: `new-tab`, `close-tab`, `rename-tab`, `focus-tab`, `move-tab`,
-`move-pane` (re-hosts a running pane in another tab without restarting it), `toggle-subagents
+`move-pane` (re-hosts a running pane in another tab, or in a new tab with
+`move-pane <pane> new --title T`, without restarting it), `toggle-subagents
 [tab]` (hides/shows the tab's Claude subagent panes; defaults to your own tab).
+
+**`new-pane` requires `--why "<one line>"`** (it refuses without one). A pane that appears on its own is a mystery
+to the user. Every pane header has an ⓘ button that shows who opened it: `ctl` records your pane,
+Claude session, process chain and cwd automatically, but only you can say *why*. Write the reason
+the user would want to read ("run the release test suite for B7"), not the command. `avada ctl info
+<pane>` prints any pane's origin.
 
 Tab verbs answer `202 Accepted` with `{"queued": true}`: they are applied by the UI thread on its
 next frame, not while your command is still running. Re-read `tabs` to confirm, don't assume.

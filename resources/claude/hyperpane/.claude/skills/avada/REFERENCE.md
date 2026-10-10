@@ -59,7 +59,8 @@ reported back — all of them at once, not just the first.
 
 | Verb | `/command` body |
 |---|---|
-| `new-pane [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N]` | `{"type":"newPane","pane":{…}}` |
+| `new-pane --why R [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
+| `info <pane>` | reads `/state`: who opened the pane, when, from where, and why |
 | `close-pane <pane>` | `{"type":"closePane","paneId":…}` |
 | `restart-pane <pane>` | `{"type":"restartPane","paneId":…}` |
 | `focus-pane <pane>` | `{"type":"focusPane","paneId":…}` |
@@ -76,6 +77,17 @@ Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `gr
 
 `new-pane` returns the new pane's id as the command result.
 
+### Pane origin
+
+Every pane records where it came from under `origin.*` keys in its `meta`, and the pane header's ⓘ
+shows it (hover to read, click to copy). `ctl new-pane` writes `origin.via`, `origin.at`,
+`origin.why` (from `--why`), `origin.by.pane` + `origin.by.label` (the calling pane, from
+`AVADA_PANE_ID`), `origin.by.session` (`CLAUDE_CODE_SESSION_ID`), `origin.by.agent` (`AI_AGENT`),
+`origin.by.process` (the caller's process chain) and `origin.cwd`. A raw `/command newPane` gets
+`origin.via = control-api` and a UTC `origin.at` from the server if it sent neither; send your own
+`origin.why` in `pane.meta`. `ctl new-pane` without a non-empty `--why` exits 2 and opens nothing. Fix or add to a
+pane's origin afterwards with `setMeta`.
+
 ## Tabs
 
 | Verb | `/command` body |
@@ -86,11 +98,12 @@ Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `gr
 | `focus-tab <tab>` | `{"type":"focusTab","tabId":…}` |
 | `move-tab <tab> <index>` | `{"type":"moveTab","tabId":…,"to":N}` |
 | `move-pane <pane> <tab>` | `{"type":"movePane","paneId":…,"tabId":…}` |
+| `move-pane <pane> new [--title T]` | `{"type":"movePane","paneId":…,"newTab":true,"title":…}` |
 | `toggle-subagents [tab]` | `{"type":"toggleSubagents","tabId":…}` — hide/show the tab's Claude subagent panes; with no tab, the calling pane's tab (`$AVADA_PANE_ID`), else the focused window's active tab |
 
 All seven answer **202** with `{"ok":true,"queued":true}` — they are applied by the UI thread on
-its next frame. `newTab` also returns the id the new tab will have (`{window}:{count}`, appended
-at the end). Re-read `tabs` to confirm anything else.
+its next frame. `newTab`, and `movePane` with `newTab`, also return the id the new tab will
+have (`{window}:{count}`, appended at the end). Re-read `tabs` to confirm anything else.
 
 Tab ids are positional (`{window}:{index}`), so they shift when tabs close or move. A stale id
 that no longer names a tab is refused with 404 rather than hitting whatever moved into that slot.
@@ -104,6 +117,12 @@ first and an index equal to the tab count puts it last.
 and its scrollback comes along. A tab emptied by the move is dropped, which shifts the ids of
 every tab after it — so re-read `tabs` between moves, or move from the last tab backwards. A
 pane in another window, or already in the target tab, is refused with 409.
+
+`move-pane <pane> new` splits a pane out into a new tab of its own window, appended last; the
+active tab does not change. A pane already alone in its tab is refused with 409 (the move would
+only rename it — use `rename-tab`), and giving both a tab and `new` is a 400.
+
+`layout <tab> <name>` needs only the tab id; the window is the tab's own.
 
 ## Preferences
 
