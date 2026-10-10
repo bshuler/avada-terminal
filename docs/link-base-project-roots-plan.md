@@ -227,21 +227,21 @@ Run: `cd rs/crates/app && cargo test --bin avada project_roots` then the full
 ### Step 6. Verify the whole
 
 ```bash
-cd /Users/bshuler/code/hyperpanes/rs/crates/core && cargo test
+cd /Users/bshuler/code/avada/avada-terminal/rs/crates/core && cargo test
 ```
 ```bash
-cd /Users/bshuler/code/hyperpanes/rs/crates/terminal-widget && cargo test --lib
+cd /Users/bshuler/code/avada/avada-terminal/rs/crates/terminal-widget && cargo test --lib
 ```
 ```bash
-cd /Users/bshuler/code/hyperpanes/rs/crates/app && cargo test --bin avada && cargo build
+cd /Users/bshuler/code/avada/avada-terminal/rs/crates/app && cargo test --bin avada && cargo build
 ```
 
 Live check (do not install to /Applications unless asked; run the built binary from
-`target/`): in a pane whose cwd is `~`, with `~/code/hyperpanes` in the sidebar, print
+`target/`): in a pane whose cwd is `~`, with `~/code/avada/avada-terminal` in the sidebar, print
 `echo rs/crates/core/src/git.rs` and hover it. Expect an underline and a tooltip naming
-`/Users/bshuler/code/hyperpanes/rs/crates/core/src/git.rs`. Then print
+`/Users/bshuler/code/avada/avada-terminal/rs/crates/core/src/git.rs`. Then print
 `echo README.md` with two projects that both have one: expect dark. Then
-`cd /Users/bshuler/code/hyperpanes && echo README.md` in the same pane: expect the
+`cd /Users/bshuler/code/avada/avada-terminal && echo README.md` in the same pane: expect the
 avada copy (the screen broke the tie).
 
 ### Step 7. Commit
@@ -254,7 +254,7 @@ Another session is editing this checkout (file-viewer highlighting: `highlight.r
    `git apply --cached`), whole-file for `pane.rs`.
 3. Verify the staged subset alone: `git worktree add --detach <scratch> HEAD`, apply
    `git diff --cached`, run Step 6 there with
-   `CARGO_TARGET_DIR=/Users/bshuler/code/hyperpanes/rs/crates/app/target`
+   `CARGO_TARGET_DIR=/Users/bshuler/code/avada/avada-terminal/rs/crates/app/target`
    (about 10 minutes). Never `git stash` in this tree.
 4. Commit as `Bert Shuler <BertShuler@proton.me>`, signed, no AI attribution, push to
    `main` directly. Suggested message:

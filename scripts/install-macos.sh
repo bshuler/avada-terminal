@@ -174,6 +174,23 @@ if [[ -d "$ATTIC" ]]; then
     done
 fi
 
+# The attic of the app's pre-rename name. Nothing new lands there, so every bundle in
+# it goes once nothing runs from it, and the directory with them.
+LEGACY_ATTIC="$DEST_DIR/.hyperpanes-attic"
+if [[ -d "$LEGACY_ATTIC" ]]; then
+    for r in "$LEGACY_ATTIC"/*.app; do
+        [[ -e "$r" ]] || continue
+        if pgrep -f -- "$r/" >/dev/null 2>&1; then
+            note "attic: $r still has a live process — kept"
+            continue
+        fi
+        chflags -R nouchg "$r" 2>/dev/null || true
+        rm -rf "$r"
+        note "attic: pruned $r (nothing running from it)"
+    done
+    rmdir "$LEGACY_ATTIC" 2>/dev/null && note "attic: removed $LEGACY_ATTIC"
+fi
+
 cat <<EOF
 
 Done. $VERSION is installed and locked.

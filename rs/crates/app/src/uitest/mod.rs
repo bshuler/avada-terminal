@@ -959,7 +959,7 @@ fn an_empty_palette_says_so() {
 /// Put up the close confirmation. `final_close` is the last pane in the window, where the
 /// close is irreversible and the "ask me" opt-out is withheld.
 fn open_confirm_close(w: &crate::AppWindow, final_close: bool) {
-    w.set_cc_title("bash — ~/code/hyperpanes".into());
+    w.set_cc_title("bash — ~/code/avada-terminal".into());
     w.set_cc_final(final_close);
     w.set_cc_ask(true);
     w.set_overlay_kind(7);
@@ -1573,8 +1573,8 @@ fn install_projects(w: &crate::AppWindow, history: bool, segment: i32) {
         ..Default::default()
     };
     let worktrees = std::rc::Rc::new(slint::VecModel::from(vec![
-        wt("main", "/code/hyperpanes", true),
-        wt("wip", "/code/hyperpanes-wip", false),
+        wt("main", "/code/avada-terminal", true),
+        wt("wip", "/code/avada-terminal-wip", false),
     ]));
     let sessions = std::rc::Rc::new(slint::VecModel::from(if history {
         vec![crate::ClaudeSessionItem {

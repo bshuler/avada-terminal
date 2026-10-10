@@ -267,7 +267,7 @@ jobs:
           shopt -s failglob
           gh release upload "${{ needs.version.outputs.tag }}" rs/packaging/out/*.dmg --clobber
 
-  # Mobile client (Flutter, mobile/hyperpanes_mobile). The mobile test suite runs in
+  # Mobile client (Flutter, mobile/avada_mobile). The mobile test suite runs in
   # its own gate job (like the Rust `test` matrix) so neither store build starts on a
   # red protocol layer. Version is stamped via --build-name (pubspec stays untouched).
   test-mobile:
@@ -275,7 +275,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: mobile/hyperpanes_mobile
+        working-directory: mobile/avada_mobile
     steps:
       - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
@@ -295,7 +295,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     defaults:
       run:
-        working-directory: mobile/hyperpanes_mobile
+        working-directory: mobile/avada_mobile
     steps:
       - uses: actions/checkout@v5
 
@@ -333,7 +333,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     defaults:
       run:
-        working-directory: mobile/hyperpanes_mobile
+        working-directory: mobile/avada_mobile
     steps:
       - uses: actions/checkout@v5
 

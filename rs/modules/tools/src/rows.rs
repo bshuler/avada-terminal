@@ -95,8 +95,8 @@ pub fn rows(state: &State, entry: &str) -> Vec<Row> {
 
 /// The heading above one project's conversations.
 fn project_row(entry: &str, project: &str, group: &[&&Session], collapsed: bool) -> Row {
-    // The directory's own name, not the whole path: `hyperpanes` reads at 260 pixels and
-    // `/Users/someone/code/hyperpanes` does not. The path is still on the detail line.
+    // The directory's own name, not the whole path: `avada-terminal` reads at 260 pixels and
+    // `/Users/someone/code/avada-terminal` does not. The path is still on the detail line.
     let name = Path::new(project)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -350,17 +350,17 @@ mod tests {
         let mut api = FakeApi::ready().with(
             "claude",
             Ok(vec![
-                session("s1", "/Users/me/code/hyperpanes", "Fix the parser"),
-                session("s2", "/Users/me/code/hyperpanes", "Add a test"),
+                session("s1", "/Users/me/code/avada-terminal", "Fix the parser"),
+                session("s2", "/Users/me/code/avada-terminal", "Add a test"),
                 session("s3", "/Users/me/code/other", "Something else"),
             ]),
         );
         let app = built(&mut api);
         let rows = rows(&app.state, "claude");
         assert_eq!(rows.len(), 5);
-        assert_eq!(rows[0].label, "hyperpanes");
+        assert_eq!(rows[0].label, "avada-terminal");
         assert_eq!(rows[0].depth, 0);
-        assert!(rows[0].detail.contains("/Users/me/code/hyperpanes"));
+        assert!(rows[0].detail.contains("/Users/me/code/avada-terminal"));
         assert!(rows[0].detail.contains("2 conversations"));
         assert_eq!(rows[1].depth, 1);
         assert_eq!(rows[1].label, "Fix the parser");
@@ -402,9 +402,9 @@ mod tests {
 
     #[test]
     fn a_filter_matches_the_label_the_project_or_the_branch() {
-        let mut s = session("s1", "/w/hyperpanes", "Fix the parser");
+        let mut s = session("s1", "/w/avada-terminal", "Fix the parser");
         s.branch = Some("feature/rail".into());
-        for q in ["PARSER", "hyperpanes", "feature/rail", " parser "] {
+        for q in ["PARSER", "avada-terminal", "feature/rail", " parser "] {
             assert!(matches(&s, q), "{q}");
         }
         assert!(!matches(&s, "nothing like this"));

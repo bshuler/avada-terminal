@@ -21,7 +21,7 @@ features and the Hyperpane pane into modules, a native editor module, licensing 
 with a stub issuer, notarization checks, and the product rename with a compatibility layer.
 All three OSes from day one.
 
-**Out:** the mobile client (`mobile/hyperpanes_mobile`, Flutter) except for the rename; the
+**Out:** the mobile client (`mobile/avada_mobile`, Flutter) except for the rename; the
 production license server on the ptah VPS (a separate repo, sketched in §9); the commercial
 crate's real policy implementations (skeleton only); tier-3 pixel surfaces beyond the
 contract type.

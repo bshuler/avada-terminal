@@ -448,10 +448,6 @@ pub fn build_env(inputs: &EnvInputs<'_>) -> EnvMap {
         }
     }
 
-    // Two releases of `HYPERPANES_*` twins for every `AVADA_*` we set, so a user's
-    // hook script or MCP config written against the old name keeps working (compat).
-    crate::compat::mirror_legacy_env(&mut env);
-
     // `BROWSER` names the command a CLI tool runs to show the user a link, so pointing
     // it at our shim IS the URL-interception feature (Q3) — which means the value the
     // user's login shell exported is deliberately overridden, not respected. A per-pane
@@ -894,10 +890,9 @@ mod tests {
         );
     }
 
-    /// compat: every `AVADA_*` we inject gets a `HYPERPANES_*` twin, so a hook script
-    /// written against the old name keeps finding its pane and control file.
+    /// The pre-rename `HYPERPANES_*` twins are no longer injected: only `AVADA_*` names.
     #[test]
-    fn build_env_mirrors_avada_vars_under_the_legacy_prefix() {
+    fn build_env_sets_no_legacy_prefixed_vars() {
         let proc_env = map(&[]);
         let integ = map(&[]);
         let env = build_env(&EnvInputs {
@@ -908,14 +903,8 @@ mod tests {
             control_file: Some("/data/control.json"),
             browser_shim: None,
         });
-        assert_eq!(
-            env.get("HYPERPANES_PANE_ID").map(String::as_str),
-            Some("pane-7")
-        );
-        assert_eq!(
-            env.get("HYPERPANES_CONTROL_FILE").map(String::as_str),
-            Some("/data/control.json")
-        );
+        assert_eq!(env.get("AVADA_PANE_ID").map(String::as_str), Some("pane-7"));
+        assert!(!env.keys().any(|k| k.starts_with("HYPERPANES_")));
     }
 
     /// compat: a parent pane started by the old app hands down `HYPERPANES_CONTROL_FILE`
