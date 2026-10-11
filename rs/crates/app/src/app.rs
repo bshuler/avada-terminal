@@ -741,26 +741,13 @@ impl App {
             // every two seconds. Either hold keeps the prompt in the queue, and the next
             // pass is two seconds away, so waiting costs nothing but delivering early
             // costs the prompt.
-            if let Some(screen) = self.mgr.render_screen(&uid) {
-                // An interactive selector (trust prompt, model picker…): typed text would
-                // land in the form and be swallowed on the human's next pick.
-                if screen_shows_option_form(&screen) {
-                    tracing::debug!(
-                        uid = %uid,
-                        session = %marker.session_id,
-                        "queued prompts held: an option form is up"
-                    );
-                    continue;
-                }
-                // Mid-turn: there is no prompt to submit into yet.
-                if screen_shows_busy(&screen) {
-                    tracing::debug!(
-                        uid = %uid,
-                        session = %marker.session_id,
-                        "queued prompts held: claude is still working"
-                    );
-                    continue;
-                }
+            if let Some(why) = self.prompt_hold_reason(&uid) {
+                tracing::debug!(
+                    uid = %uid,
+                    session = %marker.session_id,
+                    "queued prompts held: {why}"
+                );
+                continue;
             }
             let pending = resume_queue::take_for(&marker.session_id);
             if pending.is_empty() {
@@ -1204,6 +1191,26 @@ impl App {
         })
     }
 
+    /// Why an automated prompt must not be typed into `uid` right now — `None` when it is
+    /// safe. The one gate for every scheduled writer (status loop, queued-prompt delivery),
+    /// so they cannot disagree about what "the pane is free" means. The human-input check
+    /// comes first and comes from the GUI's own keystroke path, not the screen: a screen
+    /// cannot tell a dim prompt suggestion from a real half-typed line.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn prompt_hold_reason(&self, uid: &str) -> Option<&'static str> {
+        if crate::state::human_line_pending(uid) {
+            return Some("a human has an unsent line at the prompt");
+        }
+        let screen = self.mgr.render_screen(uid)?;
+        if screen_shows_option_form(&screen) {
+            return Some("an option form is up");
+        }
+        if screen_shows_busy(&screen) {
+            return Some("claude is still working");
+        }
+        None
+    }
+
     #[tracing::instrument(level = "debug", ret, skip(self, w))]
     fn fire_status_loop(&self, w: &Window, prompt: &str) {
         let prompt = if prompt.trim().is_empty() {
@@ -1265,18 +1272,13 @@ impl App {
                 return;
             }
         }
-        if let Some(screen) = self.mgr.render_screen(&uid) {
-            if screen_shows_option_form(&screen) {
-                tracing::warn!(uid = %uid, "status loop: Avada panel is showing a form; this round is skipped");
-                return;
-            }
-            // Typing at a working claude loses the text. Returning here is not a dropped
-            // round: the same prompt was queued a few lines above, and the delivery pass
-            // will type it the moment the pane is idle.
-            if screen_shows_busy(&screen) {
-                tracing::info!(uid = %uid, "status loop: pane is busy; the queued prompt will be delivered when it is idle");
-                return;
-            }
+        // Typing at a working claude loses the text, typing over a human's half-typed line
+        // submits both as one message, and typing into a form picks an option. A held
+        // round is not a dropped round when the pane has a session marker: the same prompt
+        // was queued above and the delivery pass types it once the pane is clear.
+        if let Some(why) = self.prompt_hold_reason(&uid) {
+            tracing::warn!(uid = %uid, "status loop: this round is held: {why}");
+            return;
         }
         tracing::info!(uid = %uid, "status loop: typing the prompt into the Avada panel");
         let mgr = self.mgr.clone();
@@ -2106,12 +2108,12 @@ impl App {
         // Test affordance (inert unless the env is set): panic once the app is up + autosaved, to
         // exercise the crash reporter end-to-end — hook → crash log → reporter dialog → relaunch →
         // session restore. Mirrors the `AVADA_MULTIWIN` / `AVADA_DEBUG` test hooks.
-        if self.ticks.get() == 220 && avada_core::compat::env_var_os("AVADA_TEST_PANIC").is_some() {
+        if self.ticks.get() == 220 && std::env::var_os("AVADA_TEST_PANIC").is_some() {
             panic!("AVADA_TEST_PANIC: simulated crash");
         }
         if !self.scaffold_done.get()
             && self.ticks.get() > 350 // ≈2.8 s at 8 ms/tick
-            && avada_core::compat::env_var_os("AVADA_MULTIWIN").is_some()
+            && std::env::var_os("AVADA_MULTIWIN").is_some()
         {
             if let Some(w0) = windows.first() {
                 let ready = {
@@ -2600,10 +2602,10 @@ impl App {
             PendingSeed::EmptyTab => {
                 st.add_pane(&self.mgr);
                 if self.first_seed.replace(false) {
-                    if avada_core::compat::env_var_os("AVADA_DEMO").is_some() {
+                    if std::env::var_os("AVADA_DEMO").is_some() {
                         crate::demo_seed(st, &self.mgr);
                     }
-                    if let Some(which) = avada_core::compat::env_var_os("AVADA_OPEN") {
+                    if let Some(which) = std::env::var_os("AVADA_OPEN") {
                         match which.to_string_lossy().as_ref() {
                             "palette" => {
                                 dispatch(st, Command::PaletteOpen, &self.mgr);
@@ -2712,7 +2714,7 @@ impl App {
         // `Workspace`, not `EmptyTab`, and so never reaches the match arm). `first_seed` is
         // already spent when the arm ran, which is what keeps this from firing twice.
         if self.first_seed.replace(false)
-            && avada_core::compat::env_var_os("AVADA_OPEN").is_some_and(|v| v == "leftpanel")
+            && std::env::var_os("AVADA_OPEN").is_some_and(|v| v == "leftpanel")
             && !st.left_panel_open
         {
             dispatch(st, Command::ToggleLeftPanel, &self.mgr);

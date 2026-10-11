@@ -1206,7 +1206,7 @@ async fn messages_post(
 #[tracing::instrument(level = "debug", ret)]
 fn nudges_enabled() -> bool {
     !matches!(
-        crate::compat::env_var("AVADA_MSG_NUDGE").as_deref(),
+        std::env::var("AVADA_MSG_NUDGE").ok().as_deref(),
         Some("0") | Some("false") | Some("off")
     )
 }

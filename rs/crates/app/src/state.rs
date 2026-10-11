@@ -1265,12 +1265,101 @@ pub fn pane_write_failed_uids() -> &'static std::sync::Mutex<Vec<String>> {
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn pane_write(mgr: &SessionManager, uid: &str, data: &str, op: &str) {
     let ok = mgr.write(uid, data).is_ok();
+    if op == "keystroke" || op == "paste" {
+        note_human_input(uid, data);
+    }
     if note_pane_write(uid, ok) && !ok {
         tracing::warn!(uid = %uid, op, "pane write failed; backend is gone, further writes to this pane will be suppressed until it recovers or is closed");
         pane_write_failed_uids()
             .lock()
             .expect("pane_write_failed_uids lock")
             .push(uid.to_string());
+    }
+}
+
+/// Per-pane record of a human's unsent input: uid → when they last typed a printable
+/// character that has not yet been followed by Enter (or cleared with Esc / Ctrl-C /
+/// Ctrl-U). Automated writers (the status loop, queued-prompt delivery) consult this via
+/// [`human_line_pending`] so a scheduled prompt is never appended to a half-typed line and
+/// submitted as one message — which is exactly what happened once.
+fn pending_human_input() -> &'static std::sync::Mutex<std::collections::HashMap<String, Instant>> {
+    static Q: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
+        std::sync::OnceLock::new();
+    Q.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// A half-typed line older than this no longer holds automated prompts. Keystrokes that an
+/// agent's form consumed without an Enter (a digit picking an option) would otherwise pin
+/// the flag forever; a human who walks away mid-sentence for longer than this is a smaller
+/// risk than a loop that never fires again.
+const HUMAN_INPUT_STALE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Record a GUI-side write that came from the human (see [`pane_write`]). Enter, Esc on its
+/// own, Ctrl-C and Ctrl-U clear the pending line; any printable character starts or extends
+/// one; everything else (arrow keys and other escape sequences, backspace) is neutral —
+/// after a backspace the line may or may not be empty, and guessing wrong in the "empty"
+/// direction is the dangerous one.
+#[tracing::instrument(level = "debug", skip(data))]
+pub fn note_human_input(uid: &str, data: &str) {
+    let clears = data.contains(['\r', '\n', '\x03', '\x15']) || data == "\x1b";
+    let starts = !data.starts_with('\x1b') && data.chars().any(|c| c >= ' ' && c != '\x7f');
+    let mut pending = pending_human_input()
+        .lock()
+        .expect("pending_human_input lock");
+    if clears {
+        pending.remove(uid);
+    } else if starts {
+        pending.insert(uid.to_string(), Instant::now());
+    }
+}
+
+/// Whether a human has typed something into `uid` that they have not yet sent (and not
+/// so long ago that it counts as abandoned — see [`HUMAN_INPUT_STALE`]).
+#[tracing::instrument(level = "debug", ret)]
+pub fn human_line_pending(uid: &str) -> bool {
+    pending_human_input()
+        .lock()
+        .expect("pending_human_input lock")
+        .get(uid)
+        .is_some_and(|at| at.elapsed() < HUMAN_INPUT_STALE)
+}
+
+#[cfg(test)]
+mod human_input_tests {
+    use super::*;
+
+    #[test]
+    fn printable_sets_enter_clears() {
+        let uid = "human-input-test-1";
+        assert!(!human_line_pending(uid));
+        note_human_input(uid, "i alwasys want a");
+        assert!(human_line_pending(uid));
+        note_human_input(uid, "\r");
+        assert!(!human_line_pending(uid));
+    }
+
+    #[test]
+    fn escape_sequences_and_backspace_are_neutral_but_bare_escape_clears() {
+        let uid = "human-input-test-2";
+        note_human_input(uid, "\x1b[D"); // left arrow: no line yet
+        assert!(!human_line_pending(uid));
+        note_human_input(uid, "x");
+        note_human_input(uid, "\x1b[C"); // right arrow keeps it
+        note_human_input(uid, "\x7f"); // backspace keeps it: we cannot tell if it emptied
+        assert!(human_line_pending(uid));
+        note_human_input(uid, "\x1b");
+        assert!(!human_line_pending(uid));
+    }
+
+    #[test]
+    fn ctrl_c_and_ctrl_u_clear() {
+        for (i, k) in ["\x03", "\x15"].iter().enumerate() {
+            let uid = format!("human-input-test-3-{i}");
+            note_human_input(&uid, "abc");
+            assert!(human_line_pending(&uid));
+            note_human_input(&uid, k);
+            assert!(!human_line_pending(&uid));
+        }
     }
 }
 

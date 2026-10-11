@@ -6,8 +6,7 @@
 //! microseconds instead of against a temp directory the test then has to clean up.
 
 use crate::model::{
-    self, PaneAddr, SetMember, WorkspaceFile, WorkspaceSet, LEGACY_PROJECT_DIR, PROJECT_DIR,
-    PROJECT_FILE,
+    self, PaneAddr, SetMember, WorkspaceFile, WorkspaceSet, PROJECT_DIR, PROJECT_FILE,
 };
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -227,9 +226,7 @@ pub fn scan(fs: &mut dyn Fs, root: &Path) -> Scan {
             if entry.is_dir() {
                 // `.avada` is swept even though it starts with a dot: it is the one hidden
                 // directory whose whole purpose is to hold what this module shows.
-                let hidden = entry.name.starts_with('.')
-                    && entry.name != PROJECT_DIR
-                    && entry.name != LEGACY_PROJECT_DIR;
+                let hidden = entry.name.starts_with('.') && entry.name != PROJECT_DIR;
                 if hidden || SKIP_DIRS.contains(&entry.name.as_str()) || depth + 1 > MAX_DEPTH {
                     continue;
                 }
@@ -256,9 +253,7 @@ pub fn scan(fs: &mut dyn Fs, root: &Path) -> Scan {
 /// `x.set.json` that holds a workspace is a workspace, and the human who has to reconcile
 /// the two would rather see the truth than the filename's claim.
 fn classify(path: &Path, text: &str, project: Option<&Path>, out: &mut Scan) {
-    let looks_like_set =
-        text.contains(model::SET_FORMAT) || text.contains(model::LEGACY_SET_FORMAT);
-    if looks_like_set {
+    if text.contains(model::SET_FORMAT) {
         match model::parse_set(text) {
             Ok(set) => out.sets.push((path.to_path_buf(), set)),
             Err(e) => out.broken.push((path.to_path_buf(), e)),
@@ -289,19 +284,10 @@ fn classify(path: &Path, text: &str, project: Option<&Path>, out: &mut Scan) {
     }
 }
 
-/// Where the repo-local project file is, preferring `.avada/` and falling back to the
-/// pre-rename `.hyperpanes/` only when it is the one that exists — the host's own
-/// precedence, restated so a module and its host never disagree about which file is live.
-pub fn project_file(fs: &mut dyn Fs, root: &Path) -> Option<PathBuf> {
-    let new = root.join(PROJECT_DIR).join(PROJECT_FILE);
-    if fs.read(&new).is_ok() {
-        return Some(new);
-    }
-    let old = root.join(LEGACY_PROJECT_DIR).join(PROJECT_FILE);
-    if fs.read(&old).is_ok() {
-        return Some(old);
-    }
-    Some(new)
+/// Where the repo-local project file is: `.avada/project.json` under `root`, the same
+/// path the host writes, so a module and its host never disagree about which file is live.
+pub fn project_file(_fs: &mut dyn Fs, root: &Path) -> Option<PathBuf> {
+    Some(root.join(PROJECT_DIR).join(PROJECT_FILE))
 }
 
 /// Flatten the scan into rows, honouring `expanded` and `query`.
@@ -941,21 +927,6 @@ mod tests {
         assert_eq!(
             first.file.as_deref(),
             Some(Path::new("/ws/saved.avada.json"))
-        );
-    }
-
-    #[test]
-    fn the_legacy_project_directory_is_used_only_when_it_is_the_one_that_exists() {
-        let mut fs = FakeFs::default();
-        fs.file("/ws/.hyperpanes/project.json", PROJECT);
-        assert_eq!(
-            project_file(&mut fs, Path::new("/ws")),
-            Some(PathBuf::from("/ws/.hyperpanes/project.json"))
-        );
-        fs.file("/ws/.avada/project.json", PROJECT);
-        assert_eq!(
-            project_file(&mut fs, Path::new("/ws")),
-            Some(PathBuf::from("/ws/.avada/project.json"))
         );
     }
 

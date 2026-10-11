@@ -57,7 +57,7 @@ fn install_module_services(shared: &Arc<Shared>) {
 /// launch workspace, and serve the loopback control API until the process exits.
 #[tracing::instrument(level = "debug", ret)]
 pub async fn run(version: &str) -> io::Result<()> {
-    let control_file = crate::compat::env_var_os("AVADA_CONTROL_FILE")
+    let control_file = std::env::var_os("AVADA_CONTROL_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(paths::control_json);
 
@@ -165,7 +165,10 @@ pub async fn run(version: &str) -> io::Result<()> {
 
 #[tracing::instrument(level = "debug", ret)]
 fn env_truthy(name: &str) -> bool {
-    crate::compat::env_truthy(name)
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
 }
 
 // ---- read-model seeding -------------------------------------------------------------------

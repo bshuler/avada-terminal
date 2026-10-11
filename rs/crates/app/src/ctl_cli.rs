@@ -1122,7 +1122,10 @@ fn caller_origin(conn: &Conn, why: Option<&String>) -> BTreeMap<String, String> 
     if let Some(w) = why {
         o.insert(po::WHY.to_string(), w.clone());
     }
-    if let Some(pane) = avada_core::compat::env_var("AVADA_PANE_ID").filter(|v| !v.is_empty()) {
+    if let Some(pane) = std::env::var("AVADA_PANE_ID")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
         if let Some(label) = get(conn, "/state")
             .ok()
             .as_ref()

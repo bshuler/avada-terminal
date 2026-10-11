@@ -25,7 +25,7 @@ capabilities = [
 [module]
 id = "bshuler/avada-workspace"
 name = "Workspace"
-version = "0.1.0"
+version = "0.1.1"
 description = "The workspace tree, the saved-layout library and workspace sets, as a rail entry"
 publisher = "Avada"
 contract = "^1"

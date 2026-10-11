@@ -344,7 +344,7 @@ fn resolve_control_file_with(
             return Some(v.to_string());
         }
     }
-    crate::compat::lookup("AVADA_CONTROL_FILE", env_lookup).filter(|v| !v.is_empty())
+    env_lookup("AVADA_CONTROL_FILE").filter(|v| !v.is_empty())
 }
 
 /// Assemble the child's environment exactly as the TS `Session` constructor does:
@@ -887,44 +887,6 @@ mod tests {
         assert_eq!(
             env.get("TERM_SESSION_ID").map(String::as_str),
             Some("chosen-for-this-pane")
-        );
-    }
-
-    /// The pre-rename `HYPERPANES_*` twins are no longer injected: only `AVADA_*` names.
-    #[test]
-    fn build_env_sets_no_legacy_prefixed_vars() {
-        let proc_env = map(&[]);
-        let integ = map(&[]);
-        let env = build_env(&EnvInputs {
-            process_env: &proc_env,
-            opts_env: None,
-            integration_env: &integ,
-            pane_id: Some("pane-7"),
-            control_file: Some("/data/control.json"),
-            browser_shim: None,
-        });
-        assert_eq!(env.get("AVADA_PANE_ID").map(String::as_str), Some("pane-7"));
-        assert!(!env.keys().any(|k| k.starts_with("HYPERPANES_")));
-    }
-
-    /// compat: a parent pane started by the old app hands down `HYPERPANES_CONTROL_FILE`
-    /// only; the child must still find the control plane through it.
-    #[test]
-    fn resolve_control_file_reads_the_legacy_env_name() {
-        let legacy_only =
-            |n: &str| (n == "HYPERPANES_CONTROL_FILE").then(|| "/old/control.json".to_string());
-        assert_eq!(
-            resolve_control_file_with(None, legacy_only).as_deref(),
-            Some("/old/control.json")
-        );
-        let both = |n: &str| match n {
-            "AVADA_CONTROL_FILE" => Some("/new/control.json".to_string()),
-            "HYPERPANES_CONTROL_FILE" => Some("/old/control.json".to_string()),
-            _ => None,
-        };
-        assert_eq!(
-            resolve_control_file_with(None, both).as_deref(),
-            Some("/new/control.json")
         );
     }
 
