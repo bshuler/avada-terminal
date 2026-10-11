@@ -1692,6 +1692,17 @@ fn subagent_subtitle(rec: &SubagentRecord) -> Option<SharedString> {
     Some(format!("{}{state}", rec.agent_type).into())
 }
 
+/// A subagent pane's title: its orchestrator, then what the subagent was asked to do (its
+/// type until the description is known).
+fn subagent_title(orch_title: &str, rec: &SubagentRecord) -> String {
+    let what = if rec.description.is_empty() {
+        &rec.agent_type
+    } else {
+        &rec.description
+    };
+    format!("{orch_title} › {what}")
+}
+
 /// One window as the application menu's "Windows & tabs" flyout lists it.
 #[derive(Debug, Clone)]
 pub struct WindowSummary {
@@ -3107,8 +3118,15 @@ impl State {
                     } else {
                         let p = &mut self.tabs[ti].panes[idx];
                         let subtitle = subagent_subtitle(&rec);
-                        let repaint = p.subtitle != subtitle;
+                        let mut repaint = p.subtitle != subtitle;
                         p.subtitle = subtitle;
+                        // The hook can fire before Claude Code writes the meta, so the pane
+                        // opens under the bare agent type; take the description once it lands.
+                        let named = p.subagent.as_ref().map(|old| &old.description);
+                        if !rec.description.is_empty() && named != Some(&rec.description) {
+                            p.title = subagent_title(orch_title, &rec).into();
+                            repaint = true;
+                        }
                         p.subagent = Some(rec);
                         self.dirty |= repaint;
                     }
@@ -3137,15 +3155,10 @@ impl State {
                         let ti = self.subagent_overflow_tab(oti);
                         (ti, self.tabs[ti].panes.len())
                     };
-                let what = if rec.description.is_empty() {
-                    &rec.agent_type
-                } else {
-                    &rec.description
-                };
                 tracing::info!(uid = %uid, orchestrator = %orch_uid, "subagent pane opened");
                 let det = DetachedPane {
                     uid,
-                    title: format!("{orch_title} › {what}").into(),
+                    title: subagent_title(orch_title, &rec).into(),
                     subtitle: subagent_subtitle(&rec),
                     pinned_accent: None,
                     show_frame: None,
@@ -15941,6 +15954,28 @@ mod subagent_pane_tests {
         s.records[1].stopped_at = Some(t0);
         assert!(!reconcile(&mut st, &mut clock, &s));
         assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
+    }
+
+    #[test]
+    fn a_pane_opened_before_the_meta_landed_takes_the_description_when_it_does() {
+        // Live, 2026-10-11: SubagentStart fired in the same second Claude Code wrote the
+        // meta, so the pane opened as "orch › general-purpose" and stayed that way.
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        let mut s = scan(vec![hooked("a", "")]);
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(pane(&st, "sub:a").title.as_str(), "orch › general-purpose");
+
+        s.records[0].description = "sleep then count files".into();
+        st.dirty = false;
+        reconcile(&mut st, &mut clock, &s);
+        assert_eq!(pane(&st, "sub:a").title.as_str(), "orch › sleep then count files");
+        assert!(st.dirty, "the new title repaints");
+
+        // Settled: the next pass leaves it alone.
+        st.dirty = false;
+        reconcile(&mut st, &mut clock, &s);
+        assert!(!st.dirty);
     }
 
     #[test]
