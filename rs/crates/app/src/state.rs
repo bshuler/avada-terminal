@@ -1050,6 +1050,11 @@ pub struct PaneState {
     /// AI/agent CLI so the idle glow only arms on agent panes (mirrors `isAiPane`). "" until
     /// the shell sets a title.
     pub shell_title: String,
+    /// For a remote pane (`remote.host` in `origin`): the `user@host` the shell most recently
+    /// reported in its OSC title — where typed characters land right now, which can be a
+    /// deeper hop than the one Avada ssh'd to. `None` until a title names a host (the header
+    /// then shows the first hop). Runtime-only: reconnect only ever knows the first hop.
+    pub remote_now: Option<String>,
     /// Whether the pane's ambient-AI summary line is muted (the pane menu's "Mute AI Summary"
     /// toggle; mirrors the renderer's `ui.aiMuted` set). New panes default unmuted.
     pub ai_muted: bool,
@@ -2641,6 +2646,7 @@ impl State {
             link_cursor: (0.0, 0.0),
             glow,
             shell_title: String::new(),
+            remote_now: None,
             ai_muted: false,
             talk: false,
             recording: false,
@@ -3004,6 +3010,7 @@ impl State {
             link_cursor: (0.0, 0.0),
             glow,
             shell_title: String::new(),
+            remote_now: None,
             ai_muted: false,
             talk: false,
             recording: false,
@@ -8190,6 +8197,7 @@ impl State {
                 p.tool_session = None;
             }
             p.shell_title = String::new();
+            p.remote_now = None;
             // The restart re-resolves the shell → refresh the cached header badge.
             p.shell_label = shell_label(&shell_path);
             p.surface = Image::default();
@@ -8299,6 +8307,7 @@ impl State {
             link_cursor: (0.0, 0.0),
             glow,
             shell_title: String::new(),
+            remote_now: None,
             ai_muted: false,
             talk: false,
             recording: false,
@@ -9875,6 +9884,7 @@ impl State {
             link_cursor: (0.0, 0.0),
             glow,
             shell_title: String::new(),
+            remote_now: None,
             ai_muted: false,
             talk: spec.talk.unwrap_or(false),
             recording: false,
@@ -10884,6 +10894,53 @@ mod session_file_tests {
         assert_eq!(g.panes[0].shell.as_deref(), Some("pwsh"));
         // A plain-shell pane records no command (omitted) but still records its uid.
         assert_eq!(g.panes[1].command, None);
+    }
+
+    /// A remote pane survives a laptop restart: its `remote.*` meta and its ssh+tmux launch
+    /// line come back through snapshot -> load unchanged, so restore re-attaches the first
+    /// hop (`tmux new-session -A`). Only the first hop is persisted; the live title-followed
+    /// endpoint (`remote_now`) is runtime-only.
+    #[test]
+    fn remote_pane_reconnect_facts_survive_a_relaunch() {
+        use avada_core::pane_remote as pr;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _guard = rt.enter();
+        let mut st = fresh();
+        let m = mgr();
+        let mut spec = serde_json::json!({
+            "command": "claude_auto", "cwd": "/home/b/ltc", "label": "lane ltc",
+            "meta": { "remote.host": "bert@hp2" }
+        });
+        pr::normalize_spec(&mut spec, 5);
+        let launch = spec["command"].as_str().unwrap().to_string();
+        let meta: std::collections::BTreeMap<String, String> =
+            serde_json::from_value(spec["meta"].clone()).unwrap();
+        let seed = WorkspaceFile {
+            groups: Some(vec![GroupSpec {
+                panes: vec![PaneSpec {
+                    command: Some(launch.clone()),
+                    meta: Some(meta.clone()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]),
+            active: Some(0),
+            ..Default::default()
+        };
+        st.load_workspace(seed, &m);
+        st.active_tab_mut().panes[0].remote_now = Some("root@inner".into());
+        // The header follows the innermost host...
+        let p = &st.active_tab().panes[0];
+        assert!(pr::display_title("lane", &p.origin, p.remote_now.as_deref()).ends_with("[ssh root@inner]"));
+        // ...but the snapshot carries only the first hop and the reattach line.
+        let snap = st.to_session_file();
+        let pane = &snap.groups.as_ref().unwrap()[0].panes[0];
+        assert_eq!(pane.command.as_deref(), Some(launch.as_str()));
+        let saved = pane.meta.as_ref().unwrap();
+        for k in [pr::HOST, pr::TMUX, pr::CWD, pr::CMD, pr::LAUNCH] {
+            assert_eq!(saved.get(k), meta.get(k), "{k}");
+        }
+        assert!(saved.values().all(|v| !v.contains("root@inner")));
     }
 
     /// Session-daemon prep round-trip: a pane LOADED from a spec carrying a `command` keeps

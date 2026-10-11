@@ -186,6 +186,12 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
                 );
             };
             spec["meta"] = Value::Object(caller_origin(&conn, Some(why)).into_iter().map(|(k, v)| (k, json!(v))).collect());
+            // `--remote HOST`: `--cmd`/`--cwd` then mean the command and directory ON that host.
+            // The server wraps them in ssh + a remote tmux session and records the reconnect
+            // facts in meta (`avada_core::pane_remote`).
+            if let Some(host) = flags.get("remote").filter(|h| !h.trim().is_empty()) {
+                spec["meta"][avada_core::pane_remote::HOST] = json!(host);
+            }
             let mut cmd = json!({ "type": "newPane", "pane": spec });
             if let Some(w) = flags.get("window").and_then(|w| w.parse::<i64>().ok()) {
                 cmd["windowId"] = json!(w);

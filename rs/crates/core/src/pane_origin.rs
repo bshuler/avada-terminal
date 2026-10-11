@@ -42,7 +42,12 @@ pub const VIA_CONTROL_API: &str = "control-api";
 pub fn extract(meta: Option<&BTreeMap<String, String>>) -> BTreeMap<String, String> {
     meta.map(|m| {
         m.iter()
-            .filter(|(k, v)| k.starts_with(PREFIX) && !v.is_empty())
+            // `remote.*` (see `pane_remote`) rides the same bag: it persists and restores
+            // by exactly the same path as provenance.
+            .filter(|(k, v)| {
+                (k.starts_with(PREFIX) || k.starts_with(crate::pane_remote::PREFIX))
+                    && !v.is_empty()
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     })
@@ -96,7 +101,21 @@ pub fn utc_stamp(secs: u64) -> String {
 
 /// The human-readable provenance shown on the pane's ⓘ button. Never empty: a pane with no
 /// record says so plainly rather than implying it was opened by hand.
-pub fn describe(origin: &BTreeMap<String, String>) -> String {
+pub fn describe(bag: &BTreeMap<String, String>) -> String {
+    let remote = crate::pane_remote::describe_lines(bag);
+    let origin: BTreeMap<String, String> = bag
+        .iter()
+        .filter(|(k, _)| k.starts_with(PREFIX))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let body = describe_origin(&origin);
+    if remote.is_empty() {
+        return body;
+    }
+    format!("{}\n{body}", remote.join("\n"))
+}
+
+fn describe_origin(origin: &BTreeMap<String, String>) -> String {
     if origin.is_empty() {
         return "Origin: not recorded.\nOpened by hand in Avada, restored from an older session,\n\
                 or created before origin tracking existed."

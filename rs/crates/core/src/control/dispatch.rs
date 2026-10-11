@@ -431,6 +431,9 @@ fn exec(
             // Every control-spawned pane says it came through the API (and when), even from a
             // caller that recorded nothing itself — the GUI's ⓘ reads this.
             crate::pane_origin::stamp_spec(&mut spec);
+            // A pane whose terminal runs on another host becomes ssh + a remote tmux, with the
+            // reconnect facts recorded in meta (see `pane_remote`).
+            crate::pane_remote::normalize_spec(&mut spec, crate::pane_remote::salt());
             let pane = spawn_pane(sessions, control_file, &spec)?;
             let pane_id = pane.id.clone();
             // At most MAX_PANES_PER_TAB panes per tab: a full active tab overflows into

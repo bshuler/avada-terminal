@@ -59,7 +59,7 @@ reported back — all of them at once, not just the first.
 
 | Verb | `/command` body |
 |---|---|
-| `new-pane --why R [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
+| `new-pane --why R [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N] [--remote HOST]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
 | `info <pane>` | reads `/state`: who opened the pane, when, from where, and why |
 | `close-pane <pane>` | `{"type":"closePane","paneId":…}` |
 | `restart-pane <pane>` | `{"type":"restartPane","paneId":…}` |
@@ -74,6 +74,11 @@ nests it for you.
 
 Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `grid-<cols>x<rows>`
 (e.g. `grid-2x3`). An unknown name falls back to `auto`.
+
+With `--remote HOST` the pane runs on HOST inside a remote tmux session (`--cmd`/`--cwd` then mean the command and
+directory on HOST). Its title shows `[ssh user@host]` and follows the host the typed characters currently land on
+(from the terminal's own title); `ctl info` and reconnect-after-relaunch follow the first hop only
+(`remote.host/tmux/cwd/cmd/launch` in `pane.meta`).
 
 `new-pane` returns the new pane's id as the command result. A tab holds at most 4 panes: when the
 active tab is full, the pane goes into the first "<title> 2", "<title> 3"… tab with room (a trailing

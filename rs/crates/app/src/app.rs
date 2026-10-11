@@ -2263,6 +2263,13 @@ impl App {
                 if let Some((ti, pi)) = st.find_pane(&uid) {
                     let pc = &mut st.tabs[ti].panes[pi];
                     if let Some(title) = sniffed.clone() {
+                        // A remote pane's tag follows the host the shell names in its title;
+                        // a title naming no host (an agent's) leaves it where it was.
+                        if avada_core::pane_remote::host(&pc.origin).is_some() {
+                            if let Some(ep) = avada_core::pane_remote::endpoint_from_title(&title) {
+                                pc.remote_now = Some(ep);
+                            }
+                        }
                         pc.shell_title = title;
                     }
                     pc.pane.feed(&data);

@@ -472,7 +472,8 @@ fn pane_item(
     };
     PaneItem {
         surface: ps.surface.clone(),
-        title: ps.title.clone(),
+        title: avada_core::pane_remote::display_title(&ps.title, &ps.origin, ps.remote_now.as_deref())
+            .into(),
         subtitle: ps.subtitle.clone().unwrap_or_default(),
         ai_subtitle,
         // The cached shell-type badge (computed once at pane creation; "" → not shown).
