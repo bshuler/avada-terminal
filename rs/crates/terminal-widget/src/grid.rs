@@ -311,6 +311,12 @@ impl TermGrid {
         true
     }
 
+    /// Force the next frame to repaint this grid even though nothing in it changed (a tab
+    /// became visible, the window regained focus).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     /// Take-and-clear the dirty flag. Also clears alacritty's accumulated damage so it
     /// doesn't grow unbounded (the renderers repaint the whole pane texture per dirty
     /// frame — partial-damage repaint is a noted future refinement).

@@ -344,6 +344,11 @@ impl TerminalPane {
         self.grid.resize(cols, rows)
     }
 
+    /// Force a repaint on the next frame without any content change.
+    pub fn mark_dirty(&mut self) {
+        self.grid.mark_dirty();
+    }
+
     /// Take-and-clear the repaint flag. `true` means the grid changed since the last call.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn take_dirty(&mut self) -> bool {

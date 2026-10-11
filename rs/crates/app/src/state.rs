@@ -1890,6 +1890,9 @@ pub struct State {
     /// instantiated, the `ListView` has not measured the new rows — so the ask is repeated
     /// for a few frames rather than fired once into a view that is not there.
     pub rail_scroll_hold: Option<std::time::Instant>,
+    /// Last [`crate::filedrop::focus_gen`] this state acted on; a newer one means the window
+    /// regained focus, so the active tab's panes are repainted (see `mark_active_panes_dirty`).
+    pub focus_gen_seen: u64,
     /// Host events queued for `avada_core::module::Host::emit`, as `(kind, payload)`.
     /// Queued rather than emitted for the same re-entrancy reason as
     /// [`State::rail_requests`], and drained beside it.
@@ -2185,6 +2188,7 @@ impl State {
             rail: Default::default(),
             rail_requests: Vec::new(),
             rail_scroll_hold: None,
+            focus_gen_seen: 0,
             module_events: Vec::new(),
             opener_panes: Vec::new(),
             module_openers: Vec::new(),
@@ -4255,7 +4259,19 @@ impl State {
         if idx < self.tabs.len() && idx != self.active {
             self.active = idx;
             self.editing_tab = -1;
+            self.mark_active_panes_dirty();
             self.dirty = true;
+        }
+    }
+
+    /// Force every pane of the active tab to repaint on the next tick. An idle pane is never
+    /// dirtied by pty output, so without this a tab shown (or a window refocused) after the
+    /// pane last painted comes up blank until the pointer touches it.
+    pub fn mark_active_panes_dirty(&mut self) {
+        if let Some(t) = self.tabs.get_mut(self.active) {
+            for p in &mut t.panes {
+                p.pane.mark_dirty();
+            }
         }
     }
 
@@ -11624,6 +11640,29 @@ mod view_pane_tests {
             !titles.iter().skip(1).any(|t| t == "term 2"),
             "the restored tab's name must not be handed out again: {titles:?}"
         );
+    }
+
+    /// An idle pane gets no pty output to dirty it, so showing its tab (or refocusing the
+    /// window) has to mark it dirty itself or it stays blank until the pointer touches it.
+    #[tokio::test]
+    async fn showing_a_tab_marks_its_idle_panes_dirty() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.new_tab(&m);
+        st.switch_tab(0);
+        for p in &mut st.tabs[1].panes {
+            let _ = p.pane.take_dirty();
+        }
+        assert!(st.tabs[1].panes.iter_mut().all(|p| !p.pane.take_dirty()));
+
+        st.switch_tab(1);
+        assert!(st.tabs[1].panes.iter_mut().all(|p| p.pane.take_dirty()));
+
+        for p in &mut st.tabs[1].panes {
+            let _ = p.pane.take_dirty();
+        }
+        st.mark_active_panes_dirty();
+        assert!(st.tabs[1].panes.iter_mut().all(|p| p.pane.take_dirty()));
     }
 
     #[test]

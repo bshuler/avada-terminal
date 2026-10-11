@@ -1932,6 +1932,13 @@ pub fn pump(
         }
     }
 
+    // A window focus gain repaints the active tab: idle panes get no pty output to dirty them.
+    let fg = crate::filedrop::focus_gen();
+    if fg != state.focus_gen_seen {
+        state.focus_gen_seen = fg;
+        state.mark_active_panes_dirty();
+    }
+
     // ---- resync models when state changed ----
     if state.dirty {
         resync(state, app, ui, area, scale, mgr);
