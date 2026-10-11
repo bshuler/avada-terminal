@@ -53,7 +53,7 @@ use avada_core::tools::PaneKind;
 use slint::Color;
 
 use crate::app::Window;
-use crate::state::{parse_hex, DetachedPane};
+use crate::state::{human_active, note_human_activity, parse_hex, DetachedPane};
 
 /// The pane fields the control plane (not the GUI) owns: a pane's launch spec (`command` /
 /// `args` / `shell`) and its orchestration `meta`. The GUI never edits these, so we carry them
@@ -563,6 +563,7 @@ impl ControlHost {
             None => return "Dictation needs the control server (Preferences)".to_string(),
         };
         let pane_id = self.pane_id_for(uid);
+        note_human_activity();
         if !shared.dictation.is_recording(&pane_id) {
             return match dictation_service::start_dictation(&shared, &pane_id, uid) {
                 Ok(recorder) => format!("Recording ({recorder}) — click the mic again to stop"),
@@ -572,7 +573,10 @@ impl ControlHost {
         let notices = Arc::clone(&self.dictation_notices);
         let uid = uid.to_string();
         std::thread::spawn(move || {
-            let msg = match dictation_service::stop_and_deliver(&shared, &pane_id, &uid) {
+            let delivered = dictation_service::stop_and_deliver(&shared, &pane_id, &uid);
+            // The transcript lands via the session directly, not `pane_write`: it is typing.
+            note_human_activity();
+            let msg = match delivered {
                 // The word count is in the toast on purpose: it is the one number that
                 // tells the user at a glance whether the pane got what they said, without
                 // reading the log or counting what appeared in the box.
@@ -596,6 +600,9 @@ impl ControlHost {
     #[tracing::instrument(level = "debug", ret, skip(self, shared, windows))]
     fn sync_dictation(&self, shared: &Arc<Shared>, windows: &[Rc<Window>]) {
         let recording = shared.dictation.recording_panes();
+        if !recording.is_empty() {
+            note_human_activity(); // talking counts as being here
+        }
         let notices: Vec<(String, String)> = match self.dictation_notices.lock() {
             Ok(mut q) => q.drain(..).collect(),
             Err(_) => Vec::new(),
@@ -700,9 +707,14 @@ impl ControlHost {
 
             // 1. Snapshot the read-model (it may have been mutated off-thread by a `/command`).
             //    A pending `focusPane` rides along, resolved to the session uid the GUI keys on.
-            let focus_req = model
-                .take_pending_focus()
-                .and_then(|pid| model.pane(&pid).map(|p| p.session_uid.clone()));
+            //    While the human is typing, leave it pending (the steal waits for idle).
+            let focus_req = if focus_held(windows) {
+                None
+            } else {
+                model
+                    .take_pending_focus()
+                    .and_then(|pid| model.pane(&pid).map(|p| p.session_uid.clone()))
+            };
             let (cur, cur_active, focus_uid) = self.snapshot_model(&model, windows);
 
             // 2. Reconcile the model→GUI deltas (what the control plane changed) on the UI thread.
@@ -989,7 +1001,14 @@ impl ControlHost {
         // focused tab by a pane that actually lives in it (stable across tab reorder/close),
         // falling back to the positional id only when the active tab is empty.
         let prev_active = self.prev_active.borrow();
+        let hold_focus = focus_held(windows);
         for (wid, act) in cur_active {
+            if hold_focus {
+                // The human is working; the tab switch waits for idle (the model's active tab
+                // is rebuilt from the GUI on publish, so this request is dropped, not queued —
+                // `focusPane` is the held, retried form).
+                continue;
+            }
             if prev_active.get(wid).map(|a| a.as_deref()) == Some(act.as_deref()) {
                 continue;
             }
@@ -1099,7 +1118,12 @@ impl ControlHost {
             return false;
         }
         let mut changed = false;
+        let mut held: Vec<UiOp> = Vec::new();
         for op in ops {
+            if layout_op_held(&op, windows) {
+                held.push(op);
+                continue;
+            }
             match op {
                 UiOp::NewTab {
                     window_id,
@@ -1232,6 +1256,13 @@ impl ControlHost {
                         reply.send(result);
                     }
                 }
+            }
+        }
+        if !held.is_empty() {
+            // Held, not dropped: they run on the first tick after the human goes idle.
+            let mut q = shared.ui_ops.lock().unwrap();
+            for op in held {
+                q.push(op);
             }
         }
         changed
@@ -1694,6 +1725,55 @@ fn resolve_tab<'a>(windows: &'a [Rc<Window>], tab_id: &str) -> Option<(&'a Rc<Wi
     let w = window_by_id(windows, wid.parse().ok()?)?;
     let idx: usize = idx.parse().ok()?;
     (idx < w.state.borrow().tabs.len()).then_some((w, idx))
+}
+
+/// Whether the human is active right now, per the idle-timeout setting. Settings are app-wide
+/// but held per window, so the first window answers.
+fn focus_held(windows: &[Rc<Window>]) -> bool {
+    windows
+        .first()
+        .is_some_and(|w| human_active(w.state.borrow().settings.idle_activity_timeout_seconds))
+}
+
+/// Whether tab `idx` of window `w` is the tab that window is showing — the one the human is
+/// working in.
+fn is_active_tab(w: &Window, idx: usize) -> bool {
+    w.state.borrow().active == idx
+}
+
+/// Whether an AUTOMATIC (control-plane) layout op must wait because the human is active in the
+/// tab it would change. Focus ops steal the keyboard from wherever the human is, so they wait
+/// whenever the human is active; moves, reorders and layout switches wait only when they touch
+/// the tab being worked in, so automation on other tabs carries on. Ops that are not layout
+/// changes are never held.
+fn layout_op_held(op: &UiOp, windows: &[Rc<Window>]) -> bool {
+    if !focus_held(windows) {
+        return false;
+    }
+    match op {
+        UiOp::FocusTab { .. } => true,
+        UiOp::MoveTab { tab_id, .. } | UiOp::SetTabLayout { tab_id, .. } => {
+            resolve_tab(windows, tab_id).is_some_and(|(w, i)| is_active_tab(w, i))
+        }
+        UiOp::MovePane {
+            session_uid,
+            tab_id,
+        } => {
+            let target = resolve_tab(windows, tab_id).is_some_and(|(w, i)| is_active_tab(w, i));
+            target || pane_in_active_tab(windows, session_uid)
+        }
+        UiOp::MovePaneToNewTab { session_uid, .. } => pane_in_active_tab(windows, session_uid),
+        _ => false,
+    }
+}
+
+fn pane_in_active_tab(windows: &[Rc<Window>], uid: &str) -> bool {
+    windows.iter().any(|w| {
+        let st = w.state.borrow();
+        st.tabs
+            .get(st.active)
+            .is_some_and(|t| t.panes.iter().any(|p| p.uid == uid))
+    })
 }
 
 /// `(tab index, pane index)` of the pane hosting session `uid`, given each tab's pane uids in

@@ -1306,6 +1306,7 @@ const HUMAN_INPUT_STALE: std::time::Duration = std::time::Duration::from_secs(30
 /// direction is the dangerous one.
 #[tracing::instrument(level = "debug", skip(data))]
 pub fn note_human_input(uid: &str, data: &str) {
+    note_human_activity();
     let clears = data.contains(['\r', '\n', '\x03', '\x15']) || data == "\x1b";
     let starts = !data.starts_with('\x1b') && data.chars().any(|c| c >= ' ' && c != '\x7f');
     let mut pending = pending_human_input()
@@ -1327,6 +1328,64 @@ pub fn human_line_pending(uid: &str) -> bool {
         .expect("pending_human_input lock")
         .get(uid)
         .is_some_and(|at| at.elapsed() < HUMAN_INPUT_STALE)
+}
+
+fn last_human_activity() -> &'static std::sync::Mutex<Option<Instant>> {
+    static A: std::sync::OnceLock<std::sync::Mutex<Option<Instant>>> = std::sync::OnceLock::new();
+    A.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Stamp "a human is doing something right now". Called from every human input path —
+/// keystrokes and pastes ([`note_human_input`]), menu/command use (`command::dispatch`),
+/// and voice dictation (record start, while recording, and transcript delivery, none of which
+/// go through `pane_write`). Unlike [`human_line_pending`] this carries no "unsent line"
+/// meaning: any activity at all resets the idle clock behind [`human_active`].
+pub fn note_human_activity() {
+    *last_human_activity()
+        .lock()
+        .expect("last_human_activity lock") = Some(Instant::now());
+}
+
+/// Pure core of [`human_active`]: was `last` within `timeout_secs` of now? `0` disables the hold.
+fn activity_is_recent(last: Option<Instant>, timeout_secs: u32) -> bool {
+    timeout_secs > 0
+        && last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(timeout_secs.into()))
+}
+
+/// Whether a human was active (typed, used a menu, dictated) within `timeout_secs` — the
+/// setting [`Settings::idle_activity_timeout_seconds`]. While true, AUTOMATIC layout changes
+/// (control-plane pane/tab moves, tab focus, layout switches) are held; user-initiated
+/// ones never consult this.
+pub fn human_active(timeout_secs: u32) -> bool {
+    let last = *last_human_activity()
+        .lock()
+        .expect("last_human_activity lock");
+    activity_is_recent(last, timeout_secs)
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    #[test]
+    fn recent_activity_holds_and_expires() {
+        let ago = |s: u64| Instant::now().checked_sub(std::time::Duration::from_secs(s));
+        assert!(!activity_is_recent(None, 12), "never active");
+        assert!(activity_is_recent(ago(2), 12), "2s ago is within 12s");
+        assert!(!activity_is_recent(ago(20), 12), "20s ago has expired");
+        assert!(!activity_is_recent(ago(0), 0), "0 disables the hold");
+    }
+
+    #[test]
+    fn every_input_path_stamps_activity() {
+        // Global clock shared with parallel tests: only assert the direction that is
+        // deterministic (a stamp makes it active), never that it starts idle.
+        note_human_input("act-test-uid", "\x1b[D"); // a bare arrow key still counts
+        assert!(human_active(12));
+        note_human_activity();
+        assert!(human_active(12));
+        assert!(!human_active(0), "0 disables the hold even right after activity");
+    }
 }
 
 #[cfg(test)]

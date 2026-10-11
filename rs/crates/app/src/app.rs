@@ -1765,6 +1765,10 @@ impl App {
         // Any command is user activity — snap the pump back to the fast cadence (#3) so the
         // result renders immediately even if we'd dropped to the idle cadence.
         self.wake();
+        // …and it resets the idle clock that holds automatic layout changes (menus, palette,
+        // buttons and shortcuts all arrive here; `command::dispatch` is also driven by
+        // modules, which must not look like a human).
+        crate::state::note_human_activity();
         tracing::debug!("cmd[{}] {cmd:?}", win.id);
         if matches!(cmd, Command::OpenAppContext(..)) {
             self.publish_window_directory(win);

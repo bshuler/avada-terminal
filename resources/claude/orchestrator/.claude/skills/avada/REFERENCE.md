@@ -156,6 +156,11 @@ palette change relabels every tab, a theme change repaints every pane.
 `idleAlertSeconds`, `autoUpdate`, `copyOnSelect`, `keepAlive`, `toolFavorites`, `toolPaths`,
 `browserMode`, `browserApp` and `confirmClose` — but read it rather than trusting this list.
 
+`idleActivityTimeoutSeconds` (default 12, `0` = off) is the human-activity hold: while the human
+has typed, used a menu or dictated within that many seconds, your `focus-tab`, `move-tab`,
+`move-pane`, `set-layout` (on the tab they are working in) and `focus-pane` calls are still
+accepted but **deferred** until they go idle. Don't retry them; they apply on their own.
+
 `503` means no GUI is attached, so there are no live settings to serve.
 
 ## Raw passthroughs

@@ -257,6 +257,11 @@ pub struct Settings {
     /// the built-in prompt ([`crate::loops::DEFAULT_STATUS_PROMPT`]); a single line, since it
     /// is submitted with one Enter. Capped at [`MAX_STATUS_LOOP_PROMPT`] chars.
     pub status_loop_prompt: String,
+    /// Seconds without any human activity (typing, menu use, voice dictation) before the app
+    /// resumes AUTOMATIC layout changes — control-plane pane moves, tab moves/focus, layout
+    /// switches — on the tab the human is working in. Until then those are held, not dropped.
+    /// `0` turns the hold off (automation never waits).
+    pub idle_activity_timeout_seconds: u32,
 }
 
 /// [`Settings::browser_mode`] — hand the URL to the OS default handler.
@@ -297,6 +302,7 @@ impl Default for Settings {
             status_loop_minutes: 15,
             restart_loop_hours: 24,
             status_loop_prompt: String::new(),
+            idle_activity_timeout_seconds: DEFAULT_IDLE_ACTIVITY_SECONDS,
         }
     }
 }
@@ -421,6 +427,12 @@ impl Settings {
                 self.restart_loop_hours
             ));
         }
+        if self.idle_activity_timeout_seconds > MAX_IDLE_ACTIVITY_SECONDS {
+            return Err(format!(
+                "idleActivityTimeoutSeconds {} is out of range (0 = off, else 1..={MAX_IDLE_ACTIVITY_SECONDS})",
+                self.idle_activity_timeout_seconds
+            ));
+        }
         if self.scrollback > MAX_SCROLLBACK {
             return Err(format!(
                 "scrollback {} is out of range (0..={MAX_SCROLLBACK})",
@@ -446,6 +458,10 @@ pub const MAX_SCROLLBACK: u32 = 100_000;
 /// Upper bound for [`Settings::status_loop_prompt`] in chars; one Enter submits it, so a
 /// paragraph is plenty.
 pub const MAX_STATUS_LOOP_PROMPT: usize = 4000;
+/// Default for [`Settings::idle_activity_timeout_seconds`]: long enough not to fire mid-thought.
+pub const DEFAULT_IDLE_ACTIVITY_SECONDS: u32 = 12;
+/// Upper bound for [`Settings::idle_activity_timeout_seconds`] (an hour).
+pub const MAX_IDLE_ACTIVITY_SECONDS: u32 = 3600;
 /// Upper bound for [`Settings::restart_loop_hours`] (thirty days); `0` means off.
 pub const MAX_RESTART_LOOP_HOURS: u32 = 720;
 
@@ -604,6 +620,7 @@ mod tests {
             status_loop_minutes: 5,
             restart_loop_hours: 6,
             status_loop_prompt: String::from("status please"),
+            idle_activity_timeout_seconds: 30,
         }
     }
 
