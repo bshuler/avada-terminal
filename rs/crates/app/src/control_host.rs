@@ -205,7 +205,7 @@ impl ControlHost {
         let settings = control_settings::load();
         // Panes may inherit `AVADA_CONTROL_FILE` set-but-empty from the app; treat
         // empty as unset (see `avada pair`'s identical workaround).
-        let control_file = avada_core::compat::env_var_os("AVADA_CONTROL_FILE")
+        let control_file = std::env::var_os("AVADA_CONTROL_FILE")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(paths::control_json);
@@ -1685,7 +1685,10 @@ fn color_hex(c: Color) -> String {
 
 #[tracing::instrument(level = "debug", ret)]
 fn env_truthy(name: &str) -> bool {
-    avada_core::compat::env_truthy(name)
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
 }
 
 /// Words in a transcript, for the dictation toast.

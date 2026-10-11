@@ -29,14 +29,8 @@ pub const SET_FORMAT: &str = "avada-set";
 /// The newest set-envelope `version` this module reads.
 pub const SET_VERSION: u32 = 1;
 
-/// The pre-rename `format` a set file may still carry (`hyperpanes-set`), read but never
-/// written — the same both-ways compatibility the host keeps in `compat`.
-pub const LEGACY_SET_FORMAT: &str = "hyperpanes-set";
-
 /// The repo-local project directory, relative to the checkout root.
 pub const PROJECT_DIR: &str = ".avada";
-/// The pre-rename project directory, still read when only it exists.
-pub const LEGACY_PROJECT_DIR: &str = ".hyperpanes";
 /// The repo-local project file inside [`PROJECT_DIR`].
 pub const PROJECT_FILE: &str = "project.json";
 
@@ -312,12 +306,7 @@ pub fn parse_set(raw: &str) -> Result<WorkspaceSet, String> {
     if !obj.contains_key("format") {
         return serde_json::from_value(value).map_err(|e| format!("invalid workspace set: {e}"));
     }
-    check_envelope(
-        obj,
-        &[SET_FORMAT, LEGACY_SET_FORMAT],
-        SET_VERSION,
-        "workspace set",
-    )?;
+    check_envelope(obj, &[SET_FORMAT], SET_VERSION, "workspace set")?;
     let payload = obj
         .get("set")
         .cloned()
@@ -498,15 +487,13 @@ mod tests {
     }
 
     #[test]
-    fn a_set_reads_in_both_the_new_and_the_pre_rename_format() {
-        for format in [SET_FORMAT, LEGACY_SET_FORMAT] {
-            let raw = format!(
-                r#"{{"format":"{format}","version":1,"set":{{"name":"Work","members":[{{"path":"a.avada"}}]}}}}"#
-            );
-            let set = parse_set(&raw).unwrap();
-            assert_eq!(set.name, "Work");
-            assert_eq!(set.members[0].path, "a.avada");
-        }
+    fn a_set_reads_in_its_format() {
+        let raw = format!(
+            r#"{{"format":"{SET_FORMAT}","version":1,"set":{{"name":"Work","members":[{{"path":"a.avada"}}]}}}}"#
+        );
+        let set = parse_set(&raw).unwrap();
+        assert_eq!(set.name, "Work");
+        assert_eq!(set.members[0].path, "a.avada");
         // And a workspace is not a set, however well-formed it is.
         assert!(parse_set(r#"{"format":"avada","version":1,"workspace":{}}"#).is_err());
     }

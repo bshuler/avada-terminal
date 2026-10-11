@@ -158,8 +158,7 @@ fn fs_list(root: &Path, path: &str) -> Result<Value, Value> {
     }))
 }
 
-/// `host.fs.read`. A missing file is an error, which is how the module tells `.avada` from
-/// `.hyperpanes` without a directory listing.
+/// `host.fs.read`. A missing file is an error.
 fn fs_read(root: &Path, path: &str) -> Result<Value, Value> {
     let real = PathBuf::from(path)
         .canonicalize()

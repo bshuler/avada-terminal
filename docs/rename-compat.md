@@ -1,45 +1,30 @@
 # Rename compatibility: Hyperpanes → Avada Terminal
 
 Avada Terminal shipped as **Hyperpanes** through 0.0.36. The rename touched every
-outward-facing name at once (binary `avada`, bundle id `to.avada.terminal`, app-support
-directory, `AVADA_*` environment variables, `.avada/` project directory, `.avada`
-workspace suffix, `avada-set` format tag). Everything that carried the old name is still
-on users' disks and in their scripts, so the code keeps a compatibility layer in
-`rs/crates/core/src/compat.rs` — the one module that knows the old spellings.
+outward-facing name at once: binary `avada`, bundle id `to.avada.terminal`, app-support
+directory `avada`, `AVADA_*` environment variables, `.avada/` project directory, `.avada`
+workspace suffix, `avada-set` format tag.
 
-## Policy
+## Compatibility has ended (0.2.34)
 
-**Read both, write the new.** A legacy env var, project directory, suffix or format tag
-is accepted wherever the new one is. The app only ever writes the new one.
+Up to 0.2.33 the app read the old spellings wherever it read the new ones, and copied
+the old app-support directory into the new one on first launch. From 0.2.34 it reads
+only the new names:
 
-**The environment mirror has ended.** Until 0.2.33 every `AVADA_*` variable the app
-injected into a pane (`AVADA_PANE_ID`, `AVADA_CONTROL_FILE`, `AVADA_CONTROL_TOKEN`, …)
-also got a `HYPERPANES_*` twin. From 0.2.34 panes get only the `AVADA_*` names; a hook
-script or MCP configuration that reads `HYPERPANES_*` must be renamed. Avada itself
-still *reads* a `HYPERPANES_*` value when the `AVADA_*` one is absent.
+- **Environment.** Only `AVADA_*` variables are read or injected into panes. A hook
+  script or MCP configuration that still reads `HYPERPANES_*` must be renamed.
+- **Data directory.** The old app-support directory is no longer copied. A machine
+  still holding `~/Library/Application Support/hyperpanes` (macOS), `%APPDATA%\hyperpanes`
+  (Windows) or `$XDG_*_HOME/hyperpanes` (Linux) and no `avada` directory must copy it
+  across by hand before launching 0.2.34. Copy into an empty `avada` directory only:
+  merging the two by modification time replaces newer settings with older ones.
+- **Project directories.** A checkout's layout lives in `.avada/project.json`. Rename a
+  leftover `.hyperpanes/` to `.avada/` (`git mv .hyperpanes .avada`).
+- **Workspace files and sets.** `*.hyperpanes` files and sets tagged
+  `"format": "hyperpanes-set"` no longer open; rename the file to `*.avada` or change the
+  tag to `avada-set`.
 
-**Copy the data directory once.** On the first launch, the old app-support directory is
-copied into the new one:
-
-| Platform | Old | New |
-|---|---|---|
-| macOS | `~/Library/Application Support/hyperpanes` | `~/Library/Application Support/avada` |
-| Windows | `%APPDATA%\hyperpanes` | `%APPDATA%\avada` |
-| Linux | `$XDG_CONFIG_HOME/hyperpanes`, `$XDG_DATA_HOME/hyperpanes`, `$XDG_STATE_HOME/hyperpanes` | same, `avada` |
-
-It is a copy, not a move: the old install may still be installed and running against
-its directory. Files the new directory already has are kept (a launch of the renamed
-app before this shipped is not undone), and live state is never carried over: `logs/`,
-`control.json`, `control-pane-ids.json`, SQLite `-wal`/`-shm` side files, `*.bak`. A
-marker file `.migrated-from-hyperpanes` in the new directory records what was copied
-and makes the copy a one-time event; delete it to copy again (existing files still win).
-
-**Project directories.** A checkout with only `.hyperpanes/project.json` is discovered
-and read as before. The first time Avada writes into that checkout it renames
-`.hyperpanes/` to `.avada/` — one git-visible rename, no copy. A checkout with both
-directories uses `.avada/` and leaves the other alone.
-
-## What you may notice after upgrading
+## What you may notice after upgrading from Hyperpanes
 
 - **Microphone (macOS).** Permissions are granted per bundle id. `to.avada.terminal`
   is new to the system, so the first dictation prompts for the microphone again. The
@@ -47,9 +32,6 @@ directories uses `.avada/` and leaves the other alone.
   Settings → Privacy & Security → Microphone.
 - **Accessibility / automation (macOS).** Same rule; re-grant once if you use a feature
   that needs it.
-- **Claude Code skills and MCP config.** A `.claude/skills/hyperpanes` directory or a
-  `hyperpanes-mcp` entry in `~/.claude.json` that reads `HYPERPANES_*` stopped working
-  when the env mirror ended (0.2.34). The shipped skill is `.claude/skills/avada`.
-- **Workspace files** named `*.hyperpanes` still open (`avada ./dev.hyperpanes`); the
-  file association on Windows and Linux registers only `*.avada`.
-- **The old app** keeps its own directory and settings and can run alongside the new one.
+- **Claude Code skills and MCP config.** The shipped skill is `.claude/skills/avada`; a
+  leftover `.claude/skills/hyperpanes` directory or `hyperpanes-mcp` entry in
+  `~/.claude.json` no longer works and can be deleted.

@@ -22,7 +22,7 @@ into three sections:
 
 | Section | What is in it |
 | --- | --- |
-| **PROJECT** | `.avada/project.json` — the layout checked in beside the code (`.hyperpanes/project.json` is still read) |
+| **PROJECT** | `.avada/project.json` — the layout checked in beside the code |
 | **LIBRARY** | Every other saved workspace file under the root (`*.avada.json`, `*.workspace.json`) |
 | **SETS** | Workspace sets (`*.set.json`) — a named list of workspaces to open together |
 
