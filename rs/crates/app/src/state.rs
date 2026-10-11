@@ -4071,7 +4071,7 @@ impl State {
     /// the app's per-tick retry (which keeps `orchestrator_done` unlatched on failure) is
     /// bounded rather than every 8 ms.
     #[tracing::instrument(level = "debug", ret, skip(self))]
-    fn materialize_orchestrator_dir(&mut self) -> Option<std::path::PathBuf> {
+    pub(crate) fn materialize_orchestrator_dir(&mut self) -> Option<std::path::PathBuf> {
         let now = std::time::Instant::now();
         if self.orchestrator_retry_at.is_some_and(|at| now < at) {
             return None;

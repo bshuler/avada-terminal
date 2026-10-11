@@ -108,10 +108,21 @@ fn copy_over(src: &Path, dest: &Path) -> io::Result<()> {
             if fs::create_dir_all(&to).is_ok() {
                 let _ = copy_over(&from, &to);
             }
-        } else {
-            let _ = fs::copy(&from, &to);
+        } else if let Err(e) = copy_file(&from, &to) {
+            tracing::warn!(error = %e, file = %to.display(), "could not refresh a shipped orchestrator file");
         }
     }
+    Ok(())
+}
+
+/// Copy one file's bytes onto `to`, unlocking a stale copy first. Not `fs::copy`: on macOS
+/// that clones the `uchg` flag off the locked bundle, and the next refresh then fails (see
+/// [`crate::fs_flags`]). Copies made that way before 0.2.37 are healed here.
+fn copy_file(from: &Path, to: &Path) -> io::Result<()> {
+    crate::fs_flags::clear(to)?;
+    let mut src = fs::File::open(from)?;
+    let mut dst = fs::File::create(to)?;
+    io::copy(&mut src, &mut dst)?;
     Ok(())
 }
 
@@ -214,6 +225,30 @@ mod tests {
             fs::read_to_string(dest.join("notes.md")).unwrap(),
             "the agent's own notes"
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A shipped file cloned off the locked bundle before 0.2.37 is immutable; the refresh
+    /// must unlock it and replace it, and the new copy must not carry the lock.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_locked_stale_copy_is_refreshed_and_unlocked() {
+        use std::os::macos::fs::MetadataExt;
+        let tmp = scratch("locked");
+        let (src, dest) = (tmp.join("src"), tmp.join("dest"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(src.join("README.md"), "new").unwrap();
+        fs::write(dest.join("README.md"), "old").unwrap();
+        crate::fs_flags::tests::chflags("uchg", &src.join("README.md"));
+        crate::fs_flags::tests::chflags("uchg", &dest.join("README.md"));
+
+        copy_over(&src, &dest).unwrap();
+
+        assert_eq!(fs::read_to_string(dest.join("README.md")).unwrap(), "new");
+        let flags = fs::metadata(dest.join("README.md")).unwrap().st_flags();
+        assert_eq!(flags, 0, "the copy inherits no flags");
+        crate::fs_flags::clear_tree(&tmp);
         let _ = fs::remove_dir_all(&tmp);
     }
 

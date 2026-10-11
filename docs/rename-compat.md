@@ -43,6 +43,8 @@ only the new names:
 - **Workspace directory.** On first launch `~/Library/Application Support/avada/hyperpane`
   (and its Windows/Linux equivalents) is renamed in place to `…/avada/orchestrator`. If
   both exist, both are kept and a warning is logged; merge them by hand.
+  From 0.2.37 this runs on every launch; 0.2.36 ran it only when it created the tab, so
+  an install that already had the tab kept the old name until 0.2.37.
 - **Module.** `bshuler/avada-hyperpane` is uninstalled once `bshuler/avada-orchestrator`
   is installed, and its block leaves the directory's `AGENTS.md`.
 - **Tab title.** A system tab still titled "Hyperpane" or "Avada" is renamed

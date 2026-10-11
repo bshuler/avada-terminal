@@ -17,6 +17,7 @@ pub mod claude_subagents;
 pub mod cli;
 pub mod control;
 pub mod edition;
+pub mod fs_flags;
 /// Reading one commit out of a repository — what a clicked hash needs to become a view.
 pub mod git;
 pub mod orchestrator;

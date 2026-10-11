@@ -344,6 +344,9 @@ impl InstallStore {
                 version: Some(version.clone()),
             });
         }
+        // A skill file staged before 0.2.37 was cloned off the locked bundle and kept its
+        // `uchg` flag; without this the removal stops at EPERM halfway through.
+        crate::fs_flags::clear_tree(&version_dir);
         std::fs::remove_dir_all(&version_dir).map_err(|e| io_at(&version_dir, e))?;
         let mut lockfile = self.lockfile()?;
         if lock::deactivate_version(&mut lockfile, id, version) {
@@ -580,7 +583,10 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), InstallError> {
         if meta.is_dir() {
             copy_tree(&src, &dst)?;
         } else if meta.is_file() {
-            std::fs::copy(&src, &dst).map_err(|e| io_at(&src, e))?;
+            // Bytes, not `std::fs::copy`: a macOS clone would carry the bundle's `uchg`.
+            let mut r = std::fs::File::open(&src).map_err(|e| io_at(&src, e))?;
+            let mut w = std::fs::File::create(&dst).map_err(|e| io_at(&dst, e))?;
+            std::io::copy(&mut r, &mut w).map_err(|e| io_at(&src, e))?;
         }
     }
     Ok(())
@@ -1084,6 +1090,22 @@ mod tests {
         assert_eq!(std::fs::read(&installed.binary).unwrap(), b"locked");
         // The copy carries no flags: it can be replaced, which a reinstall relies on.
         std::fs::remove_file(&installed.binary).expect("no uchg on the copy");
+    }
+
+    /// A version directory holding an immutable file (a skill cloned off the locked bundle
+    /// before 0.2.37) must still uninstall completely: stopping at EPERM left 0.2.36 with a
+    /// recordless directory the runtime reported as a broken install.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn uninstall_removes_a_version_holding_an_immutable_file() {
+        let s = Scratch::new("uninstall-uchg");
+        let installed = s.install(v("1.2.0"), &[], b"one");
+        let locked = installed.data_dir.join("SKILL.md");
+        std::fs::write(&locked, b"x").unwrap();
+        crate::fs_flags::tests::chflags("uchg", &locked);
+        s.store.uninstall(&id(), &v("1.2.0")).unwrap();
+        assert!(!s.store.paths().version_dir(&id(), &v("1.2.0")).exists());
+        assert!(s.store.installed_versions(&id()).unwrap().is_empty());
     }
 
     #[test]

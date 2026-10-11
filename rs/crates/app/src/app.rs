@@ -2749,6 +2749,13 @@ impl App {
                     .unwrap_or(false)
             });
         if existing {
+            // The tab was restored, so nothing below materializes its directory — yet that
+            // is the step that refreshes the shipped files and carries a pre-0.2.36
+            // `hyperpane` directory over to its new name. Run it here too; on failure stay
+            // unlatched so the next tick retries, the same as the creation path.
+            if st.materialize_orchestrator_dir().is_none() {
+                return;
+            }
             self.orchestrator_done.set(true);
             return;
         }
