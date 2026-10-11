@@ -6,6 +6,16 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B6 · The orchestrator module's always-on rule never reaches its folder (2026-10-11)
+`skills::Materializer` has no runtime caller: nothing walks the registry's enabled modules
+and writes their always-on rules into a pane's folder. So the `avada/orchestrator` module's
+rule never lands in `~/Library/Application Support/avada/orchestrator/AGENTS.md`. 0.2.38
+only removes the stale pre-module `avada/hyperpane` block that was left there in September
+(`orchestrator::drop_legacy_fences`); it does not write a replacement block. Fix direction: call
+`Materializer::plan` / `apply` from launch (or from the module enable/disable path) for
+the orchestrator folder, with a test that an enabled module's rule appears there and a
+disabled one's is removed.
+
 ### B3 · GUI wedges in `render_screen` and the control API starves (2026-10-09)
 Seen on the 0.2.31 GUI (pid 76456, daemon 76462) after a machine-wide swap thrash; it did not
 recover once memory was freed. Evidence gathered without restarting anything:

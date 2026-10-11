@@ -239,6 +239,9 @@ fn seed_one(
     if store.installed_versions(&id)?.contains(&version) {
         match store.record_at(&id, &version) {
             Ok(installed) => {
+                // A version seeded before 0.2.37 cloned its skills off the locked bundle
+                // and kept `uchg`; heal it here, since a verified install is never re-copied.
+                crate::fs_flags::clear_tree(&store.paths().version_dir(&id, &version));
                 let missing: Vec<&str> = accepted
                     .difference(&installed.rights().accepted)
                     .map(|c| c.name())
@@ -460,6 +463,25 @@ mod tests {
         let second = b.seed();
         assert!(second.seeded.is_empty());
         assert_eq!(second.skipped, 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_locked_file_in_an_installed_version_is_unlocked_on_the_next_launch() {
+        let b = Bench::new("unlock");
+        let m = manifest();
+        b.stage(&m, b"binary-bytes");
+        assert!(b.seed().failures.is_empty());
+
+        // What a 0.2.36 clone of the locked bundle left behind.
+        let vdir = b.store.paths().version_dir(m.id(), &m.module.version);
+        let skill = vdir.join("skills").join("greet").join("SKILL.md");
+        assert!(skill.is_file(), "{}", skill.display());
+        crate::fs_flags::tests::chflags("uchg", &skill);
+
+        let again = b.seed();
+        assert_eq!(again.skipped, 1);
+        std::fs::write(&skill, "# writable again\n").expect("the heal cleared uchg");
     }
 
     #[test]

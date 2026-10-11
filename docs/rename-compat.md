@@ -46,7 +46,12 @@ only the new names:
   From 0.2.37 this runs on every launch; 0.2.36 ran it only when it created the tab, so
   an install that already had the tab kept the old name until 0.2.37.
 - **Module.** `bshuler/avada-hyperpane` is uninstalled once `bshuler/avada-orchestrator`
-  is installed, and its block leaves the directory's `AGENTS.md`.
+  is installed. From 0.2.38 a version seeded before 0.2.37 also loses the `uchg` flag its
+  skill files cloned off the bundle.
+- **`AGENTS.md` / `CLAUDE.md`.** The rule the host fenced into the directory before it
+  became a module (`avada/hyperpane` in `AGENTS.md`, plus the `@AGENTS.md` import in
+  `CLAUDE.md`) was never swept, so the agent kept reading "Hyperpane". From 0.2.38 both
+  fences are removed on launch; text outside them stays.
 - **Tab title.** A system tab still titled "Hyperpane" or "Avada" is renamed
   "Orchestrator"; a title you chose yourself is kept.
 

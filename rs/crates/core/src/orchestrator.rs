@@ -89,10 +89,44 @@ pub fn move_legacy_dir(legacy: &Path, dest: &Path) {
 #[tracing::instrument(level = "debug", ret)]
 pub fn materialize_into(dest: &Path, src: Option<&Path>) -> io::Result<PathBuf> {
     fs::create_dir_all(dest)?;
+    drop_legacy_fences(dest);
     if let Some(src) = src {
         copy_over(src, dest)?;
     }
     Ok(dest.to_path_buf())
+}
+
+/// Remove what the host fenced into this directory before the tab's rule moved into the
+/// orchestrator module (September 2026): the rule itself, under `avada/hyperpane` in
+/// `AGENTS.md`, and the `@AGENTS.md` import under the host id in `CLAUDE.md`. Nothing has
+/// written either since, so no sweep would ever take them away, and the agent kept reading
+/// the old product's name. Text outside the fences is the user's and stays; the import goes
+/// only once `AGENTS.md` is gone, so a user's own `AGENTS.md` is still imported.
+fn drop_legacy_fences(dest: &Path) {
+    unfence(&dest.join("AGENTS.md"), "avada/hyperpane");
+    if !dest.join("AGENTS.md").exists() {
+        unfence(&dest.join("CLAUDE.md"), crate::skills::HOST_ID);
+    }
+}
+
+/// Drop fence `id` from the file at `path`, removing the file when nothing but whitespace
+/// is left. A missing file, or one without that fence, is left alone.
+fn unfence(path: &Path, id: &str) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let next = avada_module_sdk::skills::splice_fenced(&text, id, None);
+    if next == text {
+        return;
+    }
+    let done = if next.trim().is_empty() {
+        fs::remove_file(path)
+    } else {
+        fs::write(path, next)
+    };
+    if let Err(e) = done {
+        tracing::warn!(error = %e, file = %path.display(), "could not drop a legacy fence");
+    }
 }
 
 /// Recursively copy `src` onto `dest`, overwriting collisions and leaving everything else in
@@ -249,6 +283,58 @@ mod tests {
         let flags = fs::metadata(dest.join("README.md")).unwrap().st_flags();
         assert_eq!(flags, 0, "the copy inherits no flags");
         crate::fs_flags::clear_tree(&tmp);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// The pre-module rule and its import are removed; the user's own text around them stays,
+    /// and a second run changes nothing.
+    #[test]
+    fn the_pre_module_fences_are_dropped_and_the_users_text_kept() {
+        let tmp = scratch("fences");
+        let dest = tmp.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(
+            dest.join("AGENTS.md"),
+            "<!-- avada:module=avada/hyperpane -->\n# Hyperpane\nold rule\n<!-- /avada:module=avada/hyperpane -->\n",
+        )
+        .unwrap();
+        fs::write(
+            dest.join("CLAUDE.md"),
+            "my notes\n<!-- avada:module=avada/modules -->\n@AGENTS.md\n<!-- /avada:module=avada/modules -->\n",
+        )
+        .unwrap();
+
+        materialize_into(&dest, None).unwrap();
+        assert!(!dest.join("AGENTS.md").exists());
+        assert_eq!(
+            fs::read_to_string(dest.join("CLAUDE.md")).unwrap(),
+            "my notes\n"
+        );
+
+        materialize_into(&dest, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("CLAUDE.md")).unwrap(),
+            "my notes\n"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A user's own `AGENTS.md` keeps the import that pulls it in.
+    #[test]
+    fn a_users_own_agents_md_keeps_its_import() {
+        let tmp = scratch("own-agents");
+        let dest = tmp.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        let claude = "<!-- avada:module=avada/modules -->\n@AGENTS.md\n<!-- /avada:module=avada/modules -->\n";
+        fs::write(dest.join("AGENTS.md"), "mine\n").unwrap();
+        fs::write(dest.join("CLAUDE.md"), claude).unwrap();
+
+        materialize_into(&dest, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("AGENTS.md")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(fs::read_to_string(dest.join("CLAUDE.md")).unwrap(), claude);
         let _ = fs::remove_dir_all(&tmp);
     }
 

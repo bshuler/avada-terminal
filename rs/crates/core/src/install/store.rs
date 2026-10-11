@@ -144,6 +144,8 @@ impl InstallStore {
         let version = record.version.clone();
         let version_dir = self.paths.version_dir(&id, &version);
         if version_dir.exists() {
+            // A wreck staged before 0.2.37 can hold a `uchg` skill file (see `uninstall`).
+            crate::fs_flags::clear_tree(&version_dir);
             std::fs::remove_dir_all(&version_dir).map_err(|e| io_at(&version_dir, e))?;
         }
         ensure_private_dir(self.paths.module_dir(&id).as_path())?;
