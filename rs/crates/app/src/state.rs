@@ -24,6 +24,7 @@ use avada_core::layout::sizes::{
 use avada_core::persistence::{paths, projects};
 use avada_core::session_manager::{AgentLiveness, SessionManager, SpawnOptions};
 use avada_core::claude_subagents::SubagentRecord;
+use avada_core::control::readmodel::overflow_base;
 use avada_core::tools::{PaneKind, ToolSessionMark};
 use avada_core::workspace::io::{read_workspace, windows_of, write_workspace};
 use avada_core::workspace::model::{ClosedSpec, GroupSpec, PaneSpec, WorkspaceFile};
@@ -1941,28 +1942,14 @@ const SUBAGENT_RECONCILE_EVERY: std::time::Duration = std::time::Duration::from_
 
 /// Most panes a tab shows; a subagent that would be the next one goes to an overflow tab.
 /// Bert (2026-10-10): "There should be 4 panels per tab max, if you need more open a
-/// increment name number tab". The control API's `new-pane` applies the same cap on its own
-/// side (`control/readmodel.rs`, the pane-cap lane).
-pub const SUBAGENT_TAB_CAP: usize = 4;
+/// increment name number tab". The same number caps the control API's `new-pane`
+/// (`ReadModel::tab_with_room`).
+pub const SUBAGENT_TAB_CAP: usize = avada_core::control::readmodel::MAX_PANES_PER_TAB;
 
 /// How long a fallback-only subagent's transcript may stay quiet before its **open** pane
 /// closes. Longer than `GROWTH_IDLE`, which gates opening, so one slow tool call does not
 /// flap a pane shut and open again.
 pub const FALLBACK_CLOSE_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// The name an overflow tab is numbered from: `title` minus a trailing " <digits>", so
-/// "Divi 2" overflows into "Divi 3", not "Divi 2 2".
-#[tracing::instrument(level = "debug", ret)]
-pub fn overflow_base(title: &str) -> &str {
-    match title.rsplit_once(' ') {
-        Some((base, n))
-            if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) =>
-        {
-            base
-        }
-        _ => title,
-    }
-}
 
 /// A pane parked by "Remind at…" — the detached pane (its session alive centrally) plus
 /// when it's due back. `fired` flips once the due time passes (set by the app tick) and

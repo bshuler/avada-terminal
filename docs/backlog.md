@@ -76,7 +76,7 @@ a_quiet_fallback_only_subagent_opens_no_pane,
 an_open_fallback_only_pane_closes_once_its_transcript_goes_quiet,
 the_fifth_pane_overflows_into_a_numbered_tab_that_closes_when_emptied}`. Same-day relief in the
 running app was `ctl toggle-subagents` on the four flooded tabs. Note: `main` has not merged B2;
-the `pane-cap` worktree applies the same 4-per-tab rule to the control API's `new-pane`. The TopBar chip (`Command::ToggleSubagents`,
+main's 304825a applies the same `MAX_PANES_PER_TAB` rule to the control API's `new-pane`. The TopBar chip (`Command::ToggleSubagents`,
 `ctl toggle-subagents [tab]`) hides them per tab — no tile, the rest take the room — and breathes
 on the Pulse curve while any is working, hidden or not.
 

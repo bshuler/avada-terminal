@@ -949,7 +949,7 @@ pub const MAX_PANES_PER_TAB: usize = 4;
 /// The name an overflow tab is numbered from: `title` minus a trailing " <digits>", so
 /// "Divi 2" overflows into "Divi 3", not "Divi 2 2".
 #[tracing::instrument(level = "debug", ret)]
-fn overflow_base(title: &str) -> &str {
+pub fn overflow_base(title: &str) -> &str {
     match title.rsplit_once(' ') {
         Some((base, n)) if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
         _ => title,
