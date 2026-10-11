@@ -80,6 +80,8 @@ main's 304825a applies the same `MAX_PANES_PER_TAB` rule to the control API's `n
 `ctl toggle-subagents [tab]`) hides them per tab — no tile, the rest take the room — and breathes
 on the Pulse curve while any is working, hidden or not.
 
+**Open hole (2026-10-10):** the four-pane cap is applied at *placement* time, and a tab with `hide_subagents` set places without a cap because hidden panes take no room. `hide_subagents` is persisted, so a tab hidden under 0.2.33 with dozens of still-running subagents can expose more than four at once when Show is clicked after the relaunch. Re-apply the cap (move the excess into "<tab> N" tabs) on Show, or cap at placement even while hidden.
+
 **Acceptance (plan §4):**
 - hook payload → record, fallback finds the same set: `claude_subagents::tests::captured_payloads_become_a_record_silently`,
   `a_hook_record_is_enriched_from_meta_and_matches_the_fallback_set`, `the_transcript_dir_fallback_reads_meta`;
