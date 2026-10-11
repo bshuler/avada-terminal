@@ -59,9 +59,24 @@ panes c521e95/5a4a366, chrome c7c774f, proof), merged with main at a79f05e.
 
 **Built:** a Claude hook plus the session's `subagents/` transcript directory give each pane's
 subagents (`avada_core::claude_subagents`); `State::reconcile_subagents` (1 Hz) opens a read-only
-`sub:<agent id>` viewer pane after the orchestrator, closes it once the orchestrator ends a turn
-after it stopped, never reopens one the user closed, and closes the lot with the orchestrator.
-Subagent panes are not saved in the session file. The TopBar chip (`Command::ToggleSubagents`,
+`sub:<agent id>` viewer pane after the orchestrator, closes it as soon as the subagent is finished,
+never reopens one the user closed, and closes the lot with the orchestrator.
+Subagent panes are not saved in the session file.
+
+**Revised 2026-10-10 (the pane flood):** the installed 0.2.33 opened every subagent a resumed
+session had *ever* run — 297 panes across the window, 193 in the TPLX tab — because the close rule
+needed both a hook `stopped_at` and the orchestrator's `last_turn_end`, and a pre-hook session has
+neither. `reconcile_subagents` now closes a finished pane at once (Bert: "finished should be
+closed"), treats a hook-less record as done when its transcript is quiet (`GROWTH_IDLE` 10 s to
+open, `FALLBACK_CLOSE_IDLE` 60 s to close), and caps a tab at `SUBAGENT_TAB_CAP` (4) panes: the
+next subagent goes to `<tab> 2`, `<tab> 3`, … inserted after its family, and an emptied overflow
+tab drops with its last pane (Bert: "4 panels per tab max … increment name number tab"). Tests:
+`subagent_pane_tests::{a_stopped_subagent_closes_at_once_and_is_never_reopened,
+a_quiet_fallback_only_subagent_opens_no_pane,
+an_open_fallback_only_pane_closes_once_its_transcript_goes_quiet,
+the_fifth_pane_overflows_into_a_numbered_tab_that_closes_when_emptied}`. Same-day relief in the
+running app was `ctl toggle-subagents` on the four flooded tabs. Note: `main` has not merged B2;
+the `pane-cap` worktree applies the same 4-per-tab rule to the control API's `new-pane`. The TopBar chip (`Command::ToggleSubagents`,
 `ctl toggle-subagents [tab]`) hides them per tab — no tile, the rest take the room — and breathes
 on the Pulse curve while any is working, hidden or not.
 

@@ -93,8 +93,14 @@ parent link.
   `subagents_for_pane`; create missing subagent panes **in the orchestrator's tab** (not the
   active tab) right after the orchestrator and its earlier subagents, label
   `<orchestrator label> › <description>`; update finished state; close a finished subagent
-  pane once `last_turn_end` > its `stopped_at`. User-closed ones are remembered per
-  `agent_id` and not re-created.
+  pane (`stopped_at` set) on the next pass, and a fallback-only one (no hook record) once its
+  transcript has been quiet for `FALLBACK_CLOSE_IDLE` (60 s); never open one that is already
+  finished or quiet (`GROWTH_IDLE`), so a resumed session's history of helpers stays closed
+  (2026-10-10, revised from "once `last_turn_end` > `stopped_at`" after the 193-pane flood).
+  User-closed ones are remembered per `agent_id` and not re-created. A tab shows at most
+  `SUBAGENT_TAB_CAP` (4) panes: the next subagent lands in an overflow tab `<title> 2`,
+  `<title> 3`, … right after its family, which drops when its last pane closes; a tab that
+  hides its subagents has room for any number.
 - Viewer: `tail_rows(transcript, max)` (assistant text / tool name / collapsed result) and a
   `rows_for` arm for `PaneKind::Subagent`; fingerprint covers the transcript mtime+len.
   Read-only.

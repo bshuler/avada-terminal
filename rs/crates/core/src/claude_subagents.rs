@@ -269,8 +269,8 @@ pub fn turn_end_in(hook_dir: &Path) -> Option<SystemTime> {
     Some(from_ms(serde_json::from_str::<TurnRecord>(&text).ok()?.ended_at))
 }
 
-/// When `pane_id`'s orchestrator last ended a turn. A finished subagent pane closes once this
-/// is later than its `stopped_at`.
+/// When `pane_id`'s orchestrator last ended a turn (the hook's `_turn.json`). No longer gates
+/// closing a finished subagent pane — that closes at once — but the marker is still written.
 #[tracing::instrument(level = "debug", ret)]
 pub fn last_turn_end(pane_id: &str) -> Option<SystemTime> {
     turn_end_in(&paths::claude_subagents_dir().join(pane_id))

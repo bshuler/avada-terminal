@@ -93,10 +93,7 @@ fn a_sessions_subagents_open_beside_the_orchestrator_and_the_toggle_hides_them()
                     r.stopped_at = Some(SystemTime::now());
                 }
             }
-            SubagentScan {
-                records,
-                last_turn_end: None,
-            }
+            SubagentScan { records }
         };
         let t0 = Instant::now();
         let opened = state
@@ -189,11 +186,12 @@ fn a_sessions_subagents_open_beside_the_orchestrator_and_the_toggle_hides_them()
         assert_eq!(back.iter().filter(|p| !p.1).count(), 3, "both back: {back:?}");
         assert!((back[0].2 - orch_w).abs() < 0.5, "the orchestrator gives the room back");
 
-        // Both stopped (the orchestrator's turn has not ended, so the panes stay): still.
+        // Both stopped: finished panes close at once (Bert, 2026-10-10), whatever the
+        // orchestrator's turn is doing; the orchestrator keeps the tab.
         state.borrow_mut().reconcile_subagents(&mgr, t0 + Duration::from_secs(5), |uid| {
             (uid == "orch").then(|| scan(true))
         });
-        assert_eq!(state.borrow().active_tab().panes.len(), 3);
+        assert_eq!(state.borrow().active_tab().panes.len(), 1, "both finished panes closed");
         let still = breaths(6000);
         assert!(
             still.iter().all(|x| *x == 0.0),

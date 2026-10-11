@@ -1929,15 +1929,40 @@ pub struct State {
 }
 
 /// What [`State::reconcile_subagents`] learns about one Claude pane: the subagents its
-/// session spawned and when its last turn ended.
+/// session spawned. (It once carried the orchestrator's `last_turn_end` too, when a finished
+/// pane waited for the next turn end; a finished pane now closes at once.)
 #[derive(Debug, Clone, Default)]
 pub struct SubagentScan {
     pub records: Vec<SubagentRecord>,
-    pub last_turn_end: Option<std::time::SystemTime>,
 }
 
 /// How often [`State::reconcile_subagents`] actually scans.
 const SUBAGENT_RECONCILE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Most panes a tab shows; a subagent that would be the next one goes to an overflow tab.
+/// Bert (2026-10-10): "There should be 4 panels per tab max, if you need more open a
+/// increment name number tab". The control API's `new-pane` applies the same cap on its own
+/// side (`control/readmodel.rs`, the pane-cap lane).
+pub const SUBAGENT_TAB_CAP: usize = 4;
+
+/// How long a fallback-only subagent's transcript may stay quiet before its **open** pane
+/// closes. Longer than `GROWTH_IDLE`, which gates opening, so one slow tool call does not
+/// flap a pane shut and open again.
+pub const FALLBACK_CLOSE_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The name an overflow tab is numbered from: `title` minus a trailing " <digits>", so
+/// "Divi 2" overflows into "Divi 3", not "Divi 2 2".
+#[tracing::instrument(level = "debug", ret)]
+pub fn overflow_base(title: &str) -> &str {
+    match title.rsplit_once(' ') {
+        Some((base, n))
+            if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => title,
+    }
+}
 
 /// A pane parked by "Remind at…" — the detached pane (its session alive centrally) plus
 /// when it's due back. `fired` flips once the due time passes (set by the app tick) and
@@ -2949,11 +2974,22 @@ impl State {
     ///
     /// Each subagent gets a `sub:<agent_id>` pane in its **orchestrator's** tab, right after
     /// the orchestrator and its earlier subagents, without taking focus; an existing one gets
-    /// the fresh record. A subagent that stopped before the orchestrator's last turn ended is
-    /// done — its result is in the conversation — so its pane closes, and is never created in
-    /// the first place; nor is one the user closed. A subagent pane whose orchestrator is no
-    /// longer in this window closes too: the window the orchestrator went to rebuilds it.
-    /// Returns whether a pane was added or removed.
+    /// the fresh record. A **finished** subagent — the hook saw `SubagentStop` — is done: its
+    /// result is in the conversation, so its pane closes and is never created in the first
+    /// place (Bert, 2026-10-10: "finished should be closed"). A subagent known only from the
+    /// transcript directory (no hook record, so no stop event ever comes) is done once its
+    /// transcript stops growing: it opens only while growing within [`GROWTH_IDLE`] and closes
+    /// after [`FALLBACK_CLOSE_IDLE`] of silence — the longer window so a pane does not flap
+    /// around one slow tool call. Without this a resumed session's whole history of helpers
+    /// came back as panes (the 2026-10-10 flood: 193 in one tab). Nor is a pane the user
+    /// closed re-created. A subagent pane whose orchestrator is no longer in this window
+    /// closes too: the window the orchestrator went to rebuilds it.
+    ///
+    /// A tab shows at most [`SUBAGENT_TAB_CAP`] panes. A subagent that would be the fifth
+    /// visible pane of its orchestrator's tab lands in a sibling tab named `<title> 2`,
+    /// `<title> 3`, … (see [`Self::subagent_overflow_tab`]) instead; when the tab hides its
+    /// subagents they take no space, so they stay in it. Returns whether a pane was added or
+    /// removed.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn reconcile_subagents(
         &mut self,
@@ -2968,6 +3004,7 @@ impl State {
             return false;
         }
         self.subagents_reconciled_at = Some(now);
+        let wall = std::time::SystemTime::now();
         let orchestrators: Vec<(String, SharedString)> = self
             .tabs
             .iter()
@@ -2982,12 +3019,14 @@ impl State {
             };
             for rec in scan.records {
                 let uid = format!("sub:{}", rec.agent_id);
-                let done = rec
-                    .stopped_at
-                    .zip(scan.last_turn_end)
-                    .is_some_and(|(stopped, turn_end)| turn_end > stopped);
+                let finished = rec.stopped_at.is_some();
+                // Known from the transcript directory alone: growth is all there is to go on.
+                let fallback_only = rec.started_at.is_none() && !finished;
                 if let Some((ti, idx)) = self.find_pane(&uid) {
+                    let done = finished
+                        || (fallback_only && !rec.is_active(wall, FALLBACK_CLOSE_IDLE));
                     if done {
+                        tracing::info!(uid = %uid, orchestrator = %orch_uid, finished, "subagent pane closed: done");
                         changed |= self.drop_subagent_pane(ti, idx, mgr);
                     } else {
                         let p = &mut self.tabs[ti].panes[idx];
@@ -2999,19 +3038,29 @@ impl State {
                     }
                     continue;
                 }
-                if done || self.closed_subagents.contains(&rec.agent_id) {
+                let quiet = fallback_only
+                    && !rec.is_active(wall, avada_core::claude_subagents::GROWTH_IDLE);
+                if finished || quiet || self.closed_subagents.contains(&rec.agent_id) {
                     continue;
                 }
-                let Some((ti, oi)) = self.find_pane(orch_uid) else {
+                let Some((oti, oi)) = self.find_pane(orch_uid) else {
                     break;
                 };
-                let at = self.tabs[ti]
-                    .panes
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| p.parent_uid.as_deref() == Some(orch_uid.as_str()))
-                    .map(|(i, _)| i + 1)
-                    .fold(oi + 1, usize::max);
+                let parent = &self.tabs[oti];
+                let (ti, at) =
+                    if parent.hide_subagents || parent.visible_panes().count() < SUBAGENT_TAB_CAP {
+                        let at = parent
+                            .panes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.parent_uid.as_deref() == Some(orch_uid.as_str()))
+                            .map(|(i, _)| i + 1)
+                            .fold(oi + 1, usize::max);
+                        (oti, at)
+                    } else {
+                        let ti = self.subagent_overflow_tab(oti);
+                        (ti, self.tabs[ti].panes.len())
+                    };
                 let what = if rec.description.is_empty() {
                     &rec.agent_type
                 } else {
@@ -3061,6 +3110,54 @@ impl State {
             }
         }
         changed
+    }
+
+    /// The tab a subagent of tab `oti` goes to once that tab shows [`SUBAGENT_TAB_CAP`] panes:
+    /// the first of its overflow tabs — `<base> 2`, `<base> 3`, … where `base` is the tab's
+    /// title minus any trailing number ([`overflow_base`]) — with room, else a new one under
+    /// the lowest unused number, inserted right after the last tab of that family so the
+    /// family stays together on the strip. Overflow tabs are ordinary tabs: the user may move,
+    /// rename or hide-subagents them, and one emptied by its last subagent closing drops like
+    /// any other emptied tab (`take_pane_inner`) — Bert's "tabs closed once all panels are
+    /// closed". Returns the tab's index.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn subagent_overflow_tab(&mut self, oti: usize) -> usize {
+        let base = overflow_base(self.tabs[oti].title.as_str()).to_string();
+        let numbered = |t: &Tab| -> Option<u32> {
+            t.title
+                .as_str()
+                .strip_prefix(base.as_str())?
+                .strip_prefix(' ')?
+                .parse()
+                .ok()
+                .filter(|n| *n >= 2)
+        };
+        let family: Vec<(usize, u32)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.system)
+            .filter_map(|(i, t)| numbered(t).map(|n| (i, n)))
+            .collect();
+        let mut by_number = family.clone();
+        by_number.sort_by_key(|(_, n)| *n);
+        if let Some((i, _)) = by_number.iter().find(|(i, _)| {
+            let t = &self.tabs[*i];
+            t.hide_subagents || t.visible_panes().count() < SUBAGENT_TAB_CAP
+        }) {
+            return *i;
+        }
+        let n = (2..).find(|n| !family.iter().any(|(_, m)| m == n)).unwrap_or(2);
+        let dest = family.iter().map(|(i, _)| i + 1).fold(oti + 1, usize::max);
+        let title: SharedString = format!("{base} {n}").into();
+        tracing::info!(title = %title, after = oti, "overflow tab created (subagent cap)");
+        self.tabs.insert(dest, Tab::empty(title));
+        if dest <= self.active {
+            self.active += 1;
+        }
+        self.editing_tab = -1;
+        self.dirty = true;
+        dest
     }
 
     /// Close subagent pane `idx` of tab `ti` on reconcile's say-so — not remembered as the
@@ -15596,15 +15693,22 @@ mod subagent_pane_tests {
             transcript: PathBuf::from(format!("/t/subagents/agent-{id}.jsonl")),
             started_at: None,
             stopped_at: None,
-            last_growth: None,
+            // Fallback-only but growing right now: the shape of a live helper seen through
+            // the transcript directory alone.
+            last_growth: Some(SystemTime::now()),
         }
     }
 
+    /// A hook-tracked record: started, not stopped.
+    fn hooked(id: &str, description: &str) -> SubagentRecord {
+        let mut r = rec(id, description, 1);
+        r.started_at = Some(SystemTime::now());
+        r.last_growth = None;
+        r
+    }
+
     fn scan(records: Vec<SubagentRecord>) -> SubagentScan {
-        SubagentScan {
-            records,
-            last_turn_end: None,
-        }
+        SubagentScan { records }
     }
 
     /// Tab 0: `shell`, `orch` (claude), `after`, with `after` focused and zoomed. Tab 1:
@@ -15650,6 +15754,9 @@ mod subagent_pane_tests {
     #[test]
     fn reconcile_opens_subagent_panes_after_the_orchestrator_without_taking_focus() {
         let mut st = two_tabs();
+        // Three panes already: hiding subagents lifts the 4-per-tab cap so placement, not
+        // overflow, is what this test sees (overflow has its own test below).
+        st.tabs[0].set_hide_subagents(true);
         let mut clock = Clock(Instant::now());
         let mut s = scan(vec![rec("a", "Explore the repo", 1), rec("b", "Write tests", 1)]);
         assert!(reconcile(&mut st, &mut clock, &s));
@@ -15720,7 +15827,12 @@ mod subagent_pane_tests {
             "../core/tests/fixtures/claude-hooks/projects/-home-u-proj/\
              fd3804e5-9743-4a44-afde-65ea8705ee3c/subagents",
         );
-        let records = avada_core::claude_subagents::subagents_from(&dir.join("no-hooks"), Some(&dir));
+        let mut records = avada_core::claude_subagents::subagents_from(&dir.join("no-hooks"), Some(&dir));
+        // The fixture's mtimes are whatever the checkout gave them; a fallback-only record
+        // that stopped growing opens no pane, so stamp them as growing now.
+        for r in &mut records {
+            r.last_growth = Some(SystemTime::now());
+        }
         let mut st = two_tabs();
         assert!(reconcile(&mut st, &mut Clock(Instant::now()), &scan(records)));
         let p = pane(&st, "sub:a401878d07b43ff1c");
@@ -15730,29 +15842,113 @@ mod subagent_pane_tests {
     }
 
     #[test]
-    fn a_subagent_closes_once_the_orchestrator_ends_a_turn_after_it_stopped() {
+    fn a_stopped_subagent_closes_at_once_and_is_never_reopened() {
         let mut st = two_tabs();
         let mut clock = Clock(Instant::now());
         let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let mut s = scan(vec![rec("a", "x", 1)]);
+        let mut s = scan(vec![hooked("a", "x")]);
         reconcile(&mut st, &mut clock, &s);
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "after"]);
 
-        // Stopped, but the turn that started it has not ended: marked, kept.
+        // Stopped: closed on the next pass, whatever the orchestrator's turn is doing
+        // (Bert, 2026-10-10: "finished should be closed"), and not re-created.
         s.records[0].stopped_at = Some(t0);
-        s.last_turn_end = Some(t0 - Duration::from_secs(5));
-        assert!(!reconcile(&mut st, &mut clock, &s));
-        let a = pane(&st, "sub:a");
-        assert_eq!(a.subtitle.as_deref(), Some("general-purpose · finished"));
-        assert_eq!(a.subagent.as_ref().and_then(|r| r.stopped_at), Some(t0));
-
-        // The orchestrator ends a turn after it: closed, and not re-created.
-        s.last_turn_end = Some(t0 + Duration::from_secs(1));
         assert!(reconcile(&mut st, &mut clock, &s));
         assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
         assert!(!reconcile(&mut st, &mut clock, &s));
         assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
         assert!(st.closed_subagents.is_empty(), "not the user's close");
         assert_eq!(st.tabs[0].focused, 2, "focus stays on `after`");
+
+        // A subagent already stopped when first seen never gets a pane.
+        s.records.push(rec("b", "y", 1));
+        s.records[1].stopped_at = Some(t0);
+        assert!(!reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
+    }
+
+    #[test]
+    fn a_quiet_fallback_only_subagent_opens_no_pane() {
+        // The 2026-10-10 flood: a resumed session's transcript dir held 193 helpers from
+        // weeks before, none with a hook record. Not growing → not a pane.
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        let mut old = rec("a", "x", 1);
+        old.last_growth = Some(SystemTime::now() - Duration::from_secs(3 * 24 * 3600));
+        let mut never = rec("b", "y", 1);
+        never.last_growth = None;
+        let s = scan(vec![old, never, rec("c", "live", 1)]);
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:c", "after"]);
+    }
+
+    #[test]
+    fn an_open_fallback_only_pane_closes_once_its_transcript_goes_quiet() {
+        let mut st = two_tabs();
+        let mut clock = Clock(Instant::now());
+        let mut s = scan(vec![rec("a", "x", 1)]);
+        reconcile(&mut st, &mut clock, &s);
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "after"]);
+
+        // Quiet past the open threshold but not the close one: a slow tool call, kept.
+        s.records[0].last_growth = Some(SystemTime::now() - FALLBACK_CLOSE_IDLE / 2);
+        assert!(!reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "after"]);
+
+        // Quiet past the close threshold: done.
+        s.records[0].last_growth = Some(SystemTime::now() - FALLBACK_CLOSE_IDLE * 2);
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "after"]);
+        assert!(st.closed_subagents.is_empty(), "not the user's close");
+    }
+
+    #[test]
+    fn the_fifth_pane_overflows_into_a_numbered_tab_that_closes_when_emptied() {
+        // Tab 0 "Divi 1": shell, orch, after = 3 visible; one subagent fits, the next
+        // overflow into "Divi 2" (the base strips the trailing number: not "Divi 1 2").
+        let mut st = two_tabs();
+        st.active = 0;
+        st.tabs[0].title = "Divi 1".into();
+        st.tabs[1].title = "other".into();
+        let mut clock = Clock(Instant::now());
+        let base = "Divi";
+        let mut s = scan(vec![hooked("a", "x"), hooked("b", "y"), hooked("c", "z")]);
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "after"]);
+        assert_eq!(st.tabs.len(), 3);
+        assert_eq!(st.tabs[1].title.as_str(), format!("{base} 2"), "right after its parent");
+        assert_eq!(uids(&st, 1), ["sub:b", "sub:c"]);
+        assert_eq!(uids(&st, 2), ["other"], "the other tab moved over by one");
+        assert_eq!(st.active, 0, "the active tab stays active");
+        assert_eq!(st.tabs[1].sizes.len(), 2);
+        assert_eq!(pane(&st, "sub:b").parent_uid.as_deref(), Some("orch"));
+
+        // Five more: "<base> 2" fills to four, the rest start "<base> 3".
+        for id in ["d", "e", "f", "g"] {
+            s.records.push(hooked(id, id));
+        }
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 1), ["sub:b", "sub:c", "sub:d", "sub:e"]);
+        assert_eq!(st.tabs[2].title.as_str(), format!("{base} 3"));
+        assert_eq!(uids(&st, 2), ["sub:f", "sub:g"]);
+        assert_eq!(uids(&st, 3), ["other"]);
+
+        // Everything in "<base> 3" finishes: the tab goes with its last pane.
+        for r in &mut s.records {
+            if r.agent_id == "f" || r.agent_id == "g" {
+                r.stopped_at = Some(SystemTime::now());
+            }
+        }
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(st.tabs.len(), 3);
+        assert_eq!(uids(&st, 2), ["other"]);
+        assert_eq!(uids(&st, 1), ["sub:b", "sub:c", "sub:d", "sub:e"]);
+
+        // A tab hiding its subagents has room for any number of them.
+        st.tabs[0].set_hide_subagents(true);
+        s.records.push(hooked("h", "h"));
+        assert!(reconcile(&mut st, &mut clock, &s));
+        assert_eq!(uids(&st, 0), ["shell", "orch", "sub:a", "sub:h", "after"]);
     }
 
     #[test]
@@ -15816,6 +16012,7 @@ mod subagent_pane_tests {
     #[test]
     fn subagent_panes_are_not_saved_and_the_indices_are_remapped() {
         let mut st = two_tabs();
+        st.tabs[0].set_hide_subagents(true); // room for both past the 4-per-tab cap
         reconcile(&mut st, &mut Clock(Instant::now()), &scan(vec![rec("a", "x", 1), rec("b", "y", 1)]));
         let t = &mut st.tabs[0];
         t.sizes = vec![0.1, 0.3, 0.2, 0.2, 0.2];

@@ -1201,7 +1201,6 @@ impl App {
         })?;
         Some(SubagentScan {
             records: claude_subagents::subagents_for_pane(id),
-            last_turn_end: claude_subagents::last_turn_end(id),
         })
     }
 
