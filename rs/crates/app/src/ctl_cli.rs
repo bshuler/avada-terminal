@@ -48,7 +48,8 @@ usage: avada ctl <verb> [args]
   Panes
     new-pane --why REASON [--cwd D] [--cmd C] [--label L] [--color #rrggbb]
              [--shell S] [--project P] [--window N]
-                                    lands in that window's active tab; records who opened it
+                                    lands in that window's active tab, or, once that holds 4
+                                    panes, in <tab> 2, <tab> 3… (made if missing); records who opened it
                                     (calling pane, Claude session, process) and --why, shown
                                     on the pane's ⓘ button
     info <pane>                     who opened a pane, when, from where, and why

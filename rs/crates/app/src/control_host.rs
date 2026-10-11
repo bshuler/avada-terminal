@@ -853,6 +853,7 @@ impl ControlHost {
                         pane_id: p.id.clone(),
                         window_id: pr.coords.window_id,
                         tab_id: pr.coords.tab_id.clone(),
+                        tab_title: model.tab(&pr.coords.tab_id).map(|t| t.title.clone()),
                         label: p.label.clone(),
                         color: p.color.clone(),
                         subtitle: p.subtitle.clone(),
@@ -1448,6 +1449,9 @@ impl ControlHost {
                 let saved = st.active;
                 st.adopt_pane_as_tab(mgr, det);
                 let new_ti = st.tabs.len().saturating_sub(1);
+                if let Some(title) = c.tab_title.as_deref().filter(|t| !t.is_empty()) {
+                    st.tabs[new_ti].title = title.to_string().into();
+                }
                 st.switch_tab(saved);
                 created_tabs.insert(c.tab_id.clone(), (c.window_id, new_ti));
             }
@@ -1511,6 +1515,9 @@ struct ModelPane {
     pane_id: String,
     window_id: i64,
     tab_id: String,
+    /// The model tab's title, so a tab the GUI materializes for it (an `attach` group, or a
+    /// newPane overflow tab "<title> 2") is named as the model names it, not "term N".
+    tab_title: Option<String>,
     label: String,
     color: String,
     subtitle: Option<String>,

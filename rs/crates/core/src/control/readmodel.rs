@@ -488,6 +488,41 @@ impl ReadModel {
         false
     }
 
+    /// The tab a new pane for `window_id` should land in, honouring the per-tab cap: the active
+    /// tab while it holds fewer than `cap` panes, else the first overflow tab ("<base> 2",
+    /// "<base> 3", … where base is the active title minus any trailing " <n>") with room, else a
+    /// fresh overflow tab created here under the lowest unused number. `None` if the window is
+    /// unknown. Bert's rule (2026-10-10): "no more than 4 panels per tab".
+    #[tracing::instrument(level = "debug", ret)]
+    pub fn tab_with_room(&mut self, window_id: i64, cap: usize) -> Option<String> {
+        let active = self.active_tab_id(window_id)?;
+        let w = self.windows.iter().find(|w| w.window_id == window_id)?;
+        let cur = w.tabs.iter().find(|t| t.id == active)?;
+        if cur.panes.len() < cap {
+            return Some(active);
+        }
+        let base = overflow_base(&cur.title).to_string();
+        let numbered = |t: &TabInfo| -> Option<u32> {
+            t.title.strip_prefix(&base)?.strip_prefix(' ')?.parse().ok().filter(|n| *n >= 2)
+        };
+        let mut overflow: Vec<(u32, &TabInfo)> =
+            w.tabs.iter().filter_map(|t| numbered(t).map(|n| (n, t))).collect();
+        overflow.sort_by_key(|(n, _)| *n);
+        if let Some((_, t)) = overflow.iter().find(|(_, t)| t.panes.len() < cap) {
+            return Some(t.id.clone());
+        }
+        let n = (2..).find(|n| !overflow.iter().any(|(m, _)| m == n))?;
+        let tab = TabInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: format!("{base} {n}"),
+            layout: "auto".into(),
+            panes: Vec::new(),
+            system: false,
+        };
+        let id = tab.id.clone();
+        self.insert_tab(window_id, tab).then_some(id)
+    }
+
     /// Append a whole tab to a window. Returns false if the window is unknown.
     #[tracing::instrument(level = "debug", ret)]
     pub fn insert_tab(&mut self, window_id: i64, tab: TabInfo) -> bool {
@@ -875,6 +910,20 @@ pub struct PaneOut {
     pub kind: Option<String>,
 }
 
+/// Most panes one tab may hold; a new pane past this goes to an overflow tab
+/// ([`ReadModel::tab_with_room`]).
+pub const MAX_PANES_PER_TAB: usize = 4;
+
+/// The name an overflow tab is numbered from: `title` minus a trailing " <digits>", so
+/// "Divi 2" overflows into "Divi 3", not "Divi 2 2".
+#[tracing::instrument(level = "debug", ret)]
+fn overflow_base(title: &str) -> &str {
+    match title.rsplit_once(' ') {
+        Some((base, n)) if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => title,
+    }
+}
+
 #[tracing::instrument(level = "debug", ret)]
 fn is_false(b: &bool) -> bool {
     !*b
@@ -944,6 +993,77 @@ mod tests {
             }],
         });
         m
+    }
+
+    fn tab_ids(m: &ReadModel) -> Vec<(String, usize)> {
+        m.windows[0].tabs.iter().map(|t| (t.title.clone(), t.panes.len())).collect()
+    }
+
+    #[test]
+    fn overflow_base_strips_only_a_trailing_number() {
+        assert_eq!(overflow_base("Divi"), "Divi");
+        assert_eq!(overflow_base("Divi 2"), "Divi");
+        assert_eq!(overflow_base("Divi Swap 1"), "Divi Swap");
+        assert_eq!(overflow_base("Tab 1x"), "Tab 1x");
+        assert_eq!(overflow_base("42"), "42");
+        assert_eq!(overflow_base("Divi "), "Divi ");
+    }
+
+    #[test]
+    fn tab_with_room_keeps_the_active_tab_until_it_is_full() {
+        let mut m = seeded();
+        for i in 0..3 {
+            let t = m.tab_with_room(1, MAX_PANES_PER_TAB).unwrap();
+            assert_eq!(t, "t1");
+            assert!(m.insert_pane_in_tab(&t, pane(&format!("q{i}"), &format!("v{i}"))));
+        }
+        assert_eq!(tab_ids(&m), vec![("Tab 1".to_string(), 4)]);
+    }
+
+    #[test]
+    fn tab_with_room_overflows_into_numbered_tabs() {
+        let mut m = seeded();
+        for i in 0..8 {
+            let t = m.tab_with_room(1, MAX_PANES_PER_TAB).unwrap();
+            assert!(m.insert_pane_in_tab(&t, pane(&format!("q{i}"), &format!("v{i}"))));
+        }
+        // 1 seeded + 8 new = 9 panes: 4 in "Tab 1", 4 in "Tab 2", 1 in "Tab 3"; the active
+        // tab never moves, so the human's view stays put.
+        assert_eq!(
+            tab_ids(&m),
+            vec![("Tab 1".to_string(), 4), ("Tab 2".to_string(), 4), ("Tab 3".to_string(), 1)]
+        );
+        assert_eq!(m.active_tab_id(1).as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn tab_with_room_reuses_a_gap_and_an_existing_overflow_tab() {
+        let mut m = seeded();
+        m.windows[0].tabs[0].title = "Divi".into();
+        for i in 0..3 {
+            m.insert_pane_in_tab("t1", pane(&format!("q{i}"), &format!("v{i}")));
+        }
+        // "Divi 3" exists with room; "Divi 2" doesn't exist. The existing one with room wins.
+        m.insert_tab(1, TabInfo { system: false, id: "t3".into(), title: "Divi 3".into(), layout: "auto".into(), panes: vec![] });
+        assert_eq!(m.tab_with_room(1, MAX_PANES_PER_TAB).as_deref(), Some("t3"));
+        for i in 0..4 {
+            m.insert_pane_in_tab("t3", pane(&format!("r{i}"), &format!("w{i}")));
+        }
+        // Now both are full → the lowest unused number, "Divi 2", is created.
+        let t = m.tab_with_room(1, MAX_PANES_PER_TAB).unwrap();
+        assert_eq!(m.tab(&t).unwrap().title, "Divi 2");
+    }
+
+    #[test]
+    fn tab_with_room_numbers_from_an_already_numbered_active_tab() {
+        let mut m = seeded();
+        m.windows[0].tabs[0].title = "Divi Swap 1".into();
+        for i in 0..3 {
+            m.insert_pane_in_tab("t1", pane(&format!("q{i}"), &format!("v{i}")));
+        }
+        let t = m.tab_with_room(1, MAX_PANES_PER_TAB).unwrap();
+        assert_eq!(m.tab(&t).unwrap().title, "Divi Swap 2");
+        assert_eq!(m.tab_with_room(9, MAX_PANES_PER_TAB), None);
     }
 
     fn busy(_p: &PaneInfo) -> Activity {

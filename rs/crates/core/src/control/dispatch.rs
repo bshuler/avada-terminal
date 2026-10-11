@@ -433,7 +433,12 @@ fn exec(
             crate::pane_origin::stamp_spec(&mut spec);
             let pane = spawn_pane(sessions, control_file, &spec)?;
             let pane_id = pane.id.clone();
-            if !model.insert_pane(window_id, pane) {
+            // At most MAX_PANES_PER_TAB panes per tab: a full active tab overflows into
+            // "<title> 2", "<title> 3", … (made here if missing), never into a fifth pane.
+            let placed = model
+                .tab_with_room(window_id, crate::control::readmodel::MAX_PANES_PER_TAB)
+                .is_some_and(|tab| model.insert_pane_in_tab(&tab, pane));
+            if !placed {
                 return Err(DispatchError::window_not_found(window_id));
             }
             Ok((Some(Value::String(pane_id)), true))
@@ -1411,6 +1416,24 @@ mod tests {
         let id = r.body["result"].as_str().unwrap().to_string();
         assert!(m.pane(&id).is_some());
         assert_eq!(m.pane(&id).unwrap().label, "w");
+    }
+
+    #[tokio::test]
+    async fn new_pane_past_four_overflows_into_a_numbered_tab() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            let cmd = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi" } });
+            let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+            assert_eq!(r.status, 200);
+            ids.push(r.body["result"].as_str().unwrap().to_string());
+        }
+        assert_eq!(m.tab("t1").unwrap().panes.len(), 4);
+        let fifth = m.coords_of(&ids[4]).unwrap().tab_id;
+        assert_ne!(fifth, "t1");
+        assert_eq!(m.tab(&fifth).unwrap().title, "Tab 2");
+        assert_eq!(m.active_tab_id(1).as_deref(), Some("t1"));
     }
 
     #[tokio::test]
