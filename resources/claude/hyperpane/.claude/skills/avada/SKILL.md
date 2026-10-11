@@ -87,6 +87,10 @@ Claude session, process chain and cwd automatically, but only you can say *why*.
 the user would want to read ("run the release test suite for B7"), not the command. `avada ctl info
 <pane>` prints any pane's origin.
 
+**At most 4 panes per tab.** `new-pane` enforces it: once the active tab holds 4, the new pane
+lands in "<tab> 2" (then "<tab> 3"…), created in the background if needed, and your tab keeps
+focus. `move-pane` and `attach` are not capped, so keep within 4 by hand there.
+
 Tab verbs answer `202 Accepted` with `{"queued": true}`: they are applied by the UI thread on its
 next frame, not while your command is still running. Re-read `tabs` to confirm, don't assume.
 

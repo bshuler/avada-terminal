@@ -30,8 +30,8 @@ underscore counts as a word character):
 Strictly, `\bpane\b` matches Tier 1 only. Tier 2 is the same word in the plural. Tier 3 is
 not matched by the regex, but it is what "every instance" would mean in practice.
 
-**Never touched:** `hyperpane`, `hyperpanes`, `hyperpanes_mobile`, `Hyperpanes.app` (the
-live-session guardrail), `runpane` (about 400 hits; none of them match `\bpane\b`).
+**Never touched by this rename:** `hyperpane` (renamed separately, see below), the
+read-compat spellings in `core/src/compat.rs`, `runpane` (about 400 hits; none of them match `\bpane\b`).
 
 **Name collisions:** none. There is no `Panel`, `Panels`, `PanelKind`, `PanelSpec`,
 `PanelId` or `panel_id` type or identifier in any `.rs` or `.slint` file. The roughly 630
@@ -98,3 +98,12 @@ them conflicts with every hunk they hold. So:
 | 3 Tier 1+2 | ~450 files, ~9,700 lines, mostly comments and docs | medium; mechanical, guarded by step 2 |
 | 4 skill docs | ~10 files | low, but timing matters |
 | 5 Tier 3 | ~300 files, ~7,800 identifiers, 27 renames | high merge-conflict cost; no user-visible gain |
+
+## 6. The singular `hyperpane`
+
+The last trace of the old product name: the orchestrator module (`modules/hyperpane`,
+id `bshuler__avada-hyperpane`), `resources/claude/hyperpane/`, the workspace directory
+`~/Library/Application Support/avada/hyperpane`, and the Claude cache directory derived
+from that path. It is renamed in the same release as step 3, to a name Bert picks; the
+workspace directory moves with a read-the-old-path fallback, like the data-dir copy in
+`compat.rs`.

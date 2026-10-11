@@ -458,8 +458,8 @@ mod tests {
     #[test]
     fn parses_an_https_github_url_with_git() {
         assert_eq!(
-            repo_name_from_url("https://github.com/Eyalm321/hyperpanes.git").as_deref(),
-            Some("hyperpanes")
+            repo_name_from_url("https://github.com/bshuler/avada-terminal.git").as_deref(),
+            Some("avada-terminal")
         );
     }
 

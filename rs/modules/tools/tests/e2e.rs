@@ -614,8 +614,8 @@ fn the_conversations_group_under_their_project_directory() {
     sim.sessions.insert(
         "claude".into(),
         vec![
-            session("a1", "/Users/x/code/hyperpanes", "Fix the rail"),
-            session("a2", "/Users/x/code/hyperpanes", "Add a test"),
+            session("a1", "/Users/x/code/avada-terminal", "Fix the rail"),
+            session("a2", "/Users/x/code/avada-terminal", "Add a test"),
             session("b1", "/Users/x/code/avada-files", "Tree rows"),
         ],
     );
@@ -626,7 +626,7 @@ fn the_conversations_group_under_their_project_directory() {
     assert_eq!(
         labels(&rows),
         [
-            "hyperpanes",
+            "avada-terminal",
             "Fix the rail",
             "Add a test",
             "avada-files",
@@ -637,7 +637,7 @@ fn the_conversations_group_under_their_project_directory() {
     assert_eq!(depths, [0, 1, 1, 0, 1]);
     assert_eq!(
         rows[0]["detail"],
-        "/Users/x/code/hyperpanes · 2 conversations"
+        "/Users/x/code/avada-terminal · 2 conversations"
     );
     // Every clickable row carries what a click needs; a heading carries its project.
     assert_eq!(rows[0]["data"]["kind"], "project");

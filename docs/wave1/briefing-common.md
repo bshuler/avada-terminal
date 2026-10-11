@@ -13,7 +13,7 @@ parallel. Read, in this order, before touching anything:
 
 ## Where you are
 
-You are in a git worktree of `/Users/bshuler/code/hyperpanes` (the main checkout). Never
+You are in a git worktree of `/Users/bshuler/code/avada/avada-terminal` (the main checkout). Never
 edit files in the main checkout, only in your worktree. Absolute paths below are the main
 checkout's; substitute your worktree root where a path refers to source. `pwd` drifts
 between shell calls: always `cd` explicitly with an absolute path.
@@ -32,11 +32,11 @@ Before every cargo command in a workspace, export the matching target dir:
 
 ```
 # rs workspace (core, module-sdk):
-export CARGO_TARGET_DIR=/Users/bshuler/code/hyperpanes/rs/target
+export CARGO_TARGET_DIR=/Users/bshuler/code/avada/avada-terminal/rs/target
 # app workspace:
-export CARGO_TARGET_DIR=/Users/bshuler/code/hyperpanes/rs/crates/app/target
+export CARGO_TARGET_DIR=/Users/bshuler/code/avada/avada-terminal/rs/crates/app/target
 # terminal-widget workspace:
-export CARGO_TARGET_DIR=/Users/bshuler/code/hyperpanes/rs/crates/terminal-widget/target
+export CARGO_TARGET_DIR=/Users/bshuler/code/avada/avada-terminal/rs/crates/terminal-widget/target
 ```
 
 Other agents build into the same dirs: cargo serialises on its build-dir lock, so a
@@ -70,7 +70,7 @@ needs a harness test that drives it and asserts the effect; and for every new `C
 variant or Slint callback, a test that fails if its arm is deleted.
 
 Empirical checks: never launch the real GUI, never touch `/Applications`, never touch
-`~/Library/Application Support/hyperpanes` or `.../avada`, never front a window or inject
+`~/Library/Application Support/avada`, never front a window or inject
 input. Run CLI/headless binaries with `HOME=<scratch dir>` only. No secrets are needed
 for this wave: never print, log, or write a token or key anywhere including tests; keystores
 are mocked in tests.

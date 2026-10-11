@@ -12662,7 +12662,7 @@ mod tool_identity_tests {
     fn a_title_sniff_upgrades_the_chrome_and_nothing_else() {
         let m = mgr();
         let mut st = window_with(&m, "p1");
-        st.note_pane_title("p1", "claude — ~/code/hyperpanes");
+        st.note_pane_title("p1", "claude — ~/code/avada-terminal");
 
         let ps = pane_of(&st, "p1");
         assert_eq!(
@@ -12724,7 +12724,7 @@ mod tool_identity_tests {
         let m = mgr();
         let mut st = window_with(&m, "p1");
         st.note_pane_title("p1", "claude");
-        st.note_pane_title("p1", "~/code/hyperpanes");
+        st.note_pane_title("p1", "~/code/avada-terminal");
         assert_eq!(
             st.effective_kind(pane_of(&st, "p1")),
             PaneKind::Tool("claude".into())

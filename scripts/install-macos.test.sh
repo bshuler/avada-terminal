@@ -18,6 +18,7 @@ fail=0
 
 cleanup() {
     [[ -n "${VICTIM:-}" ]] && kill "$VICTIM" 2>/dev/null
+    [[ -n "${LEGACY_VICTIM:-}" ]] && kill "$LEGACY_VICTIM" 2>/dev/null
     chflags -R nouchg "$ROOT" 2>/dev/null
     rm -rf "$ROOT"
 }
@@ -70,12 +71,33 @@ retired=$(/bin/ls -1d "$ROOT/apps/.avada-attic"/*.app 2>/dev/null | wc -l | tr -
 want "the attic is pruned (kept $retired)" '[[ "$retired" -le 3 ]]'
 want "the process is STILL alive after four swaps" 'kill -0 "$VICTIM" 2>/dev/null'
 
+# --- the pre-rename attic is emptied, except what still runs -------------------
+LEGACY="$ROOT/apps/.hyperpanes-attic"
+make_bundle "$LEGACY/Hyperpanes-idle.app" idle
+make_bundle "$LEGACY/Hyperpanes-busy.app" busy
+"$LEGACY/Hyperpanes-busy.app/Contents/MacOS/avada" &
+LEGACY_VICTIM=$!
+disown 2>/dev/null
+sleep 0.3
+make_bundle "$ROOT/v6" 6
+bash "$INSTALL" "$ROOT/v6" --dest "$DEST" >/dev/null 2>&1
+want "an idle legacy-attic bundle is pruned" '[[ ! -e "$LEGACY/Hyperpanes-idle.app" ]]'
+# If it was kept, the installer saw a process naming it: say which.
+[[ -e "$LEGACY/Hyperpanes-idle.app" ]] && pgrep -fl -- "$LEGACY/Hyperpanes-idle.app/" >&2
+want "a legacy-attic bundle with a live process is kept" '[[ -d "$LEGACY/Hyperpanes-busy.app" ]]'
+want "and its process survived" 'kill -0 "$LEGACY_VICTIM" 2>/dev/null'
+kill "$LEGACY_VICTIM" 2>/dev/null
+wait "$LEGACY_VICTIM" 2>/dev/null
+make_bundle "$ROOT/v7" 7
+bash "$INSTALL" "$ROOT/v7" --dest "$DEST" >/dev/null 2>&1
+want "the legacy attic is gone once nothing runs from it" '[[ ! -e "$LEGACY" ]]'
+
 # --- a bad source is refused before anything is touched ------------------------
 bash "$INSTALL" "$ROOT/nope" --dest "$DEST" >/dev/null 2>&1
 rc=$?
 want "a missing source exits non-zero" '[[ "$rc" -ne 0 ]]'
 marker="$(cat "$DEST/Contents/MacOS/marker" 2>&1)"
-want "and leaves the install intact" '[[ "$marker" == 5 ]]'
+want "and leaves the install intact" '[[ "$marker" == 7 ]]'
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

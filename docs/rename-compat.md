@@ -12,11 +12,11 @@ on users' disks and in their scripts, so the code keeps a compatibility layer in
 **Read both, write the new.** A legacy env var, project directory, suffix or format tag
 is accepted wherever the new one is. The app only ever writes the new one.
 
-**Mirror the environment for two releases.** Every `AVADA_*` variable the app injects
-into a pane (`AVADA_PANE_ID`, `AVADA_CONTROL_FILE`, `AVADA_CONTROL_TOKEN`, …) gets a
-`HYPERPANES_*` twin with the same value, so a hook script or MCP configuration written
-against the old name keeps working. The mirror is removed two releases after the
-rename; rename your scripts before then.
+**The environment mirror has ended.** Until 0.2.33 every `AVADA_*` variable the app
+injected into a pane (`AVADA_PANE_ID`, `AVADA_CONTROL_FILE`, `AVADA_CONTROL_TOKEN`, …)
+also got a `HYPERPANES_*` twin. From 0.2.34 panes get only the `AVADA_*` names; a hook
+script or MCP configuration that reads `HYPERPANES_*` must be renamed. Avada itself
+still *reads* a `HYPERPANES_*` value when the `AVADA_*` one is absent.
 
 **Copy the data directory once.** On the first launch, the old app-support directory is
 copied into the new one:
@@ -48,8 +48,8 @@ directories uses `.avada/` and leaves the other alone.
 - **Accessibility / automation (macOS).** Same rule; re-grant once if you use a feature
   that needs it.
 - **Claude Code skills and MCP config.** A `.claude/skills/hyperpanes` directory or a
-  `hyperpanes-mcp` entry in `~/.claude.json` still works while the env mirror lasts. The
-  shipped skill is now `.claude/skills/avada`; update the entry when convenient.
+  `hyperpanes-mcp` entry in `~/.claude.json` that reads `HYPERPANES_*` stopped working
+  when the env mirror ended (0.2.34). The shipped skill is `.claude/skills/avada`.
 - **Workspace files** named `*.hyperpanes` still open (`avada ./dev.hyperpanes`); the
   file association on Windows and Linux registers only `*.avada`.
 - **The old app** keeps its own directory and settings and can run alongside the new one.

@@ -11,16 +11,12 @@
 //!
 //! * **read both, write the new** — a legacy env var, project dir, suffix or format
 //!   tag is accepted wherever the new one is; the app only ever writes the new one;
-//! * **mirror the env for two releases** — every `AVADA_*` variable injected into a
-//!   pane gets a `HYPERPANES_*` twin, so a user's existing hook script keeps working
-//!   until they have had two release notes telling them to rename it;
 //! * **copy the data directory once** — on first launch the old app-support directory
 //!   is copied (never moved: the old install may still be running against it) into
 //!   the new one, and a marker file makes the copy a one-time event.
 //!
-//! Delete this module, and every `compat::` call site, when the mirror period ends.
+//! Delete this module, and every `compat::` call site, when read-compat ends.
 
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -76,20 +72,6 @@ pub fn env_truthy(name: &str) -> bool {
         env_var(name).as_deref(),
         Some("1") | Some("true") | Some("yes")
     )
-}
-
-/// Give every `AVADA_*` entry a `HYPERPANES_*` twin with the same value. An existing
-/// legacy entry is left alone: a caller that set it on purpose is saying something,
-/// and "the new name wins" only applies to *reads*. Returns how many twins were added.
-pub fn mirror_legacy_env(env: &mut HashMap<String, String>) -> usize {
-    let twins: Vec<(String, String)> = env
-        .iter()
-        .filter_map(|(k, v)| legacy_env_name(k).map(|legacy| (legacy, v.clone())))
-        .filter(|(legacy, _)| !env.contains_key(legacy))
-        .collect();
-    let n = twins.len();
-    env.extend(twins);
-    n
 }
 
 /// What one data-directory migration did.
@@ -284,27 +266,6 @@ mod tests {
         assert!(env_truthy(new));
         std::env::remove_var(new);
         std::env::remove_var(old);
-    }
-
-    #[test]
-    fn mirror_adds_twins_without_clobbering_a_deliberate_legacy_value() {
-        let mut env: HashMap<String, String> = [
-            ("AVADA_PANE_ID", "pane-1"),
-            ("AVADA_CONTROL_FILE", "/x/control.json"),
-            ("AVADA_CONTROL_TOKEN", "new-tok"),
-            ("HYPERPANES_CONTROL_TOKEN", "old-tok"),
-            ("PATH", "/bin"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-        assert_eq!(mirror_legacy_env(&mut env), 2);
-        assert_eq!(env["HYPERPANES_PANE_ID"], "pane-1");
-        assert_eq!(env["HYPERPANES_CONTROL_FILE"], "/x/control.json");
-        assert_eq!(env["HYPERPANES_CONTROL_TOKEN"], "old-tok");
-        assert_eq!(env.len(), 7);
-        // Idempotent.
-        assert_eq!(mirror_legacy_env(&mut env), 0);
     }
 
     #[test]

@@ -164,7 +164,7 @@ fn now_ms() -> u64 {
 }
 
 #[cfg_attr(not(unix), allow(dead_code))]
-/// One chooser/`--list` row: `1) pane-1a2b3c4d  120x40  ~/code/hyperpanes   2m ago`.
+/// One chooser/`--list` row: `1) pane-1a2b3c4d  120x40  ~/code/avada-terminal   2m ago`.
 #[tracing::instrument(level = "debug", ret)]
 fn row(index: usize, s: &SessionMeta, now: u64) -> String {
     let grid = match (s.cols, s.rows) {

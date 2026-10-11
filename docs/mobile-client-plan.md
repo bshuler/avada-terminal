@@ -71,7 +71,7 @@ the master token gets from its `control-token` file on remote binds. `POST/GET/D
 are all master-only, so a sandboxed agent's scoped token can never mint or enumerate device
 credentials.
 
-## 3. Mobile app (Flutter, `mobile/hyperpanes_mobile/`)
+## 3. Mobile app (Flutter, `mobile/avada_mobile/`)
 
 **Why Flutter**: one codebase → iOS+Android; `xterm.dart` is a mature, fast
 canvas-rendered terminal emulator; excellent perf headroom vs. RN/webview approaches;
@@ -124,7 +124,7 @@ lib/src/ui/       connect, dashboard, terminal, composer, actions, settings
 
 ## 4. Build & release
 
-- **Android** (on Linux/WSL/mac): `cd mobile/hyperpanes_mobile && flutter build apk --release`.
+- **Android** (on Linux/WSL/mac): `cd mobile/avada_mobile && flutter build apk --release`.
 - **iOS** (on the Mac mini): `flutter build ipa` (needs Xcode + signing; for personal
   use, sideload via Xcode/AltStore).
 - CI later: `flutter-action` workflow building the APK on tag, mirroring release.yml.

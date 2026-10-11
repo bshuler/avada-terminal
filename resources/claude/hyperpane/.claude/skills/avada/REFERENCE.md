@@ -75,7 +75,10 @@ nests it for you.
 Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `grid-<cols>x<rows>`
 (e.g. `grid-2x3`). An unknown name falls back to `auto`.
 
-`new-pane` returns the new pane's id as the command result.
+`new-pane` returns the new pane's id as the command result. A tab holds at most 4 panes: when the
+active tab is full, the pane goes into the first "<title> 2", "<title> 3"… tab with room (a trailing
+number on the title is dropped first, so "Divi 2" overflows into "Divi 3"), and that tab is created,
+in the background, if it doesn't exist. Find where it landed with `ctl panes`.
 
 ### Pane origin
 

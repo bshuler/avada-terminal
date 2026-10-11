@@ -43,8 +43,8 @@ SIGNALS = {"kill", "pkill", "killall"}
 SANCTIONED = "scripts/install-macos.sh"
 
 APPLICATIONS = re.compile(r"/Applications\b", re.I)
-AVADA = re.compile(r"hyperpanes|avada", re.I)
-DAEMONISH = re.compile(r"hyperpanes|avada|session-daemon", re.I)
+AVADA = re.compile(r"avada", re.I)
+DAEMONISH = re.compile(r"avada|session-daemon", re.I)
 SYNTH_INPUT = re.compile(r"\bactivate\b|\bkeystroke\b|\bkey code\b|System Events", re.I)
 
 
