@@ -1,4 +1,4 @@
-//! The Hyperpane state machine, with no I/O in it.
+//! The Orchestrator state machine, with no I/O in it.
 //!
 //! Every verb the module serves — a command, a row click, an event — is a pure function
 //! from ([`State`], the params) to an [`Outcome`]: the JSON to answer with, an optional
@@ -18,10 +18,10 @@ use crate::rows;
 /// `[[contributions]] kind = "command"` list in `avada.toml`; `the_manifest_and_the_code_
 /// agree_on_the_commands` asserts it.
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("open", "Hyperpane: Open the tab"),
-    ("restart", "Hyperpane: Restart the agent"),
-    ("send", "Hyperpane: Send text to the agent"),
-    ("reveal", "Hyperpane: Reveal the working directory"),
+    ("open", "Orchestrator: Open the tab"),
+    ("restart", "Orchestrator: Restart the agent"),
+    ("send", "Orchestrator: Send text to the agent"),
+    ("reveal", "Orchestrator: Reveal the working directory"),
 ];
 
 /// Everything the rail draws from.
@@ -104,7 +104,7 @@ impl App {
             "send" => self.send(args["text"].as_str().unwrap_or_default()),
             other => Err(RpcError::new(
                 ErrorCode::MethodNotFound,
-                format!("hyperpane has no command `{other}`"),
+                format!("orchestrator has no command `{other}`"),
             )),
         }
     }
@@ -123,7 +123,7 @@ impl App {
             // rather than a human one — say which row, and change nothing.
             Some(Action::Input(_)) | None => Err(RpcError::new(
                 ErrorCode::InvalidParams,
-                format!("hyperpane does not own the row `{}`", data["action"]),
+                format!("orchestrator does not own the row `{}`", data["action"]),
             )),
         }
     }
@@ -152,7 +152,7 @@ impl App {
             // not just create — so say so rather than opening a second one.
             Some(id) => Outcome {
                 result: json!({ "pane_id": id, "spawned": false }),
-                toast: Some("Hyperpane is already open".into()),
+                toast: Some("Orchestrator is already open".into()),
                 action: None,
             },
             None => Outcome {
@@ -175,7 +175,7 @@ impl App {
             // window that isn't there, and the fix is to open it.
             return Err(RpcError::new(
                 ErrorCode::InvalidRequest,
-                "the Hyperpane pane is not open; run `Hyperpane: Open the tab` first",
+                "the Orchestrator pane is not open; run `Orchestrator: Open the tab` first",
             ));
         };
         Ok(Outcome {
@@ -301,7 +301,7 @@ mod tests {
     fn the_manifest_is_valid_and_agrees_with_the_code() {
         let m = Manifest::parse(crate::MANIFEST).expect("avada.toml parses");
         m.validate().expect("avada.toml is valid");
-        assert_eq!(m.module.id.to_string(), "bshuler/avada-hyperpane");
+        assert_eq!(m.module.id.to_string(), "bshuler/avada-orchestrator");
 
         let declared: Vec<&str> = m
             .contributions

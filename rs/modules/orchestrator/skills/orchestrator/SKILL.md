@@ -1,12 +1,12 @@
 ---
-name: hyperpane
-description: "You are running in the Hyperpane tab, Avada Terminal's always-on agent tab. Drive the app with `avada ctl <verb>`: read any window, tab or pane, type into terminals, manage panes and tabs, change preferences."
+name: orchestrator
+description: "You are running in the Orchestrator tab, Avada Terminal's always-on agent tab. Drive the app with `avada ctl <verb>`: read any window, tab or pane, type into terminals, manage panes and tabs, change preferences."
 kind: rule
 activation: always
 ---
-# Hyperpane
+# Orchestrator
 
-This directory is the working directory of the **Hyperpane** tab — the always-on tab Avada
+This directory is the working directory of the **Orchestrator** tab — the always-on tab Avada
 keeps open for its own agent. Everything the agent needs to inspect and change the workspace lives
 here, under `.claude/skills/avada/`.
 
@@ -41,7 +41,7 @@ never rewritten.
 
 ## About the control API
 
-The Hyperpane tab needs the control API on, so Avada enables it the first time it creates this
+The Orchestrator tab needs the control API on, so Avada enables it the first time it creates this
 tab, including the "allow input" permission that lets the agent type into panes. The listener binds
 loopback only and every request needs the token in `control.json`; nothing is exposed off this
 machine. To turn it back off, use **Preferences → Control API** — the app will not re-enable it,

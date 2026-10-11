@@ -1,14 +1,14 @@
-# Hyperpane
+# Orchestrator
 
-This directory is the working directory of the **Hyperpane** tab — the always-on tab Avada
+This directory is the working directory of the **Orchestrator** tab — the always-on tab Avada
 keeps open for its own agent.
 
 The app copies its own files here on every start: this README and the `avada` skill under
 `.claude/skills/avada/` with its `REFERENCE.md` and `RECIPES.md`. They are app-owned copies and
 are replaced on upgrade.
 
-The `bshuler/avada-hyperpane` module adds the rest. Installing it materializes an always-on
-rule into `AGENTS.md` (imported by `CLAUDE.md`), inside `<!-- avada:module=bshuler/avada-hyperpane -->`
+The `bshuler/avada-orchestrator` module adds the rest. Installing it materializes an always-on
+rule into `AGENTS.md` (imported by `CLAUDE.md`), inside `<!-- avada:module=bshuler/avada-orchestrator -->`
 fences that the module owns and rewrites; uninstalling it takes the rule back out.
 
 Everything else is yours. Notes, scratch files and scripts you leave here — and any text you

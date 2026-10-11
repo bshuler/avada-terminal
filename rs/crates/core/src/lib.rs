@@ -19,7 +19,7 @@ pub mod control;
 pub mod edition;
 /// Reading one commit out of a repository — what a clicked hash needs to become a view.
 pub mod git;
-pub mod hyperpane;
+pub mod orchestrator;
 pub mod install;
 pub mod layout;
 pub mod license;

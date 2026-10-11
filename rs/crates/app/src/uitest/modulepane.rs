@@ -154,7 +154,7 @@ fn clicking_a_module_row_activates_the_row_it_names() {
             vec![
                 row("git", "avada-git", "", 0, None),
                 row("files", "avada-files", "", 0, None),
-                row("hyperpane", "avada-hyperpane", "", 0, None),
+                row("orchestrator", "avada-orchestrator", "", 0, None),
             ],
         );
 

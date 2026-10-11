@@ -4,7 +4,7 @@
 //! [`crate::skills::Tools`] already models the toggle (`present` vs `disabled`, with
 //! `has` gating every write and the materializer sweeping a disabled tool's files back
 //! off disk). What was missing was somewhere to keep the answer between runs: until
-//! this file existed, `crate::hyperpane::materialize` detected the machine's tools
+//! this file existed, `crate::orchestrator::materialize` detected the machine's tools
 //! fresh on every start and wrote for all of them, so switching one off could not
 //! survive a restart.
 //!

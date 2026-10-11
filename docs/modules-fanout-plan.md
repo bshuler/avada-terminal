@@ -17,7 +17,7 @@ this document use today's names.
 **In:** the module contract and SDK crate, the module host, rights, install store and
 lockfile, marketplace, source-compile pipeline, route descriptor table and schema-driven
 CLI, skills materialization for every supported AI tool, extraction of the left-panel
-features and the Hyperpane pane into modules, a native editor module, licensing verifier
+features and the Orchestrator pane into modules, a native editor module, licensing verifier
 with a stub issuer, notarization checks, and the product rename with a compatibility layer.
 All three OSes from day one.
 
@@ -35,9 +35,9 @@ contract type.
   ships the first-party ones. **Workspace == tab.**
 - **Minimal core:** window, tab, pane grid, terminal widget, PTY daemon, control plane,
   module host, settings, rights, git service (via `gix`; `git2` only in the worktree
-  service). Everything else is a module, including the marketplace and the Hyperpane pane.
+  service). Everything else is a module, including the marketplace and the Orchestrator pane.
 - **Process modules** are the default; a linked loader exists only for a short first-party
-  **shell tier** (Hyperpane pane, left-panel shell). Native Rust editor pane via
+  **shell tier** (Orchestrator pane, left-panel shell). Native Rust editor pane via
   `helix-core`, keymap swappable (named presets from the editor module) and configurable
   (per-binding overrides in the existing keymap file, namespaced under the module id).
 - **UI tiers**, declared per contribution in the manifest and enforced by core:
@@ -212,7 +212,7 @@ rs/
                                    avada-core and registers its verifier + loader at
                                    startup (see "Free vs commercial")
 modules/                           first-party module repos live OUTSIDE this repo, one each:
-  avada-files, avada-git, avada-tools, avada-workspace, avada-hyperpane, avada-editor,
+  avada-files, avada-git, avada-tools, avada-workspace, avada-orchestrator, avada-editor,
   avada-marketplace
 ```
 
@@ -243,7 +243,7 @@ marketplace path a third-party module uses. Developing them in-tree would hide t
 | **G2** tools | `avada-tools` (Claude/Cursor/Copilot tabs) | module | F1 |
 | **G3** editor | `avada-editor` on `helix-core`, keymap presets + overrides | module+app | F1 |
 | **G4** workspace | `avada-workspace` (library/sets); tree + detached stay host-side, see below | module | F1 |
-| **G5** hyperpane | `avada-hyperpane` shell-tier module | module | F1 |
+| **G5** orchestrator | `avada-orchestrator` shell-tier module | module | F1 |
 | **G6** resolver | pubgrub, shape resolution, provider defaults, pin conflicts | core | H5 |
 | **G7** notarization | three OS verifiers behind a policy trait | core | H5 |
 | **G8** licensing | verifier, introspection client, stub issuer, three install paths, expiry/grace | core+app | W0, H2 |
@@ -371,7 +371,7 @@ three OSes.
 | B1 | F1 | new repo `avada-files`; deletes `app/src/filetree.rs`, FILES mode in `leftpanel.slint`, `files_*` in `state.rs` |
 | B2 | F2 | `core/src/marketplace/**`, `avada-marketplace` repo (tier-1 UI only) |
 | B3 | F3 | `core/src/cli/**`, `app/src/main.rs` argument handling, `ctl_cli.rs` |
-| B4 | F4 | `core/src/skills/**`, replaces the materializer in `core/src/hyperpane.rs` |
+| B4 | F4 | `core/src/skills/**`, replaces the materializer in `core/src/orchestrator.rs` |
 
 B1 is the milestone the whole plan was ordered around: **old app + host + one extracted
 module.** It lands last in the wave because it deletes code the other three do not touch.
@@ -383,7 +383,7 @@ and the pane becomes the placeholder. Tag a release.
 
 ### Wave 3 — fan out (eleven agents, three sub-waves by dependency)
 
-- **3a, parallel:** C1 G1 git, C2 G2 tools, C4 G4 workspace, C5 G5 hyperpane, C6 G6
+- **3a, parallel:** C1 G1 git, C2 G2 tools, C4 G4 workspace, C5 G5 orchestrator, C6 G6
   resolver, C7 G7 notarization, C8 G8 licensing, C9 G9 skills adapters. Each module agent
   owns its new repo plus the deletion of exactly one left-panel mode or pane kind in this
   repo; C6–C9 own their core directories only.
@@ -414,7 +414,7 @@ plus detached become the panel's permanent frame above whatever rail a module co
 `core/src/workspace/**` stays host-side permanently — a saved workspace is the host's own
 file format.
 
-**Second deviation — `claude_*.rs` and `hyperpane.rs` are services, not modes.** The Exit
+**Second deviation — `claude_*.rs` and `orchestrator.rs` are services, not modes.** The Exit
 clause below lists them beside `filetree.rs` and `gitpanel.rs`, which reads as "all five
 go, except `git.rs` which is reduced". Two of the five did go and are gone. The other
 seven files were mis-grouped: they were never panel code. `claude_history.rs` is the JSONL
@@ -424,7 +424,7 @@ mode. `claude_panes.rs` and `claude_hook.rs` are pane identity: the hook writes 
 keyed by `AVADA_PANE_ID` and the workspace snapshot reads it, which is the same process
 ownership G4 refused to hand across the RPC boundary. `claude_accounts.rs` decides the
 `CLAUDE_CONFIG_DIR` a spawned PTY gets, and `claude_recovery.rs` reads a live pane's tail
-text — both host-owned for that same reason. `hyperpane.rs` materializes the always-on
+text — both host-owned for that same reason. `orchestrator.rs` materializes the always-on
 tab's working directory, which is a resource the binary ships, not a panel view.
 
 So they stay, in the position `git.rs` is in and for the same reason: reachable from a
@@ -435,7 +435,7 @@ nor the rail registry may name one of these services. Absence is what regresses,
 is the one thing a behavioural suite cannot notice.
 
 **Exit:** the left panel in this repo has no built-in modes; `core/src/git.rs`,
-`claude_*.rs`, `hyperpane.rs`, `filetree.rs`, `gitpanel.rs` are gone or reduced to the git
+`claude_*.rs`, `orchestrator.rs`, `filetree.rs`, `gitpanel.rs` are gone or reduced to the git
 service; two versions of one module install side by side and a workspace pins the older;
 a license file installs offline and a revoked one stops the module after the grace period
 against the stub issuer.

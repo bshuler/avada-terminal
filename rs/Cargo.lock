@@ -390,16 +390,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "avada-hyperpane"
-version = "0.1.0"
-dependencies = [
- "avada-module-sdk",
- "libc",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "avada-image"
 version = "0.1.0"
 dependencies = [
@@ -467,6 +457,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "avada-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "avada-module-sdk",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

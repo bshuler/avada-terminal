@@ -30,9 +30,9 @@ additional_cargo_args = ["--offline"]
 #       absent from cargo-mutants' `.git`-less tree copy. They panic in the unmutated baseline
 #       otherwise and abort the run. No sound mutation of an in-scope subsystem changes what
 #       files exist on disk, so excluding them is coverage-neutral. Tests:
-#           hyperpane::tests::the_shipped_tree_still_holds_what_build_rs_watches
-#           hyperpane::tests::the_host_ships_no_module_skills_of_its_own
-#           hyperpane::tests::materialize_into_copies_the_tree_and_leaves_local_files_be
+#           orchestrator::tests::the_shipped_tree_still_holds_what_build_rs_watches
+#           orchestrator::tests::the_host_ships_no_module_skills_of_its_own
+#           orchestrator::tests::materialize_into_copies_the_tree_and_leaves_local_files_be
 #           session::env::unix::unix_tests::provider_uses_dollar_shell_and_falls_back_on_failure
 #           tools::session_hook::tests::every_hook_ships_in_every_packaging_manifest
 #

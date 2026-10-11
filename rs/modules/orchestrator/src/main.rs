@@ -1,4 +1,4 @@
-//! `avada-hyperpane`: the always-on agent tab for Avada Terminal.
+//! `avada-orchestrator`: the always-on agent tab for Avada Terminal.
 //!
 //! A shell-tier module. It speaks the module contract over the socket in `AVADA_MODULE_FD`,
 //! registers a rail entry and four commands, opens one terminal pane in its own data
@@ -6,12 +6,12 @@
 //! It touches no filesystem capability at all: the only directory it cares about is the
 //! private data dir the host names in the hello, and nothing in the contract guards that.
 //!
-//! What makes the tab worth installing is not the pane but `skills/hyperpane/SKILL.md`,
+//! What makes the tab worth installing is not the pane but `skills/orchestrator/SKILL.md`,
 //! which the host materialises into the agent's rules because this manifest declares
 //! `[skills] paths` and the `skills.materialize` capability. There is no runtime method
 //! for that — materialisation happens around the module, not through it.
 //!
-//! `avada-hyperpane --manifest` prints the embedded `avada.toml` and exits.
+//! `avada-orchestrator --manifest` prints the embedded `avada.toml` and exits.
 
 mod app;
 mod rows;
@@ -25,14 +25,14 @@ fn main() {
         return;
     }
     if let Err(e) = run() {
-        eprintln!("avada-hyperpane: {e}");
+        eprintln!("avada-orchestrator: {e}");
         std::process::exit(1);
     }
 }
 
 #[cfg(not(unix))]
 fn run() -> Result<(), avada_module_sdk::client::ClientError> {
-    eprintln!("avada-hyperpane: this module needs the Unix socket transport (AVADA_MODULE_FD)");
+    eprintln!("avada-orchestrator: this module needs the Unix socket transport (AVADA_MODULE_FD)");
     Ok(())
 }
 
@@ -154,7 +154,7 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
             serde_json::to_value(RegisterRail {
                 entries: vec![RailEntry {
                     id: rows::ENTRY.into(),
-                    label: "Hyperpane".into(),
+                    label: "Orchestrator".into(),
                     icon: None,
                     tier: UiTier::Data,
                     module: None,
@@ -224,7 +224,7 @@ fn run() -> Result<(), avada_module_sdk::client::ClientError> {
                     (_, None) => (
                         req.err(RpcError::new(
                             ErrorCode::MethodNotFound,
-                            format!("hyperpane does not serve {}", req.method),
+                            format!("orchestrator does not serve {}", req.method),
                         )),
                         None,
                     ),

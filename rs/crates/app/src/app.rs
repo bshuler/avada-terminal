@@ -228,7 +228,7 @@ pub struct App {
     /// restored window or created. App-wide rather than per-window: it is one console for the
     /// whole workspace, and a second copy would only be a second agent contending for the
     /// same control API.
-    hyperpane_done: Cell<bool>,
+    orchestrator_done: Cell<bool>,
     /// Whether the once-per-launch prune of stale session markers has run — see
     /// [`Self::prune_session_markers`].
     markers_pruned: Cell<bool>,
@@ -360,7 +360,7 @@ impl App {
                     .then(|| std::time::Instant::now() + DEAD_SESSION_RESTART_DELAY),
             ),
             scaffold_done: Cell::new(false),
-            hyperpane_done: Cell::new(false),
+            orchestrator_done: Cell::new(false),
             markers_pruned: Cell::new(false),
             started_at: std::time::Instant::now(),
             ticks: Cell::new(0),
@@ -884,7 +884,7 @@ impl App {
     /// learn it, so draining per window would give the first window everything and the
     /// rest nothing. Then each window folds that tick in and hands back whatever the human
     /// did to a module's rail. Last, the panes a module asked for are opened on the first
-    /// window, the same place the Avada tab and the scheduler loops use when a
+    /// window, the same place the Orchestrator tab and the scheduler loops use when a
     /// window-less choice has to be made.
     #[tracing::instrument(level = "debug", skip_all)]
     fn service_modules(&self, windows: &[Rc<Window>]) {
@@ -1111,13 +1111,13 @@ impl App {
         for kind in self.loops.poll(status_secs, restart_secs) {
             match kind {
                 crate::loops::LoopKind::Status => {
-                    // The Avada tab is unique across windows; prompt wherever it lives.
+                    // The Orchestrator tab is unique across windows; prompt wherever it lives.
                     match windows
                         .iter()
-                        .find(|w| w.state.borrow().hyperpane_pane_uid().is_some())
+                        .find(|w| w.state.borrow().orchestrator_pane_uid().is_some())
                     {
                         Some(w) => self.fire_status_loop(w, &prompt),
-                        None => tracing::warn!("status loop: no Avada panel to prompt"),
+                        None => tracing::warn!("status loop: no Orchestrator panel to prompt"),
                     }
                 }
                 crate::loops::LoopKind::Restart => {
@@ -1134,7 +1134,7 @@ impl App {
         self.loops.publish(status_secs, restart_secs);
     }
 
-    /// The status loop: put the status prompt to the Avada panel's agent. Through the
+    /// The status loop: put the status prompt to the Orchestrator panel's agent. Through the
     /// resume queue when the pane's claude has written its session marker — the queue's
     /// delivery pass already waits out option forms and paces the submitting Enter — and
     /// typed straight into the pane otherwise (the same cadence), unless a form is up, in
@@ -1218,8 +1218,8 @@ impl App {
         } else {
             prompt
         };
-        let Some(uid) = w.state.borrow().hyperpane_pane_uid() else {
-            tracing::warn!("status loop: no Avada panel to prompt");
+        let Some(uid) = w.state.borrow().orchestrator_pane_uid() else {
+            tracing::warn!("status loop: no Orchestrator panel to prompt");
             return;
         };
         if let Some(s) = self.pane_claude_marker(&uid) {
@@ -1242,7 +1242,7 @@ impl App {
             return;
         }
         if !self.mgr.has(&uid) {
-            tracing::warn!(uid = %uid, "status loop: Avada panel has no live session");
+            tracing::warn!(uid = %uid, "status loop: Orchestrator panel has no live session");
             return;
         }
         // What is actually in the foreground decides, never the pane's label or mark: a
@@ -1250,25 +1250,25 @@ impl App {
         // prompt typed into zsh as a command, round after round.
         match crate::loops::classify_foreground(self.mgr.foreground_name(&uid).as_deref()) {
             crate::loops::StatusTarget::Agent(tool) => {
-                tracing::debug!(uid = %uid, tool = %tool, "status loop: an agent holds the Avada panel");
+                tracing::debug!(uid = %uid, tool = %tool, "status loop: an agent holds the Orchestrator panel");
             }
             crate::loops::StatusTarget::Shell(shell) => {
-                tracing::warn!(uid = %uid, shell = %shell, "status loop: the Avada panel is a bare shell; relaunching its agent instead of typing");
+                tracing::warn!(uid = %uid, shell = %shell, "status loop: the Orchestrator panel is a bare shell; relaunching its agent instead of typing");
                 let rebound = w
                     .state
                     .borrow_mut()
-                    .relaunch_hyperpane_pane(&self.mgr, None);
+                    .relaunch_orchestrator_pane(&self.mgr, None);
                 match rebound {
                     Some((old, new)) => {
                         self.rekey_restarted_pane(&old, &new);
-                        tracing::info!(old = %old, new = %new, "status loop: Avada panel relaunched");
+                        tracing::info!(old = %old, new = %new, "status loop: Orchestrator panel relaunched");
                     }
-                    None => tracing::warn!(uid = %uid, "status loop: Avada panel not relaunched"),
+                    None => tracing::warn!(uid = %uid, "status loop: Orchestrator panel not relaunched"),
                 }
                 return;
             }
             crate::loops::StatusTarget::Unknown(program) => {
-                tracing::warn!(uid = %uid, program = ?program, "status loop: cannot tell what holds the Avada panel; this round is skipped");
+                tracing::warn!(uid = %uid, program = ?program, "status loop: cannot tell what holds the Orchestrator panel; this round is skipped");
                 return;
             }
         }
@@ -1280,7 +1280,7 @@ impl App {
             tracing::warn!(uid = %uid, "status loop: this round is held: {why}");
             return;
         }
-        tracing::info!(uid = %uid, "status loop: typing the prompt into the Avada panel");
+        tracing::info!(uid = %uid, "status loop: typing the prompt into the Orchestrator panel");
         let mgr = self.mgr.clone();
         let text = prompt.to_string();
         std::thread::spawn(move || {
@@ -1358,7 +1358,7 @@ impl App {
                 "dead login session escaped: restarting every pane"
             );
             for (ti, pi, uid, tool) in targets {
-                let is_hyperpane = w.state.borrow().is_hyperpane_pane(ti, pi);
+                let is_orchestrator = w.state.borrow().is_orchestrator_pane(ti, pi);
                 let pane_id = self
                     .control
                     .pane_id_for_uid(&uid)
@@ -1381,15 +1381,15 @@ impl App {
                     }
                 }
                 let tool = tool.or_else(|| marker.as_ref().map(|_| "claude".to_string()));
-                // A tool pane goes back into its conversation; the Avada panel goes back to
+                // A tool pane goes back into its conversation; the Orchestrator panel goes back to
                 // its recipe even when it is a bare shell right now (that is exactly the
                 // state a takeover before 0.2.28 left it in); anything that declines (or is
                 // a plain shell) still gets its process replaced — no pty pane may be left
                 // holding the dead bootstrap port.
-                let rebound = if is_hyperpane {
+                let rebound = if is_orchestrator {
                     w.state
                         .borrow_mut()
-                        .relaunch_hyperpane_pane(&self.mgr, marker.as_ref())
+                        .relaunch_orchestrator_pane(&self.mgr, marker.as_ref())
                 } else {
                     tool.as_deref().and_then(|_| {
                         w.state.borrow_mut().restart_monitored_pane(
@@ -1419,13 +1419,13 @@ impl App {
     /// own binary, optionally shut the session daemon down (scope "full" — every pane dies
     /// and the restore path resurrects the workspace), then quit the event loop.
     /// The "last session" snapshot of `wins`: one [`WindowSpec`] per window that has any
-    /// content, the window holding the Avada tab FIRST, with the top-level
+    /// content, the window holding the Orchestrator tab FIRST, with the top-level
     /// `name`/`groups`/`active` mirroring that first window. `None` when no window has a
     /// group (a transient mid-close state that must never clobber a good save).
     ///
     /// The mirror matters because `windows` is only honoured by loaders that walk it: the
     /// launch restore (`PendingSeed::Workspace` → `State::load_workspace`) reads the first
-    /// window only, so at least the Avada tab's window comes back from a bare relaunch; the
+    /// window only, so at least the Orchestrator tab's window comes back from a bare relaunch; the
     /// second-instance hand-off spawns a window per spec and restores all of them. A single
     /// window writes no `windows` list, keeping that file byte-identical to before.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -2059,11 +2059,11 @@ impl App {
         //     filesystem attempt, so this is a cheap latch check per tick. (b) A pane path
         //     without a `SessionManager` (drag-out, `detach_uid`) can leave the system tab
         //     empty; `take_pane_inner` never drops it, and this refills it.
-        if !self.hyperpane_done.get() {
+        if !self.orchestrator_done.get() {
             if let Some(w) = windows.first() {
                 if matches!(*w.seed.borrow(), PendingSeed::Done) {
                     let mut st = w.state.borrow_mut();
-                    self.ensure_hyperpane_tab(&mut st);
+                    self.ensure_orchestrator_tab(&mut st);
                 }
             }
         }
@@ -2137,14 +2137,14 @@ impl App {
             let all: Vec<Rc<Window>> = self.windows.borrow().clone();
             let (closing, survivors): (Vec<Rc<Window>>, Vec<Rc<Window>>) =
                 all.into_iter().partition(|w| w.closing.get());
-            // The Avada tab outlives its window: before the closing window's sessions
+            // The Orchestrator tab outlives its window: before the closing window's sessions
             // die, lift the tab out and re-home it at index 0 of the first survivor. With
             // no survivor the process is quitting and the snapshot below carries it.
             if let Some(home) = survivors.first() {
                 for w in &closing {
                     let taken = w.state.borrow_mut().take_system_tab();
                     if let Some(det) = taken {
-                        tracing::info!(from = w.id, to = home.id, "re-homing the Avada tab");
+                        tracing::info!(from = w.id, to = home.id, "re-homing the Orchestrator tab");
                         home.state.borrow_mut().adopt_system_tab(&self.mgr, det);
                     }
                 }
@@ -2720,7 +2720,7 @@ impl App {
             dispatch(st, Command::ToggleLeftPanel, &self.mgr);
         }
 
-        self.ensure_hyperpane_tab(st);
+        self.ensure_orchestrator_tab(st);
     }
 
     /// Make sure the always-on **Avada** tab exists somewhere, creating it on this window
@@ -2729,14 +2729,14 @@ impl App {
     /// Runs at the tail of every seed, because the window that ends up owning the tab depends
     /// on what was restored: a workspace that already carries it (the tab persists, see
     /// `Tab::system`) needs nothing, and only a session that has none anywhere gets a fresh
-    /// one. `hyperpane_done` then latches, so later windows never grow a second copy.
+    /// one. `orchestrator_done` then latches, so later windows never grow a second copy.
     #[tracing::instrument(level = "debug", skip_all)]
-    fn ensure_hyperpane_tab(self: &Rc<Self>, st: &mut State) {
+    fn ensure_orchestrator_tab(self: &Rc<Self>, st: &mut State) {
         // A restored workspace can carry the tab anywhere in the strip (it was appended, not
         // pinned, before the pin existed — and a saved reorder outlives the rule that now
         // forbids it). Re-pin on every seed, whether or not we go on to create one.
         st.pin_system_tab_first();
-        if self.hyperpane_done.get() {
+        if self.orchestrator_done.get() {
             return;
         }
         // `st` is one of `self.windows`' states and is already mutably borrowed here, so its
@@ -2749,13 +2749,13 @@ impl App {
                     .unwrap_or(false)
             });
         if existing {
-            self.hyperpane_done.set(true);
+            self.orchestrator_done.set(true);
             return;
         }
-        if !st.ensure_hyperpane_tab(&self.mgr) {
+        if !st.ensure_orchestrator_tab(&self.mgr) {
             return; // couldn't prepare its directory — try again on the next window
         }
-        self.hyperpane_done.set(true);
+        self.orchestrator_done.set(true);
         // The tab exists to drive the control API, so turn it on — once, here, at the moment
         // of creation. A user who switches it back off in Preferences keeps it off: the tab
         // is restored with the workspace from then on, so this branch never runs again.

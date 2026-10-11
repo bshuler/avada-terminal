@@ -1,4 +1,4 @@
-//! The real `avada-hyperpane` binary against a fake host.
+//! The real `avada-orchestrator` binary against a fake host.
 //!
 //! The host side is what `avada_core` does: a socketpair whose child end is handed to the
 //! module in `AVADA_MODULE_FD`, `module.hello` / `host.hello` as the first two lines, then
@@ -33,7 +33,7 @@ impl TempDir {
     /// the module echoes back would not be the ones we sent.
     fn data(tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!(
-            "avada-hyperpane-e2e-{tag}-{}-{}",
+            "avada-orchestrator-e2e-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -82,7 +82,7 @@ impl Host {
         assert!(flags >= 0);
         assert!(unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } >= 0);
         let dir = TempDir::data(tag);
-        let child = Command::new(env!("CARGO_BIN_EXE_avada-hyperpane"))
+        let child = Command::new(env!("CARGO_BIN_EXE_avada-orchestrator"))
             .env("AVADA_MODULE_FD", fd.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -105,7 +105,7 @@ impl Host {
         let hello: ModuleHello = serde_json::from_str(&first).expect("module.hello");
         assert_eq!(
             hello.manifest.module.id.to_string(),
-            "bshuler/avada-hyperpane"
+            "bshuler/avada-orchestrator"
         );
         assert!(hello.contract_min <= 1 && 1 <= hello.contract_max);
         for m in methods::MODULE_REQUIRED_V1 {
@@ -274,7 +274,7 @@ impl Host {
         self.ok(
             methods::MODULE_ROW_ACTIVATE,
             json!({
-                "entry": "hyperpane",
+                "entry": "orchestrator",
                 "row": row["id"],
                 "data": row["data"],
                 "gesture": gesture,
@@ -346,8 +346,8 @@ fn the_handshake_registers_the_rail_the_commands_and_the_events() {
     let rail = host.last(methods::HOST_RAIL_REGISTER);
     let entries = rail["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["id"], "hyperpane");
-    assert_eq!(entries[0]["label"], "Hyperpane");
+    assert_eq!(entries[0]["id"], "orchestrator");
+    assert_eq!(entries[0]["label"], "Orchestrator");
     assert_eq!(entries[0]["tier"], 1);
 
     let commands = host.last(methods::HOST_COMMAND_REGISTER);
@@ -375,7 +375,7 @@ fn the_handshake_registers_the_rail_the_commands_and_the_events() {
 fn the_first_paint_shows_a_cold_session_and_the_data_dir_not_the_workspace() {
     let mut host = Host::spawn("first-paint");
     let params = host.wait_for(methods::HOST_ROWS_SET, 1);
-    assert_eq!(params["entry"], "hyperpane");
+    assert_eq!(params["entry"], "orchestrator");
     let rows = params["rows"].as_array().unwrap().clone();
 
     assert_eq!(rows.len(), 2);
@@ -561,14 +561,14 @@ fn spawning_without_panes_input_still_opens_the_shell_but_types_nothing() {
 
 #[test]
 fn the_manifest_flag_prints_the_embedded_toml() {
-    let out = Command::new(env!("CARGO_BIN_EXE_avada-hyperpane"))
+    let out = Command::new(env!("CARGO_BIN_EXE_avada-orchestrator"))
         .arg("--manifest")
         .output()
         .expect("run --manifest");
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
     let m = avada_module_sdk::manifest::Manifest::parse(&text).expect("valid manifest");
-    assert_eq!(m.module.id.to_string(), "bshuler/avada-hyperpane");
+    assert_eq!(m.module.id.to_string(), "bshuler/avada-orchestrator");
     assert!(m.capabilities.contains(&Capability::PanesInput));
     assert!(m.capabilities.contains(&Capability::SkillsMaterialize));
     assert_eq!(m.skills.paths, ["skills"]);

@@ -1,17 +1,17 @@
-# avada-hyperpane
+# avada-orchestrator
 
-The **Hyperpane** tab for [Avada Terminal](https://github.com/bshuler/avada-terminal): the
+The **Orchestrator** tab for [Avada Terminal](https://github.com/bshuler/avada-terminal): the
 always-on agent session, and the rule that teaches that agent it can drive the app it is
-running inside. This used to be built into the terminal as `avada/hyperpane`; it is now a
+running inside. This used to be built into the terminal as `avada/orchestrator`; it is now a
 module, which means it can be disabled, updated, or replaced without touching the terminal.
 
 ## Install
 
 ```sh
-avada marketplace install bshuler/avada-hyperpane
+avada marketplace install bshuler/avada-orchestrator
 ```
 
-The rail entry appears as **Hyperpane** and, being tier 1, is drawn entirely by the host:
+The rail entry appears as **Orchestrator** and, being tier 1, is drawn entirely by the host:
 the module sends rows, never pixels.
 
 ## What it does
@@ -22,8 +22,8 @@ it — and it is why this module asks for both, separately.
 
 | Gesture | Effect |
 | --- | --- |
-| Click the **Hyperpane** row | Open the tab, or say it is already open |
-| Alt-click the **Hyperpane** row | Restart the agent in a fresh shell |
+| Click the **Orchestrator** row | Open the tab, or say it is already open |
+| Alt-click the **Orchestrator** row | Restart the agent in a fresh shell |
 | Click the directory row | Reveal the working directory in a file pane |
 | The filter box | Narrows the two rows on their label or their path |
 
@@ -31,10 +31,10 @@ Commands, all invokable from the palette:
 
 | Id | Label |
 | --- | --- |
-| `open` | Hyperpane: Open the tab |
-| `restart` | Hyperpane: Restart the agent |
-| `send` | Hyperpane: Send text to the agent — `{ text }` |
-| `reveal` | Hyperpane: Reveal the working directory |
+| `open` | Orchestrator: Open the tab |
+| `restart` | Orchestrator: Restart the agent |
+| `send` | Orchestrator: Send text to the agent — `{ text }` |
+| `reveal` | Orchestrator: Reveal the working directory |
 
 It subscribes to one host event, `rail.query` — the filter box under the rail entry
 changed.
@@ -49,7 +49,7 @@ contract guards that directory, so the module asks for no filesystem capability 
 
 ### The skill
 
-`skills/hyperpane/SKILL.md` is an always-on rule, materialised into the agent's own rules
+`skills/orchestrator/SKILL.md` is an always-on rule, materialised into the agent's own rules
 by the host because this manifest declares `[skills] paths` together with the
 `skills.materialize` capability. There is no runtime method for materialising skills —
 it happens around the module at install time, not through it — so the module itself does
@@ -60,10 +60,10 @@ does not know that `avada ctl` exists.
 
 | Capability | Why |
 | --- | --- |
-| `ui.rail` | The **Hyperpane** entry and its two rows. |
+| `ui.rail` | The **Orchestrator** entry and its two rows. |
 | `ui.pane` | The tab surface itself. |
 | `ui.commands` | The four palette commands above. |
-| `ui.toast` | "Hyperpane is already open", and the reason a command failed. |
+| `ui.toast` | "Orchestrator is already open", and the reason a command failed. |
 | `events.subscribe` | `rail.query`. |
 | `panes.spawn` | Opening the shell, and revealing the directory. |
 | `panes.input` | Typing into the shell it opened. Granted separately from `panes.spawn`, because opening a terminal and driving somebody's shell are different powers. |
@@ -91,7 +91,7 @@ a fake host that mints pane ids the way `avada_core::module::rpc` does — so a 
 test is a test that would pass against the app. No real terminal is ever started: the point
 of proof is the conversation, not the shell at the far end of it.
 
-`avada-hyperpane --manifest` prints the embedded `avada.toml`, which is how the host reads
+`avada-orchestrator --manifest` prints the embedded `avada.toml`, which is how the host reads
 a source module's capabilities before granting any.
 
 ## Licence

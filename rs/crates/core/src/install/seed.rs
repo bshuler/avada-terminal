@@ -54,6 +54,10 @@ const BIN_DIR: &str = "bin";
 /// The seed ledger, a sibling of the modules root (never inside it: `records()` would
 /// report a stray file there as a broken install on every scan).
 const LEDGER_FILE: &str = "seed-ledger.json";
+/// First-party modules a later bundle ships under a new id, as `(old, replacement)`. Once
+/// the replacement is installed, every version of the old id is uninstalled, so the rail
+/// never shows both and the skills materializer drops the old module's fenced block.
+const RETIRED: &[(&str, &str)] = &[("bshuler/avada-hyperpane", "bshuler/avada-orchestrator")];
 
 /// What one seeding pass did. Purely informational — the caller logs it; the GUI does not
 /// depend on any of it.
@@ -67,6 +71,8 @@ pub struct SeedOutcome {
     pub skipped: usize,
     /// `(subdirectory, reason)` for every module that could not be seeded.
     pub failures: Vec<(String, String)>,
+    /// Renamed first-party modules whose old id was uninstalled by this pass.
+    pub retired: Vec<ModuleId>,
 }
 
 /// The ledger path for a store rooted at `modules_root`: a sibling of the root, like the
@@ -149,6 +155,8 @@ pub fn seed_bundled(store: &InstallStore, seed_dir: &Path, ledger: &Path) -> See
         }
     }
 
+    outcome.retired = retire_renamed(store, RETIRED);
+
     // Persist whenever the ledger changed — a fresh seed OR an adoption of an already
     // installed version — and never fail over it: a lost ledger costs a redundant
     // (idempotent) re-seed next launch, not a broken install.
@@ -158,15 +166,46 @@ pub fn seed_bundled(store: &InstallStore, seed_dir: &Path, ledger: &Path) -> See
         }
     }
 
-    if !outcome.seeded.is_empty() || !outcome.failures.is_empty() {
+    if !outcome.seeded.is_empty() || !outcome.failures.is_empty() || !outcome.retired.is_empty() {
         tracing::info!(
             seeded = outcome.seeded.len(),
+            retired = outcome.retired.len(),
             skipped = outcome.skipped,
             failed = outcome.failures.len(),
             "seeded bundled modules"
         );
     }
     outcome
+}
+
+/// Uninstall every version of each `(old, replacement)` pair's old id, but only once the
+/// replacement is installed: a bundle that failed to seed the new module keeps the old
+/// one rather than leaving the machine with neither. Failures are logged, not returned.
+fn retire_renamed(store: &InstallStore, retired: &[(&str, &str)]) -> Vec<ModuleId> {
+    let mut gone = Vec::new();
+    for (old, new) in retired {
+        let (Ok(old), Ok(new)) = (ModuleId::new(old), ModuleId::new(new)) else {
+            tracing::warn!(old, new, "malformed retired-module entry");
+            continue;
+        };
+        let has_replacement = store.installed_versions(&new).is_ok_and(|v| !v.is_empty());
+        let versions = store.installed_versions(&old).unwrap_or_default();
+        if !has_replacement || versions.is_empty() {
+            continue;
+        }
+        let mut all_removed = true;
+        for v in &versions {
+            if let Err(e) = store.uninstall(&old, v) {
+                all_removed = false;
+                tracing::warn!(id = %old.as_str(), version = %v, error = %e, "could not retire a renamed module");
+            }
+        }
+        if all_removed {
+            tracing::info!(id = %old.as_str(), replacement = %new.as_str(), "retired a renamed module");
+            gone.push(old);
+        }
+    }
+    gone
 }
 
 /// Seed one subdirectory. `Ok(Some(id))` installed it, `Ok(None)` skipped it (already
@@ -528,6 +567,35 @@ mod tests {
         let mut versions = b.installed(&v2);
         versions.sort();
         assert_eq!(versions, vec![Version::new(1, 2, 0), Version::new(1, 3, 0)]);
+    }
+
+    #[test]
+    fn an_app_update_retires_the_renamed_module() {
+        let b = Bench::new("retire");
+        let old = manifest();
+        b.stage(&old, b"old");
+        b.seed();
+        std::fs::remove_dir_all(b.seed.join(old.id().dir_name())).unwrap();
+
+        let mut new = manifest();
+        new.module.id = ModuleId::new("acme/renamed").unwrap();
+        let table = [(old.id().as_str(), new.id().as_str())];
+
+        // Before the replacement is installed the old module is kept.
+        assert!(retire_renamed(&b.store, &table).is_empty());
+        assert_eq!(b.installed(&old), vec![old.module.version.clone()]);
+
+        b.stage(&new, b"new");
+        b.seed();
+        assert_eq!(retire_renamed(&b.store, &table), vec![old.id().clone()]);
+        assert!(
+            b.installed(&old).is_empty(),
+            "every old version is uninstalled"
+        );
+        assert!(b.store.record(old.id()).unwrap().is_none());
+        assert_eq!(b.installed(&new), vec![new.module.version.clone()]);
+        // A second pass has nothing left to retire.
+        assert!(retire_renamed(&b.store, &table).is_empty());
     }
 
     #[test]

@@ -341,7 +341,7 @@ fn the_tab_close_button_closes_that_tab() {
     });
 }
 
-/// The always-on "Avada" tab cannot be closed, so it must not offer a ×: an affordance
+/// The always-on "Orchestrator" tab cannot be closed, so it must not offer a ×: an affordance
 /// that does nothing is worse than no affordance.
 #[test]
 fn the_system_tab_offers_no_close_button() {

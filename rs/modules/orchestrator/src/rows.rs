@@ -1,4 +1,4 @@
-//! The rail rows: what the Hyperpane entry looks like in the left panel.
+//! The rail rows: what the Orchestrator entry looks like in the left panel.
 //!
 //! Two rows, always the same two. This entry is not a browser — it is a switch and a
 //! signpost — so the row list is a pure function of [`crate::app::State`] and needs no
@@ -11,7 +11,7 @@ use avada_module_sdk::rail::Row;
 use crate::app::{Action, State};
 
 /// The rail entry id this module owns. Matches `[[contributions]] kind = "rail"`.
-pub const ENTRY: &str = "hyperpane";
+pub const ENTRY: &str = "orchestrator";
 
 /// Row ids, so the tests and the activate arm agree on the spelling.
 pub const SESSION: &str = "session";
@@ -24,7 +24,7 @@ pub fn rows(state: &State) -> Vec<Row> {
     let all = vec![
         Row {
             id: SESSION.into(),
-            label: "Hyperpane".into(),
+            label: "Orchestrator".into(),
             detail: if running {
                 "running".into()
             } else {
@@ -94,7 +94,7 @@ mod tests {
 
     fn state() -> State {
         State {
-            dir: PathBuf::from("/data/bshuler__avada-hyperpane"),
+            dir: PathBuf::from("/data/bshuler__avada-orchestrator"),
             pane: None,
             filter: String::new(),
         }
@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(cold.len(), 2);
         assert_eq!(cold[0].detail, "not started");
         assert!(cold[0].marks.is_empty());
-        assert_eq!(cold[1].label, "bshuler__avada-hyperpane");
+        assert_eq!(cold[1].label, "bshuler__avada-orchestrator");
 
         s.pane = Some("p-1".into());
         let hot = rows(&s);
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn the_filter_narrows_on_label_and_on_path() {
         let mut s = state();
-        s.filter = "HYPER".into();
+        s.filter = "ORCHES".into();
         assert_eq!(
             rows(&s).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
             ["session", "directory"],

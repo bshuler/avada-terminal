@@ -1,14 +1,14 @@
 [package]
-name = "avada-hyperpane"
+name = "avada-orchestrator"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
-description = "The Hyperpane module for Avada Terminal: the always-on agent tab and the rule that teaches it to drive the app"
+description = "The Orchestrator module for Avada Terminal: the always-on agent tab and the rule that teaches it to drive the app"
 license = "MIT OR Apache-2.0"
 publish = false
 
 [[bin]]
-name = "avada-hyperpane"
+name = "avada-orchestrator"
 path = "src/main.rs"
 
 [dependencies]

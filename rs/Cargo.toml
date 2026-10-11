@@ -11,7 +11,7 @@ members = [
     "modules/git",
     "modules/tools",
     "modules/workspace",
-    "modules/hyperpane",
+    "modules/orchestrator",
     "modules/editor",
     "modules/markdown",
     "modules/marketplace",

@@ -103,14 +103,14 @@ of the tool-session tests and the full app and core suites pass with the lock in
 
 ## 0.2.29: the status loop typed into a bare shell
 
-After 0.2.28 the Avada panel (the app's own Hyperpane pane) came back as a plain `zsh`,
+After 0.2.28 the Avada panel (the app's own Orchestrator pane) came back as a plain `zsh`,
 and every fifteen minutes the status loop typed its prompt into that shell and pressed
 Enter twice, because `fire_status_loop` only checked the pane's *label*, never what the
 pane was running. 0.2.29 classifies the live foreground (`loops::classify_foreground`):
 an agent gets the prompt as before, a shell is relaunched from the pane's recipe
-(`relaunch_hyperpane_pane`, then `rekey_restarted_pane` so the loop follows the new pane
+(`relaunch_orchestrator_pane`, then `rekey_restarted_pane` so the loop follows the new pane
 id), anything else skips the round with a warning. Dead-session recovery routes the
-Hyperpane pane through the same relaunch, and `restart_monitored_pane` no longer dies on
+Orchestrator pane through the same relaunch, and `restart_monitored_pane` no longer dies on
 a stale directory.
 
 Verified live on 2026-10-09T01:55:47Z: the log shows `status loop: the Avada panel is a

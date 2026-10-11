@@ -1,4 +1,4 @@
-# Manifest of the Avada Hyperpane module. `docs/module-contract.md` in
+# Manifest of the Avada Orchestrator module. `docs/module-contract.md` in
 # bshuler/avada-terminal explains every key. Top-level keys come before the first
 # table header (TOML rule).
 #
@@ -8,7 +8,7 @@
 # at all: the only directory it cares about is its own data dir, which the host hands
 # it in the hello and which no capability guards.
 #
-# `skills.materialize` is what puts `skills/hyperpane/SKILL.md` in front of the agent
+# `skills.materialize` is what puts `skills/orchestrator/SKILL.md` in front of the agent
 # as an always-on rule; without it the pane still opens and the agent simply does not
 # know the app can be driven.
 capabilities = [
@@ -23,8 +23,8 @@ capabilities = [
 ]
 
 [module]
-id = "bshuler/avada-hyperpane"
-name = "Hyperpane"
+id = "bshuler/avada-orchestrator"
+name = "Orchestrator"
 version = "0.1.0"
 description = "The always-on agent tab: a shell that drives Avada Terminal with `avada ctl`"
 publisher = "Avada"
@@ -38,36 +38,36 @@ paths = ["skills"]
 
 [[contributions]]
 kind = "rail"
-id = "hyperpane"
+id = "orchestrator"
 tier = 1
-label = "Hyperpane"
+label = "Orchestrator"
 
 [[contributions]]
 kind = "pane"
-id = "hyperpane"
+id = "orchestrator"
 tier = 1
-label = "Hyperpane"
+label = "Orchestrator"
 
 [[contributions]]
 kind = "command"
 id = "open"
 tier = 1
-label = "Hyperpane: Open the tab"
+label = "Orchestrator: Open the tab"
 
 [[contributions]]
 kind = "command"
 id = "restart"
 tier = 1
-label = "Hyperpane: Restart the agent"
+label = "Orchestrator: Restart the agent"
 
 [[contributions]]
 kind = "command"
 id = "send"
 tier = 1
-label = "Hyperpane: Send text to the agent"
+label = "Orchestrator: Send text to the agent"
 
 [[contributions]]
 kind = "command"
 id = "reveal"
 tier = 1
-label = "Hyperpane: Reveal the working directory"
+label = "Orchestrator: Reveal the working directory"

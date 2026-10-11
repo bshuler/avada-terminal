@@ -2,8 +2,8 @@
 
 How a module's `SKILL.md` files reach the AI tools a user runs. Code:
 `rs/crates/core/src/skills/` (`avada_core::skills`); SDK types in
-`rs/crates/module-sdk/src/skills.rs`; the shipped Hyperpane skill in
-`resources/claude/hyperpane/skills/hyperpane/`.
+`rs/crates/module-sdk/src/skills.rs`; the shipped Orchestrator skill in
+`resources/claude/orchestrator/skills/orchestrator/`.
 
 ## Source format
 
@@ -137,9 +137,9 @@ Loading is forgiving — a missing or corrupt file, a non-array value, a
 non-string element, or an id no adapter in this build claims all coerce to
 "nothing disabled", which is the safe direction for a toggle that gates writes.
 
-That call currently has **no caller**. `hyperpane::materialize()` used to be it,
-back when the Hyperpane skill was built in; the skill left with the
-`bshuler/avada-hyperpane` module and the host copy-out no longer materializes
+That call currently has **no caller**. `orchestrator::materialize()` used to be it,
+back when the Orchestrator skill was built in; the skill left with the
+`bshuler/avada-orchestrator` module and the host copy-out no longer materializes
 anything. The next caller is whatever drives materialization from the module
 registry at install time, which is where the force-add of Claude Code belongs
 too: it makes a tool *present*, not *enabled* — if the user switched it off,
@@ -265,10 +265,10 @@ assert!(mat.plan(&request).is_empty());     // idempotent
 
 `ModuleInput { id, name, version, version_dir, skills, accepted, enabled }` is
 what the registry knows per installed module — the only shape this materializer
-accepts. There is no built-in module any more: `bshuler/avada-hyperpane` carries
-the Hyperpane rule and arrives through the marketplace like any other, so its
+accepts. There is no built-in module any more: `bshuler/avada-orchestrator` carries
+the Orchestrator rule and arrives through the marketplace like any other, so its
 skills reach the tab's directory as an installed module's `[skills] paths`, not
-as a special case in `hyperpane::materialize()`.
+as a special case in `orchestrator::materialize()`.
 
 ## Extending
 

@@ -80,11 +80,11 @@ for f in SKILL.md SPEC.md IMPL.md; do
   install -m 644 "$ROOT/resources/claude/goal-orchestrator/$f" "$APPDIR/usr/bin/resources/claude/goal-orchestrator/$f"
 done
 
-# The always-on Hyperpane tab's working directory (README + the hidden .claude/skills tree its
-# agent loads) — resolved as exe_dir/resources/claude/hyperpane. `cp -R` of the directory itself,
+# The always-on Orchestrator tab's working directory (README + the hidden .claude/skills tree its
+# agent loads) — resolved as exe_dir/resources/claude/orchestrator. `cp -R` of the directory itself,
 # so the dot-directory rides along; a glob would silently drop it.
-rm -rf "$APPDIR/usr/bin/resources/claude/hyperpane"
-cp -R "$ROOT/resources/claude/hyperpane" "$APPDIR/usr/bin/resources/claude/hyperpane"
+rm -rf "$APPDIR/usr/bin/resources/claude/orchestrator"
+cp -R "$ROOT/resources/claude/orchestrator" "$APPDIR/usr/bin/resources/claude/orchestrator"
 
 # First-party modules, precompiled for offline first-run seeding (requirement #2).
 # AppRun launches usr/bin/avada, so the seed resolver's exe_dir/resources/seed-modules

@@ -1,8 +1,8 @@
-//! The always-on **Avada** tab's working directory.
+//! The always-on **Orchestrator** tab's working directory.
 //!
-//! The tab runs the user's coding CLI in [`paths::hyperpane_dir`], and the files that make that
+//! The tab runs the user's coding CLI in [`paths::orchestrator_dir`], and the files that make that
 //! directory a useful place to start — the README a human reads, the `.claude/` settings and
-//! reference material — ship with the binary under `resources/claude/hyperpane/`. This module
+//! reference material — ship with the binary under `resources/claude/orchestrator/`. This module
 //! copies them out to the durable location on every start, so an upgraded app refreshes them
 //! without the user doing anything.
 //!
@@ -12,7 +12,7 @@
 //! a locally-edited shipped file is app-owned and *will* be replaced.
 //!
 //! What this module deliberately no longer does is materialize skills. The rule that teaches an
-//! agent about `avada ctl` belongs to the `bshuler/avada-hyperpane` module and travels with it;
+//! agent about `avada ctl` belongs to the `bshuler/avada-orchestrator` module and travels with it;
 //! [`crate::skills::Materializer`] runs over *installed modules*, from the registry, and has no
 //! special case for this directory any more. Seeding a directory is a host job; deciding what
 //! an agent is told is a module's.
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use crate::persistence::paths;
 
-/// The shipped copy of the Avada tab's directory, or `None` when the app is running from a tree
+/// The shipped copy of the Orchestrator tab's directory, or `None` when the app is running from a tree
 /// that doesn't carry it.
 ///
 /// Same packaged layouts [`crate::shell_integration::shell_integration_dir`] handles —
@@ -34,24 +34,54 @@ pub fn source_dir() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))?;
-    let rel = Path::new("resources").join("claude").join("hyperpane");
+    let rel = Path::new("resources").join("claude").join("orchestrator");
     let mut candidates = vec![exe_dir.join(&rel)];
     if let Some(prefix) = exe_dir.parent() {
-        candidates.push(prefix.join("Resources").join("claude").join("hyperpane"));
+        candidates.push(prefix.join("Resources").join("claude").join("orchestrator"));
         candidates.push(prefix.join("share").join("avada").join(&rel));
         candidates.push(prefix.join("lib").join("avada").join(&rel));
     }
     candidates.into_iter().find(|c| c.is_dir())
 }
 
-/// Refresh [`paths::hyperpane_dir`] from the shipped tree and return it.
+/// Refresh [`paths::orchestrator_dir`] from the shipped tree and return it.
 ///
 /// The directory is created even when nothing ships (a stripped build, a dev binary run from a
 /// tree without its resources): the tab still needs a cwd, and an empty one is a working — if
 /// unhelpful — starting point, which is strictly better than the tab failing to open.
 #[tracing::instrument(level = "debug", ret)]
 pub fn materialize() -> io::Result<PathBuf> {
-    materialize_into(&paths::hyperpane_dir(), source_dir().as_deref())
+    let dest = paths::orchestrator_dir();
+    move_legacy_dir(&paths::legacy_orchestrator_dir(), &dest);
+    materialize_into(&dest, source_dir().as_deref())
+}
+
+/// Carry the directory over from its pre-0.2.36 name (`hyperpane`) by renaming it in place.
+///
+/// A rename keeps the inode, so an agent already running in the old directory keeps a valid
+/// cwd and its notes come along. When both directories exist neither is touched: merging
+/// two copies would have to pick a winner per file, and that is how data gets lost.
+#[tracing::instrument(level = "debug")]
+pub fn move_legacy_dir(legacy: &Path, dest: &Path) {
+    if !legacy.is_dir() {
+        return;
+    }
+    if dest.exists() {
+        tracing::warn!(
+            legacy = %legacy.display(),
+            dest = %dest.display(),
+            "both the old and the new orchestrator directory exist; leaving the old one for the user"
+        );
+        return;
+    }
+    match fs::rename(legacy, dest) {
+        Ok(()) => {
+            tracing::info!(from = %legacy.display(), to = %dest.display(), "moved the orchestrator directory")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, from = %legacy.display(), "could not move the orchestrator directory")
+        }
+    }
 }
 
 /// [`materialize`] with both paths explicit: copy the shipped tree at `src` (if any) onto
@@ -89,6 +119,43 @@ fn copy_over(src: &Path, dest: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_legacy_dir_is_renamed_in_place_with_its_contents() {
+        let root = scratch("legacy-move");
+        let legacy = root.join("hyperpane");
+        let dest = root.join("orchestrator");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("notes.md"), "mine").unwrap();
+        move_legacy_dir(&legacy, &dest);
+        assert!(!legacy.exists(), "the old name is gone");
+        assert_eq!(fs::read_to_string(dest.join("notes.md")).unwrap(), "mine");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn when_both_dirs_exist_neither_is_touched() {
+        let root = scratch("legacy-both");
+        let legacy = root.join("hyperpane");
+        let dest = root.join("orchestrator");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(legacy.join("a"), "old").unwrap();
+        fs::write(dest.join("a"), "new").unwrap();
+        move_legacy_dir(&legacy, &dest);
+        assert_eq!(fs::read_to_string(legacy.join("a")).unwrap(), "old");
+        assert_eq!(fs::read_to_string(dest.join("a")).unwrap(), "new");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_legacy_dir_is_a_no_op() {
+        let root = scratch("legacy-none");
+        let dest = root.join("orchestrator");
+        move_legacy_dir(&root.join("hyperpane"), &dest);
+        assert!(!dest.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
     fn scratch(tag: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(format!("hp-{tag}-{}", uuid::Uuid::new_v4()));
         let _ = fs::remove_dir_all(&tmp);
@@ -96,7 +163,7 @@ mod tests {
         tmp
     }
 
-    /// The tree as it ships: `resources/claude/hyperpane` at the repo root.
+    /// The tree as it ships: `resources/claude/orchestrator` at the repo root.
     fn shipped() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -104,7 +171,7 @@ mod tests {
             .join("..")
             .join("resources")
             .join("claude")
-            .join("hyperpane")
+            .join("orchestrator")
     }
 
     #[test]
@@ -171,7 +238,7 @@ mod tests {
         }
     }
 
-    /// The skill unit left with the `bshuler/avada-hyperpane` module. Nothing under the shipped
+    /// The skill unit left with the `bshuler/avada-orchestrator` module. Nothing under the shipped
     /// tree may claim module ownership any more: a stray `skills/` directory here would be
     /// content the host ships and no registry knows about, which is exactly the confusion the
     /// extraction removed.
@@ -184,7 +251,7 @@ mod tests {
     fn the_host_ships_no_module_skills_of_its_own() {
         assert!(
             !shipped().join("skills").exists(),
-            "skill units belong to the hyperpane module, not to resources/claude/hyperpane"
+            "skill units belong to the orchestrator module, not to resources/claude/orchestrator"
         );
     }
 

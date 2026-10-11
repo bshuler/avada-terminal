@@ -35,3 +35,21 @@ only the new names:
 - **Claude Code skills and MCP config.** The shipped skill is `.claude/skills/avada`; a
   leftover `.claude/skills/hyperpanes` directory or `hyperpanes-mcp` entry in
   `~/.claude.json` no longer works and can be deleted.
+
+## The orchestrator directory and module (0.2.36)
+
+0.2.36 renamed the last singular `hyperpane`. Nothing needs doing by hand inside the app:
+
+- **Workspace directory.** On first launch `~/Library/Application Support/avada/hyperpane`
+  (and its Windows/Linux equivalents) is renamed in place to `…/avada/orchestrator`. If
+  both exist, both are kept and a warning is logged; merge them by hand.
+- **Module.** `bshuler/avada-hyperpane` is uninstalled once `bshuler/avada-orchestrator`
+  is installed, and its block leaves the directory's `AGENTS.md`.
+- **Tab title.** A system tab still titled "Hyperpane" or "Avada" is renamed
+  "Orchestrator"; a title you chose yourself is kept.
+
+Outside the app: Claude Code keys its session history and memory by directory path, so
+`~/.claude/projects/-Users-<you>-Library-Application-Support-avada-hyperpane` must be
+moved to the matching `…-avada-orchestrator` name to keep the orchestrator's past
+sessions and memory. Any doc or `AGENTS.md` that names
+`resources/claude/hyperpane/` must point at `resources/claude/orchestrator/`.

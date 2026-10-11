@@ -99,11 +99,15 @@ them conflicts with every hunk they hold. So:
 | 4 skill docs | ~10 files | low, but timing matters |
 | 5 Tier 3 | ~300 files, ~7,800 identifiers, 27 renames | high merge-conflict cost; no user-visible gain |
 
-## 6. The singular `hyperpane`
+## 6. The singular `hyperpane` — done in 0.2.36
 
-The last trace of the old product name: the orchestrator module (`modules/hyperpane`,
-id `bshuler__avada-hyperpane`), `resources/claude/hyperpane/`, the workspace directory
+The last trace of the old product name was the orchestrator module (`modules/hyperpane`,
+id `bshuler/avada-hyperpane`), `resources/claude/hyperpane/`, the workspace directory
 `~/Library/Application Support/avada/hyperpane`, and the Claude cache directory derived
-from that path. It is renamed in the same release as step 3, to a name Bert picks; the
-workspace directory moves with a read-the-old-path fallback, like the data-dir copy in
-`compat.rs`.
+from that path. Bert named it **orchestrator** (2026-10-11), to land after the
+subagent-panes, sp-pane, sp-chrome and sp-discovery lanes. 0.2.36 renamed all of it:
+`modules/orchestrator` (`bshuler/avada-orchestrator`), `resources/claude/orchestrator/`,
+the workspace directory `…/avada/orchestrator` (moved in place on first launch), and the
+system tab's default title "Orchestrator". Seeding uninstalls the old module once the new
+one is installed. The Claude Code project directory under `~/.claude/projects/` is moved
+by hand at rollout; see `docs/rename-compat.md`.

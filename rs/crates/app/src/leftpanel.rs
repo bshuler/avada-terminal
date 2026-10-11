@@ -1240,7 +1240,7 @@ mod tests {
             .iter()
             .map(|tail| format!("claude_{tail}"))
             .collect();
-        forbidden.push(format!("hyper{}", "pane::"));
+        forbidden.push(format!("orches{}", "trator::"));
         // `git` alone is a substring of half the identifiers in a terminal app, so the
         // git service is named by the two ways the panel could actually reach it.
         forbidden.push(format!("avada_core::{}::", "git"));

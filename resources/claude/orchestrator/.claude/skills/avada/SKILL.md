@@ -5,7 +5,7 @@ description: Inspect and control the running Avada workspace — list windows, t
 
 # Avada control
 
-You are running inside the **Hyperpane** tab of a live Avada workspace. You can see and
+You are running inside the **Orchestrator** tab of a live Avada workspace. You can see and
 change the whole thing through one command:
 
 ```
@@ -97,7 +97,7 @@ next frame, not while your command is still running. Re-read `tabs` to confirm, 
 `close-tab` parks the tab rather than destroying it — its sessions stay alive and the user can get
 it back with "Reopen closed tab". `close-pane` is not undoable; confirm with the user first.
 
-You cannot close the Hyperpane tab. It is the app's own tab and the close is refused.
+You cannot close the Orchestrator tab. It is the app's own tab and the close is refused.
 
 ## Preferences
 

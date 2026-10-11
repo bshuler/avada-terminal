@@ -29,11 +29,11 @@ fn main() {
     // `State::submit_new_goal`'s `exe_dir/resources/claude/goal-orchestrator` candidate
     // resolves at dev runtime, matching what packaging ships. Best-effort.
     let personas = manifest.join("../../../resources/claude/goal-orchestrator");
-    // The always-on Avada tab's working directory: its README plus the hidden
-    // `.claude/skills/` tree its agent loads. `hyperpane::source_dir()` looks beside the exe
+    // The always-on Orchestrator tab's working directory: its README plus the hidden
+    // `.claude/skills/` tree its agent loads. `orchestrator::source_dir()` looks beside the exe
     // first, so without this a dev build opens the tab into an empty directory and the agent
     // has no idea the app can be driven at all. Packaging ships the same tree.
-    let hyperpane = manifest.join("../../../resources/claude/hyperpane");
+    let orchestrator = manifest.join("../../../resources/claude/orchestrator");
     // Every CLI-agent session hook. `claude_hook::bundled_hook_path` and
     // `tools::session_hook::bundled_script` both look beside the exe FIRST, so without
     // this a dev build registers no hook at all and every hand-started tool pane silently
@@ -68,8 +68,11 @@ fn main() {
                     .join("goal-orchestrator"),
             );
             let _ = copy_dir(
-                &hyperpane,
-                &profile.join("resources").join("claude").join("hyperpane"),
+                &orchestrator,
+                &profile
+                    .join("resources")
+                    .join("claude")
+                    .join("orchestrator"),
             );
             for (dir, script) in hooks {
                 let dst_dir = profile.join("resources").join(dir);
@@ -103,7 +106,7 @@ fn main() {
         ".claude/skills/avada/REFERENCE.md",
         ".claude/skills/avada/RECIPES.md",
     ] {
-        println!("cargo:rerun-if-changed={}", hyperpane.join(f).display());
+        println!("cargo:rerun-if-changed={}", orchestrator.join(f).display());
     }
     for (dir, script) in hooks {
         println!(

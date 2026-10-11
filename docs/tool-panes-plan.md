@@ -717,7 +717,7 @@ widget that normally draws it is not on screen.
 
 **Asked for:** `"Artifact(/Users/bshuler/Library/Application Support/avada/lane-watch.html)"
 isnt being hot linked`, then `/System/Volumes/Data`, `/usr/bin/python3`, `/dev/disk3s5`,
-`/Users/bshuler/Library/Application Support/avada/hyperpane` and
+`/Users/bshuler/Library/Application Support/avada/orchestrator` and
 `.claude/skills/avada/relay.py` — six reports, and it turned out to be three bugs.
 
 D14 built the detector and it worked. What failed was everything around it.

@@ -299,15 +299,22 @@ pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")
 }
 
-/// The always-on **Avada** tab's working directory: the app-managed home of the skills and
+/// The always-on **Orchestrator** tab's working directory: the app-managed home of the skills and
 /// notes its agent works from.
 ///
 /// Durable user data ([`data_dir`]) rather than [`state_dir`], because it is a directory a person
 /// works in — the agent keeps notes there and the user can drop files in — not a runtime scratch
 /// file the app may delete. The app refreshes only the files it ships (see
-/// `crate::hyperpane::materialize`) and never removes anything else.
+/// `crate::orchestrator::materialize`) and never removes anything else.
 #[tracing::instrument(level = "debug", ret)]
-pub fn hyperpane_dir() -> PathBuf {
+pub fn orchestrator_dir() -> PathBuf {
+    data_dir().join("orchestrator")
+}
+
+/// Where [`orchestrator_dir`] lived up to 0.2.35. `crate::orchestrator::materialize` moves it
+/// across on the first start of a newer build; saved workspaces still carry the old path.
+#[tracing::instrument(level = "debug", ret)]
+pub fn legacy_orchestrator_dir() -> PathBuf {
     data_dir().join("hyperpane")
 }
 

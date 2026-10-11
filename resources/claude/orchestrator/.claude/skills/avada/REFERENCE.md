@@ -111,7 +111,7 @@ have (`{window}:{count}`, appended at the end). Re-read `tabs` to confirm anythi
 Tab ids are positional (`{window}:{index}`), so they shift when tabs close or move. A stale id
 that no longer names a tab is refused with 404 rather than hitting whatever moved into that slot.
 
-The Hyperpane tab is the app's own and refuses to close.
+The Orchestrator tab is the app's own and refuses to close.
 
 `move-tab`'s index is an insertion slot in the pre-move ordering, so `move-tab 1:3 0` puts the tab
 first and an index equal to the tab count puts it last.

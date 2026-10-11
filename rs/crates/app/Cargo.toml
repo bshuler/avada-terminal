@@ -1,6 +1,6 @@
 [package]
 name = "avada"
-version = "0.2.35"
+version = "0.2.36"
 edition = "2021"
 license = "MIT"
 description = "Tiled terminal workspace with AI-pane orchestration"
@@ -196,15 +196,15 @@ assets = [
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-files/bin/avada-files", "/usr/share/avada/resources/seed-modules/bshuler__avada-files/bin/avada-files", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-git/avada.toml", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/bin/avada-git", "/usr/share/avada/resources/seed-modules/bshuler__avada-git/bin/avada-git", "644"],
-    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/avada.toml", "644"],
-    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-orchestrator/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-orchestrator/avada.toml", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-orchestrator/bin/avada-orchestrator", "/usr/share/avada/resources/seed-modules/bshuler__avada-orchestrator/bin/avada-orchestrator", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/avada.toml", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/avada.toml", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/bin/avada-tools", "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/bin/avada-tools", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/avada.toml", "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/avada.toml", "644"],
     ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/bin/avada-workspace", "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/bin/avada-workspace", "644"],
-    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", "644"],
+    ["../../packaging/out/seed-stage/seed-modules/bshuler__avada-orchestrator/skills/orchestrator/SKILL.md", "/usr/share/avada/resources/seed-modules/bshuler__avada-orchestrator/skills/orchestrator/SKILL.md", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -244,15 +244,15 @@ assets = [
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-files/bin/avada-files", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-files/bin/avada-files", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-git/avada.toml", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-git/bin/avada-git", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-git/bin/avada-git", mode = "0644" },
-    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/avada.toml", mode = "0644" },
-    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/bin/avada-hyperpane", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-orchestrator/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-orchestrator/avada.toml", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-orchestrator/bin/avada-orchestrator", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-orchestrator/bin/avada-orchestrator", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/avada.toml", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-marketplace/bin/avada-marketplace", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/avada.toml", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-tools/bin/avada-tools", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-tools/bin/avada-tools", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/avada.toml", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/avada.toml", mode = "0644" },
     { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-workspace/bin/avada-workspace", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-workspace/bin/avada-workspace", mode = "0644" },
-    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-hyperpane/skills/hyperpane/SKILL.md", mode = "0644" },
+    { source = "../../packaging/out/seed-stage/seed-modules/bshuler__avada-orchestrator/skills/orchestrator/SKILL.md", dest = "/usr/share/avada/resources/seed-modules/bshuler__avada-orchestrator/skills/orchestrator/SKILL.md", mode = "0644" },
 ]
 
 # Headless Slint driver for the UI-layer end-to-end tests: builds the real component tree,
