@@ -200,6 +200,10 @@ pub struct Window {
     pub last_reminders: Cell<Option<u64>>,
     /// Same guard for the `ClosedAdapter` global's recently-closed rows.
     pub last_closed: Cell<Option<u64>>,
+    /// Signature of the last attention-card set pushed into `AttentionAdapter`, and the ids of
+    /// needs-response cards the human has already seen the bottom drawer open over.
+    pub last_attention: Cell<Option<u64>>,
+    pub attention_seen: RefCell<std::collections::HashSet<String>>,
     /// Focus acknowledgements from the terminal widgets (`(pane uid, gained)`), waiting for
     /// the next pump to fold them into the state.
     ///
@@ -1684,6 +1688,8 @@ impl App {
             last_update: RefCell::new(None),
             last_reminders: Cell::new(None),
             last_closed: Cell::new(None),
+            last_attention: Cell::new(None),
+            attention_seen: RefCell::new(std::collections::HashSet::new()),
             focus_acks: RefCell::new(Vec::new()),
         });
 
@@ -2043,6 +2049,7 @@ impl App {
         //     unchanged list costs nothing at either tick cadence).
         self.pump_reminders(&windows);
         self.pump_closed(&windows);
+        self.pump_attention(&windows);
 
         // 2f. Left panel (M5): republish the session uids every window in this process is
         //     hosting, so the panel's DETACHED section can subtract them. Cheap (a string
@@ -2556,6 +2563,90 @@ impl App {
             g.set_open(open);
             g.set_alert(alert);
             g.set_toasts(slint::ModelRc::from(Rc::new(slint::VecModel::from(toasts))));
+        }
+    }
+
+    /// Attention-drawer pump (UI thread): mirror every pane that is waiting on the human
+    /// (liveness "awaiting input") or has failed (liveness "error"), across ALL tabs, plus
+    /// fired reminders, into the `AttentionAdapter` global behind the bottom Arcane drawer.
+    /// Signature-gated like [`Self::pump_reminders`] so an unchanged set writes nothing.
+    /// `unread` counts needs-response cards whose id is not yet in `attention_seen`.
+    #[tracing::instrument(level = "debug", ret, skip(self, windows))]
+    fn pump_attention(&self, windows: &[Rc<Window>]) {
+        for w in windows {
+            let (cards, toast_count) = {
+                let st = w.state.borrow();
+                let mut cards: Vec<crate::AttentionCard> = Vec::new();
+                for (ti, t) in st.tabs.iter().enumerate() {
+                    for (pi, p) in t.panes.iter().enumerate() {
+                        let (kind, what) = match st.liveness_ui(&p.uid) {
+                            2 => (1, "waiting for your reply"),
+                            4 => (1, "reported an error"),
+                            _ => continue,
+                        };
+                        cards.push(crate::AttentionCard {
+                            id: format!("{}:{}", p.uid, what).into(),
+                            kind,
+                            tab: ti as i32,
+                            pane: pi as i32,
+                            uid: "".into(),
+                            title: p.title.clone(),
+                            detail: format!("{} · {}", t.title, what).into(),
+                            tint: p.accent,
+                        });
+                    }
+                }
+                let palette = st.settings.frame_palette;
+                for (i, r) in st.reminders.iter().enumerate() {
+                    if !(r.fired && !r.toast_dismissed) {
+                        continue;
+                    }
+                    cards.push(crate::AttentionCard {
+                        id: format!("rem:{}", r.pane.uid).into(),
+                        kind: 0,
+                        tab: -1,
+                        pane: -1,
+                        uid: r.pane.uid.as_str().into(),
+                        title: r.pane.title.clone(),
+                        detail: "reminder fired · click to bring back".into(),
+                        tint: r
+                            .pane
+                            .pinned_accent
+                            .unwrap_or_else(|| theme::accent_for(i, palette)),
+                    });
+                }
+                let n = cards.len();
+                (cards, n)
+            };
+            let _ = toast_count;
+            // Forget seen-marks for cards that are gone, so one that comes back is new again.
+            w.attention_seen
+                .borrow_mut()
+                .retain(|id| cards.iter().any(|c| c.id.as_str() == id));
+            let unread = {
+                let seen = w.attention_seen.borrow();
+                cards
+                    .iter()
+                    .filter(|c| c.kind == 1 && !seen.contains(c.id.as_str()))
+                    .count() as i32
+            };
+            let mut h: u64 = 0xcbf29ce484222325;
+            for c in &cards {
+                for b in c.id.as_bytes().iter().chain(c.title.as_bytes()).chain(c.detail.as_bytes()) {
+                    h ^= *b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                h ^= 0x1e;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h ^= (unread as u64).wrapping_mul(0x9e3779b97f4a7c15);
+            if w.last_attention.get() == Some(h) {
+                continue;
+            }
+            w.last_attention.set(Some(h));
+            let g = w.app.global::<crate::AttentionAdapter>();
+            g.set_cards(slint::ModelRc::from(Rc::new(slint::VecModel::from(cards))));
+            g.set_unread(unread);
         }
     }
 
@@ -4739,6 +4830,38 @@ impl App {
                 .on_toggle(move || {
                     if let Some(w) = app.window_by_id(id) {
                         app.run_command(&w, Command::ToggleLeftPanel);
+                    }
+                });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::AttentionAdapter>()
+                .on_focus(move |ti, i| {
+                    if let Some(w) = app.window_by_id(id) {
+                        if ti >= 0 && i >= 0 {
+                            app.run_command(&w, Command::LeftFocusPane(ti as usize, i as usize));
+                        }
+                    }
+                });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app
+                .global::<crate::AttentionAdapter>()
+                .on_acknowledge(move || {
+                    if let Some(w) = app.window_by_id(id) {
+                        use slint::Model;
+                        let cards = w.app.global::<crate::AttentionAdapter>().get_cards();
+                        let ids: Vec<String> = cards
+                            .iter()
+                            .filter(|c| c.kind == 1)
+                            .map(|c| c.id.to_string())
+                            .collect();
+                        w.attention_seen.borrow_mut().extend(ids);
+                        w.last_attention.set(None);
                     }
                 });
         }

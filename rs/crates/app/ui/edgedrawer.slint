@@ -25,6 +25,10 @@ export component EdgeDrawer inherits Rectangle {
     // the drawer hiding; revealing is still the pointer's job.
     in property <bool> keep-open: false;
     out property <bool> open: false;
+    // A count drawn on the lip when > 0 (the bottom drawer's needs-response badge).
+    in property <int> lip-badge: 0;
+    // Fired once the drawer has stayed open ~1.5s — long enough to have been read.
+    callback opened();
 
     property <bool> hovered: zone.has-hover || body.has-hover;
 
@@ -39,6 +43,12 @@ export component EdgeDrawer inherits Rectangle {
         interval: 300ms;
         running: root.open && !root.hovered && !root.keep-open;
         triggered => { root.open = false; }
+    }
+
+    Timer {
+        interval: 1500ms;
+        running: root.open;
+        triggered => { root.opened(); }
     }
 
     // The edge hot zone. Declared before the panel so an open panel's cards sit above it.
@@ -71,6 +81,26 @@ export component EdgeDrawer inherits Rectangle {
             y: root.at-top ? parent.height - root.lip : 0px;
             height: root.lip;
             background: root.lip-color;
+        }
+
+        // Count badge: hangs off the lip into the strip that stays visible when closed? The
+        // lip is only a few px tall, so the badge sits on the panel's inner corner and shows
+        // whenever the drawer is open; closed, the lip's colour alone signals "waiting".
+        if root.lip-badge > 0 : Rectangle {
+            x: parent.width - self.width - 14px;
+            y: root.at-top ? 8px : 8px;
+            width: 22px;
+            height: 18px;
+            border-radius: 9px;
+            background: Theme.warn;
+            Text {
+                text: root.lip-badge;
+                color: Theme.arc-bg;
+                font-size: 11px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
         }
     }
 }

@@ -880,3 +880,32 @@ export global GridPaneAdapter {
     in property <[GridPaneItem]> grids: [];
     in property <[GridRun]> runs: [];
 }
+
+// ===== Arcane attention drawer =====
+
+// One card in the bottom edge drawer. `kind` 0 = notification (FYI), 1 = needs-response
+// (a pane is waiting on, or has failed for, the human). `tab`/`pane` locate the pane a click
+// focuses (both -1 for a card that is not a pane, e.g. a fired reminder, whose `uid` is the
+// restore key instead). `id` is stable across pushes so "seen" survives a list change.
+export struct AttentionCard {
+    id: string,
+    kind: int,
+    tab: int,
+    pane: int,
+    uid: string,
+    title: string,
+    detail: string,
+    tint: color,
+}
+
+// The bottom drawer's bridge to the controller, a GLOBAL like `RemindersAdapter`.
+export global AttentionAdapter {
+    in property <[AttentionCard]> cards;
+    // Needs-response cards the human has not yet seen the drawer open over (the lip badge and
+    // the "stay open" hold). Cleared by `acknowledge`.
+    in property <int> unread;
+    // A card for a pane was clicked → focus that pane (never moves keyboard focus otherwise).
+    callback focus(int, int);
+    // The drawer has been open long enough to count as seen.
+    callback acknowledge();
+}
