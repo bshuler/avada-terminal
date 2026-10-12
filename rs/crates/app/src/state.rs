@@ -1965,6 +1965,12 @@ pub struct State {
     /// One forced render was not enough: Bert still saw idle panels blank after a tab click
     /// until the pointer moved over them.
     pub tab_show_repaint: Option<(std::time::Instant, u64)>,
+    /// When the visible siblings of a repainting pane were last forced to re-push their
+    /// surfaces. A large redraw in one tiled pane has been seen to leave its idle siblings
+    /// half-blank (their buffers full, the window never damaged over them); re-pushing a
+    /// surface damages its rect, so the pump does it on a throttle while a multi-pane tab
+    /// is repainting.
+    pub sibling_refresh_at: Option<std::time::Instant>,
     /// Host events queued for `avada_core::module::Host::emit`, as `(kind, payload)`.
     /// Queued rather than emitted for the same re-entrancy reason as
     /// [`State::rail_requests`], and drained beside it.
@@ -2267,6 +2273,7 @@ impl State {
             focus_gen_seen: 0,
             shown_tab: None,
             tab_show_repaint: None,
+            sibling_refresh_at: None,
             module_events: Vec::new(),
             opener_panes: Vec::new(),
             module_openers: Vec::new(),

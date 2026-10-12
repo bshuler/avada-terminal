@@ -2188,6 +2188,16 @@ pub fn pump(
     }
     if rendered > 0 {
         state.frames += 1;
+        // A repaint in a tiled tab re-dirties the idle siblings (throttled), so a damage rect
+        // the window dropped over one of them is repainted on the next tick.
+        let tiled = state.tabs[active_idx].panes.iter().filter(|p| p.visible).count() >= 2;
+        let due = state
+            .sibling_refresh_at
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
+        if tiled && due {
+            state.sibling_refresh_at = Some(Instant::now());
+            state.mark_active_panes_dirty();
+        }
         // Ask for the frame outright rather than relying on the model change to schedule it.
         app.window().request_redraw();
     }
