@@ -133,14 +133,14 @@ component ProjectMenu inherits PopupWindow {
                     // (the default `stretch` would spread the fixed-width swatches apart).
                     spacing: 3px;
                     alignment: start;
-                    Swatch { hue: #e5484d; label: "Red"; picked => { root.recolor(0); root.close(); } }
-                    Swatch { hue: #f5a623; label: "Orange"; picked => { root.recolor(1); root.close(); } }
-                    Swatch { hue: #30a46c; label: "Green"; picked => { root.recolor(2); root.close(); } }
-                    Swatch { hue: #3b82f6; label: "Blue"; picked => { root.recolor(3); root.close(); } }
-                    Swatch { hue: #a855f7; label: "Purple"; picked => { root.recolor(4); root.close(); } }
-                    Swatch { hue: #ec4899; label: "Pink"; picked => { root.recolor(5); root.close(); } }
-                    Swatch { hue: #14b8a6; label: "Teal"; picked => { root.recolor(6); root.close(); } }
-                    Swatch { hue: #eab308; label: "Yellow"; picked => { root.recolor(7); root.close(); } }
+                    Swatch { hue: #39ff14; label: "Spell Green"; picked => { root.recolor(0); root.close(); } }
+                    Swatch { hue: #d4af37; label: "Gold"; picked => { root.recolor(1); root.close(); } }
+                    Swatch { hue: #5fe0a0; label: "Mint"; picked => { root.recolor(2); root.close(); } }
+                    Swatch { hue: #9d4edd; label: "Amethyst"; picked => { root.recolor(3); root.close(); } }
+                    Swatch { hue: #7b2cbf; label: "Arcane Purple"; picked => { root.recolor(4); root.close(); } }
+                    Swatch { hue: #c77dff; label: "Lavender"; picked => { root.recolor(5); root.close(); } }
+                    Swatch { hue: #3ec46d; label: "Leaf"; picked => { root.recolor(6); root.close(); } }
+                    Swatch { hue: #f5f5f5; label: "Soft White"; picked => { root.recolor(7); root.close(); } }
                 }
             }
 
@@ -187,7 +187,7 @@ component ProjectMenu inherits PopupWindow {
                     padding-left: 9px;
                     Text {
                         text: "Remove";
-                        color: rta.has-hover ? #ffffff : Theme.danger;
+                        color: rta.has-hover ? #f5f5f5 : Theme.danger;
                         font-size: 12px;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -254,7 +254,7 @@ component WorktreeRowView inherits Rectangle {
                 TrashGlyph {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    ink: !root.deletable ? Theme.faint : (tta.has-hover ? #ffffff : Theme.subtext);
+                    ink: !root.deletable ? Theme.faint : (tta.has-hover ? #f5f5f5 : Theme.subtext);
                 }
                 tta := TipArea {
                     tip: root.deletable ? "Delete this worktree from disk"
@@ -1411,7 +1411,7 @@ export component SidebarRail inherits Rectangle {
                         background: cfa.has-hover ? Theme.danger.brighter(0.2) : Theme.danger;
                         Text {
                             text: "Remove";
-                            color: #ffffff;
+                            color: #f5f5f5;
                             font-size: 12px;
                             font-weight: 700;
                             horizontal-alignment: center;

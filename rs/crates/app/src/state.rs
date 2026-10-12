@@ -2204,7 +2204,11 @@ impl State {
             add_project_error: String::new(),
             ask_url: String::new(),
             ask_browsers: Vec::new(),
-            settings: prefs::load(),
+            settings: {
+                let settings = prefs::load();
+                theme::note_frame_palette(settings.frame_palette);
+                settings
+            },
             keymap: crate::keybindings::Keymap::load(),
             capturing_binding: None,
             capture_conflict: None,
@@ -5394,6 +5398,7 @@ impl State {
             Setting::FramePalette(idx) => {
                 if self.settings.frame_palette != idx {
                     self.settings.frame_palette = idx;
+                    theme::note_frame_palette(idx);
                     // Recompute every pane's accent against the new palette (by creation
                     // slot); pinned project colors are preserved by `relabel`.
                     for t in &mut self.tabs {
@@ -5594,6 +5599,7 @@ impl State {
             self.sidebar_open = false;
         }
 
+        theme::note_frame_palette(next.frame_palette);
         self.settings = next;
         self.dirty = true;
         Ok(keys)
@@ -10583,7 +10589,9 @@ fn snapshot_pane_spec(base: u32, p: SnapPane<'_>) -> PaneSpec {
 }
 
 /// Parse a `#rrggbb` hex string (the project palette format) into a Slint [`Color`],
-/// falling back to the default accent on a malformed value.
+/// falling back to the default accent on a malformed value. Every saved colour comes in
+/// through here, so this is also where a pre-0.2.41 Muted hue becomes its Avada slot
+/// ([`theme::legacy_to_brand`]); the next save writes the brand colour back.
 #[tracing::instrument(level = "debug", ret)]
 pub fn parse_hex(s: &str) -> Color {
     let h = s.trim_start_matches('#');
@@ -10593,6 +10601,7 @@ pub fn parse_hex(s: &str) -> Color {
             u8::from_str_radix(&h[2..4], 16),
             u8::from_str_radix(&h[4..6], 16),
         ) {
+            let (r, g, b) = theme::legacy_to_brand((r, g, b)).unwrap_or((r, g, b));
             return Color::from_rgb_u8(r, g, b);
         }
     }

@@ -137,6 +137,7 @@ outlines and wordmark highlight.
 only on outlines/highlights; no large gold fills.
 **Default (warn):** keep an amber (`#E8B339`) distinct from brand Gold so attention states
 stay legible and gold stays reserved.
+*Superseded 2026-10-11 (8b2d629):* `warn` = Gold `#D4AF37`. See [`color-audit.md`](color-audit.md).
 
 **BR-04 — Rename the token comment vars `--hp-*` → `--avada-*`.**
 `rs/crates/app/ui/theme.slint` (comments like `--hp-bg`). Align the documentary CSS-var names
@@ -149,6 +150,8 @@ with the brand tokens.
 clash with the green/purple pair; change the `#ffffff` fill to Soft White `#F5F5F5`.
 *Acceptance:* swatches legible on `#000000`; no raw `#ffffff` remains; both exceptions still
 the only literals outside `theme.slint`.
+*Done in 0.2.41:* swatches are the Avada frame palette (brand hues); `#ffffff` → `#f5f5f5`.
+See [`color-audit.md`](color-audit.md).
 **Default (swatches):** keep hues but lift lightness where any fails contrast on black;
 replace any that collide with `#39FF14`/`#7B2CBF`.
 

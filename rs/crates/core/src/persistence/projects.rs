@@ -35,10 +35,11 @@ pub struct Project {
     pub last_opened_at: Option<u64>,
 }
 
-/// The 8-slot palette a repo's color is hashed into (kept identical to the TS source
-/// AND the shared renderer palette so colors are stable across the rewrite).
+/// The 8-slot palette a repo's color is hashed into: the app's Avada frame palette (brand
+/// colours only, since 0.2.41), slot for slot. A repo keeps its slot across the change —
+/// the app maps a saved pre-0.2.41 hue to the brand colour of the same slot on load.
 pub const PROJECT_COLORS: [&str; 8] = [
-    "#e5484d", "#f5a623", "#30a46c", "#3b82f6", "#a855f7", "#ec4899", "#14b8a6", "#eab308",
+    "#39ff14", "#d4af37", "#5fe0a0", "#9d4edd", "#7b2cbf", "#c77dff", "#3ec46d", "#f5f5f5",
 ];
 
 /// On-disk wrapper: `{ "projects": [ … ] }`.

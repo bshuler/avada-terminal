@@ -1917,9 +1917,7 @@ fn the_project_menu_names_every_colour_swatch() {
 
         right_click(&w, &only(&w, "avada", AccessibleRole::ListItem));
 
-        for name in [
-            "Red", "Orange", "Green", "Blue", "Purple", "Pink", "Teal", "Yellow",
-        ] {
+        for name in crate::theme::AVADA_FRAME_NAMES {
             assert_eq!(
                 by_role(&w, name, AccessibleRole::Button).len(),
                 1,
@@ -1930,12 +1928,12 @@ fn the_project_menu_names_every_colour_swatch() {
         click_in_popup(
             &w,
             project_menu_origin(&w, 0),
-            &only(&w, "Blue", AccessibleRole::Button),
+            &only(&w, "Amethyst", AccessibleRole::Button),
         );
         assert_eq!(
             *log.borrow(),
             vec![(0, 3)],
-            "Blue is palette slot 3 of project 0"
+            "Amethyst is palette slot 3 of project 0"
         );
     });
 }

@@ -722,7 +722,7 @@ export component TopBar inherits Rectangle {
                 CloseIcon {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    ink: closh.has-hover ? #ffffff : Theme.subtext;
+                    ink: closh.has-hover ? #f5f5f5 : Theme.subtext;
                 }
                 closh := TipArea { tip: "Close the window"; clicked => { root.close-window(); } }
             }

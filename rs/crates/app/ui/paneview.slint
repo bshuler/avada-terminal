@@ -104,8 +104,9 @@ component IconInfo inherits Path {
 component PaneBtn inherits Rectangle {
     in property <int> kind;
     in property <bool> active: false;
-    // Recording right now: a filled DANGER-coloured button, distinct from `active`'s accent
-    // fill, because "this pane is listening to the room" must not read like "zoomed".
+    // Recording right now: a filled Arcane Purple button (the brand's AI/magic energy),
+    // distinct from `active`'s Spell Green fill, because "this pane is listening to the
+    // room" must not read like "zoomed". Not `danger`: recording is not an error.
     in property <bool> recording: false;
     in property <bool> danger: false;
     in property <string> tip;
@@ -113,11 +114,12 @@ component PaneBtn inherits Rectangle {
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    background: root.recording ? Theme.danger
+    background: root.recording ? Theme.accent2
               : root.active ? Theme.accent
               : ta.has-hover ? (root.danger ? Theme.danger.with-alpha(0.2) : Theme.surface2)
               : transparent;
-    property <color> ink: (root.active || root.recording) ? Theme.bg
+    property <color> ink: root.recording ? Theme.text
+             : root.active ? Theme.bg
              : (ta.has-hover && root.danger) ? Theme.danger
              : ta.has-hover ? Theme.text
              : Theme.subtext;
@@ -828,7 +830,8 @@ export component PaneView inherits Rectangle {
             }
         }
 
-        // idle glow: an accent-tinted glow on the pane FRAME once it has gone output-quiet
+        // idle glow: an Arcane Purple glow (the brand's AI energy, lifted so a 2px ring
+        // reads on black) on the pane FRAME once it has gone output-quiet
         // (the AI-pane quiescence effect). `pane.glow` is the animated opacity the controller
         // computes each tick (firefly/pulse/blink/solid); 0 = no glow. Confined to the frame —
         // a bright ring on the border plus a softer inner ring for bloom — so it never bleeds
@@ -841,7 +844,7 @@ export component PaneView inherits Rectangle {
             height: pane.h;
             border-radius: 7px;
             border-width: 2px;
-            border-color: pane.accent.with-alpha(pane.glow);
+            border-color: Theme.accent2.brighter(0.35).with-alpha(pane.glow);
             // softer inner ring, inset so the whole effect stays within the pane footprint.
             Rectangle {
                 x: 2px;
@@ -850,7 +853,7 @@ export component PaneView inherits Rectangle {
                 height: parent.height - 4px;
                 border-radius: 5px;
                 border-width: 1px;
-                border-color: pane.accent.with-alpha(pane.glow * 0.45);
+                border-color: Theme.accent2.brighter(0.35).with-alpha(pane.glow * 0.45);
             }
         }
 

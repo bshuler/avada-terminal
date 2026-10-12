@@ -9,16 +9,26 @@ use slint::Color;
 
 /// The selectable frame palettes (pane dot + frame-border colors), the native port of
 /// the renderer's `theme.ts` `PALETTES`. Every palette shares the same 8 slots in the
-/// same order — red · amber · green · blue · purple · pink · teal · yellow — so a pane
-/// created at index `i` keeps its logical hue when the active palette changes (the accent
-/// is recomputed by index against the new palette). Which one is active is the
-/// `frame_palette` appearance setting; index 0 (Muted) is the default.
+/// same order, so a pane created at index `i` keeps its slot when the active palette
+/// changes (the accent is recomputed by index against the new palette). The legacy sets
+/// read red · amber · green · blue · purple · pink · teal · yellow; the Avada set fills the
+/// same eight slots from the brand's three hues and its ink. Which one is active is the
+/// `frame_palette` appearance setting; index 0 (Avada) is the default.
 /// One entry of [`FRAME_PALETTES`]: the palette's display name and its 8 hue slots as
 /// RGB triples, in the fixed slot order documented on that constant.
 pub type FramePalette = (&'static str, [(u8, u8, u8); 8]);
 
-pub const FRAME_PALETTES: [FramePalette; 4] = [
-    // "Muted" — the original saturated set (renderer `dark`), kept as the default.
+pub const FRAME_PALETTES: [FramePalette; 5] = [
+    // "Avada" — every slot from the brand book: Spell Green, Gold and Arcane Purple, the
+    // greens and purples the UI palette already derives from them (`ok`, `link`), two
+    // lifted purples that stay visible as a 2 px line on Void Black, and Soft White. A pane
+    // frame and its idle glow are thin outlines, which is the one place the brand lets
+    // Gold appear.
+    (
+        "Avada",
+        AVADA_FRAME,
+    ),
+    // "Muted" — the original saturated set (renderer `dark`); the default before 0.2.41.
     (
         "Muted",
         [
@@ -76,8 +86,66 @@ pub const FRAME_PALETTES: [FramePalette; 4] = [
     ),
 ];
 
+/// The Avada frame slots, in rotation order (a new pane takes the next one).
+const AVADA_FRAME: [(u8, u8, u8); 8] = [
+    (0x39, 0xff, 0x14), // Spell Green
+    (0xd4, 0xaf, 0x37), // Gold
+    (0x5f, 0xe0, 0xa0), // Mint (= `link`)
+    (0x9d, 0x4e, 0xdd), // Amethyst (Arcane Purple, lifted)
+    (0x7b, 0x2c, 0xbf), // Arcane Purple
+    (0xc7, 0x7d, 0xff), // Lavender (Arcane Purple, lifted further)
+    (0x3e, 0xc4, 0x6d), // Leaf (= `ok`)
+    (0xf5, 0xf5, 0xf5), // Soft White
+];
+
+/// The swatch names the project recolor menu shows, slot for slot with [`AVADA_FRAME`].
+#[cfg_attr(not(test), allow(dead_code))] // Pins sidebar.slint's swatch labels; the UI tests read it.
+pub const AVADA_FRAME_NAMES: [&str; 8] = [
+    "Spell Green",
+    "Gold",
+    "Mint",
+    "Amethyst",
+    "Arcane Purple",
+    "Lavender",
+    "Leaf",
+    "Soft White",
+];
+
+/// The frame palette in force, mirrored here so [`legacy_to_brand`] can tell a stale
+/// pre-0.2.41 colour from one the user picked under the Muted palette on purpose.
+static ACTIVE_FRAME_PALETTE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Record which frame palette is active (called wherever the setting is applied).
+#[tracing::instrument(level = "debug")]
+pub fn note_frame_palette(idx: usize) {
+    ACTIVE_FRAME_PALETTE.store(idx, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A colour saved before 0.2.41 (projects.json, a workspace pane, a control-API
+/// recolor) is one of the eight Muted hues. Under the Avada palette it is stale: map it
+/// to the Avada slot with the same index, so a project keeps its distinct slot but wears
+/// a brand colour. Under any other palette, or for any other colour, `None`.
+#[tracing::instrument(level = "debug", ret)]
+pub fn legacy_to_brand(rgb: (u8, u8, u8)) -> Option<(u8, u8, u8)> {
+    legacy_to_brand_under(
+        ACTIVE_FRAME_PALETTE.load(std::sync::atomic::Ordering::Relaxed),
+        rgb,
+    )
+}
+
+/// [`legacy_to_brand`] for an explicit palette index — pure, so tests need not touch the
+/// process-wide palette other tests read.
+fn legacy_to_brand_under(palette: usize, rgb: (u8, u8, u8)) -> Option<(u8, u8, u8)> {
+    if palette != 0 {
+        return None;
+    }
+    let slot = FRAME_PALETTES[1].1.iter().position(|c| *c == rgb)?;
+    Some(AVADA_FRAME[slot])
+}
+
 /// Clamp a (possibly stale) palette index to a real palette, returning its 8 slots
-/// (defaults to index 0 = Muted).
+/// (defaults to index 0 = Avada).
 #[tracing::instrument(level = "debug", ret)]
 pub fn frame_palette(idx: usize) -> &'static [(u8, u8, u8); 8] {
     &FRAME_PALETTES[idx.min(FRAME_PALETTES.len() - 1)].1
@@ -592,6 +660,44 @@ pub fn load_font_at(path: &str, base_px: f32, scale: f32) -> Font {
 
 #[cfg(test)]
 mod tests {
+    /// The default frame palette is the brand's: every slot is a design-requirements
+    /// colour or a documented lift of one, and the swatch names line up slot for slot.
+    #[test]
+    fn the_default_frame_palette_is_the_brand_palette() {
+        assert_eq!(super::FRAME_PALETTES[0].0, "Avada");
+        assert_eq!(super::FRAME_PALETTES[0].1, super::AVADA_FRAME);
+        assert_eq!(super::AVADA_FRAME[0], (0x39, 0xff, 0x14), "Spell Green leads");
+        assert_eq!(super::AVADA_FRAME[1], (0xd4, 0xaf, 0x37), "Gold");
+        assert_eq!(super::AVADA_FRAME[4], (0x7b, 0x2c, 0xbf), "Arcane Purple");
+        assert_eq!(super::AVADA_FRAME[7], (0xf5, 0xf5, 0xf5), "Soft White");
+        assert_eq!(super::FRAME_PALETTES[1].0, "Muted", "Muted moved to slot 1");
+        // core hashes repos into the same eight, as hex
+        for (hex, rgb) in avada_core::persistence::projects::PROJECT_COLORS
+            .iter()
+            .zip(super::AVADA_FRAME)
+        {
+            let want = format!("#{:02x}{:02x}{:02x}", rgb.0, rgb.1, rgb.2);
+            assert_eq!(*hex, want, "core PROJECT_COLORS drifted from AVADA_FRAME");
+        }
+    }
+
+    /// A saved pre-0.2.41 Muted hue becomes the Avada colour of the same slot, but only
+    /// under the Avada palette, and nothing else is touched.
+    #[test]
+    fn a_saved_muted_hue_migrates_to_its_brand_slot() {
+        for (slot, muted) in super::FRAME_PALETTES[1].1.iter().enumerate() {
+            assert_eq!(
+                super::legacy_to_brand_under(0, *muted),
+                Some(super::AVADA_FRAME[slot]),
+                "Muted slot {slot}"
+            );
+            assert_eq!(super::legacy_to_brand_under(1, *muted), None, "Muted kept under Muted");
+            assert_eq!(super::legacy_to_brand_under(3, *muted), None);
+        }
+        assert_eq!(super::legacy_to_brand_under(0, (0x12, 0x34, 0x56)), None);
+        assert_eq!(super::legacy_to_brand_under(0, (0x39, 0xff, 0x14)), None);
+    }
+
     #[test]
     fn tool_icons_start_where_the_registry_says() {
         // Two crates, one allocation. Drift here silently draws the wrong mark.

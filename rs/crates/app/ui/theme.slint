@@ -14,9 +14,12 @@
 //     were derived from instead of being frozen by a Rust setter that forgot them.
 //
 // Exactly two literals survive elsewhere, and both are deliberate: the eight project
-// swatch hues in `sidebar.slint` (a user's chosen label colour, not a theme token), and
-// `#ffffff` where it is ink sitting on a saturated `danger` fill — white on red is the
-// right answer on every palette, so deriving it from one would only make it wrong.
+// swatch hues in `sidebar.slint` (a user's chosen label colour, not a theme token — they
+// are the brand's Avada frame palette, slot for slot with `theme::AVADA_FRAME`), and
+// Soft White `#f5f5f5` where it is ink sitting on a saturated `danger` fill — light ink on
+// red is the right answer on every palette, so deriving it from one would only make it
+// wrong. Every colour traces to docs/brand/design-requirements.md; see
+// docs/brand/color-audit.md for the one non-brand hue (`danger`) and why it stays.
 
 export global Theme {
     // surfaces

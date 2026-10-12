@@ -1,6 +1,6 @@
 [package]
 name = "avada"
-version = "0.2.40"
+version = "0.2.41"
 edition = "2021"
 license = "MIT"
 description = "Tiled terminal workspace with AI-pane orchestration"
