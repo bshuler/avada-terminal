@@ -65,6 +65,7 @@ thread_local! {
     /// Bumped each time any window gains focus; see [`focus_gen`].
     static FOCUS_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Bumped on every `RedrawRequested` any window receives; see [`redraw_count`].
+    static EVENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static REDRAWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static QUEUE: std::cell::RefCell<Vec<Dropped>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -93,13 +94,25 @@ pub fn install(win: &slint::Window, key: isize) {
             use slint::winit_030::winit::event::WindowEvent;
             match ev {
                 WindowEvent::DroppedFile(p) => record(key, p.clone()),
-                WindowEvent::Focused(true) => FOCUS_GEN.with(|g| g.set(g.get() + 1)),
+                WindowEvent::Focused(on) => {
+                    tracing::info!(on, "window focus event");
+                    if *on {
+                        FOCUS_GEN.with(|g| g.set(g.get() + 1));
+                    }
+                }
                 WindowEvent::RedrawRequested => REDRAWS.with(|g| g.set(g.get() + 1)),
                 _ => {}
             }
+            EVENTS.with(|g| g.set(g.get() + 1));
             slint::winit_030::EventResult::Propagate
         }),
     );
+}
+
+/// Every winit event the hook has seen; logged beside the redraw count so a zero there can
+/// be told apart from a hook that never fires.
+pub fn event_count() -> u64 {
+    EVENTS.with(|g| g.get())
 }
 
 /// Queue one dropped file, stamping it with where the pointer is *right now*.
