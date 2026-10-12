@@ -6,9 +6,12 @@ per-surface requirements that cover the whole `avada-terminal` repo. This docume
 
 - **Source of truth:** `docs/brand/AvadaTerminal_Brand_Guidelines.pdf`. Reference extracts
   beside it: `guideline-page-{1..5}.png` (raster) and `guideline-page-{1..5}.svg`
-  (**vector** — the pages are real vector art, ~56 paths on page 1, not flat JPEGs; only
-  pages 1–3 carry a small embedded raster). The blade-A mark is therefore vector and
-  extractable; the repo's icon pipeline already has a vector source at `build/icon.svg`
+  (the page chrome — rules, wordmark text — is real vector art, ~56 paths on page 1; the
+  ~56 paths are outlined text and rules, **not** the mark). The **blade-A mark itself is a
+  painterly raster**, embedded as a JPEG on pages 1–3 (the page-3 app-icon render is the
+  highest-fidelity version). It is therefore not clean line art and cannot be lifted as
+  vector paths; the icon is built from that raster. `build/icon.svg` is accordingly a
+  **raster-backed master** — it embeds the rendered PNG — read by the icon pipeline
   (see BR-12, BR-20).
 - **Status:** requirements only. Each `BR-NN` names the file(s) to change and an acceptance
   check. Nothing here is built yet.
@@ -199,8 +202,8 @@ wordmark is displayed.
 ### D. Icons & app identity
 
 **BR-12 — Rebuild the app icon as the sharp dual-blade A (green→purple).**
-The **source** is the checked-in vector `build/icon.svg` (→ `build/icon.png` 512×512, which
-`build/icon.ico` and `build/icon.original.svg` sit beside). The macOS iconset under
+The **source** is the checked-in `build/icon.svg` — a raster-backed master that embeds the
+brand mark's painterly render (→ `build/icon.png` 512×512, beside `build/icon.ico`). The macOS iconset under
 `rs/packaging/out/macos-stage/avada.iconset/` is **generated output** (`rs/packaging/out` is
 gitignored): `rs/packaging/macos/bundle.sh` derives every size with `sips` from
 `build/icon.png`. So: author the blade A into `build/icon.svg`, re-render `build/icon.png`,
@@ -267,14 +270,14 @@ displayed app name matches the brand ("Avada" / "Avada Terminal"); set consisten
 `avada`.
 
 **BR-20 — Master logo asset + icon package.**
-`docs/brand/`, `build/icon.svg`. The guideline pages are vector (see §1 note); the blade A can
-be lifted/retraced from `guideline-page-*.svg` rather than authored from nothing, and the repo
-already carries a vector icon source at `build/icon.svg` that the whole icon pipeline reads.
-Deliver: a clean vector master A (reconciled into `build/icon.svg`), wordmark lockups
+`docs/brand/`, `build/icon.svg`. The blade-A mark is a painterly raster (see §1 note), not
+line art, so the master is the rendered image rather than retraced paths: `build/icon.svg` is
+a raster-backed master (embeds the PNG) that the whole icon pipeline reads.
+Deliver: the raster-backed master A (in `build/icon.svg`), wordmark lockups
 (horizontal + stacked), the favicon set (BR-13), and a small secondary UI icon set (BR-16) —
 the brand's "Icon Package."
-*Acceptance:* a vector master A + both wordmark lockups live in `docs/brand/`, and
-`build/icon.svg` is the reconciled blade A; BR-12/13/14/16 all source from them.
+*Acceptance:* the master A + both wordmark lockups live in `docs/brand/`, and
+`build/icon.svg` is the dual-blade A; BR-12/13/14/16 all source from them.
 
 **BR-21 — Font licensing record.**
 `docs/` (note: `docs/licensing.md` is about commercial *module* license tokens, **not** font
