@@ -2215,6 +2215,12 @@ pub fn pump(
             visible = tab.panes.iter().filter(|p| p.visible).count(),
             rows = ui.panes.row_count(),
             redraws = crate::filedrop::redraw_count().saturating_sub(redraws_at),
+            hook_events = crate::filedrop::event_count(),
+            surfaces = ?tab
+                .panes
+                .iter()
+                .map(|p| (p.surf, p.surface.size().width, p.surface.size().height))
+                .collect::<Vec<_>>(),
             "tab shown: repaint window closed"
         );
     }
