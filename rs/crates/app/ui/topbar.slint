@@ -367,12 +367,22 @@ export component TopBar inherits Rectangle {
     callback close-window();
 
     height: 32px;
-    background: Theme.mantle;
-    // bottom hairline
+    background: Theme.arc-bar;
+    // bottom hairline in the Arcane rule colour
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
-        background: Theme.border;
+        background: Theme.arc-rule;
+    }
+    // Centered brand mark. Visual only (no TouchArea → clicks fall through to the strip)
+    // and drawn behind the tab layout, so tabs and buttons always win the overlap.
+    Text {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        text: "✦ AvadaTerminal ✦";
+        color: Theme.arc-gold.with-alpha(0.85);
+        font-size: 12px;
+        font-weight: 600;
     }
 
     // drag/tear-off: a faint wash while the strip is a drop target + an insertion caret at

@@ -48,6 +48,18 @@ export global Theme {
     // than a shadow does, and on a light palette the two want different hues.
     in-out property <color> veil: #000000cc;
 
+    // ---- "Arcane" chrome (center column + titlebar only; the rails keep the palette) ----
+    // Fixed, not palette-swapped: the Arcane look is a deliberate identity for the terminal
+    // surface and its title bar, so a shell palette pick does not repaint it. The side
+    // rails never read these.
+    out property <color> arc-bg: #0a0a0f;       // near-black ground of the center column
+    out property <color> arc-bar: #0d0d14;      // titlebar ground, a step above arc-bg
+    out property <color> arc-gold: #e8b84b;     // titles, headers
+    out property <color> arc-magenta: #c23ae0;  // accent rules, glyphs
+    out property <color> arc-green: #3ee07a;    // prompt arrow, OK status
+    out property <color> arc-lavender: #9a98b5; // labels, body
+    out property <color> arc-rule: #3a2a55;     // dividers
+
     // ---- aliases kept for the rest of the UI (paneview/app) ----
     out property <color> brand: self.accent;
     out property <color> ink: self.text;
