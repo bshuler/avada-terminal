@@ -1,0 +1,13 @@
+Fri Oct  9 14:35:16 EDT 2026
+USER      PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+bshuler 76456   ??    0.0 S    46T  11:37.64  33:52.93 /Applications/Avada.app/Contents/MacOS/avada
+        76456         0.0 S    31T   0:00.00   0:00.00 
+48c9e1d7649355b29207a96657c46ca0
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5155.
+Pages active:                                 439403.
+Pages inactive:                               437803.
+Pages speculative:                               674.
+Pages throttled:                                   0.
+Pages wired down:                             297578.
+Pages purgeable:                                1215.

@@ -1,0 +1,39 @@
+    + 7854 start + 6688  
+    +   7854 main + 52  
+    +     7854 start_internal + 952  
+    +       7854 _RNCINvNtCs82bWklYMk3w_3std2rt10lang_startINtNtCs8Mbv00yxnRz_4core6result6ResultuINtNtCshxvaOLs88l5_5alloc5boxed3BoxDNtNtBI_5error5Er
+    +         7854 ktrace28___rust_begin_short_backtraceFEINtNtCs8Mbv00yxnRz_4core6result6ResultuINtNtCshxvaOLs88l5_5alloc5boxed3BoxDNtNtB1e_5error5Er
+    +           7854 + 13732  
+    +             7854 t_loop + 76  
+    +               7854 ckend_winitNtB5_7BackendNtNtCsenUTfovf4MV_12i_slint_core8platform8Platform14run_event_loop + 420  
+    +                 7854 13platform_impl5macos10event_loopINtB6_9EventLoopNtCsjQyYOaFH7rU_21i_slint_backend_winit10SlintEventE13run_on_demandNCINvYI
+    +                   7854 -[NSApplication run] + 396  
+    +                     7854 -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:] + 292  
+    +                       7854 -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 780  
+    +                         7854 _DPSNextEvent + 580  
+    +                           7854 _DPSBlockUntilNextEventMatchingListInMode + 292  
+    +                             7854 _BlockUntilNextEventMatchingListInMode + 48  
+    +                               7854 ReceiveNextEventCommon + 492  
+    +                                 7854 RunCurrentEventLoopInMode + 320  
+    +                                   7854 _CFRunLoopRunSpecificWithOptions + 536  
+    +                                     7854 __CFRunLoopRun + 1620  
+    +                                       7854 __CFRunLoopDoObservers + 648  
+    +                                         7854 __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__ + 36  
+    +                                           7854 atform_impl5macos8observer26control_flow_begin_handler + 144  
+    +                                             7854 latform_impl5macos9app_stateNtB2_19ApplicationDelegate6wakeup + 444  
+    +                                               7854 3platform_impl5macos13event_handlerNtB4_12EventHandler12handle_event + 120  
+    +                                                 7854 _RNCINvNtNtNtCsdRGG8RuYMz9_5winit13platform_impl5macos10event_loop14map_user_eventNtCsjQyYO
+    +                                                   7854 _RNCINvYINtNtCsdRGG8RuYMz9_5winit10event_loop9EventLoopNtCsjQyYOaFH7rU_21i_slint_backend_
+    +                                                     7854 8platform28update_timers_and_animations + 256  
+    +                                                       7854 ead5localINtB6_8LocalKeyINtNtCs8Mbv00yxnRz_4core4cell7RefCellNtNtCsenUTfovf4MV_12i_sl
+    +                                                         7854 _RNCNvCsj2r0V6L2xsx_5avada4mains4_0B3_ + 60  
+    +                                                           7854 2_3App4tick + 38356  
+    +                                                             7854 re15session_managerNtB5_14SessionManager13render_screen + 108  
+    +                                                               7854 ore7session13daemon_clientNtB4_20DaemonSessionManager13render_screen + 1432  
+    +                                                                 7854 c4mpmcINtB5_8ReceiverNtNtNtCs54gJb3ni9mk_10avada_core7session5proto9DaemonM
+    +                                                                   7854 ync4mpmc4listINtB5_7ChannelNtNtNtCs54gJb3ni9mk_10avada_core7session5proto
+    +                                                                     7854 _RNCNvMs1_NtNtNtCs82bWklYMk3w_3std4sync4mpmc4listINtB7_7ChannelINtNtCs8
+    +                                                                       7854 ad6threadNtB4_6Thread12park_timeout + 100  
+    +                                                                         7854 _dispatch_semaphore_wait_slow + 76  
+    +                                                                           7854 _dispatch_sema4_timedwait + 64  
+    +                                                                             7854 semaphore_timedwait_trap + 8  

@@ -1,0 +1,10 @@
+2026-10-09 14:40:46.089 Df Dock[54062:35ff634] [com.apple.dock:tile] Calling force quit asn=(0x0 0x8d4dd45)
+2026-10-09 14:40:46.093 Df Dock[54062:3604559] [com.apple.libquit:logging] avada [76456] force quit (caller responsible for termination)
+2026-10-09 14:40:46.095 E  Dock[54062:35ff634] [com.apple.libquit:logging] avada [76456] being force quit without LQReportPotentialHang
+2026-10-09 14:40:46.097 Df Dock[54062:35ff634] [com.apple.libquit:logging] avada [76456] waiting for spindump for 1.0s before termination...
+2026-10-09 14:40:47.189 Df launchd[1:361dc53] [gui/501/application.to.avada.terminal.322918899.322918905 [76456]:] exited due to SIGTERM | sent by Dock[54062], ran for 12104155ms
+2026-10-09 14:40:47.191 Df loginwindow[45713:31294ef] [com.apple.loginwindow.logging:AppExit] -[ApplicationManager handleCASEvent:withData:] | CAS notification for appDeath for to.avada.terminal with asn: LSASN:{0x0-0x8d4dd45} for bundle path: /Applications/Avada.app with URL: file:///Applications/A
+2026-10-09 14:40:47.192 Df loginwindow[45713:31294ef] [com.apple.loginwindow.logging:Standard] -[ApplicationManager handleCASEvent:withData:] | kLSNotifyApplicationExitedIncludingSubordinateProcesses for asn: LSASN:{0x0-0x8d4dd45}
+2026-10-09 14:40:47.193 Df Dock[54062:3604559] [com.apple.dock:tile] Did force quit asn=(0x0 0x8d4dd45)
+2026-10-09 14:40:47.194 I  loginwindow[45713:361e28a] [com.apple.launchservices:quitsupport] applicationDeath: app=0x0-0x8d4dd45 "Avada Terminal" has died, is non-foreground and never tracked, so ignoring it from the application list.
+2026-10-09 14:40:47.194 I  loginwindow[45713:361e28a] [com.apple.launchservices:quitsupport] applicationExited: app=0x0-0x8d4dd45 "Avada Terminal" pid=76456, previously being tracked, has fully exited including subordinate processes.

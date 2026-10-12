@@ -1,0 +1,60 @@
+Analysis of sampling avada (pid 76456) every 1 millisecond
+Process:         avada [76456]
+Path:            /Applications/.avada-attic/Avada-0.2.31-20261009124446.app/Contents/MacOS/avada
+Load Address:    0x100030000
+Identifier:      to.avada.terminal
+Version:         0.2.32 (0.2.32)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  launchd [1]
+Target Type:     live task (Roots Present)
+
+Date/Time:       2026-10-09 14:26:53.691 -0400
+Launch Time:     2026-10-09 11:19:02.969 -0400
+OS Version:      macOS 27.0.1 (26A434)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         1.1G
+Physical footprint (peak):  1.3G
+Idle exit:                  untracked
+----
+
+Call graph:
+    7854 Thread_55122755   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 7854 start  (in dyld) + 6688  [0x19afe7e80]
+    +   7854 main  (in avada) + 52  [0x1006e0b80]
+    +     7854 _RNvNtCs82bWklYMk3w_3std2rt19lang_start_internal  (in avada) + 952  [0x1021487e8]
+    +       7854 _RNCINvNtCs82bWklYMk3w_3std2rt10lang_startINtNtCs8Mbv00yxnRz_4core6result6ResultuINtNtCshxvaOLs88l5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Csj2r0V6L2xsx_5avada  (in avada) + 16  [0x10086fb40]
+    +         7854 _RINvNtNtCs82bWklYMk3w_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs8Mbv00yxnRz_4core6result6ResultuINtNtCshxvaOLs88l5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECsj2r0V6L2xsx_5avada  (in avada) + 12  [0x1007c07b8]
+    +           7854 _RNvCsj2r0V6L2xsx_5avada4main  (in avada) + 13732  [0x1006b4438]
+    +             7854 _RNvCsdUwjxX8b6jM_5slint14run_event_loop  (in avada) + 76  [0x100d8ecac]
+    +               7854 _RNvXs1_CsjQyYOaFH7rU_21i_slint_backend_winitNtB5_7BackendNtNtCsenUTfovf4MV_12i_slint_core8platform8Platform14run_event_loop  (in avada) + 420  [0x100e2f72c]
+    +                 7854 _RINvMs3_NtNtNtCsdRGG8RuYMz9_5winit13platform_impl5macos10event_loopINtB6_9EventLoopNtCsjQyYOaFH7rU_21i_slint_backend_winit10SlintEventE13run_on_demandNCINvYINtNtBc_10event_loop9EventLoopB1j_ENtNtNtBc_8platform13run_on_demand23EventLoopExtRunOnDemand17run_app_on_demandNtNtB1l_10event_loop14EventLoopStateE0EB1l_  (in avada) + 260  [0x100e191a0]
+    +                   7854 -[NSApplication run]  (in AppKit) + 396  [0x19fa2790c]
+    +                     7854 -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:]  (in AppKit) + 292  [0x1a02ac26c]
+    +                       7854 -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:]  (in AppKit) + 780  [0x1a02ac748]
+    +                         7854 _DPSNextEvent  (in AppKit) + 580  [0x19fa344fc]
+    +                           7854 _DPSBlockUntilNextEventMatchingListInMode  (in AppKit) + 292  [0x19fd7729c]
+    +                             7854 _BlockUntilNextEventMatchingListInMode  (in HIToolbox) + 48  [0x1a8a36380]
+    +                               7854 ReceiveNextEventCommon  (in HIToolbox) + 492  [0x1a88b391c]
+    +                                 7854 RunCurrentEventLoopInMode  (in HIToolbox) + 320  [0x1a88b0590]
+    +                                   7854 _CFRunLoopRunSpecificWithOptions  (in CoreFoundation) + 536  [0x19b55782c]
+    +                                     7854 __CFRunLoopRun  (in CoreFoundation) + 1620  [0x19b47d4f4]
+    +                                       7854 __CFRunLoopDoObservers  (in CoreFoundation) + 648  [0x19b47dbbc]
+    +                                         7854 __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__  (in CoreFoundation) + 36  [0x19b47dcc4]
+    +                                           7854 _RNvNtNtNtCsdRGG8RuYMz9_5winit13platform_impl5macos8observer26control_flow_begin_handler  (in avada) + 144  [0x100f21b40]
+    +                                             7854 _RNvMNtNtNtCsdRGG8RuYMz9_5winit13platform_impl5macos9app_stateNtB2_19ApplicationDelegate6wakeup  (in avada) + 444  [0x100f1d58c]
+    +                                               7854 _RNvMs_NtNtNtCsdRGG8RuYMz9_5winit13platform_impl5macos13event_handlerNtB4_12EventHandler12handle_event  (in avada) + 120  [0x100f2af64]
+    +                                                 7854 _RNCINvNtNtNtCsdRGG8RuYMz9_5winit13platform_impl5macos10event_loop14map_user_eventNtCsjQyYOaFH7rU_21i_slint_backend_winit10SlintEventNCINvYINtNtBa_10event_loop9EventLoopB1h_ENtNtNtBa_8platform11pump_events22EventLoopExtPumpEvents15pump_app_eventsNtNtB1j_10event_loop14EventLoopStateE0E0B1j_  (in avada) + 640  [0x100e203e8]
+    +                                                   7854 _RNCINvYINtNtCsdRGG8RuYMz9_5winit10event_loop9EventLoopNtCsjQyYOaFH7rU_21i_slint_backend_winit10SlintEventENtNtNtBa_8platform11pump_events22EventLoopExtPumpEvents15pump_app_eventsNtNtBS_10event_loop14EventLoopStateE0BS_  (in avada) + 200  [0x100e20528]
+    +                                                     7854 _RNvNtCsenUTfovf4MV_12i_slint_core8platform28update_timers_and_animations  (in avada) + 256  [0x100f81374]
+    +                                                       7854 _RINvMs2_NtNtCs82bWklYMk3w_3std6thread5localINtB6_8LocalKeyINtNtCs8Mbv00yxnRz_4core4cell7RefCellNtNtCsenUTfovf4MV_12i_slint_core6timers9TimerListEE4withNCNvMs0_B1x_B1v_21maybe_activate_timerss_0bEB1z_  (in avada) + 864  [0x100f50624]
+    +                                                         7854 _RNCNvCsj2r0V6L2xsx_5avada4mains4_0B3_  (in avada) + 60  [0x10069fa2c]
+    +                                                           7854 _RNvMNtCsj2r0V6L2xsx_5avada3appNtB2_3App4tick  (in avada) + 38356  [0x10057fa00]
+    +                                                             7854 _RNvMs2_NtCs54gJb3ni9mk_10avada_core15session_managerNtB5_14SessionManager13render_screen  (in avada) + 108  [0x1016ded2c]
+    +                                                               7854 _RNvMs_NtNtCs54gJb3ni9mk_10avada_core7session13daemon_clientNtB4_20DaemonSessionManager13render_screen  (in avada) + 1432  [0x101b4fb94]
+    +                                                                 7854 _RNvMsg_NtNtCs82bWklYMk3w_3std4sync4mpmcINtB5_8ReceiverNtNtNtCs54gJb3ni9mk_10avada_core7session5proto9DaemonMsgE12recv_timeoutBW_  (in avada) + 104  [0x1019e01fc]
+    +                                                                   7854 _RNvMs1_NtNtNtCs82bWklYMk3w_3std4sync4mpmc4listINtB5_7ChannelNtNtNtCs54gJb3ni9mk_10avada_core7session5proto9DaemonMsgE4recvB12_  (in avada) + 324  [0x1019d5f58]
+    +                                                                     7854 _RNCNvMs1_NtNtNtCs82bWklYMk3w_3std4sync4mpmc4listINtB7_7ChannelINtNtCs8Mbv00yxnRz_4core6option6OptionINtNtCshxvaOLs88l5_5alloc3vec3VechEEE4recvs_0Cs54gJb3ni9mk_10avada_core  (in avada) + 200  [0x1019d3430]
+    +                                                                       7854 _RNvMs_NtNtCs82bWklYMk3w_3std6thread6threadNtB4_6Thread12park_timeout  (in avada) + 100  [0x10213e2f8]

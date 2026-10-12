@@ -258,8 +258,17 @@ pub fn run(salt: &str) -> io::Result<()> {
     // path unlinks it). The idle monitor watches it; `serve`'s accept loop checks it.
     let lifecycle = Arc::new(Lifecycle::new(names.socket.clone()));
     let daemon = Daemon::new(Arc::clone(&lifecycle));
+    // Provenance: which launcher made us. The launchd label arrives in our environment
+    // (launchd does not put it in `XPC_SERVICE_NAME` for a bootstrapped job) and is removed
+    // right here so it never reaches a pane through `spawn::build_env`.
+    let launchd_label = std::env::var(super::launchd::LABEL_ENV).ok();
+    std::env::remove_var(super::launchd::LABEL_ENV);
+    // SAFETY: getppid has no preconditions and cannot fail.
+    let ppid = unsafe { libc::getppid() };
     tracing::info!(
         pid = std::process::id(),
+        ppid,
+        launchd = launchd_label.as_deref().unwrap_or("-"),
         socket = %names.socket.display(),
         took_over,
         serving_without_flock,
@@ -575,7 +584,7 @@ fn runtime_dir() -> PathBuf {
 /// token. Tiny and dependency-free.
 #[cfg(unix)]
 #[tracing::instrument(level = "debug", ret)]
-fn fnv1a64(s: &str) -> u64 {
+pub(crate) fn fnv1a64(s: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in s.bytes() {
         h ^= b as u64;

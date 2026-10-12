@@ -367,6 +367,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // `logLevel` setting unless `AVADA_LOG` / `AVADA_DEBUG` override it.
         let level = prefs::load().log_level;
         avada_core::logging::init(log_role(&argv), &level);
+        // A SIGTERM/SIGHUP/SIGINT death writes one line to the same log before the default
+        // action runs — the daemon's silent death on 2026-10-09 is why.
+        #[cfg(unix)]
+        avada_core::session::signal_log::install(&avada_core::logging::log_path(log_role(&argv)));
         tracing::debug!(argv = ?argv, "process start");
     }
 
@@ -716,6 +720,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //  * In-process backend (either way) → the PTYs are our children and die with us; the
     //    keep-alive preference is INERT, and `kill_all` is the historical clean teardown.
     let keep_alive = prefs::load().keep_alive;
+    // Info, not debug: a GUI that is *missing* this line died by a signal or a Force Quit,
+    // and that distinction is the first thing a lost-handoff investigation needs.
+    tracing::info!(
+        keep_alive,
+        restarting = GUI_RESTARTING.load(std::sync::atomic::Ordering::SeqCst),
+        daemon = mgr.is_daemon(),
+        "quit: event loop exited normally"
+    );
     match quit_action(
         mgr.is_daemon(),
         keep_alive,

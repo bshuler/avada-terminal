@@ -1,0 +1,6 @@
+8u 0x73c2e92f367e71da ->0x3b1be290518ef8fa 
+9u 0x3b1be290518ef8fa ->0x73c2e92f367e71da 
+10u 0x73c2e92f367e71da ->0x3b1be290518ef8fa 
+11u 0x7b338f4b4d0e938c /var/folders/09/k3vj0xjs7z74cdj2t0pwbysw0000gn/T/avadad.b4488f5de313e99e.sock 
+102u 0xb9a304a2b3a52b54 /var/folders/09/k3vj0xjs7z74cdj2t0pwbysw0000gn/T/avadad.b4488f5de313e99e.sock 
+103u 0xb9a304a2b3a52b54 /var/folders/09/k3vj0xjs7z74cdj2t0pwbysw0000gn/T/avadad.b4488f5de313e99e.sock 

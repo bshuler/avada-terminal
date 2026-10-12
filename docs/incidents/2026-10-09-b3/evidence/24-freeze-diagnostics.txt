@@ -1,0 +1,57 @@
+== ps flags
+  PID STAT        F WCHAN  PRI NI STARTED
+76456 S        4084 -       46  0 Fri Oct  9 11:19:02 2026    
+76462 Ss       4004 -       31  0 Fri Oct  9 11:19:03 2026    
+== lsappinfo
+asn=ASN:0x0-0x8d4dd45-"Avada_Terminal":
+[ NULL ]  ASN:0x0-0x8d4dd45: 
+    bundleID=[ NULL ] 
+    bundle path=[ NULL ] 
+    executable path=[ NULL ] 
+    pid = 76456 !cgsConnection !signalled type=[ NULL ]  flavor=[ NULL ]  Version=[ NULL ]  Arch=!!none 
+== freezer/memorystatus sysctls
+kern.memorystatus.sysprocs_idle_delay_time_ns: 10
+kern.memorystatus.apps_idle_delay_time_ns: 10
+kern.memorystatus.wired_max_proc_pct: 25
+kern.memorystatus.kill_on_sustained_pressure_count: 0
+kern.memorystatus.kill_on_sustained_pressure_window_s: 600
+kern.memorystatus.kill_on_sustained_pressure_delay_ms: 500
+kern.vm_page_free_target: 4000
+kern.vm_page_free_min: 3500
+kern.vm_page_free_reserved: 906
+kern.memorystatus_level: 59
+kern.memorystatus_purge_on_warning: 2
+kern.memorystatus_purge_on_urgent: 5
+kern.memorystatus_purge_on_critical: 8
+vm.compressor.config.freezer_swap_enabled: 0
+vm.compressor.swapper.swapouts_freezer: 0
+vm.compressor.swapper.swapins_freezer: 0
+vm.compressor.compactor.swapouts_queued_freezer: 0
+vm.compressor.pages_swapped_freezer: 0
+vm.compressor.pages_swap_freezer: 0
+vm.vm_page_free_target: 4000
+vfs.generic.apfs.unwritten_freeze_threshold: 4294967296
+net.link.generic.system.rxpoll_freeze_time: 1000000000
+== swapfiles
+-rw-------  1 root  wheel  1073741824 Oct  8 23:28 swapfile3
+-rw-------  1 root  wheel  1073741824 Oct  7 06:10 swapfile4
+-rw-------  1 root  wheel  1073741824 Oct  9 10:48 swapfile5
+-rw-------  1 root  wheel  1073741824 Oct  9 10:53 swapfile6
+-rw-------  1 root  wheel  1073741824 Oct  9 12:10 swapfile7
+-rw-------  1 root  wheel  1073741824 Oct  9 12:30 swapfile8
+== user-leaf thread stack (sqlite)
+    +                       7854 _RINvMNtNtNtCs5vdwu0J7rwy_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB15_12multi_thread6
+    +                         7854 _RNvMs_NtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run + 2836  
+    +                           7854 _RNvMs_NtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context8run_task + 292  
+    +                             7854 _RINvNtNtNtCs5vdwu0J7rwy_5tokio7runtime4task3raw4pollNCNvNtNtCs54gJb3ni9mk_10avada_core7control6server17run_reaper_ticker
+    +                               7854 <deduplicated_symbol> + 56  
+    +                                 7854 _RNCNvNtNtCs54gJb3ni9mk_10avada_core7control6server17run_reaper_ticker0Csj2r0V6L2xsx_5avada + 1112  
+    +                                   7854 _RNvMs1_NtNtCs54gJb3ni9mk_10avada_core7control4workNtB5_9WorkQueue12reap_expired + 456  
+    +                                     7854 _RINvMs1_NtNtCs54gJb3ni9mk_10avada_core7control4workNtB6_9WorkQueue11claimed_idsRSRDNtNtNtCs93oqsCmx3vk_8rusqlite
+    +                                       7854 _RNvMs_NtCs93oqsCmx3vk_8rusqlite16inner_connectionNtB4_15InnerConnection7prepare + 140  
+    +                                         7854 sqlite3LockAndPrepare + 228  
+    +                                           7854 sqlite3Prepare + 780  
+    +                                             7854 sqlite3DbMallocRawNN + 0  
+== daemon main thread CPU drift
+bshuler 76462   ??    0.1 S    31T   0:10.44   0:04.05 /Applications/Avada.app/Contents/MacOS/avada --session-daemon /Users/bshuler/Library/Application Support/avada
+bshuler 76462   ??    0.1 S    31T   0:10.72   0:04.16 /Applications/Avada.app/Contents/MacOS/avada --session-daemon /Users/bshuler/Library/Application Support/avada

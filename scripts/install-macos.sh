@@ -211,4 +211,11 @@ Nothing here needs \`pkill\`. Killing the daemon closes the pty masters and ever
 program in every pane dies with them — the exact loss the handoff exists to
 prevent. If the daemon is genuinely wedged and will not hand over, that is a bug
 worth a log, not a routine step.
+
+Quit, not Force Quit. Avada ▸ Quit hands the sessions over. Dock Force Quit
+terminates the app "including subordinate processes": a daemon spawned by a GUI
+older than 0.2.42 is such a process and dies with it, taking every pane
+(docs/incidents/2026-10-09-b3). From 0.2.42 the daemon is its own launchd job
+and survives a Force Quit, but only once it is running from that build — i.e.
+after the first Avada ▸ Quit and relaunch following this install.
 EOF

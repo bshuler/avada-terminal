@@ -110,6 +110,38 @@ lock-step upgrades are fine — no third-party compat burden).
 - **Explicit control:** a `Shutdown` admin message + a `avada --kill-daemon` for clean teardown;
   the GUI's "Quit" can leave the daemon running (sessions persist) or shut it down per a preference.
 
+### Detaching the daemon from the GUI (macOS, 0.2.42)
+
+`setsid` is not enough. macOS Force Quit (Dock, Activity Monitor, the ⌥⌘⎋ dialog) terminates
+an application *including subordinate processes*, and LaunchServices counts a direct child of
+the GUI as subordinate whatever its session id. On 2026-10-09 a Force Quit of a kernel-suspended
+GUI killed the daemon and every pane with it (`docs/incidents/2026-10-09-b3/`).
+
+So on macOS `spawn_daemon_detached` first bootstraps the daemon as its own launchd job
+(`rs/crates/core/src/session/launchd.rs`), the analogue of the Linux `systemd-run --user
+--scope` path, and only falls back to `setsid` (with a warning) if `launchctl bootstrap` fails:
+
+- Domain `gui/<uid>`; label `to.avada.terminal.daemon.<fnv1a64(salt) hex>.<nonce>`, unique per
+  spawn, so a stale job can never shadow a new one. `RunAtLoad=true`, `KeepAlive=false` (the
+  daemon's idle-exit stays in charge), `AbandonProcessGroup=true` (pane children are not
+  reaped when the daemon exits), stdio to `/dev/null`.
+- Environment: the job gets **only** `TMPDIR` and `XDG_RUNTIME_DIR` (so `runtime_dir()`
+  resolves to the same socket path as the GUI) plus `AVADA_DAEMON_LAUNCHD_LABEL`, which the
+  daemon reads for its start-up log line and strips before spawning anything. launchd sets
+  `XPC_SERVICE_NAME=0` for bootstrapped jobs, hence the explicit label variable. A
+  consequence worth knowing: a dev build started from a terminal no longer leaks that
+  terminal's environment into panes; panes get launchd's session environment plus whatever
+  `spawn::build_env` adds.
+- Plists live in `state_dir()/launchd/`, mode 0600. Before each spawn, every plist with the
+  prefix is checked with `launchctl print`: running (has `pid =`) → kept; loaded but exited →
+  `bootout` and removed; unknown to launchd → removed.
+- The daemon logs `pid`, `ppid` (1 under launchd) and the label at start, and
+  `signal_log.rs` records SIGTERM/SIGHUP/SIGINT with the sender's pid and uid before the
+  default action runs, so a daemon death is never silent again.
+
+Verification: after the daemon runs from a launchd-spawned build, Force Quit the GUI; the
+daemon pid must not change and the relaunched GUI must log `took_over=true`.
+
 ## Reconnect / re-attach (the payoff — M2)
 
 On GUI launch with a live daemon:

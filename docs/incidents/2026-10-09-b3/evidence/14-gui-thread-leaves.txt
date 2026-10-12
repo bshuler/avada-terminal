@@ -1,0 +1,42 @@
+Thread_55122755   DispatchQueue_1: com.apple.main-thread  (serial) :: semaphore_timedwait_trap
+Thread_55122810: tokio-rt-worker :: __psynch_cvwait
+Thread_55122811: tokio-rt-worker :: __psynch_cvwait
+Thread_55122812: tokio-rt-worker :: kevent
+Thread_55122813: tokio-rt-worker :: __psynch_cvwait
+Thread_55122814: tokio-rt-worker :: sqlite3DbMallocRawNN
+Thread_55122815: tokio-rt-worker :: __psynch_cvwait
+Thread_55122816: tokio-rt-worker :: __psynch_cvwait
+Thread_55122817: tokio-rt-worker :: __psynch_cvwait
+Thread_55122818: tokio-rt-worker :: __psynch_cvwait
+Thread_55122819: tokio-rt-worker :: __psynch_cvwait
+Thread_55122907: hp-daemon-sm-reader :: __recvfrom
+Thread_55122932: module-runtime :: semaphore_timedwait_trap
+Thread_55122933: ambient-ai :: kevent
+Thread_55123055: com.apple.NSEventThread :: mach_msg2_trap
+Thread_55123118: module-routes :: semaphore_wait_trap
+Thread_55123119: history-scan :: semaphore_wait_trap
+Thread_55123130 :: __recvfrom
+Thread_55123131 :: __semwait_signal
+Thread_55123141 :: __recvfrom
+Thread_55123142 :: __semwait_signal
+Thread_55123156 :: __recvfrom
+Thread_55123157 :: __semwait_signal
+Thread_55123174 :: __recvfrom
+Thread_55123175 :: __semwait_signal
+Thread_55123228 :: __recvfrom
+Thread_55123229 :: __semwait_signal
+Thread_55123238 :: __recvfrom
+Thread_55123239 :: __semwait_signal
+Thread_55123247 :: __recvfrom
+Thread_55123248 :: __semwait_signal
+Thread_55123259 :: __recvfrom
+Thread_55123260 :: __semwait_signal
+Thread_55123459 :: __recvfrom
+Thread_55123460 :: __semwait_signal
+Thread_55123463 :: __recvfrom
+Thread_55123464 :: __semwait_signal
+Thread_55123480 :: __recvfrom
+Thread_55123481 :: __semwait_signal
+Thread_56318290 :: start_wqthread
+Thread_56333009 :: start_wqthread
+Thread_56333048   DispatchQueue_13: com.apple.root.default-qos  (concurrent) :: os_unfair_lock_lock_with_options

@@ -6,39 +6,42 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
-### B3 · GUI wedges in `render_screen` and the control API starves (2026-10-09)
-Seen on the 0.2.31 GUI (pid 76456, daemon 76462) after a machine-wide swap thrash; it did not
-recover once memory was freed. Evidence gathered without restarting anything:
-- `sample` of the GUI: all 712 samples of the main thread sit in
-  `App::tick → SessionManager::render_screen → DaemonSessionManager::render_screen →
-  request() → recv_timeout` (2 s per call, `SCREEN_TIMEOUT`,
-  `rs/crates/core/src/session/daemon_client.rs`). The Slint loop never gets back to the
-  control server, so every `avada ctl` call times out and the window stops painting. The
-  app log stops dead between the 17:40 and 17:55 firings of the status loop.
-- The GUI's only daemon reader (`hp-daemon-sm-reader`, `reader_loop`) sleeps in
-  `read_frame → recvfrom` with 0 % CPU, while `netstat -f unix` shows that same socket
-  holding a full 8160-byte receive queue, unchanged across every `netstat` check since first
-  seen. The main thread was still logging at 17:40:47Z (13:40 local), so onset is bounded to
-  17:40–17:55Z. The daemon's writer
-  thread for that connection (`hp-daemon-writer`, `writer_loop → write_all → sendto`) is
-  blocked because the GUI is not draining. A sleeping reader on a full queue has no
-  userland explanation found so far (no `SO_RCVLOWAT`, one socket, fds 11/12 are dups of
-  it, no second reader); root needs `dtrace`/`fs_usage` to settle it.
-- The daemon is healthy: a fresh client (`Hello`, `Ping`, `ListSessions`, `RenderScreen`)
-  gets answers in under 30 ms, 50 sessions listed, pane screens render. The daemon log shows
-  those probes as `conn=3` / `conn=4` at 18:16Z, so they reached this daemon, not a stale socket. Pane PTYs and
-  their programs are untouched.
-Remedy today: quit and reopen the GUI (the daemon and every pane survive; it also moves the
-GUI onto the installed 0.2.32). Fix direction:
-1. `request()` must not retry forever: after N consecutive `SCREEN_TIMEOUT`s on one
-   connection, mark the link dead (`connected = false`), log it, and let the redial path
-   rebuild the connection — the reader thread is not the only place the process may learn
-   the daemon link is gone.
-2. Keep `render_screen` off the UI thread (cache the last screen, refresh asynchronously)
-   so a slow or dead daemon link can never stall the Slint loop or the control server.
-3. A reader watchdog: if the socket has bytes queued (or the daemon's `Ping` goes
-   unanswered) for longer than a few seconds while the reader reports idle, drop and redial.
-4. Reproduce under memory pressure (`sample` + `netstat -f unix` script) before closing.
+### B4 · Force Quit of the GUI killed the session daemon and every pane (2026-10-09)
+Dock Force Quit of the 0.2.31 GUI (pid 76456) at 14:40:46 ended with loginwindow's
+"has fully exited including subordinate processes" at 14:40:47.194, and the daemon (76462,
+a setsid child of the GUI) died with it, silently. The relaunched GUI spawned a fresh daemon
+(`took_over=false`) and all 49 Claude sessions restarted from a bare shell. Write-up and
+evidence: [`incidents/2026-10-09-b3/`](incidents/2026-10-09-b3/README.md), root cause 2.
+Fix shipped in 0.2.42: on macOS the daemon is bootstrapped as its own launchd job
+(`rs/crates/core/src/session/launchd.rs`, the analogue of the Linux `systemd-run --scope`
+path), SIGTERM/SIGHUP/SIGINT are logged with the sender pid (`signal_log.rs`), the daemon
+logs its ppid and label at start, and the GUI logs a line on a normal quit.
+**Open until verified:** once the daemon has rolled onto 0.2.42 (Avada ▸ Quit, reopen),
+Force Quit the GUI from the Dock and confirm the daemon pid is unchanged and the new GUI
+logs `took_over=true`. Until that rollover, use Avada ▸ Quit, never Force Quit.
+
+### B3 · GUI wedged (kernel-suspended) under swap exhaustion; control API starved (2026-10-09)
+Seen on the 0.2.31 GUI (pid 76456, daemon 76462) during a machine-wide swap thrash (8.4 of
+9 GB swap used, load 89); it did not recover once memory was freed. Write-up and evidence:
+[`incidents/2026-10-09-b3/`](incidents/2026-10-09-b3/README.md), root cause 1.
+- Root cause: the kernel **suspended the GUI process** (`proc_pidinfo` flags `PC_SUSP` and
+  `PA_SUSP`, every thread `WAITING` at 0 % CPU, `T` priority suffix in `ps`). The `sample`
+  that showed the main thread in `render_screen → request() → recv_timeout` was a frozen
+  snapshot, not a loop: the earlier reading that `request()` "retries forever" and that the
+  reader thread sleeps on a full receive queue is withdrawn. The queue filled because its
+  reader was frozen.
+- The daemon was healthy throughout: fresh probes answered in under 30 ms, 50 sessions
+  listed, every pane PTY intact.
+- The remedy "quit and reopen the GUI; the daemon and every pane survive" held only for
+  Avada ▸ Quit. A suspended GUI cannot be quit normally; the Force Quit that was the only
+  option killed the daemon as a subordinate process. That is B4, fixed in 0.2.42.
+Hardening still worth doing, none of which would have helped a suspended process:
+1. Keep `render_screen` off the UI thread (cache the last screen, refresh asynchronously)
+   so a slow daemon link can never stall the Slint loop or the control server.
+2. After N consecutive `SCREEN_TIMEOUT`s on one connection, mark the link dead, log it,
+   and let the redial path rebuild it.
+3. Reproduce under memory pressure (`sample` + `proc_pidinfo` flags) before closing; the
+   first thing to check on a "wedged" GUI is now `pbi_flags` for `PC_SUSP`/`PA_SUSP`.
 
 ### B1 · Pane activity reads `busy` after a GUI relaunch until the pane prints (2026-10-09)
 Pre-existing `activity_for` rule (`rs/crates/core/src/control/server.rs`): no liveness marker

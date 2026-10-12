@@ -1885,6 +1885,23 @@ fn spawn_daemon_detached(salt: &str) -> io::Result<()> {
         // systemd-run present but the spawn failed — fall through to the setsid path rather
         // than leaving the caller with no daemon.
     }
+    // macOS: the analog of the systemd scope is a launchd job of the daemon's own. A bare
+    // `setsid` child is still a *subordinate process* of the GUI to LaunchServices, and a
+    // Force Quit of the GUI (the only quit a wedged GUI accepts) terminates subordinates
+    // too — which killed the daemon and every pane on 2026-10-09
+    // (`session::launchd` has the whole story). Fall back to setsid only when launchd
+    // refuses: that daemon has the old exposure, but no daemon at all is worse.
+    #[cfg(target_os = "macos")]
+    match crate::session::launchd::spawn_daemon_launchd(&exe, salt) {
+        Ok(label) => {
+            tracing::info!(label, "spawned session daemon via launchd");
+            return Ok(());
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "launchd spawn failed; falling back to setsid (daemon will not survive a Force Quit)"
+        ),
+    }
     spawn_daemon_setsid(&exe, salt)
 }
 

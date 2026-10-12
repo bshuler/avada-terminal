@@ -1,0 +1,60 @@
+Analysis of sampling avada (pid 76462) every 1 millisecond
+Process:         avada [76462]
+Path:            /Applications/.avada-attic/Avada-0.2.31-20261009124446.app/Contents/MacOS/avada
+Load Address:    0x1047a0000
+Identifier:      to.avada.terminal
+Version:         0.2.32 (0.2.32)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  avada [76456]
+Target Type:     live task
+
+Date/Time:       2026-10-09 14:27:09.560 -0400
+Launch Time:     2026-10-09 11:19:03.606 -0400
+OS Version:      macOS 27.0.1 (26A434)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         184.6M
+Physical footprint (peak):  185.9M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2967 Thread_55122823   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 2967 start  (in dyld) + 6688  [0x19afe7e80]
+    +   2967 main  (in avada) + 52  [0x104e50b80]
+    +     2967 _RNvNtCs82bWklYMk3w_3std2rt19lang_start_internal  (in avada) + 952  [0x1068b87e8]
+    +       2967 _RNCINvNtCs82bWklYMk3w_3std2rt10lang_startINtNtCs8Mbv00yxnRz_4core6result6ResultuINtNtCshxvaOLs88l5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Csj2r0V6L2xsx_5avada  (in avada) + 16  [0x104fdfb40]
+    +         2967 _RINvNtNtCs82bWklYMk3w_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs8Mbv00yxnRz_4core6result6ResultuINtNtCshxvaOLs88l5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECsj2r0V6L2xsx_5avada  (in avada) + 12  [0x104f307b8]
+    +           2967 _RNvCsj2r0V6L2xsx_5avada4main  (in avada) + 7052  [0x104e22a20]
+    +             2967 _RNvNtNtCs54gJb3ni9mk_10avada_core7session6daemon3run  (in avada) + 396  [0x105f66cd4]
+    +               2963 _RNCNvNtNtCs54gJb3ni9mk_10avada_core7session6daemon3run0B7_  (in avada) + 16128  [0x105f3e2ec]
+    +               ! 2963 _RNvNtNtCs82bWklYMk3w_3std6thread9functions5sleep  (in avada) + 64  [0x1068bbda4]
+    +               !   2963 nanosleep  (in libsystem_c.dylib) + 220  [0x19b253054]
+    +               !     2963 __semwait_signal  (in libsystem_kernel.dylib) + 8,16  [0x19b37c308,0x19b37c310]
+    +               2 _RNCNvNtNtCs54gJb3ni9mk_10avada_core7session6daemon3run0B7_  (in avada) + 15560  [0x105f3e0b4]
+    +               ! 2 _RNvMs_NtNtNtNtCs82bWklYMk3w_3std2os4unix3net8listenerNtB4_12UnixListener6accept  (in avada) + 72  [0x1068b2538]
+    +               !   2 _RNvMNtNtNtNtNtCs82bWklYMk3w_3std3sys3net10connection6socket4unixNtB2_6Socket6accept  (in avada) + 72  [0x1068a5d18]
+    +               !     2 __accept  (in libsystem_kernel.dylib) + 8  [0x19b381734]
+    +               2 _RNCNvNtNtCs54gJb3ni9mk_10avada_core7session6daemon3run0B7_  (in avada) + 16128  [0x105f3e2ec]
+    2967 Thread_55122827: tokio-rt-worker
+    + 2967 thread_start  (in libsystem_pthread.dylib) + 8  [0x19b3b8cec]
+    +   2967 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x19b3bdd00]
+    +     2967 _RNvNvMs0_NtNtNtCs82bWklYMk3w_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in avada) + 392  [0x1068c1654]
+    +       2967 _RNSNvYNCINvNtNtCs82bWklYMk3w_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCs5vdwu0J7rwy_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCs8Mbv00yxnRz_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in avada) + 96  [0x1068660a4]
+    +         2967 _RINvNtNtCs82bWklYMk3w_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCs5vdwu0J7rwy_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in avada) + 132  [0x10686c84c]
+    +           2967 _RNvMs5_NtNtNtCs5vdwu0J7rwy_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in avada) + 400  [0x10686b1d4]
+    +             2967 _RNvMs0_NtNtNtCs5vdwu0J7rwy_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1L_6Launch6launch0ENtNtB19_8schedule16BlockingScheduleE4pollBb_  (in avada) + 168  [0x106858af0]
+    +               2967 _RNvMs4_NtNtNtCs5vdwu0J7rwy_5tokio7runtime4task4coreINtB5_4CoreINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1F_6Launch6launch0ENtNtB13_8schedule16BlockingScheduleE4pollBb_  (in avada) + 84  [0x1068683e0]
+    +                 2967 _RNvXs0_NtNtNtCs5vdwu0J7rwy_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1g_6Launch6launch0ENtNtNtCs8Mbv00yxnRz_4core6future6future6Future4pollBb_  (in avada) + 68  [0x10687fd80]
+    +                   2967 _RNvNtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread6worker3run  (in avada) + 172  [0x1068642f4]
+    +                     2967 _RINvNtNtNtCs5vdwu0J7rwy_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in avada) + 156  [0x10685af60]
+    +                       2967 _RINvMNtNtNtCs5vdwu0J7rwy_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB15_12multi_thread6worker3run00uEB9_  (in avada) + 60  [0x106859a98]
+    +                         2927 _RNvMs_NtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in avada) + 3624  [0x106863664]
+    +                         ! 1900 _RNvMs_NtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in avada) + 360  [0x106862558]
+    +                         ! : 1900 _RNvMs1_NtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar  (in avada) + 376  [0x106875ecc]
+    +                         ! :   1900 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x19b3be1d0]
+    +                         ! :     1900 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x19b37c50c]
+    +                         ! 1026 _RNvMs_NtNtNtNtCs5vdwu0J7rwy_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in avada) + 296  [0x106862518]
+    +                         ! : 1025 _RNvMNtNtCs5vdwu0J7rwy_5tokio7runtime4timeNtB2_6Driver13park_internal  (in avada) + 556  [0x106871db8]

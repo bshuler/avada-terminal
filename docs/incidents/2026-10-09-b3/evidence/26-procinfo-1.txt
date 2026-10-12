@@ -1,0 +1,33 @@
+=== pid 76456 at 14:37:38
+pbi_flags=0x1405410 ['LP64', 'PC_SUSP', 'PA_SUSP', 'EXEC', 'IMPORTANCE_DONOR', 'APPLICATION']
+virt=502079225856 res=393216 user_ns=52935853383 sys_ns=29391675751 thr_user=49718639205 thr_sys=18915761529 policy=1 faults=143956304 pageins=53263 cow=555 msgs_sent=90174369 msgs_recv=47671405 syscalls_mach=106861136 syscalls_unix=34299635 csw=19122628 threadnum=42 numrunning=0 priority=31
+thread (run_state,flags) histogram: {('WAITING', 1): 31, ('WAITING', 0): 11}
+  state=WAITING flags=1 sleep_s=0 curpri=46 cpu_ns=2730568634000 name='main'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=10323615000 name='hp-daemon-sm-reader'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=8882841000 name=''
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=8876261000 name=''
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=8870769000 name=''
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=8864372000 name=''
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=8863716000 name=''
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=8863275000 name=''
+=== pid 76462 at 14:37:38
+pbi_flags=0x1404030 ['LP64', 'SLEADER', 'EXEC', 'IMPORTANCE_DONOR', 'APPLICATION']
+virt=500779630592 res=4653056 user_ns=1010981137 sys_ns=2020689864 thr_user=1010927519 thr_sys=2020268014 policy=1 faults=362373 pageins=26298 cow=369 msgs_sent=1522239 msgs_recv=761111 syscalls_mach=1117315 syscalls_unix=10268647 csw=3173542 threadnum=64 numrunning=0 priority=31
+thread (run_state,flags) histogram: {('WAITING', 1): 12, ('WAITING', 0): 52}
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=26246344000 name='tokio-rt-worker'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=23202828000 name='tokio-rt-worker'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=18056671000 name='tokio-rt-worker'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=15644517000 name='tokio-rt-worker'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=15338192000 name='main'
+  state=WAITING flags=0 sleep_s=0 curpri=31 cpu_ns=7370432000 name='hp-daemon-writer'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=4311270000 name='hp-daemon-idle'
+  state=WAITING flags=1 sleep_s=0 curpri=31 cpu_ns=3892292000 name='tokio-rt-worker'
+#define PROC_FLAG_PC_SUSP       0x400   /* In resource starvation situations, this process is to be suspended */
+#define PROC_FLAG_PA_SUSP       0x1000  /* The process is currently suspended due to resource starvation */
+#define TH_STATE_RUNNING        1       /* thread is running normally */
+#define TH_STATE_STOPPED        2       /* thread is stopped */
+#define TH_STATE_WAITING        3       /* thread is waiting normally */
+#define TH_STATE_UNINTERRUPTIBLE 4      /* thread is in an uninterruptible
+#define TH_STATE_HALTED         5       /* thread is halted at a
+#define TH_FLAGS_SWAPPED        0x1     /* thread is swapped out */
+#define TH_FLAGS_IDLE           0x2     /* thread is an idle thread */
