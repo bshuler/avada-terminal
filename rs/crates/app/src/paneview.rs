@@ -214,10 +214,10 @@ impl Ui {
 
 /// Copy a shell palette into the Slint `Theme` global.
 ///
-/// Only the fourteen *base* tokens are written. The aliases at the bottom of
+/// Only the sixteen *base* tokens are written. The aliases at the bottom of
 /// `ui/theme.slint` (`brand`, `ink`, `hover`, …) are plain `out` properties bound to the
 /// bases, so they re-derive themselves the instant a base changes — setting them here would
-/// need a setter per alias and would silently rot the moment someone adds a fifteenth.
+/// need a setter per alias and would silently rot the moment someone adds a seventeenth.
 ///
 /// `from_argb_encoded` rather than `from_rgb_u8`: `scrim` and `veil` are translucent, and
 /// the alpha is part of the palette (a light theme wants a lighter shadow).
@@ -235,6 +235,7 @@ fn push_ui_palette(app: &AppWindow, p: crate::theme::UiPalette) {
     t.set_subtext(c(p.subtext));
     t.set_faint(c(p.faint));
     t.set_accent(c(p.accent));
+    t.set_accent2(c(p.accent2));
     t.set_danger(c(p.danger));
     t.set_ok(c(p.ok));
     t.set_warn(c(p.warn));

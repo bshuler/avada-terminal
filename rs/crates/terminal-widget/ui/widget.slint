@@ -321,6 +321,11 @@ export component TerminalPane inherits Rectangle {
 
     // --- text selection overlay (the controller fills these after a drag hit-test) ---
     in property <[HiRect]> selection-rects;
+    // The selection wash colour (include its own alpha). A THEME-level colour the app supplies,
+    // orthogonal to the per-pane-accent ban below: it is one shared highlight for all panes, not
+    // a re-tint of an individual pane's `accent`, so a coloured pane still can't tint itself.
+    // Default = the original neutral foreground wash, so a consumer that ignores it is unchanged.
+    in property <color> selection-color: #c0caf547;
 
     // --- copy/paste indicator ("Copied …" / "Pasted …"), bottom-right, terminal-font + halo ---
     in property <string> toast: "";
@@ -639,7 +644,7 @@ export component TerminalPane inherits Rectangle {
         y: r.y;
         width: r.w;
         height: r.h;
-        background: #c0caf5.with-alpha(0.28);
+        background: root.selection-color;
     }
 
     // Search-match highlights: every visible match dimmed, the active one accented + outlined.

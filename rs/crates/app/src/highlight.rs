@@ -1262,7 +1262,7 @@ mod tests {
     /// user's theme is the thing they spend the most time reading.
     #[test]
     fn every_colour_comes_from_the_palette() {
-        for idx in 0..5 {
+        for idx in 0..crate::theme::UI_PALETTES.len() {
             let p = ui_palette(idx);
             let known: Vec<String> = [p.text, p.subtext, p.faint, p.accent, p.ok, p.warn, p.link]
                 .iter()

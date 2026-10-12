@@ -86,8 +86,32 @@ pub fn frame_palette(idx: usize) -> &'static [(u8, u8, u8); 8] {
 /// The selectable terminal colour themes (the terminal's own bg/fg + 16 ANSI colours),
 /// the native port of the renderer's `TERMINAL_THEMES`. Each is the 16 base colours the
 /// glyph grid uses: index 0 = background, 7 = foreground, 1–6 the ANSI colours, 8–15 the
-/// bright variants (see `terminal-widget`'s `set_base16`). Index 0 (Dark) is the default.
-pub const TERMINAL_THEMES: [(&str, [[u8; 3]; 16]); 4] = [
+/// bright variants (see `terminal-widget`'s `set_base16`). Index 0 (Avada) is the default.
+pub const TERMINAL_THEMES: [(&str, [[u8; 3]; 16]); 5] = [
+    // "Avada" — the brand terminal theme: Void Black ground, Soft White ink, Spell Green
+    // (#39ff14) and Arcane Purple (#7b2cbf) carrying the two energies, Gold (#d4af37) as
+    // the subtle yellow. The cursor colour is applied separately at render time.
+    (
+        "Avada",
+        [
+            [0x00, 0x00, 0x00], // bg
+            [0xff, 0x5c, 0x57], // red
+            [0x39, 0xff, 0x14], // green
+            [0xd4, 0xaf, 0x37], // yellow
+            [0x57, 0xc7, 0xff], // blue
+            [0x7b, 0x2c, 0xbf], // magenta
+            [0x9a, 0xed, 0xfe], // cyan
+            [0xf5, 0xf5, 0xf5], // fg
+            [0x58, 0x5b, 0x70], // bright black
+            [0xff, 0x7b, 0x75],
+            [0x86, 0xff, 0x6b],
+            [0xff, 0xd2, 0x4a],
+            [0x8f, 0xd9, 0xff],
+            [0x9d, 0x5c, 0xe0],
+            [0xc0, 0xf5, 0xff],
+            [0xff, 0xff, 0xff],
+        ],
+    ),
     // "Dark" — Catppuccin Mocha (the original look).
     (
         "Dark",
@@ -178,17 +202,33 @@ pub const TERMINAL_THEMES: [(&str, [[u8; 3]; 16]); 4] = [
     ),
 ];
 
-/// Clamp a (possibly stale) theme index to a real theme, returning its 16 base colours
-/// (defaults to index 0 = Dark).
+/// The fixed cursor-block colour for each terminal theme, parallel to [`TERMINAL_THEMES`]
+/// (same length, same order). `Some(rgb)` pins the cursor block to that colour; `None` keeps
+/// the classic true-invert cursor (the block borrows the cell's foreground). Index 0 (Avada)
+/// uses Spell Green (#39ff14) per the brand; the ported themes keep the invert default.
+pub const TERMINAL_CURSORS: [Option<[u8; 3]>; 5] = [
+    Some([0x39, 0xff, 0x14]), // Avada — Spell Green
+    None,                     // Dark
+    None,                     // Black
+    None,                     // Light
+    None,                     // High contrast
+];
+
+/// Clamp a (possibly stale) theme index to a real theme, returning its 16 base colours plus
+/// the theme's optional fixed cursor colour (defaults to index 0 = Avada).
 #[tracing::instrument(level = "debug", ret)]
-pub fn terminal_theme(idx: usize) -> [[u8; 3]; 16] {
-    TERMINAL_THEMES[idx.min(TERMINAL_THEMES.len() - 1)].1
+pub fn terminal_theme(idx: usize) -> avada_terminal_widget::TermColors {
+    let i = idx.min(TERMINAL_THEMES.len() - 1);
+    avada_terminal_widget::TermColors {
+        base16: TERMINAL_THEMES[i].1,
+        cursor: TERMINAL_CURSORS[i],
+    }
 }
 
 /// A colour from a theme's base-16 slot, as a Slint `Color` (used by the preview).
 #[tracing::instrument(level = "debug", ret)]
 pub fn theme_color(idx: usize, slot: usize) -> Color {
-    let c = terminal_theme(idx)[slot.min(15)];
+    let c = terminal_theme(idx).base16[slot.min(15)];
     Color::from_rgb_u8(c[0], c[1], c[2])
 }
 
@@ -218,6 +258,7 @@ pub struct UiPalette {
     pub subtext: u32,
     pub faint: u32,
     pub accent: u32,
+    pub accent2: u32,
     pub danger: u32,
     pub ok: u32,
     pub warn: u32,
@@ -226,14 +267,36 @@ pub struct UiPalette {
     pub veil: u32,
 }
 
-/// The selectable shell palettes, in picker order. Index 0 (Mocha) is the default and is
+/// The selectable shell palettes, in picker order. Index 0 (Avada) is the default and is
 /// byte-identical to the literals `ui/theme.slint` still carries as its property defaults —
 /// so a build that somehow never pushes a palette looks exactly as it always has.
 ///
 /// The set deliberately spans more than hue: Latte is the light option and High Contrast
 /// the accessibility one, because the complaint that produced this table was "I can't tell
 /// which tab is selected", and for some eyes the fix is contrast, not colour.
-pub const UI_PALETTES: [UiPalette; 5] = [
+pub const UI_PALETTES: [UiPalette; 6] = [
+    // Avada — the brand palette. Void Black ground; Spell Green (#39ff14) is `accent`, the
+    // left/active energy; Arcane Purple (#7b2cbf) is `accent2`, the AI/right energy. These
+    // values are byte-identical to the property defaults in `ui/theme.slint`.
+    UiPalette {
+        name: "Avada",
+        bg: 0xff000000,
+        mantle: 0xff050507,
+        surface: 0xff0b0b10,
+        surface2: 0xff15151d,
+        border: 0xff26262f,
+        text: 0xfff5f5f5,
+        subtext: 0xffa0a0a0,
+        faint: 0xff6e6e78,
+        accent: 0xff39ff14,
+        accent2: 0xff7b2cbf,
+        danger: 0xffe5484d,
+        ok: 0xff3ec46d,
+        warn: 0xffd4af37,
+        link: 0xff5fe0a0,
+        scrim: 0x8c000000,
+        veil: 0xcc000000,
+    },
     // Catppuccin Mocha — the original shell, matched to the Electron app's `:root` vars.
     UiPalette {
         name: "Mocha",
@@ -246,6 +309,7 @@ pub const UI_PALETTES: [UiPalette; 5] = [
         subtext: 0xff9399b2,
         faint: 0xff6c7086,
         accent: 0xff89b4fa,
+        accent2: 0xff89b4fa,
         danger: 0xffe5484d,
         ok: 0xffa6e3a1,
         warn: 0xfff9e2af,
@@ -266,6 +330,7 @@ pub const UI_PALETTES: [UiPalette; 5] = [
         subtext: 0xff6c6f85,
         faint: 0xff8c8fa1,
         accent: 0xff1e66d5,
+        accent2: 0xff1e66d5,
         danger: 0xffd20f39,
         ok: 0xff40a02b,
         warn: 0xffdf8e1d,
@@ -287,6 +352,7 @@ pub const UI_PALETTES: [UiPalette; 5] = [
         subtext: 0xffaeb7c7,
         faint: 0xff7b8494,
         accent: 0xff88c0d0,
+        accent2: 0xff88c0d0,
         danger: 0xffbf616a,
         ok: 0xffa3be8c,
         warn: 0xffebcb8b,
@@ -306,6 +372,7 @@ pub const UI_PALETTES: [UiPalette; 5] = [
         subtext: 0xffbdae93,
         faint: 0xff928374,
         accent: 0xff83a598,
+        accent2: 0xff83a598,
         danger: 0xfffb4934,
         ok: 0xffb8bb26,
         warn: 0xfffabd2f,
@@ -327,6 +394,7 @@ pub const UI_PALETTES: [UiPalette; 5] = [
         subtext: 0xffd0d0d0,
         faint: 0xff9a9a9a,
         accent: 0xff4cc2ff,
+        accent2: 0xff4cc2ff,
         danger: 0xffff5f5f,
         ok: 0xff4ff07a,
         warn: 0xffffd000,
@@ -601,8 +669,11 @@ mod tests {
     /// startup with no UI to report it.
     #[test]
     fn an_out_of_range_shell_palette_clamps_to_the_default() {
-        assert_eq!(super::ui_palette(0).name, "Mocha");
-        assert_eq!(super::ui_palette(999).name, super::UI_PALETTES[4].name);
+        assert_eq!(super::ui_palette(0).name, "Avada");
+        assert_eq!(
+            super::ui_palette(999).name,
+            super::UI_PALETTES[super::UI_PALETTES.len() - 1].name
+        );
     }
 
     /// Every shell token except the two translucent ones must be fully opaque. A palette
@@ -622,6 +693,7 @@ mod tests {
                 ("subtext", p.subtext),
                 ("faint", p.faint),
                 ("accent", p.accent),
+                ("accent2", p.accent2),
                 ("danger", p.danger),
                 ("ok", p.ok),
                 ("warn", p.warn),
@@ -653,6 +725,7 @@ mod tests {
             ("subtext", p.subtext),
             ("faint", p.faint),
             ("accent", p.accent),
+            ("accent2", p.accent2),
             ("danger", p.danger),
             ("ok", p.ok),
             ("warn", p.warn),
@@ -661,7 +734,7 @@ mod tests {
             let needle = format!("> {}: #{:06x};", prop, v & 0x00ff_ffff);
             assert!(
                 ui.contains(&needle),
-                "ui/theme.slint has no `{}` — Mocha and the Slint defaults have drifted",
+                "ui/theme.slint has no `{}` — Avada and the Slint defaults have drifted",
                 needle
             );
         }

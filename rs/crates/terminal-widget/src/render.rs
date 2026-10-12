@@ -275,6 +275,9 @@ impl PaneRenderer for SoftwareRenderer {
             let y0 = crow as u32 * ch;
             let cell = *grid.cell(ccol, crow);
             let block_w = if cell.wide { cw * 2 } else { cw };
+            // The block colour: a theme-fixed cursor colour (the brand's Spell Green) when
+            // one is set, else the cell's own fg so the cursor still reads as a true invert.
+            let cfill = grid.cursor_color.map(|[r, g, b]| [r, g, b, 255]).unwrap_or(cell.fg);
             // The colour the inverted glyph is drawn in: the cell's own bg if opaque, else the
             // grid default bg — i.e. whatever the block colour "replaced", so it reads as invert.
             let under = if cell.bg[3] > 0 {
@@ -294,9 +297,9 @@ impl PaneRenderer for SoftwareRenderer {
                         break;
                     }
                     let p = &mut px[row_off + xx as usize];
-                    p.r = cell.fg[0];
-                    p.g = cell.fg[1];
-                    p.b = cell.fg[2];
+                    p.r = cfill[0];
+                    p.g = cfill[1];
+                    p.b = cfill[2];
                     p.a = 255;
                 }
             }
@@ -790,6 +793,9 @@ impl GpuRenderer {
         if grid.cursor_visible && opts.cursor_on {
             let (col, row) = grid.cursor;
             let cell = grid.cell(col.min(grid.cols - 1), row.min(grid.rows - 1));
+            // A theme-fixed cursor colour (the brand's Spell Green) when set, else the cell's
+            // own fg — matching the software renderer's true-invert block.
+            let cfill = grid.cursor_color.map(|[r, g, b]| [r, g, b, 255]).unwrap_or(cell.fg);
             bgs.push(BgInstance {
                 rect: [
                     (col as u32 * cw) as f32,
@@ -797,7 +803,7 @@ impl GpuRenderer {
                     cw as f32,
                     ch as f32,
                 ],
-                color: to_f(cell.fg),
+                color: to_f(cfill),
             });
         }
 

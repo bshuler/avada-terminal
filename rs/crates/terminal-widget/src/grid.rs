@@ -61,6 +61,8 @@ pub struct GridSnapshot {
     pub cells: Vec<RenderCell>,
     pub cursor: (usize, usize), // (col, row) in viewport
     pub cursor_visible: bool,
+    /// A fixed cursor-block colour, or `None` for the classic true-invert (block = cell fg).
+    pub cursor_color: Option<[u8; 3]>,
     pub default_bg: [u8; 4],
     pub default_fg: [u8; 4],
 }
@@ -135,6 +137,10 @@ pub struct TermGrid {
     /// Lines of history the grid keeps (alacritty's `scrolling_history`), remembered here
     /// because `Term` doesn't hand its config back.
     scrollback: usize,
+    /// An explicit cursor-block colour, independent of the 16 base colours. `None` keeps the
+    /// classic true-invert behaviour (the block takes the cell's own fg); `Some(rgb)` paints
+    /// the block in a fixed colour (the brand's Spell Green, say). Carried into the snapshot.
+    cursor_color: Option<[u8; 3]>,
     dirty: bool,
 }
 
@@ -180,6 +186,7 @@ impl TermGrid {
             palette: default_palette(),
             size,
             scrollback,
+            cursor_color: None,
             dirty: true,
         }
     }
@@ -219,6 +226,14 @@ impl TermGrid {
                 b: c[2],
             };
         }
+        self.dirty = true;
+    }
+
+    /// Set (or clear) the fixed cursor-block colour. `None` restores the true-invert default
+    /// (the block borrows the cell's foreground); `Some(rgb)` pins it. Marks the grid dirty.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn set_cursor_color(&mut self, color: Option<[u8; 3]>) {
+        self.cursor_color = color;
         self.dirty = true;
     }
 
@@ -681,6 +696,7 @@ impl TermGrid {
             cells,
             cursor,
             cursor_visible,
+            cursor_color: self.cursor_color,
             default_bg,
             default_fg,
         }

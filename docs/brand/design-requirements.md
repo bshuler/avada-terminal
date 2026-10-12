@@ -101,8 +101,10 @@ brand is silent) a **Default:**.
 defaults). Add a `UiPalette { name: "Avada", … }` built from the brand colours and place it at
 **index 0**, updating `theme.slint`'s property defaults byte-for-byte to match (preserve the
 documented invariant). Map: `text` = `#F5F5F5`, `subtext`/`faint` = `#A0A0A0` (two tiers,
-see default), `ok` = `#39FF14`, `link` = `#39FF14` or green-tinted, `danger` stays a
-conventional error red.
+see default), `ok` = `#3EC46D` (a muted leaf green — derived, **not** Spell Green: the
+syntax highlighter paints keywords with `accent` and strings with `ok`, and the prefs-rights
+matrix uses `accent` and `ok` as adjacent levels, so the two must stay visibly distinct),
+`link` = `#5FE0A0` (green-tinted), `danger` stays a conventional error red.
 *Acceptance:* picker shows "Avada" first and selected on a fresh profile; `theme.slint`
 literals equal `UI_PALETTES[0]`; `cargo test -p app` palette tests green.
 **Default (bg tiers):** brand gives one background (Void `#000000`). Derive the five tiers as

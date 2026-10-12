@@ -67,6 +67,26 @@ fn osc52_store_to_honor(stores: Vec<String>) -> Option<String> {
     Some(text)
 }
 
+/// A terminal colour theme: the 16 base ANSI colours plus an optional fixed cursor-block
+/// colour. `cursor: None` keeps the classic true-invert cursor (block borrows the cell's
+/// foreground); `Some(rgb)` pins the block to a fixed colour. `Copy` so callers can bind it
+/// to a local and still pass it by value; `From<[[u8; 3]; 16]>` covers the common
+/// 16-colours-only case (demo, tests) with no cursor override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermColors {
+    pub base16: [[u8; 3]; 16],
+    pub cursor: Option<[u8; 3]>,
+}
+
+impl From<[[u8; 3]; 16]> for TermColors {
+    fn from(base16: [[u8; 3]; 16]) -> Self {
+        Self {
+            base16,
+            cursor: None,
+        }
+    }
+}
+
 /// Controller for a single terminal pane: grid model + a pluggable renderer.
 pub struct TerminalPane {
     grid: TermGrid,
@@ -396,10 +416,15 @@ impl TerminalPane {
     }
 
     /// Apply a colour theme: override the 16 base ANSI colours (index 0 = default background,
-    /// 7 = default foreground). See [`crate::grid::TermGrid::set_base16`].
-    #[tracing::instrument(level = "debug", ret, skip(self))]
-    pub fn set_palette(&mut self, base: [[u8; 3]; 16]) {
-        self.grid.set_base16(base);
+    /// 7 = default foreground) and set the optional fixed cursor colour. See
+    /// [`crate::grid::TermGrid::set_base16`] and [`crate::grid::TermGrid::set_cursor_color`].
+    /// Accepts anything `Into<TermColors>`, so a bare `[[u8; 3]; 16]` still works (no cursor
+    /// override).
+    #[tracing::instrument(level = "debug", ret, skip(self, colors))]
+    pub fn set_palette(&mut self, colors: impl Into<TermColors>) {
+        let colors = colors.into();
+        self.grid.set_base16(colors.base16);
+        self.grid.set_cursor_color(colors.cursor);
     }
 
     /// Swap the renderer at runtime (e.g. GPU↔software on a device-lost / RDP transition).

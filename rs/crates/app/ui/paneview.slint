@@ -528,7 +528,9 @@ export component PaneView inherits Rectangle {
                                 // the controller), shown only when no manual subtitle wins.
                                 if pane.subtitle == "" && pane.ai-subtitle != "" : Text {
                                     text: pane.ai-subtitle;
-                                    color: Theme.accent;
+                                    // Arcane Purple: the AI narrating its own work (brand's
+                                    // AI/right energy), distinct from Spell Green `accent`.
+                                    color: Theme.accent2;
                                     font-size: 9px;
                                     font-italic: true;
                                     horizontal-stretch: 1;
@@ -708,6 +710,9 @@ export component PaneView inherits Rectangle {
                         search-active-rect: pane.search-active-rect;
                         // drag-to-select highlight rects (controller-driven, per tick)
                         selection-rects: pane.selection-rects;
+                        // Selection wash: Arcane Purple at 30% (brand spec). A Theme global, NOT
+                        // pane.accent — so it's one shared highlight, never a per-pane re-tint.
+                        selection-color: Theme.accent2.with-alpha(0.30);
                         // transient bottom-right indicator (copy/paste + Ctrl-zoom font %)
                         toast: pane.toast;
                         // live terminal font px → toast + search box scale with zoom
