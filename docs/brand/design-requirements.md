@@ -4,9 +4,12 @@ Decomposition of `AvadaTerminal_Brand_Guidelines.pdf` (in this folder) into conc
 per-surface requirements that cover the whole `avada-terminal` repo. This document only
 **decomposes** the brand into requirements; it does not implement them.
 
-- **Source of truth:** `docs/brand/AvadaTerminal_Brand_Guidelines.pdf` (page renders:
-  `guideline-page-{1..5}.png`, extracted for reference — the PDF embeds each page as a
-  flat JPEG, so there is no isolated vector logo asset to extract; see BR-20).
+- **Source of truth:** `docs/brand/AvadaTerminal_Brand_Guidelines.pdf`. Reference extracts
+  beside it: `guideline-page-{1..5}.png` (raster) and `guideline-page-{1..5}.svg`
+  (**vector** — the pages are real vector art, ~56 paths on page 1, not flat JPEGs; only
+  pages 1–3 carry a small embedded raster). The blade-A mark is therefore vector and
+  extractable; the repo's icon pipeline already has a vector source at `build/icon.svg`
+  (see BR-12, BR-20).
 - **Status:** requirements only. Each `BR-NN` names the file(s) to change and an acceptance
   check. Nothing here is built yet.
 - **Brand gaps:** the brand book is silent on several values the repo must set. Each gap is
@@ -184,7 +187,7 @@ to the wordmark, Inter as the UI default font, JetBrains Mono to the terminal gr
 *Acceptance:* wordmark renders in Cinzel, UI chrome in Inter, terminal in JetBrains Mono; app
 builds with the fonts embedded.
 **Default (face/weights):** Inter Regular + Medium; Cinzel Regular + SemiBold; licensing is
-SIL OFL for all three (verify at bundle time — see BR-19).
+SIL OFL for all three (verify at bundle time — see BR-21).
 
 **BR-11 — Wordmark string is "AVADA TERMINAL".**
 `rs/crates/app/ui/topbar.slint` (title rendering), any about/splash string. Ensure the
@@ -196,13 +199,18 @@ wordmark is displayed.
 ### D. Icons & app identity
 
 **BR-12 — Rebuild the app icon as the sharp dual-blade A (green→purple).**
-macOS `rs/packaging/out/macos-stage/avada.iconset/` (icon_16…512 + @2x) + `bundle.sh`;
-`build/icon.png`; Linux `rs/packaging/linux/icons/hicolor/{16,32,48,64,128,256,512}/apps/avada.png`
-+ `avada.desktop`; iOS `mobile/hyperpanes_mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/`
-(through 1024). Replace every size with the dual-blade A monogram on pure black, hard edges,
-green left → purple right.
-*Acceptance:* every platform icon set renders the blade A on black at every required size;
-direction never reversed; small sizes stay legible.
+The **source** is the checked-in vector `build/icon.svg` (→ `build/icon.png` 512×512, which
+`build/icon.ico` and `build/icon.original.svg` sit beside). The macOS iconset under
+`rs/packaging/out/macos-stage/avada.iconset/` is **generated output** (`rs/packaging/out` is
+gitignored): `rs/packaging/macos/bundle.sh` derives every size with `sips` from
+`build/icon.png`. So: author the blade A into `build/icon.svg`, re-render `build/icon.png`,
+and let `bundle.sh` do the rest. Then regenerate the icons that are checked in separately:
+Linux `rs/packaging/linux/icons/hicolor/{16,32,48,64,128,256,512}/apps/avada.png` +
+`avada.desktop`, and iOS `mobile/hyperpanes_mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/`
+(through 1024). Pure black, hard edges, green left → purple right.
+*Acceptance:* `build/icon.svg`/`.png` is the blade A; `bundle.sh` produces a macOS iconset
+from it; Linux hicolor PNGs and the iOS appiconset are regenerated to match; direction never
+reversed; small sizes legible.
 
 **BR-13 — Favicon set, adding 64 px.**
 `docs/favicon-{16,32,48}.png` + `docs/favicon.ico` (currently 16/32/48 only). Produce the
@@ -259,12 +267,14 @@ displayed app name matches the brand ("Avada" / "Avada Terminal"); set consisten
 `avada`.
 
 **BR-20 — Master logo asset + icon package.**
-`docs/brand/`. The PDF embeds only flat page JPEGs, so there is **no vector master** to
-extract; one must be authored. Deliver: primary A monogram (vector), wordmark lockups
+`docs/brand/`, `build/icon.svg`. The guideline pages are vector (see §1 note); the blade A can
+be lifted/retraced from `guideline-page-*.svg` rather than authored from nothing, and the repo
+already carries a vector icon source at `build/icon.svg` that the whole icon pipeline reads.
+Deliver: a clean vector master A (reconciled into `build/icon.svg`), wordmark lockups
 (horizontal + stacked), the favicon set (BR-13), and a small secondary UI icon set (BR-16) —
 the brand's "Icon Package."
-*Acceptance:* a vector master A + both wordmark lockups live in `docs/brand/`; BR-12/13/14/16
-all source from them.
+*Acceptance:* a vector master A + both wordmark lockups live in `docs/brand/`, and
+`build/icon.svg` is the reconciled blade A; BR-12/13/14/16 all source from them.
 
 **BR-21 — Font licensing record.**
 `docs/` (note: `docs/licensing.md` is about commercial *module* license tokens, **not** font
@@ -344,7 +354,7 @@ against.
 | `rs/crates/app/ui/app.slint` (fonts/size) | BR-10 |
 | `rs/crates/app/ui/topbar.slint` (wordmark) | BR-11 |
 | macOS iconset + `bundle.sh` | BR-12, BR-19 |
-| `build/icon.png` | BR-12 |
+| `build/icon.svg` / `build/icon.png` / `build/icon.ico` (icon source) | BR-12, BR-20 |
 | Linux hicolor icons + `avada.desktop` | BR-12, BR-19 |
 | iOS `AppIcon.appiconset` | BR-12 |
 | `docs/favicon-*.png` + `favicon.ico` | BR-13 |
