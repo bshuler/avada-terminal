@@ -12,7 +12,10 @@ per-surface requirements that cover the whole `avada-terminal` repo. This docume
   highest-fidelity version). It is therefore not clean line art and cannot be lifted as
   vector paths; the icon is built from that raster. `build/icon.svg` is accordingly a
   **raster-backed master** — it embeds the rendered PNG — read by the icon pipeline
-  (see BR-12, BR-20).
+  (see BR-12, BR-20). Since 0.2.40 the art is the chosen concept "Blade A, Sharpest"
+  (concept 37 of the brand chat export): its old tile border masked out, the mark
+  centred on an 824 px rounded black tile inside a transparent 1024 canvas (the macOS
+  icon grid). Desktop and Android use that tile; iOS uses the art full-bleed and opaque.
 - **Status:** requirements only. Each `BR-NN` names the file(s) to change and an acceptance
   check. Nothing here is built yet.
 - **Brand gaps:** the brand book is silent on several values the repo must set. Each gap is
