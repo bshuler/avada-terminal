@@ -11,17 +11,19 @@
 //! notes there and the user drops files in, and neither can be clobbered by an upgrade, while
 //! a locally-edited shipped file is app-owned and *will* be replaced.
 //!
-//! What this module deliberately no longer does is materialize skills. The rule that teaches an
-//! agent about `avada ctl` belongs to the `bshuler/avada-orchestrator` module and travels with it;
-//! [`crate::skills::Materializer`] runs over *installed modules*, from the registry, and has no
-//! special case for this directory any more. Seeding a directory is a host job; deciding what
-//! an agent is told is a module's.
+//! The copy-out deliberately does not write skills. The rule that teaches an agent about
+//! `avada ctl` belongs to the `bshuler/avada-orchestrator` module and travels with it;
+//! [`materialize_modules`] hands the registry's enabled modules to
+//! [`crate::skills::Materializer`] with this directory as the only project root, so whatever
+//! those modules ship lands here like it would in any project. Seeding a directory is a host
+//! job; deciding what an agent is told is a module's.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::persistence::paths;
+use crate::skills::{Applied, Materializer, ModuleInput, Request, Tools};
 
 /// The shipped copy of the Orchestrator tab's directory, or `None` when the app is running from a tree
 /// that doesn't carry it.
@@ -94,6 +96,68 @@ pub fn materialize_into(dest: &Path, src: Option<&Path>) -> io::Result<PathBuf> 
         copy_over(src, dest)?;
     }
     Ok(dest.to_path_buf())
+}
+
+/// The materializer's view of one install: its record's manifest and accepted capabilities,
+/// with `enabled` deciding whether it writes here or is swept away.
+pub fn module_input(installed: &crate::install::Installed, enabled: bool) -> ModuleInput {
+    let record = installed.rights();
+    ModuleInput {
+        id: installed.id.clone(),
+        name: record.manifest.module.name.clone(),
+        version: installed.version.to_string(),
+        version_dir: installed.version_dir.clone(),
+        skills: record.manifest.skills.clone(),
+        accepted: record.accepted.clone(),
+        enabled,
+    }
+}
+
+/// Write `modules`' skills into [`paths::orchestrator_dir`], and sweep what a module that is no
+/// longer among them left there. See [`materialize_modules_into`].
+pub fn materialize_modules(modules: &[ModuleInput], tools: &Tools) -> Applied {
+    let dest = paths::orchestrator_dir();
+    // The runtime can get here before the tab's own refresh does; creating `dest` first
+    // would strand a pre-0.2.36 directory under its old name.
+    move_legacy_dir(&paths::legacy_orchestrator_dir(), &dest);
+    materialize_modules_into(&dest, modules, tools)
+}
+
+/// Run the materializer with `dest` as the only project root and the user scope left alone.
+///
+/// Only files carrying an `avada:module` fence are ever changed or removed, so the user's
+/// notes and the shipped `.claude/skills/avada/` survive. There is no index skill (`schema`
+/// is `None`): the agent here already has the full `avada ctl` reference. Problems are
+/// logged, never returned — a module with a bad skill must not keep the tab from opening.
+pub fn materialize_modules_into(dest: &Path, modules: &[ModuleInput], tools: &Tools) -> Applied {
+    let roots = [dest.to_path_buf()];
+    let materializer = Materializer::new();
+    let plan = materializer.plan(&Request {
+        modules,
+        roots: &roots,
+        home: None,
+        tools,
+        schema: None,
+        workspace: None,
+    });
+    for e in &plan.errors {
+        tracing::warn!(module = %e.module.as_str(), file = %e.path.display(), error = %e.error, "orchestrator: a module skill was not materialized");
+    }
+    for s in &plan.skipped {
+        tracing::info!(unit = ?s.unit, tool = %s.tool, reason = %s.reason, "orchestrator: skill skipped");
+    }
+    let applied = materializer.apply(&plan);
+    for (path, e) in &applied.failed {
+        tracing::warn!(file = %path.display(), error = %e, "orchestrator: could not write a module skill");
+    }
+    if !applied.written.is_empty() || !applied.removed.is_empty() {
+        tracing::info!(
+            written = applied.written.len(),
+            removed = applied.removed.len(),
+            "orchestrator: module skills refreshed"
+        );
+    }
+    applied
 }
 
 /// Remove what the host fenced into this directory before the tab's rule moved into the
@@ -411,6 +475,120 @@ mod tests {
         materialize_into(&dest, None).unwrap();
         assert!(dest.is_dir());
         assert!(!dest.join("README.md").exists());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A module dir shipping one always-on rule, as `bshuler/avada-orchestrator` does.
+    fn rule_module(root: &Path, enabled: bool) -> ModuleInput {
+        let dir = root.join("module");
+        let unit = dir.join("skills").join("orchestrator");
+        fs::create_dir_all(&unit).unwrap();
+        fs::write(
+            unit.join("SKILL.md"),
+            "---\nname: orchestrator\ndescription: \"Drive the app with avada ctl.\"\nkind: rule\nactivation: always\n---\n# Orchestrator\n\nUse `avada ctl`.\n",
+        )
+        .unwrap();
+        ModuleInput {
+            id: avada_module_sdk::manifest::ModuleId::new("bshuler/avada-orchestrator").unwrap(),
+            name: "Orchestrator".into(),
+            version: "0.1.0".into(),
+            version_dir: dir,
+            skills: avada_module_sdk::manifest::SkillsSection {
+                paths: vec!["skills".into()],
+            },
+            accepted: std::collections::BTreeSet::from([
+                avada_module_sdk::caps::Capability::SkillsMaterialize,
+            ]),
+            enabled,
+        }
+    }
+
+    /// The directory as a long-lived orchestrator folder has it: shipped reference files,
+    /// the user's notes, and a pre-module Aider fence.
+    fn lived_in(dest: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let avada = dest.join(".claude").join("skills").join("avada");
+        fs::create_dir_all(&avada).unwrap();
+        fs::write(avada.join("SKILL.md"), "---\nname: avada\n---\nshipped\n").unwrap();
+        fs::write(avada.join("REFERENCE.md"), "reference\n").unwrap();
+        fs::create_dir_all(dest.join("supervise")).unwrap();
+        fs::write(dest.join("supervise").join("notes.md"), "mine\n").unwrap();
+        fs::write(dest.join("README.md"), "readme\n").unwrap();
+        [
+            avada.join("SKILL.md"),
+            avada.join("REFERENCE.md"),
+            dest.join("supervise").join("notes.md"),
+            dest.join("README.md"),
+        ]
+        .into_iter()
+        .map(|p| {
+            let b = fs::read(&p).unwrap();
+            (p, b)
+        })
+        .collect()
+    }
+
+    fn untouched(files: &[(PathBuf, Vec<u8>)]) {
+        for (p, b) in files {
+            assert_eq!(&fs::read(p).unwrap(), b, "{} changed", p.display());
+        }
+    }
+
+    /// B6: an enabled module's always-on rule reaches the folder, fenced, with Claude Code's
+    /// import; nothing else there changes, and a second run has nothing to do.
+    #[test]
+    fn an_enabled_modules_rule_is_written_and_nothing_else_is_touched() {
+        let tmp = scratch("b6-on");
+        let dest = tmp.join("dest");
+        let before = lived_in(&dest);
+        let modules = [rule_module(&tmp, true)];
+        let tools = Tools::only(["claude-code"]);
+
+        let applied = materialize_modules_into(&dest, &modules, &tools);
+        assert!(applied.ok(), "{:?}", applied.failed);
+        let agents = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
+        assert!(
+            agents.contains("<!-- avada:module=bshuler/avada-orchestrator -->"),
+            "{agents}"
+        );
+        assert!(agents.contains("Use `avada ctl`."), "{agents}");
+        let claude = fs::read_to_string(dest.join("CLAUDE.md")).unwrap();
+        assert!(claude.contains("@AGENTS.md"), "{claude}");
+        untouched(&before);
+
+        let again = materialize_modules_into(&dest, &modules, &tools);
+        assert!(
+            again.written.is_empty() && again.removed.is_empty(),
+            "{again:?}"
+        );
+        // The copy-out's legacy cleanup must not take the import away from the module's rule.
+        materialize_into(&dest, None).unwrap();
+        assert!(fs::read_to_string(dest.join("CLAUDE.md"))
+            .unwrap()
+            .contains("@AGENTS.md"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// B6: disabling the module sweeps its rule and the import, and still nothing else moves.
+    /// A pre-module fence in `CONVENTIONS.md` is swept on the way.
+    #[test]
+    fn a_disabled_modules_rule_is_swept_and_nothing_else_is_touched() {
+        let tmp = scratch("b6-off");
+        let dest = tmp.join("dest");
+        let before = lived_in(&dest);
+        let tools = Tools::only(["claude-code"]);
+        materialize_modules_into(&dest, &[rule_module(&tmp, true)], &tools);
+        fs::write(
+            dest.join("CONVENTIONS.md"),
+            "<!-- avada:module=avada/hyperpane -->\n# Hyperpane\n<!-- /avada:module=avada/hyperpane -->\n",
+        )
+        .unwrap();
+
+        let applied = materialize_modules_into(&dest, &[rule_module(&tmp, false)], &tools);
+        assert!(applied.ok(), "{:?}", applied.failed);
+        assert!(!dest.join("AGENTS.md").exists());
+        assert!(!dest.join("CLAUDE.md").exists());
+        assert!(!dest.join("CONVENTIONS.md").exists());
+        untouched(&before);
         let _ = fs::remove_dir_all(&tmp);
     }
 }

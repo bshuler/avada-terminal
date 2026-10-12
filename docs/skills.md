@@ -137,13 +137,16 @@ Loading is forgiving — a missing or corrupt file, a non-array value, a
 non-string element, or an id no adapter in this build claims all coerce to
 "nothing disabled", which is the safe direction for a toggle that gates writes.
 
-That call currently has **no caller**. `orchestrator::materialize()` used to be it,
-back when the Orchestrator skill was built in; the skill left with the
-`bshuler/avada-orchestrator` module and the host copy-out no longer materializes
-anything. The next caller is whatever drives materialization from the module
-registry at install time, which is where the force-add of Claude Code belongs
-too: it makes a tool *present*, not *enabled* — if the user switched it off,
-`Tools::has` still says no and the sweep removes what an earlier run wrote.
+Its caller is the app's `ModuleRuntime` (B6, 0.2.39): at launch and on every live
+module enable/disable it hands the running modules to
+`orchestrator::materialize_modules`, which plans one root — the orchestrator folder
+(`~/Library/Application Support/avada/orchestrator`) — with no home, workspace,
+schema or index skill, so the orchestrator pane's tools read each enabled module's
+always-on rule and a disabled module's fence is swept. Only the production runtime
+does this; tests root their runtime elsewhere and never touch the real folder. The
+force-add of Claude Code makes a tool *present*, not *enabled* — if the user switched
+it off, `Tools::has` still says no and the sweep removes what an earlier run wrote.
+Workspace roots are not materialized yet.
 Nothing writes the settings file yet either; the per-tool toggles are still owed
 a surface in the app's settings UI.
 

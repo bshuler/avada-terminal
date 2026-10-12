@@ -6,16 +6,6 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
-### B6 · The orchestrator module's always-on rule never reaches its folder (2026-10-11)
-`skills::Materializer` has no runtime caller: nothing walks the registry's enabled modules
-and writes their always-on rules into a pane's folder. So the `avada/orchestrator` module's
-rule never lands in `~/Library/Application Support/avada/orchestrator/AGENTS.md`. 0.2.38
-only removes the stale pre-module `avada/hyperpane` block that was left there in September
-(`orchestrator::drop_legacy_fences`); it does not write a replacement block. Fix direction: call
-`Materializer::plan` / `apply` from launch (or from the module enable/disable path) for
-the orchestrator folder, with a test that an enabled module's rule appears there and a
-disabled one's is removed.
-
 ### B3 · GUI wedges in `render_screen` and the control API starves (2026-10-09)
 Seen on the 0.2.31 GUI (pid 76456, daemon 76462) after a machine-wide swap thrash; it did not
 recover once memory was freed. Evidence gathered without restarting anything:
@@ -61,6 +51,20 @@ the brand-new-pane rule, add the resumed-pane test beside
 [`dead-session-recovery.md`](dead-session-recovery.md) §0.2.31 last paragraph.
 
 ## Closed
+
+### B6 · The orchestrator module's always-on rule never reaches its folder (2026-10-11, fixed 2026-10-11)
+`skills::Materializer` had no runtime caller, so the `bshuler/avada-orchestrator` module's rule
+never landed in `~/Library/Application Support/avada/orchestrator/AGENTS.md`; 0.2.38 only removed
+the stale pre-module `avada/hyperpane` block.
+
+**Fixed (0.2.39):** `ModuleRuntime::new` and `ModuleRuntime::reconcile` pass the running modules to
+`orchestrator::materialize_modules`, which plans the orchestrator folder alone (no home, workspace,
+schema or index skill) with `Tools::detect_here_with(disabled).with("claude-code")`; errors are
+logged, never fatal. Only fenced files are written or removed, so the shipped
+`.claude/skills/avada/` and the human's own notes stay byte-identical. Tests:
+`orchestrator::tests::{an_enabled_modules_rule_is_written_and_nothing_else_is_touched,
+a_disabled_modules_rule_is_swept_and_nothing_else_is_touched}`. Left behind on purpose: an
+unfenced September copy at `orchestrator/skills/hyperpane/SKILL.md`, which no sweep owns.
 
 ### B2 · Subagent panes and the breathing "hide subagents" toggle (2026-10-09, built 2026-10-10)
 Spec: [`subagent-panes-plan.md`](subagent-panes-plan.md), design contract

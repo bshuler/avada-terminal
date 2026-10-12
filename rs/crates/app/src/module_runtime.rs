@@ -256,6 +256,10 @@ pub struct ModuleRuntime {
     /// would have to guess which workspace's opt-outs to honour.
     modules_root: PathBuf,
     workspace: Option<String>,
+    /// Whether this runtime owns the orchestrator folder's module skills (B6). Only the
+    /// production runtime does: tests root a runtime in a temp dir and must never write
+    /// into the human's real `avada/orchestrator`.
+    orchestrator_skills: Cell<bool>,
 }
 
 impl ModuleRuntime {
@@ -274,7 +278,31 @@ impl ModuleRuntime {
     /// `avada_core::workspace::launch::module_workspace`).
     pub fn new(workspace: Option<&str>, info: WorkspaceInfo) -> ModuleRuntime {
         let root = InstallPaths::host().root().to_path_buf();
-        ModuleRuntime::under(&root, workspace, info)
+        let rt = ModuleRuntime::under(&root, workspace, info);
+        rt.orchestrator_skills.set(true);
+        if let Some(store) = rt.store.as_ref() {
+            rt.materialize_orchestrator_skills(&installs_to_start(store, &root, workspace));
+        }
+        rt
+    }
+
+    /// Write the running modules' always-on rules into the orchestrator folder and sweep
+    /// those of modules no longer running (B6). The orchestrator pane opens no workspace, so
+    /// the set is exactly what launch starts. Failures are logged by the materializer and
+    /// never stop the app.
+    fn materialize_orchestrator_skills(&self, desired: &[Installed]) {
+        if !self.orchestrator_skills.get() {
+            return;
+        }
+        let inputs: Vec<_> = desired
+            .iter()
+            .map(|i| avada_core::orchestrator::module_input(i, true))
+            .collect();
+        let tools = avada_core::skills::Tools::detect_here_with(
+            avada_core::persistence::skills_settings::load().disabled_tools,
+        )
+        .with("claude-code");
+        avada_core::orchestrator::materialize_modules(&inputs, &tools);
     }
 
     /// The same runtime rooted at `modules_root`, with `workspace` deciding which modules
@@ -312,6 +340,7 @@ impl ModuleRuntime {
                     grid_sizes: RefCell::new(std::collections::HashMap::new()),
                     modules_root: modules_root.to_path_buf(),
                     workspace: workspace.map(str::to_owned),
+                    orchestrator_skills: Cell::new(false),
                 };
             }
         };
@@ -396,6 +425,7 @@ impl ModuleRuntime {
             grid_sizes: RefCell::new(std::collections::HashMap::new()),
             modules_root: modules_root.to_path_buf(),
             workspace: workspace.map(str::to_owned),
+            orchestrator_skills: Cell::new(false),
         };
         rt.start_installed(modules_root, workspace);
         rt
@@ -437,6 +467,7 @@ impl ModuleRuntime {
             .filter(|(_, status)| status.is_live())
             .map(|(id, _)| id)
             .collect();
+        self.materialize_orchestrator_skills(&desired);
         let desired_ids: Vec<ModuleId> = desired.iter().map(|i| i.id.clone()).collect();
         let plan = reconcile_plan(&desired_ids, &live);
         // Stop first: the human's disable is the change they are most likely watching for,
@@ -1264,6 +1295,7 @@ label = "Tree"
             grid_sizes: RefCell::new(HashMap::new()),
             modules_root: PathBuf::new(),
             workspace: None,
+            orchestrator_skills: Cell::new(false),
         }
     }
 
