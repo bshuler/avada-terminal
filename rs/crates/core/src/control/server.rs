@@ -72,6 +72,14 @@ pub struct Shared {
     /// queue ops. Opened in-memory here (test-safe, zero-config); a durable embedder
     /// swaps in `WorkQueue::open(paths::work_db())` + boot recovery (work.rs §3.3).
     pub work: Mutex<WorkQueue>,
+    /// Built-in message-queue broker (`control::mq`): the in-process topic spine for
+    /// Manager/Orchestrator/Agent messaging. Cheap to hold; the push layer over the durable
+    /// `inbox`. See `docs/manager-architecture-plan.md`.
+    pub mq: Arc<crate::control::mq::Broker>,
+    /// Whether the MQ is live. Additive + off by default so the running fleet is undisturbed;
+    /// set from `AVADA_MQ` in [`run_server`], forced on by `serve_for_test`. While false, the
+    /// wired producers skip publishing and behaviour is byte-for-byte the pre-MQ path.
+    pub mq_enabled: AtomicBool,
     pub events: EventHub,
     /// Phase-5 auto-restart supervisor: per-pane policy + retry ledger. Default-empty ⇒
     /// every `Exit` runs the legacy path until a pane opts in via `hp.supervise` meta.
@@ -183,6 +191,8 @@ impl Shared {
             nudges: Mutex::new(NudgeLedger::new()),
             locks: Mutex::new(PaneLocks::new()),
             work: Mutex::new(WorkQueue::open_in_memory().expect("open in-memory work queue")),
+            mq: Arc::new(crate::control::mq::Broker::new()),
+            mq_enabled: AtomicBool::new(false),
             events: EventHub::new(),
             supervisor: Mutex::new(Supervisor::new()),
             sessions,
@@ -563,12 +573,27 @@ pub fn remove_discovery(shared: &Arc<Shared>) {
     }
 }
 
+/// Whether the built-in MQ is enabled for this process. Off unless `AVADA_MQ` is set to a truthy
+/// value (`1`/`true`/`on`) — additive, so a build that doesn't set it behaves exactly as before.
+#[tracing::instrument(level = "debug", ret)]
+fn mq_enabled_from_env() -> bool {
+    matches!(
+        std::env::var("AVADA_MQ").ok().as_deref(),
+        Some("1") | Some("true") | Some("on")
+    )
+}
+
 /// Bind loopback on an ephemeral port, mint the master token, write `control.json`, and serve
 /// until the process exits. Never returns under normal operation. The activity ticker is a
 /// SEPARATE task ([`run_activity_ticker`]) the embedder spawns alongside this one, so its
 /// lifetime can be torn down independently (the GUI host aborts it on stop — see `control_host`).
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn run_server(shared: Arc<Shared>) -> io::Result<()> {
+    // Opt the MQ spine in once, from the environment, before anything can publish. Off unless
+    // `AVADA_MQ` is a truthy value, so the running fleet is undisturbed until a deliberate restart.
+    shared
+        .mq_enabled
+        .store(mq_enabled_from_env(), Ordering::SeqCst);
     // A control file owned by a live, different-pid instance is not ours to claim — fail
     // loudly before binding anything (see control::discovery_guard).
     crate::control::discovery_guard::ensure_claimable(&shared.control_file, shared.pid).await?;

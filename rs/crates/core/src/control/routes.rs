@@ -1187,6 +1187,18 @@ async fn messages_post(
     // Wake an opted-in agent pane (goals org): the durable read stays the source of truth, but a
     // TUI agent parked at its prompt would never perform that read on its own.
     arm_inbox_nudge(&shared, &id, msg.seq);
+    // Phase-1 MQ proof: when the built-in message queue is enabled, also publish this pane→pane
+    // message onto its `agent:<pane-id>` topic so event-driven subscribers get an instant push
+    // instead of polling. Additive — the durable inbox above remains the source of truth, and
+    // the topic is keyed by the canonical id so there is no cross-talk to sibling agents.
+    if shared.mq_enabled.load(std::sync::atomic::Ordering::SeqCst) {
+        shared.mq.publish(
+            crate::control::mq::TopicAddr::Agent(id.clone()),
+            &from,
+            &msg_body,
+            now_ms(),
+        );
+    }
     // Nudge live, in-scope clients (the durable read remains the source of truth).
     let coords = shared.model.lock().unwrap().coords_of(&id);
     shared.events.broadcast_for_pane(
@@ -4353,6 +4365,101 @@ mod golden {
             .unwrap();
         assert_eq!(alias["paneId"], serde_json::json!("pane-abc"));
         assert_eq!(alias["messages"][0]["body"], serde_json::json!("done"));
+    }
+
+    #[tokio::test]
+    async fn mq_publishes_message_to_addressed_agent_topic_only() {
+        // Phase-1 proof: with the MQ enabled, a POST /panes/{id}/messages pushes onto the
+        // target's `agent:<pane-id>` topic AND leaves a sibling agent's topic untouched
+        // (the no-cross-talk guarantee, observed end-to-end through the real route).
+        let s = boot(true).await;
+        s.shared
+            .mq_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        s.shared.model.lock().unwrap().insert_pane(1, pane("p1", "u1"));
+        s.shared.model.lock().unwrap().insert_pane(1, pane("p2", "u2"));
+        let mut rx1 = s
+            .shared
+            .mq
+            .subscribe(crate::control::mq::TopicAddr::Agent("p1".into()));
+        let mut rx2 = s
+            .shared
+            .mq
+            .subscribe(crate::control::mq::TopicAddr::Agent("p2".into()));
+        let post = client()
+            .post(format!("{}/panes/p1/messages", s.base))
+            .header("authorization", format!("Bearer {}", s.token))
+            .header("content-type", "application/json")
+            .body(r#"{"from":"mgr","body":"go"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(post.status().as_u16(), 200);
+        let got = rx1.try_recv().expect("p1 topic should receive the push");
+        assert_eq!(got.topic, "agent:p1");
+        assert_eq!(got.from, "mgr");
+        assert_eq!(got.body, "go");
+        // The sibling agent's topic sees nothing — no leak.
+        assert!(matches!(
+            rx2.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn mq_is_off_by_default_so_no_push_without_the_flag() {
+        // Companion guard: boot() leaves mq_enabled false, so the legacy path is byte-for-byte
+        // unchanged and nothing is published — the running fleet is undisturbed until opt-in.
+        let s = boot(true).await;
+        s.shared.model.lock().unwrap().insert_pane(1, pane("p1", "u1"));
+        let mut rx = s
+            .shared
+            .mq
+            .subscribe(crate::control::mq::TopicAddr::Agent("p1".into()));
+        let post = client()
+            .post(format!("{}/panes/p1/messages", s.base))
+            .header("authorization", format!("Bearer {}", s.token))
+            .header("content-type", "application/json")
+            .body(r#"{"from":"mgr","body":"go"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(post.status().as_u16(), 200);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn mq_topic_uses_canonical_id_for_either_spelling() {
+        // Both pane-id spellings land on ONE topic: subscribe the canonical `agent:pane-abc`,
+        // POST to the bare-uuid alias, and the push still arrives (mirrors the inbox aliasing).
+        let s = boot(true).await;
+        s.shared
+            .mq_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        s.shared
+            .model
+            .lock()
+            .unwrap()
+            .insert_pane(1, pane("pane-abc", "u1"));
+        let mut rx = s
+            .shared
+            .mq
+            .subscribe(crate::control::mq::TopicAddr::Agent("pane-abc".into()));
+        let post = client()
+            .post(format!("{}/panes/abc/messages", s.base))
+            .header("authorization", format!("Bearer {}", s.token))
+            .header("content-type", "application/json")
+            .body(r#"{"from":"impl","body":"done"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(post.status().as_u16(), 200);
+        let got = rx.try_recv().expect("canonical topic should receive");
+        assert_eq!(got.topic, "agent:pane-abc");
+        assert_eq!(got.body, "done");
     }
 
     #[tokio::test]
