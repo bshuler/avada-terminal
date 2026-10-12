@@ -128,9 +128,9 @@ stage_seed_modules "$APP/Contents/Resources/seed-modules"
 ln -s ../Resources "$APP/Contents/MacOS/resources"
 
 echo "==> generating avada.icns from build/icon.png"
-# Source icon is 512x512 (build/icon.png — same art as the Windows icon.ico).
-# Standard iconset, every size derived with sips; 512@2x needs a 1024 source so
-# it is omitted (allowed — iconutil only requires the sizes present to be valid).
+# Source icon is 1024x1024 (build/icon.png — the retina master; same art as
+# the Windows icon.ico/icon.svg). Standard iconset, every size derived with sips,
+# including the full-resolution 512x512@2x (1024) entry for Retina displays.
 ICONSET="$STAGE/avada.iconset"
 mkdir -p "$ICONSET"
 SRC_ICON="$ROOT/build/icon.png"
@@ -143,6 +143,7 @@ sips -z 256 256   "$SRC_ICON" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
 sips -z 256 256   "$SRC_ICON" --out "$ICONSET/icon_256x256.png"    >/dev/null
 sips -z 512 512   "$SRC_ICON" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
 sips -z 512 512   "$SRC_ICON" --out "$ICONSET/icon_512x512.png"    >/dev/null
+sips -z 1024 1024 "$SRC_ICON" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/avada.icns"
 
 echo "==> writing Info.plist"

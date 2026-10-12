@@ -203,10 +203,10 @@ wordmark is displayed.
 
 **BR-12 — Rebuild the app icon as the sharp dual-blade A (green→purple).**
 The **source** is the checked-in `build/icon.svg` — a raster-backed master that embeds the
-brand mark's painterly render (→ `build/icon.png` 512×512, beside `build/icon.ico`). The macOS iconset under
+brand mark's painterly render (→ `build/icon.png` 1024×1024 retina master, beside `build/icon.ico`). The macOS iconset under
 `rs/packaging/out/macos-stage/avada.iconset/` is **generated output** (`rs/packaging/out` is
 gitignored): `rs/packaging/macos/bundle.sh` derives every size with `sips` from
-`build/icon.png`. So: author the blade A into `build/icon.svg`, re-render `build/icon.png`,
+`build/icon.png`, through the full-resolution 512×512@2x (1024) Retina entry. So: author the blade A into `build/icon.svg`, re-render `build/icon.png`,
 and let `bundle.sh` do the rest. Then regenerate the icons that are checked in separately:
 Linux `rs/packaging/linux/icons/hicolor/{16,32,48,64,128,256,512}/apps/avada.png` +
 `avada.desktop`, and iOS `mobile/hyperpanes_mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/`
