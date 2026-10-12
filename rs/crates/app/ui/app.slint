@@ -21,6 +21,7 @@ import { OverlayLayer } from "overlays.slint";
 import { SidebarRail } from "sidebar.slint";
 import { LeftPanel } from "leftpanel.slint";
 import { ContextMenu, ReminderCustom } from "contextmenu.slint";
+import { EdgeDrawer } from "edgedrawer.slint";
 import { RightsAskToast } from "prefs_rights.slint";   // track H2 (mounted app-wide, below)
 import { TipHost, TipArea } from "tooltip.slint";
 import { KeyMsg, HiRect } from "@widgets";
@@ -403,8 +404,15 @@ export component AppWindow inherits Window {
                 width: 300px;
             }
 
+            // The centre column: the panes plus the two Arcane edge drawers that overlay
+            // them. The drawers live here, between the rails, so they never cover a rail.
+            Rectangle {
+              horizontal-stretch: 1;
+              clip: true;
+
             PaneView {
-                horizontal-stretch: 1;
+                width: parent.width;
+                height: parent.height;
                 panes: root.panes;
                 dividers: root.dividers;
                 zoomed: root.zoomed;
@@ -455,6 +463,42 @@ export component AppWindow inherits Window {
                 pane-view-activate(i, r) => { root.pane-view-activate(i, r); }
                 pane-view-select(i, r, e) => { root.pane-view-select(i, r, e); }
                 pane-view-link(i, l) => { root.pane-view-link(i, l); }
+            }
+
+            // Welcome banner: reveals on the top edge. Content arrives in phase 4.
+            if !root.fullscreen : EdgeDrawer {
+                at-top: true;
+                drawer-height: 96px;
+                Text {
+                    x: 20px;
+                    y: 14px;
+                    text: "✦ AVADATERMINAL ✦";
+                    color: Theme.arc-gold;
+                    font-size: 20px;
+                    font-weight: 700;
+                }
+                Text {
+                    x: 20px;
+                    y: 46px;
+                    text: "Premium Magical AI Terminal  •  Power. Precision. Purpose.";
+                    color: Theme.arc-lavender;
+                    font-size: 12px;
+                }
+            }
+
+            // Notifications / attention cards: reveals on the bottom edge. Cards arrive in
+            // phase 3.
+            if !root.fullscreen : EdgeDrawer {
+                at-top: false;
+                drawer-height: 72px;
+                Text {
+                    x: 20px;
+                    y: 26px;
+                    text: "✧ Nothing needs you right now";
+                    color: Theme.arc-lavender;
+                    font-size: 12px;
+                }
+            }
             }
 
             // Shown whenever the setting is on AND not fullscreen (mirrors
