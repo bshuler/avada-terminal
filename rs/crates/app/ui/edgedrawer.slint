@@ -28,7 +28,7 @@ export component EdgeDrawer inherits Rectangle {
     // A count drawn on the lip when > 0 (the bottom drawer's needs-response badge).
     in property <int> lip-badge: 0;
     // Fired once the drawer has stayed open ~1.5s — long enough to have been read.
-    callback opened();
+    callback revealed();
 
     property <bool> hovered: zone.has-hover || body.has-hover;
 
@@ -48,7 +48,7 @@ export component EdgeDrawer inherits Rectangle {
     Timer {
         interval: 1500ms;
         running: root.open;
-        triggered => { root.opened(); }
+        triggered => { root.revealed(); }
     }
 
     // The edge hot zone. Declared before the panel so an open panel's cards sit above it.

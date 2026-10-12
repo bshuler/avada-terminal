@@ -2050,6 +2050,7 @@ impl App {
         self.pump_reminders(&windows);
         self.pump_closed(&windows);
         self.pump_attention(&windows);
+        self.pump_banner(&windows);
 
         // 2f. Left panel (M5): republish the session uids every window in this process is
         //     hosting, so the panel's DETACHED section can subtract them. Cheap (a string
@@ -2647,6 +2648,31 @@ impl App {
             let g = w.app.global::<crate::AttentionAdapter>();
             g.set_cards(slint::ModelRc::from(Rc::new(slint::VecModel::from(cards))));
             g.set_unread(unread);
+        }
+    }
+
+    /// Welcome-banner pump (UI thread): version, build date, uptime and host for the top Arcane
+    /// drawer. Uptime is formatted to the minute and each window only writes when the text
+    /// changed, so an idle window renders once a minute at most for this.
+    #[tracing::instrument(level = "debug", ret, skip(self, windows))]
+    fn pump_banner(&self, windows: &[Rc<Window>]) {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let secs = START.get_or_init(std::time::Instant::now).elapsed().as_secs();
+        let (d, h, m) = (secs / 86400, secs % 86400 / 3600, secs % 3600 / 60);
+        let uptime = match (d, h) {
+            (0, 0) => format!("{m}m"),
+            (0, _) => format!("{h}h {m}m"),
+            _ => format!("{d}d {h}h {m}m"),
+        };
+        for w in windows {
+            let g = w.app.global::<crate::BannerAdapter>();
+            if g.get_uptime().as_str() == uptime {
+                continue;
+            }
+            g.set_version(env!("CARGO_PKG_VERSION").into());
+            g.set_updated(env!("AVADA_BUILD_DATE").into());
+            g.set_host(avada_core::pane_remote::local_hostname().into());
+            g.set_uptime(uptime.clone().into());
         }
     }
 
@@ -4838,7 +4864,7 @@ impl App {
             let id = win.id;
             win.app
                 .global::<crate::AttentionAdapter>()
-                .on_focus(move |ti, i| {
+                .on_attention_focus(move |ti, i| {
                     if let Some(w) = app.window_by_id(id) {
                         if ti >= 0 && i >= 0 {
                             app.run_command(&w, Command::LeftFocusPane(ti as usize, i as usize));
@@ -4851,7 +4877,7 @@ impl App {
             let id = win.id;
             win.app
                 .global::<crate::AttentionAdapter>()
-                .on_acknowledge(move || {
+                .on_attention_ack(move || {
                     if let Some(w) = app.window_by_id(id) {
                         use slint::Model;
                         let cards = w.app.global::<crate::AttentionAdapter>().get_cards();

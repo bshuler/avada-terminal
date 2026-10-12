@@ -13,6 +13,7 @@
 // One file per Wave 1 track (docs/modules-fanout-plan.md §4); each `use super::*`s the
 // helpers below. The orchestrator owns this file and the list; a track owns its file.
 mod annotations;
+mod attention;
 mod ctxmenu;
 mod datatree;
 mod docpane;

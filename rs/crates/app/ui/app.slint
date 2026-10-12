@@ -10,7 +10,7 @@
 // dispatched against the central `State` (see ARCHITECTURE.md).
 
 import { Theme } from "theme.slint";
-import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter } from "types.slint";
+import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
@@ -37,7 +37,7 @@ export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem,
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
-export { AttentionCard, AttentionAdapter }
+export { AttentionCard, AttentionAdapter, BannerAdapter }
 // ---- track V3: re-exported so `imagepane::attach` can reach the adapter and the
 // harness can call `invoke_fit`; the UI lives in imagepane.slint.
 export { ImagePaneItem, ImageFit, ImagePaneAdapter }
@@ -466,24 +466,54 @@ export component AppWindow inherits Window {
                 pane-view-link(i, l) => { root.pane-view-link(i, l); }
             }
 
-            // Welcome banner: reveals on the top edge. Content arrives in phase 4.
+            // Welcome banner: reveals on the top edge.
             if !root.fullscreen : EdgeDrawer {
                 at-top: true;
-                drawer-height: 96px;
+                drawer-height: 112px;
                 Text {
-                    x: 20px;
+                    x: 24px;
                     y: 14px;
                     text: "✦ AVADATERMINAL ✦";
                     color: Theme.arc-gold;
-                    font-size: 20px;
+                    font-size: 22px;
                     font-weight: 700;
                 }
                 Text {
-                    x: 20px;
+                    x: 24px;
                     y: 46px;
                     text: "Premium Magical AI Terminal  •  Power. Precision. Purpose.";
                     color: Theme.arc-lavender;
                     font-size: 12px;
+                }
+                // metadata block: label in lavender, value in the Arcane accent
+                for m[i] in [
+                    { k: "version", v: BannerAdapter.version },
+                    { k: "last update", v: BannerAdapter.updated },
+                    { k: "uptime", v: BannerAdapter.uptime },
+                    { k: "host", v: BannerAdapter.host },
+                ] : Text {
+                    x: 24px + i * 150px;
+                    y: 74px;
+                    width: 140px;
+                    text: m.k + "  " + m.v;
+                    color: Theme.arc-magenta;
+                    font-size: 11px;
+                    overflow: elide;
+                }
+                // compass-star glyph art, right side
+                Text {
+                    x: parent.width - self.width - 28px;
+                    y: 8px;
+                    text: "✸";
+                    color: Theme.arc-magenta.with-alpha(0.55);
+                    font-size: 64px;
+                }
+                Text {
+                    x: parent.width - self.width - 98px;
+                    y: 30px;
+                    text: "✧";
+                    color: Theme.arc-gold.with-alpha(0.5);
+                    font-size: 22px;
                 }
             }
 
@@ -497,7 +527,7 @@ export component AppWindow inherits Window {
                 lip-color: AttentionAdapter.unread > 0 ? Theme.warn : Theme.arc-magenta;
                 lip-badge: AttentionAdapter.unread;
                 // Open long enough to be read → count what is on it as seen.
-                opened => { AttentionAdapter.acknowledge(); }
+                revealed => { AttentionAdapter.attention-ack(); }
 
                 if AttentionAdapter.cards.length == 0 : Text {
                     x: 20px;
@@ -518,8 +548,10 @@ export component AppWindow inherits Window {
                             max-width: 260px;
                             background: ca.has-hover ? Theme.surface2 : transparent;
                             ca := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Attention: " + c.title + " — " + c.detail;
                                 clicked => {
-                                    if (c.tab >= 0) { AttentionAdapter.focus(c.tab, c.pane); }
+                                    if (c.tab >= 0) { AttentionAdapter.attention-focus(c.tab, c.pane); }
                                     else if (c.uid != "") { RemindersAdapter.restore(c.uid); }
                                 }
                             }

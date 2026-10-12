@@ -146,6 +146,17 @@ fn main() {
     // simply was not in it, which is the worst shape a build bug can take. Cargo watches a
     // directory recursively, and one entry cannot fall behind the imports the way a list did.
     println!("cargo:rerun-if-changed=ui");
+    // Shown on the Arcane welcome banner as "last update". Re-evaluated whenever the UI or
+    // widget tree changes (the rerun triggers above), which is when a build is a new build.
+    let build_date = std::process::Command::new("date")
+        .args(["-u", "+%Y-%m-%d"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=AVADA_BUILD_DATE={build_date}");
     println!("cargo:rerun-if-changed={}", widget.display());
 }
 

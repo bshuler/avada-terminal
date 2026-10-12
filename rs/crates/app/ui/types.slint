@@ -905,7 +905,17 @@ export global AttentionAdapter {
     // the "stay open" hold). Cleared by `acknowledge`.
     in property <int> unread;
     // A card for a pane was clicked → focus that pane (never moves keyboard focus otherwise).
-    callback focus(int, int);
+    callback attention-focus(int, int);
     // The drawer has been open long enough to count as seen.
-    callback acknowledge();
+    callback attention-ack();
+}
+
+// The Arcane welcome banner's metadata block, pushed by the controller. Uptime is rendered
+// to a string here-side's caller at minute granularity, so an idle window is not re-rendered
+// every second just to tick a clock nobody can read that finely.
+export global BannerAdapter {
+    in property <string> version;
+    in property <string> updated;
+    in property <string> uptime;
+    in property <string> host;
 }

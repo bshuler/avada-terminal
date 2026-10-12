@@ -22,16 +22,16 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 186 |
-| …bound to Rust | 110 |
-| …proven end-to-end | 110 |
+| callbacks declared | 189 |
+| …bound to Rust | 112 |
+| …proven end-to-end | 112 |
 | …bound but unproven | 0 |
-| …ui-local or dead | 76 |
+| …ui-local or dead | 77 |
 | Command variants | 151 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
-End-to-end coverage of the Rust-reaching UI surface is **100%** (110 of 110). "Named by a test" is an *upper* bound on proven:
+End-to-end coverage of the Rust-reaching UI surface is **100%** (112 of 112). "Named by a test" is an *upper* bound on proven:
 a test may mention a callback while asserting something else about it, and a proven
 callback can still front a feature whose real work happens past a boundary the harness
 cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
@@ -50,6 +50,8 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `ask_allow_once` | `types.slint` | `e2e` |
 | `ask_deny` | `types.slint` | `e2e` |
 | `attach_image` | `newgoal.slint` | `ui-local` |
+| `attention_ack` | `types.slint` | `e2e` |
+| `attention_focus` | `types.slint` | `e2e` |
 | `begin_rename` | `app.slint` | `ui-local` |
 | `begin_rename_pane` | `app.slint` | `e2e` |
 | `browser_pick` | `overlays.slint` | `ui-local` |
@@ -185,6 +187,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `reorder_pane` | `types.slint` | `e2e` |
 | `report_geom` | `topbar.slint` | `ui-local` |
 | `request_delete` | `sidebar.slint` | `ui-local` |
+| `revealed` | `edgedrawer.slint` | `ui-local` |
 | `restore` | `sidebar.slint` | `e2e` |
 | `resume` | `sidebar.slint` | `ui-local` |
 | `resume_session` | `app.slint` | `e2e` |
