@@ -57,6 +57,7 @@ fn every_letter_of_a_bold_word_is_equally_bright() {
         cursor_visible: false,
         default_bg: BG,
         default_fg: FG,
+        cursor_color: None,
     };
 
     let img = SoftwareRenderer::new().render(&grid, &mut f, &RenderOpts { cursor_on: false });
