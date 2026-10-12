@@ -56,17 +56,55 @@ pub fn badge(endpoint: &str) -> String {
 }
 
 /// The header title for a pane: its label plus the tag for the host keystrokes land on now
-/// (`current`), falling back to the first hop. A pane that is not remote keeps its label.
+/// (`current`), falling back to the first hop. A local pane wears the tag only while
+/// `current` names a host — a shell that the user ssh'd out of by hand.
 pub fn display_title(
     label: &str,
     remote: &BTreeMap<String, String>,
     current: Option<&str>,
 ) -> String {
-    let Some(first) = host(remote) else {
-        return label.to_string();
-    };
-    let shown = current.filter(|c| !c.is_empty()).unwrap_or(first);
-    format!("{label} {}", badge(shown))
+    match current.filter(|c| !c.is_empty()).or(host(remote)) {
+        Some(shown) => format!("{label} {}", badge(shown)),
+        None => label.to_string(),
+    }
+}
+
+/// Whether a `user@host` endpoint is this machine (`local` is its hostname). Short names
+/// compare case-insensitively, so `bert@Mac` matches `mac.local`; `localhost` is always local.
+pub fn is_local_endpoint(endpoint: &str, local: &str) -> bool {
+    let short = |h: &str| h.split('.').next().unwrap_or("").to_ascii_lowercase();
+    let host = short(endpoint.rsplit('@').next().unwrap_or(endpoint));
+    host == "localhost" || (!host.is_empty() && host == short(local))
+}
+
+/// This machine's hostname, as a shell prompt's `%m`/`\h` would name it. Read once.
+pub fn local_hostname() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        #[cfg(unix)]
+        {
+            let mut buf = [0u8; 256];
+            // SAFETY: `gethostname` writes at most `buf.len()` bytes into `buf`.
+            if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0 {
+                let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+                return String::from_utf8_lossy(&buf[..end]).into_owned();
+            }
+            String::new()
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::var("COMPUTERNAME").unwrap_or_default()
+        }
+    })
+}
+
+/// The ssh-family client programs: while one holds a local pane's foreground, its title
+/// may name the far host; once none does, the pane is back home.
+pub fn is_ssh_client(foreground: &str) -> bool {
+    matches!(
+        foreground.rsplit('/').next().unwrap_or(foreground),
+        "ssh" | "autossh" | "mosh-client" | "mosh" | "et" | "sshpass"
+    )
 }
 
 /// Pull the `user@host` a shell reports in its OSC window title (`user@host: ~/dir`,
@@ -401,6 +439,17 @@ mod tests {
     }
 
     #[test]
+    fn local_endpoint_compares_short_hostnames() {
+        assert!(is_local_endpoint("bshuler@Berts-MacBook-Air", "Berts-MacBook-Air.local"));
+        assert!(is_local_endpoint("bshuler@berts-macbook-air.local", "Berts-MacBook-Air"));
+        assert!(is_local_endpoint("me@localhost", "anything"));
+        assert!(!is_local_endpoint("bshuler@hp2", "Berts-MacBook-Air.local"));
+        assert!(!is_local_endpoint("bshuler@hp2", ""));
+        assert!(is_ssh_client("ssh") && is_ssh_client("/usr/bin/ssh") && is_ssh_client("mosh-client"));
+        assert!(!is_ssh_client("zsh") && !is_ssh_client("sshd"));
+    }
+
+    #[test]
     fn title_follows_current_host_but_info_stays_first_hop() {
         let r = m(&[(HOST, "bert@hp2"), (TMUX, "avada-x")]);
         assert_eq!(display_title("lane", &r, None), "lane [ssh bert@hp2]");
@@ -408,7 +457,9 @@ mod tests {
             display_title("lane", &r, Some("root@inner")),
             "lane [ssh root@inner]"
         );
-        assert_eq!(display_title("lane", &BTreeMap::new(), Some("a@b")), "lane");
+        assert_eq!(display_title("lane", &BTreeMap::new(), Some("a@b")), "lane [ssh a@b]");
+        assert_eq!(display_title("lane", &BTreeMap::new(), None), "lane");
+        assert_eq!(display_title("lane", &BTreeMap::new(), Some("")), "lane");
         let info = describe_lines(&r).join("\n");
         assert!(info.contains("bert@hp2") && info.contains("avada-x"));
         assert!(!info.contains("inner"));

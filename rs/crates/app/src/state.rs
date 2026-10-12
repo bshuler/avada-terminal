@@ -1957,6 +1957,14 @@ pub struct State {
     /// Last [`crate::filedrop::focus_gen`] this state acted on; a newer one means the window
     /// regained focus, so the active tab's panes are repainted (see `mark_active_panes_dirty`).
     pub focus_gen_seen: u64,
+    /// The tab the pump last showed. When `active` moves away from it (by any path — a tab
+    /// click, Ctrl+Tab, a close, a restore) the pump opens a [`Self::tab_show_repaint`] window.
+    pub shown_tab: Option<usize>,
+    /// While set, the pump repaints every pane of the active tab each tick until the deadline,
+    /// and logs the window redraw count (the `u64`, taken when the tab was shown) at the end.
+    /// One forced render was not enough: Bert still saw idle panels blank after a tab click
+    /// until the pointer moved over them.
+    pub tab_show_repaint: Option<(std::time::Instant, u64)>,
     /// Host events queued for `avada_core::module::Host::emit`, as `(kind, payload)`.
     /// Queued rather than emitted for the same re-entrancy reason as
     /// [`State::rail_requests`], and drained beside it.
@@ -2253,6 +2261,8 @@ impl State {
             rail_requests: Vec::new(),
             rail_scroll_hold: None,
             focus_gen_seen: 0,
+            shown_tab: None,
+            tab_show_repaint: None,
             module_events: Vec::new(),
             opener_panes: Vec::new(),
             module_openers: Vec::new(),
@@ -3691,6 +3701,16 @@ impl State {
         };
         if !matches!(self.tabs[ti].panes[pi].kind, PaneKind::Terminal) {
             return;
+        }
+        // A local pane's `[ssh …]` tag lasts only while an ssh client holds the terminal:
+        // after `exit` a plain zsh sets no title that could clear it.
+        let p = &mut self.tabs[ti].panes[pi];
+        if p.remote_now.is_some()
+            && avada_core::pane_remote::host(&p.origin).is_none()
+            && !avada_core::pane_remote::is_ssh_client(name)
+        {
+            p.remote_now = None;
+            self.dirty = true;
         }
         match avada_core::tools::foreground::tool_for_foreground_name(name) {
             Some(t) => {
@@ -11000,6 +11020,36 @@ mod session_file_tests {
             assert_eq!(saved.get(k), meta.get(k), "{k}");
         }
         assert!(saved.values().all(|v| !v.contains("root@inner")));
+    }
+
+    /// A local shell the user ssh'd out of by hand wears the `[ssh …]` tag while an ssh
+    /// client holds it, and loses it once the shell is back in the foreground.
+    #[test]
+    fn local_pane_ssh_tag_clears_when_ssh_leaves_the_foreground() {
+        use avada_core::pane_remote as pr;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _guard = rt.enter();
+        let mut st = fresh();
+        let seed = WorkspaceFile {
+            groups: Some(vec![GroupSpec {
+                panes: vec![PaneSpec::default()],
+                ..Default::default()
+            }]),
+            active: Some(0),
+            ..Default::default()
+        };
+        st.load_workspace(seed, &mgr());
+        let uid = st.active_tab().panes[0].uid.clone();
+        st.active_tab_mut().panes[0].remote_now = Some("bshuler@hp2".into());
+        st.note_pane_foreground(&uid, Some("ssh"));
+        let p = &st.active_tab().panes[0];
+        assert_eq!(pr::display_title("shell", &p.origin, p.remote_now.as_deref()), "shell [ssh bshuler@hp2]");
+        st.dirty = false;
+        st.note_pane_foreground(&uid, Some("zsh"));
+        let p = &st.active_tab().panes[0];
+        assert_eq!(p.remote_now, None);
+        assert_eq!(pr::display_title("shell", &p.origin, p.remote_now.as_deref()), "shell");
+        assert!(st.dirty);
     }
 
     /// Session-daemon prep round-trip: a pane LOADED from a spec carrying a `command` keeps

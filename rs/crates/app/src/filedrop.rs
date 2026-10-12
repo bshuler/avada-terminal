@@ -64,6 +64,8 @@ pub struct Dropped {
 thread_local! {
     /// Bumped each time any window gains focus; see [`focus_gen`].
     static FOCUS_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Bumped on every `RedrawRequested` any window receives; see [`redraw_count`].
+    static REDRAWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static QUEUE: std::cell::RefCell<Vec<Dropped>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -71,6 +73,13 @@ thread_local! {
 /// it last saw to repaint its panes once per focus gain.
 pub fn focus_gen() -> u64 {
     FOCUS_GEN.with(|g| g.get())
+}
+
+/// How many redraws the windows have received so far. The tab-show repaint logs it, so a
+/// report of a blank tab can tell "the panes were never rendered" from "they were rendered
+/// but the window never drew them".
+pub fn redraw_count() -> u64 {
+    REDRAWS.with(|g| g.get())
 }
 
 /// Start listening for drops on the window identified by `key` (its native handle).
@@ -85,6 +94,7 @@ pub fn install(win: &slint::Window, key: isize) {
             match ev {
                 WindowEvent::DroppedFile(p) => record(key, p.clone()),
                 WindowEvent::Focused(true) => FOCUS_GEN.with(|g| g.set(g.get() + 1)),
+                WindowEvent::RedrawRequested => REDRAWS.with(|g| g.set(g.get() + 1)),
                 _ => {}
             }
             slint::winit_030::EventResult::Propagate

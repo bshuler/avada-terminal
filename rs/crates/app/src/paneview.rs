@@ -13,7 +13,7 @@ use avada_core::tools::kind::ModulePaneRef;
 use avada_core::tools::PaneKind;
 use avada_terminal_widget::{cells_for_px, RenderOpts};
 
-use slint::{Color, Model, ModelRc, SharedString, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -854,6 +854,8 @@ const PTY_RESIZE_SETTLE: Duration = Duration::from_millis(300);
 /// instantiated and the ListView measuring its new model; short enough that the human
 /// cannot scroll away inside it and be dragged back.
 pub const RAIL_SCROLL_HOLD: Duration = Duration::from_millis(250);
+/// How long a newly shown tab keeps repainting all of its panes (see `State::tab_show_repaint`).
+pub const TAB_SHOW_REPAINT: Duration = Duration::from_millis(300);
 
 /// Push any pane whose grid has finished moving to its session, and nothing sooner.
 ///
@@ -1941,6 +1943,26 @@ pub fn pump(
         state.mark_active_panes_dirty();
     }
 
+    // A newly shown tab repaints all its panes for a short window, not once: a pane that is
+    // idle gets no pty output to dirty it again, so a single lost frame left it blank until
+    // the pointer touched it. Keyed on `active` itself so every way of changing tabs counts.
+    let now = Instant::now();
+    if state.shown_tab != Some(state.active) {
+        state.shown_tab = Some(state.active);
+        state.tab_show_repaint = Some((now + TAB_SHOW_REPAINT, crate::filedrop::redraw_count()));
+        state.dirty = true;
+    }
+    let mut tab_show_log = None;
+    if let Some((until, redraws_at)) = state.tab_show_repaint {
+        if now < until {
+            state.mark_active_panes_dirty();
+            active = true;
+        } else {
+            state.tab_show_repaint = None;
+            tab_show_log = Some(redraws_at);
+        }
+    }
+
     // ---- resync models when state changed ----
     if state.dirty {
         resync(state, app, ui, area, scale, mgr);
@@ -2166,6 +2188,19 @@ pub fn pump(
     }
     if rendered > 0 {
         state.frames += 1;
+        // Ask for the frame outright rather than relying on the model change to schedule it.
+        app.window().request_redraw();
+    }
+    if let Some(redraws_at) = tab_show_log {
+        let tab = &state.tabs[active_idx];
+        tracing::info!(
+            tab = active_idx,
+            panes = n,
+            visible = tab.panes.iter().filter(|p| p.visible).count(),
+            rows = ui.panes.row_count(),
+            redraws = crate::filedrop::redraw_count().saturating_sub(redraws_at),
+            "tab shown: repaint window closed"
+        );
     }
 
     // ---- HUD ----

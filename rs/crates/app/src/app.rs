@@ -2264,14 +2264,24 @@ impl App {
                 // Sniff the shell's OSC window title so the idle glow can tell an agent
                 // pane (claude, etc.) from a plain shell (app-side; no core change).
                 let sniffed = crate::glow::sniff_osc_title(&data);
+                let mut retagged = false;
                 if let Some((ti, pi)) = st.find_pane(&uid) {
                     let pc = &mut st.tabs[ti].panes[pi];
                     if let Some(title) = sniffed.clone() {
-                        // A remote pane's tag follows the host the shell names in its title;
-                        // a title naming no host (an agent's) leaves it where it was.
-                        if avada_core::pane_remote::host(&pc.origin).is_some() {
-                            if let Some(ep) = avada_core::pane_remote::endpoint_from_title(&title) {
-                                pc.remote_now = Some(ep);
+                        // The tag follows the host the shell names in its title; a title
+                        // naming no host (an agent's) leaves it where it was. A local pane
+                        // the user ssh'd out of by hand gets it too, and drops it when the
+                        // title names this machine again.
+                        if let Some(ep) = avada_core::pane_remote::endpoint_from_title(&title) {
+                            let pr = avada_core::pane_remote::host(&pc.origin).is_some();
+                            let home = avada_core::pane_remote::is_local_endpoint(
+                                &ep,
+                                avada_core::pane_remote::local_hostname(),
+                            );
+                            let now = (pr || !home).then_some(ep);
+                            if pc.remote_now != now {
+                                pc.remote_now = now;
+                                retagged = true;
                             }
                         }
                         pc.shell_title = title;
@@ -2293,6 +2303,9 @@ impl App {
                             crate::state::pane_write(&self.mgr, &uid, &cmd, "startup-command");
                         }
                     }
+                }
+                if retagged {
+                    st.dirty = true;
                 }
                 // The same title, read a second way: which *tool* it says is running. This
                 // upgrades a plain terminal's chrome only — see `State::note_pane_title`.
