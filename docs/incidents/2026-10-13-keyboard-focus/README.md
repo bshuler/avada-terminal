@@ -114,11 +114,16 @@ Consequences, in the order Bert sees them:
   `sync_pane_keyboard_focus` never bumps again. Clicking the Dock icon re-activates the
   window with no focus item to restore. `keyboardFocusPaneId: None` at 20:05 is the variant
   where a `WindowActivation` FocusOut had cleared it first.
-- **Clicking the tab does not land.** A tab click re-arms and bumps the selected pane, but a
-  row that was just created (tab switch with a different pane count) takes the bumped seq as
-  its initial value and never sees `changed`. If the selected pane's `TerminalPane` is not
-  visible (`visible: pane.kind < 2`, or a hidden subagent row), programmatic focus succeeds and
-  the first keypress drops it (Slint fact 3).
+- **Clicking the pane or tab does not land.** Clicking the already-selected pane changes
+  nothing: `kbd_focus_on` is unchanged, so there is no re-arm. Clicking a tab re-arms, but
+  the first check in `sync_pane_keyboard_focus` is "is `kbd_focus_live` already the selected
+  uid?", and that value is **stale**: it was never cleared when the focused element died
+  (Slint fact 1). The stale-equal short-circuit sets `tries = 0` and returns, so no bump is
+  sent. (A row created during the tab switch does miss the first bump, Slint fact 2, but the
+  retry loop lands the second one as a normal `changed`; that case self-heals and is not the
+  cause.) Separately, if the selected pane's `TerminalPane` is not visible (`visible:
+  pane.kind < 2`, or a hidden subagent row), programmatic focus succeeds and the first
+  keypress drops it (Slint fact 3).
 
 ### RC2 · Nothing re-arms the hand-off on the events that invalidate it
 
@@ -185,9 +190,10 @@ In `app/src/state.rs` add a helper `rearm_kbd_focus(&mut self)` that sets
   hidden subagent after `take_pane_inner`/`hide_subagents` toggles, move it to the nearest
   visible pane there (the `visible_layout` helper already knows which rows are visible).
 
-### F4 · Focus on creation
+### F4 · Focus on creation (defense in depth)
 
-Elements created with the bumped seq as their initial value never see `changed`. In
+Elements created with the bumped seq as their initial value never see `changed`; the retry
+loop covers this today, but taking focus on creation removes one wasted tick. In
 `widget.slint` add `init => { if (root.refocus-tick != 0 && !root.search-open) { fs.focus();
 root.focus-changed(fs.has-focus); } }` so a freshly created selected row takes focus itself.
 With F1 only the selected row has a non-zero tick, so this is safe.
