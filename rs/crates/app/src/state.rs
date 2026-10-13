@@ -3744,6 +3744,35 @@ impl State {
         }
     }
 
+    /// A live interactive `ssh` holds this local pane's terminal and names `target`
+    /// (`user@host`, or the host as typed). Tags the pane `[ssh …]` even when the far shell
+    /// sets no `user@host` window title to read it from. It only fills an empty tag — a
+    /// title-derived endpoint is the fuller name and is left alone — and the tag is cleared
+    /// by [`Self::note_pane_foreground`] once no ssh client holds the foreground.
+    pub fn note_pane_ssh(&mut self, uid: &str, target: Option<&str>) {
+        let Some(target) = target.filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let Some((ti, pi)) = self.find_pane(uid) else {
+            return;
+        };
+        let p = &mut self.tabs[ti].panes[pi];
+        if p.remote_now.is_some() || avada_core::pane_remote::host(&p.origin).is_some() {
+            return;
+        }
+        let ep = if target.contains('@') {
+            target.to_string()
+        } else {
+            let me = std::env::var("USER").unwrap_or_default();
+            if me.is_empty() { target.to_string() } else { format!("{me}@{target}") }
+        };
+        if avada_core::pane_remote::is_local_endpoint(&ep, avada_core::pane_remote::local_hostname()) {
+            return;
+        }
+        p.remote_now = Some(ep);
+        self.dirty = true;
+    }
+
     /// The shell is back at a prompt (or the foreground command ended): whatever was
     /// running is not running any more. This is D5's **downgrade** — the sniffed identity
     /// and the liveness badge both go, so a pane that ran `claude` once does not wear its
@@ -11066,6 +11095,31 @@ mod session_file_tests {
         assert_eq!(p.remote_now, None);
         assert_eq!(pr::display_title("shell", &p.origin, p.remote_now.as_deref()), "shell");
         assert!(st.dirty);
+    }
+
+    /// A local pane whose far shell sets no window title still gets the tag from the live ssh
+    /// argv, never overrides a title-derived one, and drops it when the shell returns.
+    #[test]
+    fn local_pane_takes_the_ssh_tag_from_the_live_argv() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _guard = rt.enter();
+        let mut st = fresh();
+        let seed = WorkspaceFile {
+            groups: Some(vec![GroupSpec {
+                panes: vec![PaneSpec::default()],
+                ..Default::default()
+            }]),
+            active: Some(0),
+            ..Default::default()
+        };
+        st.load_workspace(seed, &mgr());
+        let uid = st.active_tab().panes[0].uid.clone();
+        st.note_pane_ssh(&uid, Some("bert@hp2"));
+        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@hp2"));
+        st.note_pane_ssh(&uid, Some("other@elsewhere"));
+        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@hp2"));
+        st.note_pane_foreground(&uid, Some("zsh"));
+        assert_eq!(st.active_tab().panes[0].remote_now, None);
     }
 
     /// Session-daemon prep round-trip: a pane LOADED from a spec carrying a `command` keeps

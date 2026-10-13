@@ -725,6 +725,7 @@ fn session_metas(
                 // answer", which is what a reader must treat it as.
                 foreground: None,
                 fg_cwd: None,
+                fg_ssh: None,
                 uid,
             }
         })

@@ -200,6 +200,12 @@ pub struct SessionMeta {
     /// `PROTO_VER` bump.
     #[serde(default)]
     pub fg_cwd: Option<String>,
+    /// The `ssh` target (`user@host`, or the host as typed) when an interactive `ssh` client
+    /// holds the foreground — the live far end a pane's `[ssh …]` title tag follows.
+    ///
+    /// ADDITIVE, `#[serde(default)]` — see [`cols`](Self::cols).
+    #[serde(default)]
+    pub fg_ssh: Option<String>,
 }
 
 /// A request from a client to the daemon. Fire-and-forget for mutators; request/response
@@ -595,6 +601,7 @@ mod tests {
                 rows: Some(40),
                 foreground: Some("claude".into()),
                 fg_cwd: None,
+                fg_ssh: None,
             }]),
             DaemonMsg::Created { uid: "s9".into() },
             DaemonMsg::Replay {
@@ -639,6 +646,7 @@ mod tests {
                 rows: Some(34),
                 foreground: None,
                 fg_cwd: None,
+                fg_ssh: None,
             }]),
         ];
         for m in &msgs {

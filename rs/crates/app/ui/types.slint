@@ -919,3 +919,19 @@ export global BannerAdapter {
     in property <string> uptime;
     in property <string> host;
 }
+
+// One status-tray card (INTENT / AI MODEL / CONTEXT …), registered from Rust through
+// `status_tray`. `level`: 0 info, 1 ok, 2 warn, 3 needs the human. `clickable` = has a handler.
+export struct StatusCard {
+    id: string,
+    label: string,
+    value: string,
+    glyph: string,
+    level: int,
+    clickable: bool,
+}
+
+export global StatusAdapter {
+    in property <[StatusCard]> cards;
+    callback activate(string);
+}

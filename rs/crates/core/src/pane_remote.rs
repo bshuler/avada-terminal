@@ -149,6 +149,40 @@ pub fn infer_host(command: &str) -> Option<String> {
     None
 }
 
+/// The far end of an interactive `ssh` client, from its argv: `user@host` when the line
+/// names a user (`user@host` or `-l user`), the bare host otherwise. `None` unless `argv[0]`
+/// is `ssh`. This is what a local pane's `[ssh …]` tag follows while the client holds the
+/// terminal, for a far shell that sets no `user@host` window title to read it from.
+pub fn ssh_target_from_argv(argv: &[&str]) -> Option<String> {
+    let (bin, rest) = argv.split_first()?;
+    if bin.rsplit('/').next()? != "ssh" {
+        return None;
+    }
+    const WITH_VALUE: &[&str] = &[
+        "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p",
+        "-Q", "-R", "-S", "-W", "-w",
+    ];
+    let mut user: Option<&str> = None;
+    let mut it = rest.iter();
+    while let Some(&t) = it.next() {
+        if t == "-l" {
+            user = it.next().copied();
+        } else if WITH_VALUE.contains(&t) {
+            it.next();
+        } else if !t.starts_with('-') {
+            let host = t.trim_matches(['\'', '"']);
+            if host.is_empty() {
+                return None;
+            }
+            return Some(match (host.contains('@'), user) {
+                (false, Some(u)) => format!("{u}@{host}"),
+                _ => host.to_string(),
+            });
+        }
+    }
+    None
+}
+
 /// A cheap per-call salt for a session name (wall-clock nanos mixed with the pid).
 pub fn salt() -> u64 {
     let n = std::time::SystemTime::now()
@@ -416,6 +450,16 @@ mod tests {
         assert_eq!(meta[LAUNCH], cmd);
         assert!(meta[TMUX].as_str().unwrap().starts_with("avada-lane-ltc-"));
         assert_eq!(meta["origin.via"], "x");
+    }
+
+    #[test]
+    fn a_live_ssh_argv_names_its_far_end() {
+        let t = |a: &[&str]| ssh_target_from_argv(a);
+        assert_eq!(t(&["ssh", "hp2"]).as_deref(), Some("hp2"));
+        assert_eq!(t(&["/usr/bin/ssh", "-p", "22", "bert@hp2", "ls"]).as_deref(), Some("bert@hp2"));
+        assert_eq!(t(&["ssh", "-l", "bert", "-i", "k", "hp2"]).as_deref(), Some("bert@hp2"));
+        assert_eq!(t(&["zsh", "hp2"]), None);
+        assert_eq!(t(&["ssh"]), None);
     }
 
     #[test]

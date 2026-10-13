@@ -459,6 +459,24 @@ pub fn foreground_cwd(fd: PtyFd) -> Option<String> {
     }
 }
 
+/// The `ssh` target in the foreground of the pty on `fd` (`user@host`, or the bare host as
+/// typed), or `None` when the foreground is not an interactive `ssh` client. Read from the
+/// untruncated argv, so it is the invocation and not a guess from a title.
+#[tracing::instrument(level = "debug", ret)]
+pub fn foreground_ssh(fd: PtyFd) -> Option<String> {
+    #[cfg(unix)]
+    {
+        let raw = foreground_command(foreground_pgrp(fd)?)?;
+        let argv: Vec<&str> = raw.split('\0').filter(|s| !s.is_empty()).collect();
+        crate::pane_remote::ssh_target_from_argv(&argv)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = fd;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
