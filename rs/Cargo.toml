@@ -12,6 +12,7 @@ members = [
     "modules/tools",
     "modules/workspace",
     "modules/orchestrator",
+    "modules/operating-model",
     "modules/editor",
     "modules/markdown",
     "modules/marketplace",

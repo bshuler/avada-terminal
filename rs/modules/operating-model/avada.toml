@@ -1,0 +1,27 @@
+# Manifest of the Avada Operating Model module. `docs/module-contract.md` in
+# bshuler/avada-terminal explains every key. Top-level keys come before the first
+# table header (TOML rule).
+#
+# This module contributes no UI and holds no process state: its whole job is to put the
+# manager -> orchestrator -> builder way of working in front of every agent. It asks only
+# for `skills.materialize`, which writes its always-on rule into the project's agent
+# instruction files and its playbooks into the agent skills directory.
+capabilities = ["skills.materialize"]
+
+[module]
+id = "bshuler/avada-operating-model"
+name = "Operating Model"
+version = "0.1.0"
+description = "The manager -> orchestrator -> builder way of working, in every agent's instructions"
+publisher = "Avada"
+contract = "^1"
+
+[distribution]
+kind = "source"
+
+[[provides]]
+shape = "avada.agent.operating_model"
+version = "1.0.0"
+
+[skills]
+paths = ["skills"]

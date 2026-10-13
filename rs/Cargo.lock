@@ -460,6 +460,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "avada-operating-model"
+version = "0.1.0"
+dependencies = [
+ "avada-module-sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "avada-orchestrator"
 version = "0.1.0"
 dependencies = [
