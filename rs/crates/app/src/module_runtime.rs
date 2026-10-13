@@ -532,6 +532,16 @@ impl ModuleRuntime {
                 self.fold_event(event, &mut tick);
             }
         }
+        // A click on a module's status card goes back to that module as a notification.
+        if let Some(host) = self.host.as_ref() {
+            for (owner, card) in crate::status_tray::take_activations() {
+                if let Ok(m) = owner.parse::<ModuleId>() {
+                    if let Err(e) = host.activate_status(&m, &card) {
+                        tracing::debug!(%owner, %card, "status activate not delivered: {e}");
+                    }
+                }
+            }
+        }
         tick
     }
 
@@ -659,6 +669,14 @@ impl ModuleRuntime {
             } => {
                 tracing::debug!(module = %module.as_str(), %level, "module toast: {text}");
                 tick.toasts.push(text);
+            }
+            HostEvent::StatusSet {
+                module,
+                items,
+                remove,
+            } => apply_status_set(&module, items, &remove),
+            HostEvent::StatusCleared { module } => {
+                crate::status_tray::remove_owner(module.as_str());
             }
             HostEvent::PaneSpawn {
                 module,
@@ -836,6 +854,44 @@ impl ModuleRuntime {
         if tx.send(job).is_err() {
             tracing::warn!("the module worker is gone; dropping the request");
         }
+    }
+}
+
+/// Mirror one module's `host.status.set` into the status tray: cards are namespaced
+/// `<module>/<id>` and owned by the module, and a click on an `activatable` one is queued
+/// for the runtime to forward as `module.status.activate`.
+fn apply_status_set(
+    module: &ModuleId,
+    items: Vec<avada_core::module::status::StatusItem>,
+    remove: &[String],
+) {
+    use crate::status_tray::{register, remove as drop_card, Level, StatusItem};
+    use avada_core::module::status::StatusLevel;
+    let owner = module.as_str().to_string();
+    for id in remove {
+        drop_card(&format!("{owner}/{id}"));
+    }
+    for i in items {
+        let mut card = StatusItem::new(&format!("{owner}/{}", i.id), &i.label, &i.value)
+            .level(match i.level {
+                StatusLevel::Info => Level::Info,
+                StatusLevel::Ok => Level::Ok,
+                StatusLevel::Warn => Level::Warn,
+                StatusLevel::Needs => Level::Needs,
+            })
+            .order(i.order)
+            .owner(&owner);
+        if i.banner {
+            card = card.banner();
+        }
+        if !i.glyph.is_empty() {
+            card = card.glyph(&i.glyph);
+        }
+        if i.activatable {
+            let (o, id) = (owner.clone(), i.id.clone());
+            card = card.on_activate(move || crate::status_tray::post_activation(&o, &id));
+        }
+        register(card);
     }
 }
 
@@ -1188,6 +1244,32 @@ mod tests {
     use avada_core::rights::{Capability, DistributionKind, InstallKind, Manifest};
     use std::collections::{BTreeSet, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    #[test]
+    fn wire_status_items_are_namespaced_owned_and_cleared() {
+        use avada_core::module::status::{StatusItem as W, StatusLevel};
+        let m = id("acme/wiretest");
+        let w = |id: &str, banner: bool| W {
+            id: id.into(),
+            label: "L".into(),
+            value: "V".into(),
+            glyph: String::new(),
+            level: StatusLevel::Warn,
+            order: 0,
+            activatable: false,
+            banner,
+        };
+        super::apply_status_set(&m, vec![w("a", false), w("b", true)], &[]);
+        let snap = crate::status_tray::snapshot();
+        let a = snap.iter().find(|i| i.id == "acme/wiretest/a").expect("a registered");
+        assert_eq!(a.owner.as_deref(), Some("acme/wiretest"));
+        assert!(!a.banner);
+        assert!(snap.iter().find(|i| i.id == "acme/wiretest/b").unwrap().banner);
+        super::apply_status_set(&m, vec![], &["a".to_string()]);
+        assert!(!crate::status_tray::snapshot().iter().any(|i| i.id == "acme/wiretest/a"));
+        crate::status_tray::remove_owner("acme/wiretest");
+        assert!(!crate::status_tray::snapshot().iter().any(|i| i.id == "acme/wiretest/b"));
+    }
 
     #[test]
     fn control_url_waits_for_the_bind_and_brackets_ipv6() {

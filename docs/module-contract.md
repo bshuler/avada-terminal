@@ -164,10 +164,13 @@ version-1 peer must serve.
 | `host.fs.list` | `{ path }` → `{ entries: [{ name, kind }] }` |
 | `host.events.subscribe` | `{ kinds: [string] }` |
 | `host.toast` | `{ text, level? }` |
+| `host.status.set` | `{ items: [{ id, label, value, glyph?, level?, order?, activatable?, banner? }], remove?: [id] }` — upserts the module's status-tray cards (≤16 items, ≤120 chars of text; `level` is `info`/`ok`/`warn`/`needs`; `needs` also raises an attention card; `banner` puts the line in the top welcome banner instead). Optional; requires `ui.toast`. Cards go when the module stops. |
 | `host.routes.register` | `{ routes: [RouteDescriptor] }` — the whole set; registering again replaces it (§7) |
 | `host.keychain.get` / `host.keychain.set` | `{ key }` → `{ value? }` / `{ key, value }` |
 
 **Module serves** (host calls):
+
+`module.status.activate` `{ id }` (optional) is sent when the user clicks an `activatable` status card.
 
 | Method | Params |
 |---|---|

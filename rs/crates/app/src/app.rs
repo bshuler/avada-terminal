@@ -2624,7 +2624,7 @@ impl App {
                 // Registered status cards that need the human ride the same cards, so they
                 // count toward the badge and hold the drawer open like a waiting pane does.
                 for it in crate::status_tray::snapshot() {
-                    if it.level == crate::status_tray::Level::Needs {
+                    if it.level == crate::status_tray::Level::Needs && !it.banner {
                         cards.push(crate::AttentionCard {
                             id: format!("status:{}:{}", it.id, it.value).into(),
                             kind: 1,
@@ -2686,9 +2686,21 @@ impl App {
             w.last_status.set(Some(rev));
             // Attention cards are built from the same registry; rebuild them too.
             w.last_attention.set(None);
-            let cards: Vec<crate::StatusCard> = status_tray::snapshot()
+            let all = status_tray::snapshot();
+            let fields: Vec<crate::BannerField> = all
+                .iter()
+                .filter(|i| i.banner)
+                .map(|i| crate::BannerField {
+                    k: i.label.as_str().into(),
+                    v: i.value.as_str().into(),
+                })
+                .collect();
+            let b = w.app.global::<crate::BannerAdapter>();
+            b.set_tagline("Premium Magical AI Terminal  •  Power. Precision. Purpose.".into());
+            b.set_fields(slint::ModelRc::from(Rc::new(slint::VecModel::from(fields))));
+            let cards: Vec<crate::StatusCard> = all
                 .into_iter()
-                .filter(|i| i.level != Level::Needs)
+                .filter(|i| i.level != Level::Needs && !i.banner)
                 .map(|i| crate::StatusCard {
                     id: i.id.as_str().into(),
                     label: i.label.as_str().into(),
@@ -2709,27 +2721,17 @@ impl App {
         }
     }
 
-    /// Welcome-banner pump (UI thread): version, build date, uptime and host for the top Arcane
-    /// drawer. Uptime is formatted to the minute and each window only writes when the text
-    /// changed, so an idle window renders once a minute at most for this.
-    #[tracing::instrument(level = "debug", ret, skip(self, windows))]
-    fn pump_banner(&self, windows: &[Rc<Window>]) {
+    /// Welcome-banner pump (UI thread): keeps the built-in banner values (version, build
+    /// date, uptime, host) in the status registry. They are ordinary `banner` items, so a
+    /// module can add its own lines to the welcome with `host.status.set { banner: true }`
+    /// and [`Self::pump_status`] draws the lot. Uptime is formatted to the minute, and an
+    /// unchanged value is a no-op for the registry, so an idle window re-renders once a
+    /// minute at most for this.
+    #[tracing::instrument(level = "debug", ret, skip(self, _windows))]
+    fn pump_banner(&self, _windows: &[Rc<Window>]) {
+        use crate::status_tray::{register, update, Level, StatusItem};
         static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         static BUILTINS: std::sync::Once = std::sync::Once::new();
-        BUILTINS.call_once(|| {
-            use crate::status_tray::{register, Level, StatusItem};
-            register(
-                StatusItem::new("app.build", "AVADA", env!("CARGO_PKG_VERSION"))
-                    .glyph("✧")
-                    .level(Level::Ok)
-                    .order(-20),
-            );
-            register(
-                StatusItem::new("app.host", "HOST", &avada_core::pane_remote::local_hostname())
-                    .glyph("◈")
-                    .order(-10),
-            );
-        });
         let secs = START.get_or_init(std::time::Instant::now).elapsed().as_secs();
         let (d, h, m) = (secs / 86400, secs % 86400 / 3600, secs % 3600 / 60);
         let uptime = match (d, h) {
@@ -2737,16 +2739,21 @@ impl App {
             (0, _) => format!("{h}h {m}m"),
             _ => format!("{d}d {h}h {m}m"),
         };
-        for w in windows {
-            let g = w.app.global::<crate::BannerAdapter>();
-            if g.get_uptime().as_str() == uptime {
-                continue;
-            }
-            g.set_version(env!("CARGO_PKG_VERSION").into());
-            g.set_updated(env!("AVADA_BUILD_DATE").into());
-            g.set_host(avada_core::pane_remote::local_hostname().into());
-            g.set_uptime(uptime.clone().into());
-        }
+        BUILTINS.call_once(|| {
+            let host = avada_core::pane_remote::local_hostname();
+            register(StatusItem::new("app.version", "version", env!("CARGO_PKG_VERSION")).banner().order(-40));
+            register(StatusItem::new("app.updated", "last update", env!("AVADA_BUILD_DATE")).banner().order(-30));
+            register(StatusItem::new("app.uptime", "uptime", &uptime).banner().order(-20));
+            register(StatusItem::new("app.host", "host", &host).banner().order(-10));
+            register(
+                StatusItem::new("app.build", "AVADA", env!("CARGO_PKG_VERSION"))
+                    .glyph("✧")
+                    .level(Level::Ok)
+                    .order(-20),
+            );
+            register(StatusItem::new("app.hostcard", "HOST", &host).glyph("◈").order(-10));
+        });
+        update("app.uptime", &uptime, Level::Info);
     }
 
     /// Recently-closed pump (UI thread): mirror each window's close history into its
