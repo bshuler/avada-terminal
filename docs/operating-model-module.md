@@ -280,3 +280,7 @@ than the module itself.
 
 Not yet given: Bert's explicit go to start building. Open implementation item R1 (setting
 `AVADA_ROLE` at pane spawn) is verified during B5, not assumed.
+
+## 11. As built (2026-10-13)
+
+Shape name is `avada.agent.operating_model` (underscore) throughout; the manifest validator rejects hyphens. See `REPORT-operating-model.md` for commits, limits, and merge notes.
