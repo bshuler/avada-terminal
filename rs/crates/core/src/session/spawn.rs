@@ -434,6 +434,18 @@ pub fn build_env(inputs: &EnvInputs<'_>) -> EnvMap {
         }
     }
 
+    // `AVADA_ROLE` is the operating-model switch (see `pane_role`): present only on a pane
+    // that was given a role. Avada launched from inside a role pane would otherwise hand its
+    // own role to every pane it spawns, so the INHERITED value is dropped; the one set via
+    // `opts_env` (the pane's own role) is kept.
+    {
+        let explicit = inputs.opts_env.is_some_and(|o| o.contains_key(crate::pane_role::ENV_VAR))
+            || inputs.integration_env.contains_key(crate::pane_role::ENV_VAR);
+        if !explicit {
+            env.remove(crate::pane_role::ENV_VAR);
+        }
+    }
+
     if let Some(pane_id) = inputs.pane_id {
         env.insert("AVADA_PANE_ID".into(), pane_id.to_string());
     }
@@ -751,6 +763,43 @@ mod tests {
         for key in HARNESS_MARKERS {
             assert!(!env.contains_key(*key), "{key} leaked into the pane");
         }
+    }
+
+    #[test]
+    fn avada_role_is_scrubbed_when_inherited_and_kept_when_the_pane_has_a_role() {
+        let integ = map(&[]);
+        let inherited = map(&[("AVADA_ROLE", "manager")]);
+        let env = build_env(&EnvInputs {
+            process_env: &inherited,
+            opts_env: None,
+            integration_env: &integ,
+            pane_id: None,
+            control_file: None,
+            browser_shim: None,
+        });
+        assert!(!env.contains_key("AVADA_ROLE"), "inherited role leaked");
+
+        let opts = map(&[("AVADA_ROLE", "builder")]);
+        let env = build_env(&EnvInputs {
+            process_env: &inherited,
+            opts_env: Some(&opts),
+            integration_env: &integ,
+            pane_id: None,
+            control_file: None,
+            browser_shim: None,
+        });
+        assert_eq!(env.get("AVADA_ROLE").map(String::as_str), Some("builder"));
+
+        let none = map(&[]);
+        let env = build_env(&EnvInputs {
+            process_env: &none,
+            opts_env: None,
+            integration_env: &integ,
+            pane_id: None,
+            control_file: None,
+            browser_shim: None,
+        });
+        assert!(!env.contains_key("AVADA_ROLE"));
     }
 
     #[test]

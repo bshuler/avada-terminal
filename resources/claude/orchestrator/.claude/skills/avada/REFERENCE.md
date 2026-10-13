@@ -59,7 +59,7 @@ reported back — all of them at once, not just the first.
 
 | Verb | `/command` body |
 |---|---|
-| `new-pane --why R [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N] [--remote HOST]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
+| `new-pane --why R [--role ROLE] [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N] [--remote HOST]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
 | `info <pane>` | reads `/state`: who opened the pane, when, from where, and why |
 | `close-pane <pane>` | `{"type":"closePane","paneId":…}` |
 | `restart-pane <pane>` | `{"type":"restartPane","paneId":…}` |
@@ -84,6 +84,15 @@ directory on HOST). Its title shows `[ssh user@host]` and follows the host the t
 active tab is full, the pane goes into the first "<title> 2", "<title> 3"… tab with room (a trailing
 number on the title is dropped first, so "Divi 2" overflows into "Divi 3"), and that tab is created,
 in the background, if it doesn't exist. Find where it landed with `ctl panes`.
+
+### Pane role
+
+`new-pane --role manager|orchestrator|builder` (raw form: `pane.meta.role`) records the pane's
+operating-model role in its `meta` (`role`, visible in `/state`) and exports it to the pane's
+process as `AVADA_ROLE`, which the injected operating-model rule keys off. Any other value is
+refused (exit 2 from the CLI, HTTP 400 from `/command`). Without `--role` the variable is absent,
+even if Avada itself was started from a role pane. Do not set `env.AVADA_ROLE` by hand: it is
+refused; pass the role.
 
 ### Pane origin
 

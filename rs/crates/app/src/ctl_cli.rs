@@ -55,7 +55,7 @@ usage: avada ctl <verb> [args]
     keys <pane> <key>…              named keys, e.g. enter escape ctrl+c up
 
   Panes
-    new-pane --why REASON [--cwd D] [--cmd C] [--label L] [--color #rrggbb]
+    new-pane --why REASON [--role manager|orchestrator|builder] [--cwd D] [--cmd C] [--label L] [--color #rrggbb]
              [--shell S] [--project P] [--window N]
                                     lands in that window's active tab, or, once that holds 4
                                     panes, in <tab> 2, <tab> 3… (made if missing); records who opened it
@@ -248,6 +248,14 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             // facts in meta (`avada_core::pane_remote`).
             if let Some(host) = flags.get("remote").filter(|h| !h.trim().is_empty()) {
                 spec["meta"][avada_core::pane_remote::HOST] = json!(host);
+            }
+            // `--role`: stored as `meta.role` and exported to the pane as AVADA_ROLE by the
+            // host. Validated here for a fast usage error; the server validates again.
+            if let Some(role) = flags.get("role") {
+                if let Err(e) = avada_core::pane_role::validate(role) {
+                    usage(&format!("new-pane --role: {e}"));
+                }
+                spec["meta"][avada_core::pane_role::META_KEY] = json!(role);
             }
             let mut cmd = json!({ "type": "newPane", "pane": spec });
             if let Some(w) = flags.get("window").and_then(|w| w.parse::<i64>().ok()) {

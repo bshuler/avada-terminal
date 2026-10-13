@@ -431,6 +431,9 @@ fn exec(
             // Every control-spawned pane says it came through the API (and when), even from a
             // caller that recorded nothing itself — the GUI's ⓘ reads this.
             crate::pane_origin::stamp_spec(&mut spec);
+            // `meta.role` (manager|orchestrator|builder) is validated here and exported to the
+            // pane as `AVADA_ROLE`; no role leaves the variable absent.
+            crate::pane_role::apply_to_spec(&mut spec).map_err(DispatchError::BadRequest)?;
             // A pane whose terminal runs on another host becomes ssh + a remote tmux, with the
             // reconnect facts recorded in meta (see `pane_remote`).
             crate::pane_remote::normalize_spec(&mut spec, crate::pane_remote::salt());
@@ -1421,6 +1424,21 @@ mod tests {
         let id = r.body["result"].as_str().unwrap().to_string();
         assert!(m.pane(&id).is_some());
         assert_eq!(m.pane(&id).unwrap().label, "w");
+    }
+
+    #[tokio::test]
+    async fn new_pane_with_a_bad_role_is_400_and_a_good_one_is_stored() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let bad = json!({ "type": "newPane", "windowId": 1, "pane": { "meta": { "role": "boss" } } });
+        let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &bad, &speech());
+        assert_eq!(r.status, 400);
+        let good = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi", "meta": { "role": "builder" } } });
+        let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &good, &speech());
+        assert_eq!(r.status, 200);
+        let id = r.body["result"].as_str().unwrap().to_string();
+        let meta = m.pane(&id).unwrap().meta.clone().unwrap();
+        assert_eq!(meta.get("role").map(String::as_str), Some("builder"));
     }
 
     #[tokio::test]
