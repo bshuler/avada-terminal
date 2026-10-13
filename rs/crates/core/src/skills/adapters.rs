@@ -26,6 +26,7 @@
 //! | `kiro` | `~/.kiro` | `kiro`, `kiro-cli` |
 //! | `augment` | `~/.augment` | `auggie` |
 //! | `continue` | `~/.continue` | `cn` |
+//! | `gemini` | `~/.gemini` | `gemini` |
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -236,6 +237,11 @@ const CLAUDE_CODE_CAP: Cap = Cap {
 ///   That page documents no size cap for a skill (only "keep `SKILL.md` under
 ///   500 lines" as advice), so the 4 MiB memory-file cap is applied to skill
 ///   files too rather than leaving them uncapped.
+/// * **Gemini CLI** — `GEMINI.md` is its context file (`./GEMINI.md`,
+///   `~/.gemini/GEMINI.md`) and it supports `@file.md` imports, so the project
+///   row mirrors Claude Code's: a fenced `@AGENTS.md` import, with the shared
+///   layer carrying the rules. No per-tool skills dir or rules dir is written;
+///   skills stay in the shared `.agents/skills/`.
 /// * **Aider** — `CONVENTIONS.md` is the documented convention (read via
 ///   `--read`); no user-level file, no on-demand form.
 /// * **Cline** — `docs.cline.bot/features/cline-rules`: `.clinerules/` holds
@@ -433,6 +439,25 @@ pub const ADAPTERS: &[AdapterRow] = &[
                 dialect: Dialect::Continue,
                 always_only: false,
             }),
+            ..Layout::EMPTY
+        }),
+    },
+    AdapterRow {
+        id: "gemini",
+        name: "Gemini CLI",
+        status: AdapterStatus::Implemented,
+        detect: Detect {
+            home_paths: &[&[".gemini"]],
+            binaries: &["gemini"],
+        },
+        project: Some(Layout {
+            rules_file: Some(&["GEMINI.md"]),
+            rules_form: RulesForm::ImportShared("@AGENTS.md"),
+            ..Layout::EMPTY
+        }),
+        user: Some(Layout {
+            rules_file: Some(&[".gemini", "GEMINI.md"]),
+            rules_form: RulesForm::Inline,
             ..Layout::EMPTY
         }),
     },

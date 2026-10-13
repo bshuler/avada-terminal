@@ -24,7 +24,7 @@ Body in Markdown.
 
 `scripts/`, `references/` and `assets/` beside a `SKILL.md` are copied with it.
 `skills/<tool>/<name>/SKILL.md` is a per-tool override and wins for that tool.
-Tool ids: `claude-code`, `aider`, `cline`, `kiro`, `augment`, `continue`, and
+Tool ids: `claude-code`, `aider`, `cline`, `kiro`, `augment`, `continue`, `gemini`, and
 `agents` for the shared layer.
 
 Every `kind` x `activation` pair has a form per tool (table below). Two pairs
@@ -48,6 +48,7 @@ Project scope, per project root of the workspace (`<m>` is `<owner>-<repo>`):
 | Claude Code | `CLAUDE.md` | fenced `@AGENTS.md` import (id `avada/modules`) |
 | Claude Code | `.claude/rules/<m>-<name>.md` | glob rules with `paths:` front matter |
 | Claude Code | `.claude/skills/<m>-<name>/` | copy of each skill + the index; manual units carry `disable-model-invocation: true` |
+| Gemini CLI | `GEMINI.md` | fenced `@AGENTS.md` import (id `avada/modules`); no skills dir, skills stay in `.agents/skills/` |
 | Aider | `CONVENTIONS.md` | rules inlined per module, glob rules in prose (Aider cannot import; it has no skills) |
 | Cline | `.clinerules/<m>-<name>.md` | one file per rule; glob rules with `paths:` front matter |
 | Cline | `.clinerules/workflows/<m>-<name>.md` | manual units as workflows (`/<m>-<name>.md` in chat) |
@@ -65,6 +66,7 @@ uninstall semantics as project scope:
 | Kiro | `.kiro/steering/<m>-<name>.md` | same, `fileMatch` | same, `manual` | same, `auto` |
 | Augment | `.augment/rules/<m>-<name>.md` | skipped | skipped | skipped |
 | Continue | `.continue/rules/<m>-<name>.md` | same, `globs` | same | same |
+| Gemini CLI | fenced block in `.gemini/GEMINI.md` (inlined) | prose in the same block | skipped | skipped |
 | Aider | none | | | |
 
 `~/.claude/settings.json` is never touched. The shared layer (`AGENTS.md`,
@@ -78,6 +80,7 @@ How each `activation` is written, and what is `Skipped` with which reason:
 |---|---|---|---|---|
 | shared `agents` | `AGENTS.md` block | prose in the `AGENTS.md` block | skipped: "the shared Agent Skills layer has no manual-only flag; manual units are written per tool" | skill dir |
 | Claude Code | `AGENTS.md` via import (project); `.claude/CLAUDE.md` (user) | `.claude/rules/*.md` with `paths:` | skill dir with `disable-model-invocation: true` | skill dir |
+| Gemini CLI | `AGENTS.md` via import (project); `.gemini/GEMINI.md` (user) | prose in `AGENTS.md` / the user block | skipped: "this tool has no manual form" | skipped: "this tool has no on-demand skills; only rules are written" |
 | Aider | `CONVENTIONS.md` | prose in `CONVENTIONS.md` | skipped: "this tool has no manual form" | skipped: "this tool has no on-demand skills; only rules are written" |
 | Cline | `.clinerules/*.md` | `.clinerules/*.md` with `paths:` | `.clinerules/workflows/*.md` | skipped: no on-demand skills |
 | Kiro | `inclusion: always` | `inclusion: fileMatch` + `fileMatchPattern` | `inclusion: manual` (user types `#name`) | `inclusion: auto` + `name` + `description` |
@@ -117,6 +120,7 @@ under `home` exists, or a binary (with or without `.exe`) is in one of the
 | kiro | `~/.kiro` | `kiro`, `kiro-cli` |
 | augment | `~/.augment` | `auggie` |
 | continue | `~/.continue` | `cn` |
+| gemini | `~/.gemini` | `gemini` |
 
 `Tools::detect_here()` uses the real home and `PATH`; every other constructor
 takes injected values so tests never touch the machine. The per-tool toggle is a
