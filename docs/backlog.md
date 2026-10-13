@@ -6,6 +6,16 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B7 · Keyboard focus dies or wanders in the Orchestrator tab under subagent churn (2026-10-13)
+Slint keeps keyboard focus on a *row slot*; `paneview::sync_model` rewrites slots in place
+and drops the tail row, and `PaneState::refocus_seq` is projected for every row, so each
+mid-list subagent insert/remove re-fires `changed refocus-tick` on every shifted row (last
+one wins, keys route by `idx` to the wrong pane) or destroys the focused element silently
+(dead keyboard, never re-armed). Observed live on 0.2.41 pid 12185: the holder jumped from
+"repaint fix" to an exited subagent pane with no click. Write-up, evidence and the fix spec
+(F1–F7): [`incidents/2026-10-13-keyboard-focus/`](incidents/2026-10-13-keyboard-focus/README.md).
+Workaround: `avada ctl focus-pane <other pane>` then back (same-pane focus is a no-op).
+
 ### B4 · Force Quit of the GUI killed the session daemon and every pane (2026-10-09)
 Dock Force Quit of the 0.2.31 GUI (pid 76456) at 14:40:46 ended with loginwindow's
 "has fully exited including subordinate processes" at 14:40:47.194, and the daemon (76462,

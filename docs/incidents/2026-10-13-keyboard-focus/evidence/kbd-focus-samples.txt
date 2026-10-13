@@ -1,0 +1,4 @@
+# keyboardFocusPaneId samples (UTC), taken with: avada ctl state | keyboardFocusPaneId
+2026-10-13T20:0x  None            (Bert reports dead keys; active tab 0:0 Orchestrator)
+2026-10-13T20:1x  7d41f732-8174   (pane 'repaint fix', row 4 of tab 0:0; Bert had clicked into it)
+2026-10-13T20:13  sub:a2afca1c6b5  (EXITED subagent pane, row 3, inserted after the row-4 pane acked; nobody clicked it)

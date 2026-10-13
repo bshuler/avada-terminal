@@ -1,0 +1,648 @@
+{
+  "dictation": {
+    "keptIn": "/Users/bshuler/Library/Application Support/avada/dictation",
+    "recorder": "native",
+    "recordingPanes": [],
+    "transcriber": "native"
+  },
+  "speech": {
+    "backend": "say",
+    "focusedOnly": false,
+    "muted": false,
+    "speakingPane": null
+  },
+  "windows": [
+    {
+      "activeTabId": "0:0",
+      "keyboardFocusPaneId": "sub:a2afca1c6b5cbb524",
+      "tabs": [
+        {
+          "id": "0:0",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "busy",
+              "color": "#3ec46d",
+              "cols": 194,
+              "cwd": "/Users/bshuler/Library/Application Support/avada/orchestrator",
+              "id": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+              "kind": "claude",
+              "label": "Avada",
+              "rows": 49,
+              "sessionUid": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+              "status": "running"
+            },
+            {
+              "activity": "active",
+              "color": "#d4af37",
+              "cwd": "/Users/bshuler/.claude/projects/-Users-bshuler-Library-Application-Support-avada-orchestrator/283de732-9b9b-4fef-b5d6-71fae511cf95/subagents/agent-af2128c5ebf52a76b.jsonl",
+              "id": "sub:af2128c5ebf52a76b",
+              "kind": "subagent",
+              "label": "Avada › Make close-panel recoverable",
+              "parentPaneId": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+              "sessionUid": "sub:af2128c5ebf52a76b",
+              "status": "exited",
+              "subtitle": "general-purpose"
+            },
+            {
+              "activity": "active",
+              "color": "#5fe0a0",
+              "cwd": "/Users/bshuler/.claude/projects/-Users-bshuler-Library-Application-Support-avada-orchestrator/283de732-9b9b-4fef-b5d6-71fae511cf95/subagents/agent-a6c753f8e6ab01de5.jsonl",
+              "id": "sub:a6c753f8e6ab01de5",
+              "kind": "subagent",
+              "label": "Avada › Panel rename + recoverable close on hp3",
+              "parentPaneId": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+              "sessionUid": "sub:a6c753f8e6ab01de5",
+              "status": "exited",
+              "subtitle": "general-purpose"
+            },
+            {
+              "activity": "active",
+              "color": "#9d4edd",
+              "cwd": "/Users/bshuler/.claude/projects/-Users-bshuler-Library-Application-Support-avada-orchestrator/283de732-9b9b-4fef-b5d6-71fae511cf95/subagents/agent-a2afca1c6b5cbb524.jsonl",
+              "id": "sub:a2afca1c6b5cbb524",
+              "kind": "subagent",
+              "label": "Avada › Fix 3x gfs disk alarm dedup",
+              "parentPaneId": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+              "sessionUid": "sub:a2afca1c6b5cbb524",
+              "status": "exited",
+              "subtitle": "general-purpose"
+            },
+            {
+              "activity": "idle",
+              "color": "#c77dff",
+              "cols": 63,
+              "cwd": "/Users/bshuler/code/avada/avada-terminal/worktrees/repaint-on-show/rs/crates/app",
+              "id": "7d41f732-8174-4a92-a377-2391c0706cdf",
+              "label": "repaint fix",
+              "meta": {
+                "origin.at": "2026-10-11 11:11:19 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-d35a0213-2c77-44a4-95ca-8e1b78f989eb",
+                "origin.by.process": "zsh(9268) < claude(60375) < zsh(78400)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/private/tmp",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "fix: panes blank until mouse-move; repaint on tab-show/window-focus",
+                "supervisor.at": "2026-10-13T11:27:34-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 49,
+              "sessionUid": "pane-93f7374c-b9b0-4889-9a07-fde1172abd0a",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#f5f5f5",
+              "cols": 63,
+              "cwd": "/Users/bshuler/code/avada/avada-license",
+              "id": "afa39087-9ab0-4b5a-972b-47835eadf51a",
+              "label": "license agent",
+              "meta": {
+                "origin.at": "2026-10-13 13:44:41 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+                "origin.by.process": "zsh(58545) < claude(17862) < zsh(14044) < avada(12318) < avada(12185)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/orchestrator",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Dedicated Avada licensing agent: issue a real commercial license on license.avada.to + assign to correct product; pause for Bert before minting. Brief: orchestrator/LICENSE-AGENT-BRIEF.md. Requested by Bert 2026-10-13"
+              },
+              "rows": 49,
+              "sessionUid": "f4941c77-8a91-426d-b382-13033c2dce7b",
+              "status": "running"
+            }
+          ],
+          "title": "Orchestrator"
+        },
+        {
+          "id": "0:1",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#7b2cbf",
+              "cols": 194,
+              "cwd": "/Users/bshuler/code/health",
+              "id": "pane-43c9eb41-56aa-46e7-8397-bd4088733b3f",
+              "label": "Avada Terminal",
+              "meta": {
+                "supervisor.at": "2026-10-13T14:51:01-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 49,
+              "sessionUid": "pane-43c9eb41-56aa-46e7-8397-bd4088733b3f",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#3ec46d",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/avada/avada-terminal",
+              "id": "pane-aac77e4e-9cc1-4e48-b98f-b9d8587557ab",
+              "label": "Avada memory fix",
+              "rows": 23,
+              "sessionUid": "pane-aac77e4e-9cc1-4e48-b98f-b9d8587557ab",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#39ff14",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/avada/avada-terminal/worktrees/remote-panes/rs/crates/app",
+              "id": "b5eda3cb-e41d-4e52-8a42-8c52fbcba99b",
+              "label": "remote panes",
+              "meta": {
+                "origin.at": "2026-10-11 12:19:41 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-d35a0213-2c77-44a4-95ca-8e1b78f989eb",
+                "origin.by.process": "zsh(9257) < claude(60375) < zsh(78400)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/hyperpane",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Dev: remote panes first-class — [ssh user@host] title (follows current hop), info+restore first-hop only, tmux-recoverable; isolated worktree feat/remote-panes"
+              },
+              "rows": 23,
+              "sessionUid": "pane-fd3b037d-235e-4dce-8fb2-d661893995e0",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#39ff14",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/avada/avada-terminal/worktrees/activity-gated-layout",
+              "id": "309e07a7-fd7d-4122-861e-e061b2f4f45a",
+              "label": "activity gate",
+              "meta": {
+                "origin.at": "2026-10-11 12:19:41 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-d35a0213-2c77-44a4-95ca-8e1b78f989eb",
+                "origin.by.process": "zsh(9257) < claude(60375) < zsh(78400)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/hyperpane",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Dev: don't auto-move/reflow/reorder/focus panes while human active; new idle-timeout setting (typing+menu+voice reset it); isolated worktree feat/activity-gated-layout"
+              },
+              "rows": 23,
+              "sessionUid": "pane-a6b0b6e1-920f-4bfe-92cf-dddf0027fc93",
+              "status": "running"
+            }
+          ],
+          "title": "Avada Dev + restart cluster"
+        },
+        {
+          "id": "0:2",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#7b2cbf",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/health",
+              "id": "pane-8354d94a-87df-4860-9615-01252823e40f",
+              "label": "VPS Health",
+              "meta": {
+                "supervisor.at": "2026-10-13T11:08:00-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 23,
+              "sessionUid": "pane-8354d94a-87df-4860-9615-01252823e40f",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#7b2cbf",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/disk_space",
+              "id": "pane-000ead09-b109-4a52-aff3-13e0c054e0b5",
+              "kind": "claude",
+              "label": "Disk Space",
+              "rows": 23,
+              "sessionUid": "pane-000ead09-b109-4a52-aff3-13e0c054e0b5",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#5fe0a0",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/backup_code",
+              "id": "pane-99d1e22a-1ff0-4969-b4cb-ab06118cb5ee",
+              "label": "health",
+              "meta": {
+                "supervisor.at": "2026-10-13T08:39:29-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 23,
+              "sessionUid": "pane-99d1e22a-1ff0-4969-b4cb-ab06118cb5ee",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#5fe0a0",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/backup_code",
+              "id": "2831fdaa-ffbd-4a6d-8130-99a93e83c241",
+              "label": "Proton on hp2",
+              "meta": {
+                "origin.at": "2026-10-12 08:27:12 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "health",
+                "origin.by.pane": "pane-f04ad316-3f19-42fb-86de-10f0e9c756c6",
+                "origin.by.process": "zsh(20988) < claude(85685) < zsh(78426)",
+                "origin.by.session": "dde1f777-8e54-4fdb-8413-dcf793cfd3db",
+                "origin.cwd": "/Users/bshuler/code/backup_code",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Shared terminal for setting up hp2's Proton Drive backup login (Bert asked)"
+              },
+              "rows": 23,
+              "sessionUid": "pane-13ddc53b-bd5d-4282-b3af-181814ce867e",
+              "status": "running"
+            }
+          ],
+          "title": "Local"
+        },
+        {
+          "id": "0:3",
+          "layout": "grid",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#5fe0a0",
+              "cols": 194,
+              "cwd": "/Users/bshuler/code/tplx-lanes/tql",
+              "id": "pane-c07a303b-bba7-4a00-ba72-d53ddc2dab9b",
+              "label": "TQL",
+              "rows": 49,
+              "sessionUid": "pane-c07a303b-bba7-4a00-ba72-d53ddc2dab9b",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#9d4edd",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/tplx-lanes/ceb/bench",
+              "id": "pane-a3a58f1c-2b11-4949-8c10-05fe7d2f309b",
+              "kind": "claude",
+              "label": "CEB",
+              "rows": 23,
+              "sessionUid": "pane-a3a58f1c-2b11-4949-8c10-05fe7d2f309b",
+              "status": "running"
+            },
+            {
+              "activity": "busy",
+              "color": "#3ec46d",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/tplx-lanes/ulr/docs/plans/2026-08-23-universal-log-receiver",
+              "id": "pane-6910a5b6-8f50-449e-891c-8054b3737f1f",
+              "kind": "claude",
+              "label": "ULR",
+              "rows": 23,
+              "sessionUid": "pane-6910a5b6-8f50-449e-891c-8054b3737f1f",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#f5f5f5",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/tplx-lanes/survey/docs/research/2026-08-23-query-ui-survey",
+              "id": "pane-025ffced-cc2a-4c1b-aeae-65d89b930e68",
+              "kind": "claude",
+              "label": "Survey",
+              "rows": 23,
+              "sessionUid": "pane-025ffced-cc2a-4c1b-aeae-65d89b930e68",
+              "status": "running"
+            }
+          ],
+          "title": "TPLX"
+        },
+        {
+          "id": "0:4",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "active",
+              "color": "#39ff14",
+              "cwd": "/Users/bshuler/.claude/projects/-Users-bshuler-code-tplx-lanes-ulr/df6a305a-658b-42fb-91dc-1b5b6b68062c/subagents/agent-ab57937bceb8b306d.jsonl",
+              "id": "sub:ab57937bceb8b306d",
+              "kind": "subagent",
+              "label": "ULR › Map narrow register re-freeze dependencies",
+              "parentPaneId": "pane-6910a5b6-8f50-449e-891c-8054b3737f1f",
+              "sessionUid": "sub:ab57937bceb8b306d",
+              "status": "exited",
+              "subtitle": "general-purpose"
+            }
+          ],
+          "title": "TPLX 2"
+        },
+        {
+          "id": "0:5",
+          "layout": "grid",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#5fe0a0",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/ziti-player",
+              "id": "pane-50a9c43b-8e1e-4ffb-8bd0-85d0c1aa4553",
+              "label": "ziti-player",
+              "rows": 23,
+              "sessionUid": "pane-50a9c43b-8e1e-4ffb-8bd0-85d0c1aa4553",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#f5f5f5",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/iptvcli",
+              "id": "pane-71fe7afc-cd2b-4d30-80f4-92af1aa85fcb",
+              "label": "IPTVCLI",
+              "rows": 23,
+              "sessionUid": "pane-71fe7afc-cd2b-4d30-80f4-92af1aa85fcb",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#9d4edd",
+              "cols": 194,
+              "cwd": "/Users/bshuler/code/iptv_project",
+              "id": "pane-ef6e4df0-2a4d-40a9-a16e-9ef0447b9cb9",
+              "label": "web-player",
+              "rows": 23,
+              "sessionUid": "pane-ef6e4df0-2a4d-40a9-a16e-9ef0447b9cb9",
+              "status": "running"
+            }
+          ],
+          "title": "IPTV"
+        },
+        {
+          "id": "0:6",
+          "layout": "grid",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#9d4edd",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/iptv_project",
+              "id": "pane-d9dd0682-26cb-4dab-be3f-a09056f6e806",
+              "label": "NFT",
+              "meta": {
+                "supervisor.answered": "314",
+                "supervisor.at": "2026-10-13T13:17:09-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 23,
+              "sessionUid": "pane-c2124834-359f-426c-ab88-929c09079559",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#9d4edd",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code",
+              "id": "046c6075-bec5-4472-a006-610e33ef60ec",
+              "label": "divi-nft fork",
+              "meta": {
+                "origin.at": "2026-10-10 12:06:06 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada Terminal",
+                "origin.by.pane": "pane-271f43cd-2933-41b8-84ae-9b9dc046c6ff",
+                "origin.by.process": "zsh(81515) < claude(85678) < zsh(78407)",
+                "origin.by.session": "e678d21a-9abe-414a-b81c-d0adfa79a929",
+                "origin.cwd": "/Users/bshuler/code/divi-chatbot",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Shows the divi-nft fork agent (session b09fc467), which ran hidden in tmux and is waiting on your answer"
+              },
+              "rows": 23,
+              "sessionUid": "pane-f74db0d4-57ec-4989-a148-5615eb8002a3",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#f5f5f5",
+              "cols": 194,
+              "cwd": "/Users/bshuler/code/divi-nft",
+              "id": "6a8420e0-06d1-4ac9-9a3f-f23fd321c107",
+              "label": "NFT wallet",
+              "meta": {
+                "origin.at": "2026-10-13 13:21:24 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+                "origin.by.process": "zsh(43762) < claude(17862) < zsh(14044) < avada(12318) < avada(12185)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/orchestrator",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "NFT wallet feature build per WALLET-FEATURE-BRIEF.md; requested by Bert 2026-10-13",
+                "supervisor.at": "2026-10-13T13:21:55-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 23,
+              "sessionUid": "7d2d348c-c2d1-4eb7-b468-4d9cdad6edc0",
+              "status": "running"
+            }
+          ],
+          "title": "Divi"
+        },
+        {
+          "id": "0:7",
+          "layout": "grid",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#39ff14",
+              "cols": 194,
+              "cwd": "/Users/bshuler/code/IronDivi",
+              "id": "pane-033ef0d4-3200-4d5b-ac49-926f75101334",
+              "label": "orchestrator",
+              "rows": 49,
+              "sessionUid": "pane-033ef0d4-3200-4d5b-ac49-926f75101334",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#39ff14",
+              "cols": 2,
+              "cwd": "/Users/bshuler/code/IronDivi",
+              "id": "ae8a03fc-fad5-45c4-9fa6-d87a24aef49b",
+              "label": "secret-broker",
+              "meta": {
+                "origin.at": "2026-10-09 20:16:52 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "orchestrator",
+                "origin.by.pane": "pane-3f088f33-4936-4f6a-aef4-db211a1b9337",
+                "origin.by.process": "zsh(57582) < claude(91529) < zsh(78701)",
+                "origin.by.session": "32b7dd88-0aa0-4f1d-ac66-6dc62585f13b",
+                "origin.cwd": "/Users/bshuler/code/IronDivi",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "secret-broker for the swap POC: approve its one 1Password Touch ID and every swap lane's key reads ride on it"
+              },
+              "rows": 1,
+              "sessionUid": "pane-8e593bee-e207-40fd-96c7-e58b607a785e",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#39ff14",
+              "cols": 2,
+              "cwd": "/Users/bshuler/code/agent-supervisor",
+              "id": "ac49441f-d670-4496-887f-5ee76a39412c",
+              "label": "supervisor build",
+              "meta": {
+                "origin.at": "2026-10-10 16:15:06 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-d35a0213-2c77-44a4-95ca-8e1b78f989eb",
+                "origin.by.process": "zsh(74144) < claude(60375) < zsh(78400)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/hyperpane",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "build the tiered agent-supervision system Bert asked for (DESIGN.md in ~/code/agent-supervisor)"
+              },
+              "rows": 1,
+              "sessionUid": "pane-fb1f8eed-4601-403e-a6bf-2540655b0e5d",
+              "status": "running"
+            }
+          ],
+          "title": "Divi Swap 1"
+        },
+        {
+          "id": "0:8",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#39ff14",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/IronDivi",
+              "id": "pane-74a03ba2-5c2f-4618-97db-5cd282a6bd43",
+              "label": "IronDivi",
+              "meta": {
+                "supervisor.at": "2026-10-13T16:03:37-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 49,
+              "sessionUid": "pane-74a03ba2-5c2f-4618-97db-5cd282a6bd43",
+              "status": "running"
+            },
+            {
+              "activity": "idle",
+              "color": "#7b2cbf",
+              "cols": 96,
+              "cwd": "/Users/bshuler/code/health",
+              "id": "pane-b780e3ac-20ce-4f95-ab3b-6cabadf0e11b",
+              "label": "health",
+              "meta": {
+                "supervisor.at": "2026-10-13T07:12:25-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 49,
+              "sessionUid": "pane-b780e3ac-20ce-4f95-ab3b-6cabadf0e11b",
+              "status": "running"
+            }
+          ],
+          "title": "IronDivi & Health"
+        },
+        {
+          "id": "0:9",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#7c4dff",
+              "cols": 194,
+              "command": "ssh dev-a",
+              "cwd": "/Users/bshuler",
+              "id": "03c7d579-eda0-423a-b2d7-f0087f40e41b",
+              "label": "divi-basicswap",
+              "meta": {
+                "origin.at": "2026-10-13 11:27:02 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+                "origin.by.process": "zsh(63088) < claude(17862) < zsh(14044) < avada(12318) < avada(12185)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/orchestrator",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Divi x BasicSwap DEX integration builder (claude_auto on dev-a); brief at ~/code/divi-basicswap/BRIEF.md; managed by orchestrator",
+                "remote.host": "dev-a",
+                "remote.launch": "ssh dev-a",
+                "supervisor.at": "2026-10-13T16:03:39-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 49,
+              "sessionUid": "b2112983-b893-4ae8-81e5-7f09fb19c7af",
+              "status": "running"
+            }
+          ],
+          "title": "divi-basicswap"
+        },
+        {
+          "id": "0:10",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#6b5b95",
+              "cols": 194,
+              "command": "claude_auto",
+              "cwd": "/Users/bshuler/code/avada/avada-terminal/worktrees/scheduled-tasks",
+              "id": "54ee320d-8f9d-43ea-ae0c-ed31c87d05f0",
+              "label": "scheduler-builder",
+              "meta": {
+                "origin.at": "2026-10-13 11:39:04 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+                "origin.by.process": "zsh(67232) < claude(17862) < zsh(14044) < avada(12318) < avada(12185)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/orchestrator",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Builder: Avada scheduled-task feature fronting launchd/systemd/schtasks; janitor as task #1"
+              },
+              "rows": 49,
+              "sessionUid": "21eb3683-fda2-4b20-b1bc-ad563978cccf",
+              "status": "running"
+            }
+          ],
+          "title": "Scheduler Feat"
+        },
+        {
+          "id": "0:11",
+          "layout": "auto",
+          "panes": [
+            {
+              "activity": "idle",
+              "color": "#3ec46d",
+              "cols": 194,
+              "cwd": "/Users/bshuler/code/avada/avada-terminal",
+              "id": "274c4a52-5ebc-4be0-85a1-65ddbb991f90",
+              "label": "opmodel orch",
+              "meta": {
+                "origin.at": "2026-10-13 14:01:16 EDT",
+                "origin.by.agent": "claude-code_2-1-296_agent",
+                "origin.by.label": "Avada",
+                "origin.by.pane": "pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715",
+                "origin.by.process": "zsh(76982) < claude(17862) < zsh(14044) < avada(12318) < avada(12185)",
+                "origin.by.session": "283de732-9b9b-4fef-b5d6-71fae511cf95",
+                "origin.cwd": "/Users/bshuler/Library/Application Support/avada/orchestrator",
+                "origin.via": "avada ctl new-pane",
+                "origin.why": "Orchestrator: build the manager/orchestrator/builder way-of-working as a swappable, harness-agnostic Avada module (OPERATING-MODEL-MODULE-BRIEF.md); owns design+builder dispatch, pauses for Bert's design approval",
+                "supervisor.at": "2026-10-13T15:35:02-0400",
+                "supervisor.last": "ghost-probe"
+              },
+              "rows": 49,
+              "sessionUid": "88fb627c-5448-420a-b783-6129242dfe4f",
+              "status": "running"
+            }
+          ],
+          "title": "Orchestrator 2"
+        }
+      ],
+      "windowId": 0
+    }
+  ]
+}
