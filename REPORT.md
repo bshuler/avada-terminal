@@ -21,6 +21,7 @@ Janitor registered through the real `Scheduler<Launchd>` code: `python3 janitor.
 - Status file `1791907378 1791909103 0` (start, end, exit 0); task list shows `lastRun 1791909103`, `nextRun 1791910003`, `lastStatus 0`.
 - `janitor-report.md` regenerated: mtime 11:32 → 12:31, header `# Janitor report — 2026-10-13 12:31`.
 - Disable → service gone from `gui/501`, `enabled:false`, `nextRun:null`; enable → back, `run interval = 900`. Left enabled.
+- **Natural firing:** after the re-enable at ~12:32, launchd started the job itself at 12:47 with no kickstart (`runs = 0` → `runs = 1`, pid spawned by the `StartInterval 900` timer). That run's status file/report update lands when it finishes (slow, see below); the 12:31 run-now already showed the full `last_run` + report regeneration.
 - The run took 29 min only because the Mac was at load ~100–180 and the janitor does one `avada ctl read` per pane (~40 s each). Not a scheduler fault.
 
 ## Verification
