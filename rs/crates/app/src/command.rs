@@ -40,6 +40,18 @@ pub enum Command {
     SubmitNewPane(Box<NewPaneOpts>),
     /// Open the "New goal" box (command palette → "New goal…").
     OpenNewGoal,
+    /// Open the scheduled-tasks panel (command palette → "Scheduled tasks").
+    OpenScheduledTasks,
+    /// Re-read the OS scheduler's task list.
+    TasksRefresh,
+    /// Enable (`true`) or disable task `0`.
+    TaskEnable(String, bool),
+    /// Fire task `0` now, outside its schedule.
+    TaskRun(String),
+    /// Unregister task `0` and delete its native definition.
+    TaskRemove(String),
+    /// Create a task from the panel's form: name, command line, schedule.
+    TaskAdd(String, String, String),
     /// New-goal box: set the goal text — the mirror of the box's TextInput (pushed on `edited`).
     GoalQuery(String),
     /// New-goal box: Tab / Shift+Tab — reveal the option chips, then cycle focus among them.
@@ -567,6 +579,28 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             state.close_overlay();
         }
         Command::OpenNewGoal => state.open_new_goal(),
+        Command::OpenScheduledTasks => state.open_scheduled_tasks(),
+        Command::TasksRefresh => {
+            state.tasks.error.clear();
+            state.tasks.refresh();
+            state.dirty = true;
+        }
+        Command::TaskEnable(id, on) => {
+            state.tasks.set_enabled(&id, on);
+            state.dirty = true;
+        }
+        Command::TaskRun(id) => {
+            state.tasks.run_now(&id);
+            state.dirty = true;
+        }
+        Command::TaskRemove(id) => {
+            state.tasks.remove(&id);
+            state.dirty = true;
+        }
+        Command::TaskAdd(name, cmd, schedule) => {
+            state.tasks.add(&name, &cmd, &schedule);
+            state.dirty = true;
+        }
         Command::GoalQuery(q) => state.goal_set_text(q),
         Command::GoalNav(d) => state.goal_nav(d),
         Command::GoalToggleOptions => state.goal_toggle_options(),

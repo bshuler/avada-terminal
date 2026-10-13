@@ -4860,6 +4860,26 @@ impl App {
                 });
         }
         {
+            use slint::ComponentHandle as _;
+            let g = win.app.global::<crate::TasksAdapter>();
+            macro_rules! task_cb {
+                ($on:ident, |$($a:ident),*| $cmd:expr) => {{
+                    let app = app.clone();
+                    let id = win.id;
+                    g.$on(move |$($a),*| {
+                        if let Some(w) = app.window_by_id(id) {
+                            app.run_command(&w, $cmd);
+                        }
+                    });
+                }};
+            }
+            task_cb!(on_refresh, | | Command::TasksRefresh);
+            task_cb!(on_toggle, |i, on| Command::TaskEnable(i.to_string(), on));
+            task_cb!(on_run_now, |i| Command::TaskRun(i.to_string()));
+            task_cb!(on_remove, |i| Command::TaskRemove(i.to_string()));
+            task_cb!(on_add, |n, c, s| Command::TaskAdd(n.to_string(), c.to_string(), s.to_string()));
+        }
+        {
             let app = app.clone();
             let id = win.id;
             win.app

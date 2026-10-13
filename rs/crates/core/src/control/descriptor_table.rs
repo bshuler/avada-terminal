@@ -638,6 +638,63 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             vec![path_id("tool", "Tool id from tools.list")],
         ),
         // ---- end track G2 tools
+        // ---- scheduled tasks (front end for launchd / systemd --user / schtasks)
+        master(route(
+            "scheduled.list",
+            "/scheduled-tasks",
+            Get,
+            "Scheduled tasks registered with the OS scheduler, with last/next run",
+        )),
+        master(with(
+            route(
+                "scheduled.add",
+                "/scheduled-tasks",
+                Post,
+                "Register a task with the OS scheduler",
+            ),
+            vec![
+                p("name", Body, "string", true, "Display name (id is derived unless given)"),
+                p("command", Body, "string", true, "Program to run"),
+                p("args", Body, "array", false, "Arguments, one string each"),
+                p("cwd", Body, "string", false, "Absolute working directory"),
+                p("env", Body, "array", false, "Env var NAMES to pass through, never values"),
+                p("schedule", Body, "string", true, "'every 15m', 'daily 09:30', 'hourly' or 5 cron fields"),
+                p("id", Body, "string", false, "Slug; defaults to the name"),
+                p("enabled", Body, "boolean", false, "Default true"),
+                p("createdBy", Body, "string", false, "Who is registering it"),
+            ],
+        )),
+        master(with(
+            route(
+                "scheduled.remove",
+                "/scheduled-tasks/{id}",
+                Delete,
+                "Unregister a task and delete its native definition",
+            ),
+            vec![path_id("id", "Task id")],
+        )),
+        master(with(
+            route(
+                "scheduled.enable",
+                "/scheduled-tasks/{id}/enable",
+                Post,
+                "Enable or disable a task",
+            ),
+            vec![
+                path_id("id", "Task id"),
+                p("enabled", Body, "boolean", false, "Default true; false disables"),
+            ],
+        )),
+        master(with(
+            route(
+                "scheduled.run",
+                "/scheduled-tasks/{id}/run",
+                Post,
+                "Run a task now, outside its schedule",
+            ),
+            vec![path_id("id", "Task id")],
+        )),
+        // ---- end scheduled tasks
         route(
             "schema",
             "/schema",
@@ -673,6 +730,13 @@ pub fn core_capability(method: &str) -> Option<Capability> {
         "devices.list" | "devices.mint" | "devices.revoke" => return None,
         // Reading the windows/tabs/panes tree and the loop ledger is workspace metadata.
         "state" | "loops" => WorkspaceRead,
+        // Scheduled tasks run arbitrary commands unattended, so they are master-only
+        // (`Scope::Master`) on top of these: reading the list is workspace metadata,
+        // everything else changes what the machine will run.
+        "scheduled.list" => WorkspaceRead,
+        "scheduled.add" | "scheduled.remove" | "scheduled.enable" | "scheduled.run" => {
+            WorkspaceWrite
+        }
         // Minting a token is control-plane administration. No contract capability names
         // it, and it must not be open to a capability-limited caller (a minted token
         // would otherwise be an unrestricted legacy token — an escalation), so it takes
@@ -889,8 +953,18 @@ mod tests {
             .collect();
         assert_eq!(
             master,
-            ["devices.list", "devices.mint", "devices.revoke", "fs.read"]
-                .into_iter()
+            [
+                "devices.list",
+                "devices.mint",
+                "devices.revoke",
+                "fs.read",
+                "scheduled.add",
+                "scheduled.enable",
+                "scheduled.list",
+                "scheduled.remove",
+                "scheduled.run",
+            ]
+            .into_iter()
                 .map(String::from)
                 .collect()
         );

@@ -10,7 +10,7 @@
 // dispatched against the central `State` (see ARCHITECTURE.md).
 
 import { Theme } from "theme.slint";
-import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter } from "types.slint";
+import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter, TaskRow, TasksAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
@@ -37,7 +37,7 @@ export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem,
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
-export { AttentionCard, AttentionAdapter, BannerAdapter }
+export { AttentionCard, AttentionAdapter, BannerAdapter, TaskRow, TasksAdapter }
 // ---- track V3: re-exported so `imagepane::attach` can reach the adapter and the
 // harness can call `invoke_fit`; the UI lives in imagepane.slint.
 export { ImagePaneItem, ImageFit, ImagePaneAdapter }

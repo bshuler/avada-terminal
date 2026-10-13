@@ -1,0 +1,247 @@
+// The scheduled-tasks panel — opened from the command palette ("Scheduled tasks").
+//
+// A centred modal card in the Arcane palette listing what the OS scheduler (launchd / systemd
+// user timers / Task Scheduler) will run unattended: one row per task with its schedule, last
+// and next run and the last exit status, plus enable/disable, Run now and Remove, and a
+// create form underneath. Pure projection of `TasksAdapter` (types.slint) — the controller
+// owns the data and talks to the scheduler; this file only draws and reports intent. Kept
+// self-contained (its own small input and button) so the shell's redesign never has to touch it.
+
+import { Theme } from "theme.slint";
+import { TaskRow, TasksAdapter } from "types.slint";
+export { TasksAdapter }
+
+component StButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    height: 26px;
+    min-width: 58px;
+    border-radius: 6px;
+    background: root.primary ? Theme.arc-magenta : (ta.has-hover ? Theme.surface2 : Theme.surface);
+    border-width: 1px;
+    border-color: root.primary ? Theme.arc-magenta : (root.danger && ta.has-hover ? Theme.danger : Theme.arc-rule);
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.label;
+            color: root.primary ? Theme.bg : (root.danger && ta.has-hover ? Theme.danger : Theme.arc-lavender);
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+component StInput inherits Rectangle {
+    in property <string> placeholder;
+    in property <string> label;
+    out property <string> text <=> ti.text;
+    callback submit();
+    callback escape();
+    accessible-role: text-input;
+    accessible-label: root.label;
+    height: 30px;
+    border-radius: 6px;
+    background: Theme.bg;
+    border-width: 1px;
+    border-color: ti.has-focus ? Theme.arc-magenta : Theme.arc-rule;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        ti := TextInput {
+            color: Theme.text;
+            font-size: 12px;
+            vertical-alignment: center;
+            single-line: true;
+            key-pressed(e) => {
+                if (e.text == Key.Return) { root.submit(); return EventResult.accept; }
+                if (e.text == Key.Escape) { root.escape(); return EventResult.accept; }
+                return EventResult.reject;
+            }
+        }
+    }
+    Text {
+        x: 8px;
+        text: root.placeholder;
+        color: Theme.faint;
+        font-size: 12px;
+        vertical-alignment: center;
+        visible: ti.text == "";
+    }
+}
+
+component TaskLine inherits Rectangle {
+    in property <TaskRow> task;
+    height: 50px;
+    border-radius: 6px;
+    background: lt.has-hover ? Theme.surface : transparent;
+    lt := TouchArea {}
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        // enable switch, drawn as geometry (accessible as a checkbox)
+        Rectangle {
+            width: 34px;
+            accessible-role: checkbox;
+            accessible-label: "Enable " + root.task.id;
+            accessible-checked: root.task.enabled;
+            accessible-action-default => { TasksAdapter.toggle(root.task.id, !root.task.enabled); }
+            Rectangle {
+                width: 30px;
+                height: 16px;
+                border-radius: 8px;
+                background: root.task.enabled ? Theme.arc-green : Theme.surface2;
+                border-width: 1px;
+                border-color: Theme.arc-rule;
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    y: 3px;
+                    x: root.task.enabled ? 17px : 3px;
+                    border-radius: 5px;
+                    background: root.task.enabled ? Theme.bg : Theme.faint;
+                }
+            }
+            TouchArea { clicked => { TasksAdapter.toggle(root.task.id, !root.task.enabled); } }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.task.name;
+                color: root.task.enabled ? Theme.arc-gold : Theme.faint;
+                font-size: 13px;
+                font-weight: 700;
+                overflow: elide;
+            }
+            Text {
+                text: root.task.command;
+                color: Theme.arc-lavender;
+                font-size: 11px;
+                overflow: elide;
+            }
+            Text {
+                text: root.task.schedule + "  ·  last " + root.task.last + "  ·  next " + (root.task.enabled ? root.task.next : "—");
+                color: Theme.faint;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: root.task.status-text;
+            color: root.task.status == 2 ? Theme.danger : (root.task.status == 1 ? Theme.arc-green : Theme.faint);
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 52px;
+        }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 6px;
+                StButton { label: "Run now"; clicked => { TasksAdapter.run-now(root.task.id); } }
+                StButton { label: "Remove"; danger: true; clicked => { TasksAdapter.remove(root.task.id); } }
+            }
+        }
+    }
+}
+
+export component ScheduledTasksDialog inherits Rectangle {
+    callback cancel();
+
+    // eat scrim clicks behind the card
+    TouchArea {}
+
+    card := Rectangle {
+        width: min(720px, parent.width - 40px);
+        x: (parent.width - self.width) / 2;
+        y: max(40px, (parent.height - self.height) / 2);
+        height: min(parent.height - 80px, body.preferred-height);
+        background: Theme.arc-bar;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.arc-rule;
+        drop-shadow-blur: 48px;
+        drop-shadow-color: Theme.scrim;
+        drop-shadow-offset-y: 18px;
+        TouchArea {}
+
+        body := VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: "Scheduled tasks";
+                    color: Theme.arc-gold;
+                    font-size: 15px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "via " + TasksAdapter.backend;
+                    color: Theme.faint;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                StButton { label: "Refresh"; clicked => { TasksAdapter.refresh(); } }
+                StButton { label: "Close"; clicked => { root.cancel(); } }
+            }
+            Rectangle { height: 1px; background: Theme.arc-rule; }
+
+            if TasksAdapter.rows.length == 0 : Text {
+                text: "Nothing scheduled yet. Add a task below, or run: avada ctl task-add --name … --cmd … --schedule …";
+                color: Theme.faint;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Flickable {
+                vertical-stretch: 1;
+                min-height: min(TasksAdapter.rows.length * 52px, 260px);
+                viewport-height: TasksAdapter.rows.length * 52px;
+                VerticalLayout {
+                    spacing: 2px;
+                    for r in TasksAdapter.rows : TaskLine { task: r; }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.arc-rule; }
+            Text { text: "New task"; color: Theme.arc-lavender; font-size: 11px; }
+            HorizontalLayout {
+                spacing: 8px;
+                name-in := StInput { label: "Task name"; placeholder: "name"; width: 140px; escape => { root.cancel(); } }
+                cmd-in := StInput { label: "Command"; placeholder: "command, e.g. python3 janitor.py"; horizontal-stretch: 1; escape => { root.cancel(); } }
+                sched-in := StInput {
+                    label: "Schedule";
+                    placeholder: "every 15m";
+                    width: 140px;
+                    escape => { root.cancel(); }
+                    submit => { TasksAdapter.add(name-in.text, cmd-in.text, sched-in.text); }
+                }
+                StButton {
+                    label: "Add";
+                    primary: true;
+                    clicked => { TasksAdapter.add(name-in.text, cmd-in.text, sched-in.text); }
+                }
+            }
+            if TasksAdapter.error != "" : Text {
+                text: TasksAdapter.error;
+                color: Theme.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

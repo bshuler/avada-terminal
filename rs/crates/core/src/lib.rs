@@ -43,6 +43,7 @@ pub mod single_instance;
 pub mod skills;
 pub mod speech;
 pub mod stt;
+pub mod tasks;
 pub mod sync;
 pub mod tool_sessions;
 pub mod tools;

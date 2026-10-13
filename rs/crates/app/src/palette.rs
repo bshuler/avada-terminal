@@ -99,6 +99,12 @@ pub fn build(state: &State) -> Vec<Entry> {
             "goal agent orchestrator autonomous objective",
             Command::OpenNewGoal,
         ),
+        Entry::new(
+            "Scheduled tasks",
+            "Jobs the OS scheduler runs for you (launchd / systemd / Task Scheduler)",
+            "cron timer launchd systemd schtasks job schedule janitor",
+            Command::OpenScheduledTasks,
+        ),
         // ---- windows ----
         Entry::new(
             "New window",
