@@ -3,7 +3,8 @@
 ## NEEDS BERT
 - Nothing blocking. FYI: the janitor is now registered on this Mac's launchd (`to.avada.task.janitor`, every 15 min) and stays until removed with `avada ctl task-rm janitor` (needs the new build) or `launchctl bootout gui/$(id -u)/to.avada.task.janitor`.
 
-## Status: PR-ready on `feat/scheduled-tasks` (not merged)
+## Status: LANDED on origin/main (2026-10-13)
+Cherry-picked onto origin/main d9462ba (not onto the stale local main, whose working tree holds another feature's uncommitted session/daemon work; untouched). `feat/scheduled-tasks` carried ~59 unrelated unmerged commits, so it was not merged. The only conflicts were import/export lines in `ui/app.slint` and `ui/types.slint` (kept both sides). Compile-verified and tested on hp2 after the pick: 400 core `tasks::`/`control::` tests, 2 `schedtasks` app tests, `cargo check --bins --tests` clean.
 
 ## What was built
 - `core::tasks` (`rs/crates/core/src/tasks/`): `Task` model, `Schedule` (interval / calendar / cron-ish string), `TaskScheduler` trait
