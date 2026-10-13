@@ -580,9 +580,9 @@ fn expect(tool_paths: &[&str]) -> BTreeSet<String> {
     .collect()
 }
 
-/// Uninstalling the module removes exactly what was written, at both scopes.
+/// Disabling (an uninstall that still lists the module) removes exactly what was written, at both scopes.
 fn assert_uninstall(mut fx: Fx, tools: &Tools, paths: &BTreeSet<String>) {
-    fx.modules.clear();
+    fx.modules.iter_mut().for_each(|m| m.enabled = false);
     let plan = fx.run(tools, true, None);
     for p in paths {
         assert!(!seg(&fx.tmp, p).exists(), "{p} should be gone");
@@ -801,7 +801,7 @@ fn a_legacy_single_file_clinerules_is_used_inline() {
         s.tool == "cline" && s.unit.name == "manual" && s.reason.contains("no manual form")
     }));
     assert!(fx.plan(&tools, false, None).is_empty());
-    fx.modules.clear();
+    fx.modules.iter_mut().for_each(|m| m.enabled = false);
     fx.run(&tools, false, None);
     assert_eq!(read(&fx.root.join(".clinerules")), "Team rules.\n");
     fx.done();
@@ -942,7 +942,7 @@ fn fit_cap_drops_whole_blocks_from_the_end() {
         )
     };
     let size = |keep: &[(String, String)]| {
-        materialize::fit_cap("", &mut keep.to_vec(), usize::MAX)
+        materialize::fit_cap("", &mut keep.to_vec(), usize::MAX, &BTreeSet::new())
             .0
             .len()
     };
@@ -950,7 +950,8 @@ fn fit_cap_drops_whole_blocks_from_the_end() {
     assert!(size(&[block(0), block(1), block(2)]) > two);
 
     let mut keep = vec![block(0), block(1), block(2)];
-    let (text, dropped) = materialize::fit_cap("", &mut keep, two);
+    let owned = owned_all(&keep);
+    let (text, dropped) = materialize::fit_cap("", &mut keep, two, &owned);
     assert_eq!(dropped, vec!["acme/m2".to_string()]);
     assert_eq!(text.len(), two);
     assert!(text.contains("Module 1."));
@@ -960,11 +961,16 @@ fn fit_cap_drops_whole_blocks_from_the_end() {
     assert_eq!(text.matches("<!-- /avada:module=").count(), 2);
 }
 
+fn owned_all(keep: &[(String, String)]) -> BTreeSet<String> {
+    keep.iter().map(|(id, _)| id.clone()).collect()
+}
+
 #[test]
 fn fit_cap_never_cuts_the_users_own_bytes() {
     let user = "# My notes\n\nKeep every word of this.\n";
     let mut keep = vec![("acme/one".to_string(), "y".repeat(500))];
-    let (text, dropped) = materialize::fit_cap(user, &mut keep, 10);
+    let owned = owned_all(&keep);
+    let (text, dropped) = materialize::fit_cap(user, &mut keep, 10, &owned);
     assert_eq!(dropped, vec!["acme/one".to_string()]);
     assert!(keep.is_empty());
     // Still over the cap, and that is the right answer: the remainder is the
@@ -980,7 +986,8 @@ fn fit_cap_keeps_the_hosts_import_line() {
         (HOST_ID.to_string(), "@AGENTS.md".to_string()),
         ("acme/one".to_string(), "z".repeat(400)),
     ];
-    let (text, dropped) = materialize::fit_cap("", &mut keep, 60);
+    let owned = owned_all(&keep);
+    let (text, dropped) = materialize::fit_cap("", &mut keep, 60, &owned);
     assert_eq!(dropped, vec!["acme/one".to_string()]);
     assert_eq!(keep.len(), 1);
     assert!(text.contains("@AGENTS.md"));
@@ -1056,13 +1063,33 @@ fn nothing_is_written_without_the_accepted_capability() {
 }
 
 #[test]
-fn disabled_module_keeps_user_scope_but_not_project_scope() {
+fn disabled_module_writes_nothing_at_project_or_user_scope() {
     let mut fx = fixture("enabled");
     unit(&fx.module_dir, None, "deploy", SKILL, "x\n");
     fx.modules[0].enabled = false;
     fx.run(&claude(), true, None);
     assert!(fs::read_dir(&fx.root).unwrap().next().is_none());
-    assert!(seg(&fx.home, ".claude/skills/acme-tools-deploy/SKILL.md").is_file());
+    assert!(fs::read_dir(&fx.home).unwrap().next().is_none());
+    fx.done();
+}
+
+#[test]
+fn foreign_fence_survives_and_unterminated_fence_is_untouched() {
+    let fx = fixture("foreign");
+    unit(&fx.module_dir, None, "conventions", RULE, "Rule.\n");
+    let foreign = "<!-- avada:module=other/orch -->\nTheirs.\n<!-- /avada:module=other/orch -->\n";
+    write(&fx.root.join("AGENTS.md"), &format!("# Mine\n{foreign}"));
+    let broken = "# Notes\n<!-- avada:module=acme/tools -->\nstale\nuser text after\n";
+    write(&fx.root.join("CLAUDE.md"), broken);
+    let plan = fx.run(&claude(), false, None);
+    let agents = read(&fx.root.join("AGENTS.md"));
+    assert!(agents.contains(foreign), "{agents}");
+    assert!(agents.contains("Rule."));
+    assert_eq!(read(&fx.root.join("CLAUDE.md")), broken);
+    assert!(
+        plan.errors.iter().any(|e| e.error.contains("unterminated")),
+        "{plan:?}"
+    );
     fx.done();
 }
 

@@ -241,8 +241,29 @@ pub fn fence(module_id: &str) -> (String, String) {
     )
 }
 
+/// Is there an opening fence for `module_id` with no closing marker after it?
+/// [`splice_fenced`] refuses such a file: it cannot tell where the block ends.
+pub fn fence_unterminated(file: &str, module_id: &str) -> bool {
+    let (open, close) = fence(module_id);
+    let mut skipping = false;
+    for line in file.split_inclusive('\n') {
+        let l = line.trim_end_matches(['\r', '\n']);
+        if !skipping && l == open {
+            skipping = true;
+        } else if skipping && l == close {
+            skipping = false;
+        }
+    }
+    skipping
+}
+
 /// Replace (or append) the fenced block for `module_id` in `file`. `None` removes it.
+/// An opening fence with no closing marker would swallow everything after it, so
+/// such a file is returned unchanged (see [`fence_unterminated`]).
 pub fn splice_fenced(file: &str, module_id: &str, block: Option<&str>) -> String {
+    if fence_unterminated(file, module_id) {
+        return file.to_string();
+    }
     let (open, close) = fence(module_id);
     let mut out = String::new();
     let mut skipping = false;
@@ -366,6 +387,15 @@ mod tests {
             "no newline\n<!-- avada:module=a/b -->\nz\n<!-- /avada:module=a/b -->\n"
         );
         assert_eq!(splice_fenced(base, "a/b", None), base);
+    }
+
+    #[test]
+    fn unterminated_fence_leaves_the_file_unchanged() {
+        let f = "intro\n<!-- avada:module=a/b -->\nold\nuser text after\n";
+        assert!(fence_unterminated(f, "a/b"));
+        assert_eq!(splice_fenced(f, "a/b", None), f);
+        assert_eq!(splice_fenced(f, "a/b", Some("new")), f);
+        assert!(!fence_unterminated("<!-- avada:module=a/b -->\nx\n<!-- /avada:module=a/b -->\n", "a/b"));
     }
 
     #[test]

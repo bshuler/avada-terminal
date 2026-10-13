@@ -26,14 +26,14 @@ use std::path::{Path, PathBuf};
 use avada_module_sdk::caps::Capability;
 use avada_module_sdk::descriptor::SchemaDocument;
 use avada_module_sdk::manifest::{ModuleId, SkillsSection};
-use avada_module_sdk::skills::{fence, splice_fenced, Activation, SkillKind};
+use avada_module_sdk::skills::{fence, fence_unterminated, splice_fenced, Activation, SkillKind};
 
 use super::adapters::{
     rel, AdapterStatus, Cap, Dialect, Layout, RulesDir, RulesForm, Scope, Tools, ADAPTERS, SHARED,
 };
 use super::index;
 use super::plan::{apply, Applied, FileWrite, Overflow, Plan, Removal, Skipped, Truncated};
-use super::unit::{emitted_name, load_units, sibling_files, Unit, UnitRef};
+use super::unit::{emitted_name, load_units, sibling_files, Unit, UnitError, UnitRef};
 
 /// Fence id of everything the host itself generates (the `@AGENTS.md` import line
 /// and the index skill), as opposed to a module's units.
@@ -125,6 +125,8 @@ impl Materializer {
             .collect();
 
         let mut desired = Desired::default();
+        desired.owned = req.modules.iter().map(|m| m.id.as_str().to_string()).collect();
+        desired.owned.insert(HOST_ID.to_string());
         let roots: BTreeSet<&PathBuf> = req.roots.iter().collect();
         for root in roots {
             plan_project(&mut desired, &mut plan, root, &loaded, req);
@@ -143,9 +145,11 @@ impl Materializer {
     }
 }
 
-/// The accepted-capability gate. Project scope also needs the module enabled.
-pub fn gated(m: &ModuleInput, scope: Scope) -> bool {
-    m.accepted.contains(&Capability::SkillsMaterialize) && (scope == Scope::User || m.enabled)
+/// The accepted-capability gate. Both scopes need the module enabled: a module
+/// must never keep writing into user scope (`~/.claude/CLAUDE.md` and friends)
+/// once it is disabled.
+pub fn gated(m: &ModuleInput, _scope: Scope) -> bool {
+    m.accepted.contains(&Capability::SkillsMaterialize) && m.enabled
 }
 
 /// The text of an emitted `SKILL.md`: minimal frontmatter, then the body inside
@@ -250,6 +254,9 @@ struct Desired {
     caps: BTreeMap<PathBuf, (Cap, String)>,
     /// Rules and workflow directories whose fenced `*.md` files we own.
     sweep_file_dirs: BTreeSet<PathBuf>,
+    /// Fence ids this run owns: every module in the request plus the host. A
+    /// fence for any other id belongs to someone else and is left alone.
+    owned: BTreeSet<String>,
 }
 
 /// What one unit becomes for one tool.
@@ -802,13 +809,16 @@ fn fence_ids(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Splice `keep` into `current`, dropping every fence of ours that `keep` does
-/// not carry. The result is the whole final file, the user's own bytes included.
-fn assemble(current: &str, keep: &[(String, String)]) -> String {
+/// Splice `keep` into `current`, dropping every fence that `keep` does not carry
+/// and that this run owns. `owned` is every module id in the request (enabled or
+/// not, so disabling removes its own fence) plus the host; a fence for any other
+/// id is another tool's or an uninstalled module's and survives untouched. The
+/// result is the whole final file, the user's own bytes included.
+fn assemble(current: &str, keep: &[(String, String)], owned: &BTreeSet<String>) -> String {
     let ids: BTreeSet<&str> = keep.iter().map(|(id, _)| id.as_str()).collect();
     let mut next = current.to_string();
     for id in fence_ids(current) {
-        if !ids.contains(id.as_str()) {
+        if !ids.contains(id.as_str()) && owned.contains(&id) {
             next = splice_fenced(&next, &id, None);
         }
     }
@@ -830,15 +840,16 @@ pub(crate) fn fit_cap(
     current: &str,
     keep: &mut Vec<(String, String)>,
     cap: usize,
+    owned: &BTreeSet<String>,
 ) -> (String, Vec<String>) {
-    let mut next = assemble(current, keep);
+    let mut next = assemble(current, keep, owned);
     let mut dropped: Vec<String> = Vec::new();
     while next.len() > cap {
         let Some(at) = keep.iter().rposition(|(id, _)| id != HOST_ID) else {
             break;
         };
         dropped.push(keep.remove(at).0);
-        next = assemble(current, keep);
+        next = assemble(current, keep, owned);
     }
     dropped.reverse();
     (next, dropped)
@@ -857,8 +868,23 @@ fn diff(d: &Desired, plan: &mut Plan) {
             String::new()
         };
         let wanted: &[(String, String)] = d.fenced.get(file).map(Vec::as_slice).unwrap_or(&[]);
+        // An unterminated fence we would rewrite or remove: leave the file alone
+        // rather than guess where the block ends, and say so.
+        if let Some(id) = fence_ids(&current).into_iter().find(|id| {
+            (d.owned.contains(id) || wanted.iter().any(|(w, _)| w == id))
+                && fence_unterminated(&current, id)
+        }) {
+            if let Ok(module) = ModuleId::new(&id) {
+                plan.errors.push(UnitError {
+                    module,
+                    path: file.clone(),
+                    error: format!("unterminated fence for {id}: file left unchanged"),
+                });
+            }
+            continue;
+        }
         let mut keep = wanted.to_vec();
-        let mut next = assemble(&current, &keep);
+        let mut next = assemble(&current, &keep, &d.owned);
         // The cap is the tool's limit on the *file*, and an over-cap file is
         // skipped whole rather than read in part, so a file that grew past it
         // would take every module's rules down with it. Drop whole blocks from
@@ -867,7 +893,7 @@ fn diff(d: &Desired, plan: &mut Plan) {
         if let Some((cap, tool)) = d.caps.get(file) {
             let assembled = next.len();
             let dropped;
-            (next, dropped) = fit_cap(&current, &mut keep, cap.bytes);
+            (next, dropped) = fit_cap(&current, &mut keep, cap.bytes, &d.owned);
             if !dropped.is_empty() {
                 plan.overflowed.push(Overflow {
                     path: file.clone(),

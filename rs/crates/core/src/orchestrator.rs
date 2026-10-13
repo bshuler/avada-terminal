@@ -130,6 +130,9 @@ pub fn materialize_modules(modules: &[ModuleInput], tools: &Tools) -> Applied {
 /// is `None`): the agent here already has the full `avada ctl` reference. Problems are
 /// logged, never returned — a module with a bad skill must not keep the tab from opening.
 pub fn materialize_modules_into(dest: &Path, modules: &[ModuleInput], tools: &Tools) -> Applied {
+    // The materializer only sweeps fences for ids in the request, so the retired
+    // pre-module id is dropped here, by name.
+    unfence(&dest.join("CONVENTIONS.md"), "avada/hyperpane");
     let roots = [dest.to_path_buf()];
     let materializer = Materializer::new();
     let plan = materializer.plan(&Request {
