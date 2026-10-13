@@ -486,6 +486,7 @@ mod tests {
             rows: Some(40),
             foreground: None,
             fg_cwd: None,
+            fg_ssh: None,
         }
     }
 

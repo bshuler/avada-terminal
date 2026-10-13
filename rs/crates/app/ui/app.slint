@@ -10,7 +10,7 @@
 // dispatched against the central `State` (see ARCHITECTURE.md).
 
 import { Theme } from "theme.slint";
-import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter } from "types.slint";
+import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter, StatusCard, StatusAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
@@ -37,7 +37,7 @@ export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem,
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
-export { AttentionCard, AttentionAdapter, BannerAdapter }
+export { AttentionCard, AttentionAdapter, BannerAdapter, StatusCard, StatusAdapter }
 // ---- track V3: re-exported so `imagepane::attach` can reach the adapter and the
 // harness can call `invoke_fit`; the UI lives in imagepane.slint.
 export { ImagePaneItem, ImageFit, ImagePaneAdapter }
@@ -522,14 +522,14 @@ export component AppWindow inherits Window {
             // drawer open once the pointer has brought it up.
             if !root.fullscreen : EdgeDrawer {
                 at-top: false;
-                drawer-height: 76px;
+                drawer-height: 84px;
                 keep-open: AttentionAdapter.unread > 0;
                 lip-color: AttentionAdapter.unread > 0 ? Theme.warn : Theme.arc-magenta;
                 lip-badge: AttentionAdapter.unread;
                 // Open long enough to be read → count what is on it as seen.
                 revealed => { AttentionAdapter.attention-ack(); }
 
-                if AttentionAdapter.cards.length == 0 : Text {
+                if AttentionAdapter.cards.length == 0 && StatusAdapter.cards.length == 0 : Text {
                     x: 20px;
                     y: 26px;
                     text: "✧ Nothing needs you right now";
@@ -552,6 +552,7 @@ export component AppWindow inherits Window {
                                 accessible-label: "Attention: " + c.title + " — " + c.detail;
                                 clicked => {
                                     if (c.tab >= 0) { AttentionAdapter.attention-focus(c.tab, c.pane); }
+                                    else if (c.tab == -2) { StatusAdapter.activate(c.uid); }
                                     else if (c.uid != "") { RemindersAdapter.restore(c.uid); }
                                 }
                             }
@@ -582,6 +583,39 @@ export component AppWindow inherits Window {
                                         font-size: 11px;
                                         overflow: elide;
                                     }
+                                }
+                            }
+                        }
+                    }
+                    if AttentionAdapter.cards.length > 0 && StatusAdapter.cards.length > 0 : Rectangle { width: 2px; background: Theme.arc-gold.with-alpha(0.6); }
+                    for sc[i] in StatusAdapter.cards : HorizontalLayout {
+                        spacing: 0px;
+                        if i > 0 : Rectangle { width: 1px; background: Theme.arc-rule; }
+                        Rectangle {
+                            min-width: 130px;
+                            max-width: 220px;
+                            background: sca.has-hover && sc.clickable ? Theme.surface2 : transparent;
+                            sca := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Status: " + sc.label + " " + sc.value;
+                                clicked => { if (sc.clickable) { StatusAdapter.activate(sc.id); } }
+                            }
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 10px;
+                                alignment: start;
+                                Text {
+                                    text: sc.glyph;
+                                    color: sc.level == 3 ? Theme.warn : sc.level == 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
+                                    font-size: 20px;
+                                    vertical-alignment: center;
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text { text: sc.label; color: Theme.arc-lavender; font-size: 10px; font-weight: 600; overflow: elide; }
+                                    Text { text: sc.value; color: Theme.arc-gold; font-size: 12px; overflow: elide; }
                                 }
                             }
                         }

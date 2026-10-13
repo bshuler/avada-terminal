@@ -102,6 +102,9 @@ struct Shadow {
     /// live answer, kept apart from [`cwd`](Self::cwd), which is the last one a shell
     /// *reported*.
     fg_cwd: Option<String>,
+    /// The `ssh` target the daemon last reported in the foreground
+    /// ([`SessionMeta::fg_ssh`](crate::session::proto::SessionMeta::fg_ssh)).
+    fg_ssh: Option<String>,
     /// The pty's grid `(cols, rows)` as the daemon last reported it
     /// ([`SessionMeta::cols`](crate::session::proto::SessionMeta::cols)).
     ///
@@ -132,6 +135,7 @@ impl Shadow {
             cwd: None,
             foreground: None,
             fg_cwd: None,
+            fg_ssh: None,
             dims: None,
             pending: false,
         }
@@ -602,6 +606,7 @@ impl DaemonSessionManager {
                 }
                 shadow.foreground = meta.foreground.clone();
                 shadow.fg_cwd = meta.fg_cwd.clone();
+                shadow.fg_ssh = meta.fg_ssh.clone();
                 shadow.dims = meta.cols.zip(meta.rows);
             }
         }
@@ -793,6 +798,17 @@ impl DaemonSessionManager {
             .unwrap()
             .get(uid)
             .and_then(|s| s.fg_cwd.clone())
+    }
+
+    /// The `ssh` target the daemon last reported in this pane's foreground; `None` when no
+    /// interactive ssh client holds it (or no answer).
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn foreground_ssh(&self, uid: &str) -> Option<String> {
+        self.shadows
+            .lock()
+            .unwrap()
+            .get(uid)
+            .and_then(|s| s.fg_ssh.clone())
     }
 
     /// Serialize the pane's current screen — a bounded `RenderScreen`/`Screen` round-trip
@@ -1392,6 +1408,7 @@ fn reconcile_snapshot(
         shadow.foreground = meta.foreground.clone();
         // Rides with `foreground`: same sample, same tick, same honest `None`.
         shadow.fg_cwd = meta.fg_cwd.clone();
+        shadow.fg_ssh = meta.fg_ssh.clone();
         // Same rule as `foreground`, for the same reason: a daemon that cannot answer says
         // `None`, and a stale grid size is worse than no size — it would seed a replay at a
         // width the pty stopped using.
@@ -2045,6 +2062,7 @@ mod tests {
             rows: None,
             foreground: foreground.map(str::to_string),
             fg_cwd: None,
+            fg_ssh: None,
         }
     }
 
