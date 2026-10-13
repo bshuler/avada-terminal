@@ -260,6 +260,9 @@ pub struct ModuleRuntime {
     /// production runtime does: tests root a runtime in a temp dir and must never write
     /// into the human's real `avada/orchestrator`.
     orchestrator_skills: Cell<bool>,
+    /// The launch workspace's project roots (the root the modules were told about), where
+    /// an opted-in workspace gets module instruction files. Empty when it has none.
+    project_roots: Vec<PathBuf>,
 }
 
 impl ModuleRuntime {
@@ -309,6 +312,36 @@ impl ModuleRuntime {
             .map(|d| d.shapes)
             .unwrap_or_default();
         avada_core::orchestrator::materialize_modules(&inputs, &tools, &defaults);
+        self.materialize_project_roots(inputs, &tools, &defaults);
+    }
+
+    /// B4b: for a workspace that opted in (`WorkspaceModuleState::instruction_files`), write
+    /// the same enabled set into its project roots; an opted-out one writes nothing and has
+    /// anything an earlier opted-in run left swept. `inputs` is already this workspace's
+    /// enabled set (`installs_to_start`), so a module disabled here never reaches its roots.
+    fn materialize_project_roots(
+        &self,
+        inputs: Vec<avada_core::skills::ModuleInput>,
+        tools: &avada_core::skills::Tools,
+        defaults: &std::collections::BTreeMap<String, ModuleId>,
+    ) {
+        let Some(key) = self.workspace.as_deref() else {
+            return;
+        };
+        let state_dir = state_dir_beside(&self.modules_root);
+        let states = WorkspaceStates::under(&state_dir);
+        let on = states.instruction_files(key).unwrap_or(false);
+        let target = avada_core::orchestrator::WorkspaceTarget {
+            key: key.to_string(),
+            instruction_files: on,
+            roots: avada_core::orchestrator::project_roots(&self.project_roots),
+            modules: inputs,
+        };
+        let applied =
+            avada_core::orchestrator::materialize_workspace_roots(&target, &state_dir, tools, defaults);
+        for f in applied.written.iter().chain(&applied.removed) {
+            tracing::info!(workspace = key, file = %f.display(), "instruction file updated");
+        }
     }
 
     /// The same runtime rooted at `modules_root`, with `workspace` deciding which modules
@@ -347,6 +380,7 @@ impl ModuleRuntime {
                     modules_root: modules_root.to_path_buf(),
                     workspace: workspace.map(str::to_owned),
                     orchestrator_skills: Cell::new(false),
+                    project_roots: Vec::new(),
                 };
             }
         };
@@ -381,6 +415,7 @@ impl ModuleRuntime {
         // reads its root from the hello (as the file browser does) would otherwise start
         // on "no workspace" and stay there.
         let mut config = HostConfig::new(data_root);
+        let project_roots: Vec<PathBuf> = info.root.iter().map(PathBuf::from).collect();
         config.workspace = Some(info);
         let host = Host::new(config, gate.clone());
         let service = Arc::new(LicenseService::under(modules_root));
@@ -432,6 +467,7 @@ impl ModuleRuntime {
             modules_root: modules_root.to_path_buf(),
             workspace: workspace.map(str::to_owned),
             orchestrator_skills: Cell::new(false),
+            project_roots,
         };
         rt.start_installed(modules_root, workspace);
         rt
@@ -1302,6 +1338,7 @@ label = "Tree"
             modules_root: PathBuf::new(),
             workspace: None,
             orchestrator_skills: Cell::new(false),
+            project_roots: Vec::new(),
         }
     }
 

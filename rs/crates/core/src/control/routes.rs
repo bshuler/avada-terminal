@@ -141,6 +141,11 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("marketplace.pin", marketplace_pin),
         h("marketplace.unpin", marketplace_unpin),
         h("marketplace.pins", marketplace_pins),
+        h("marketplace.instruction_files", marketplace_instruction_files),
+        h(
+            "marketplace.instruction_files.set",
+            marketplace_instruction_files_set,
+        ),
         h("marketplace.defaults", marketplace_defaults),
         h("marketplace.defaults.set", marketplace_defaults_set),
         h("marketplace.defaults.clear", marketplace_defaults_clear),
@@ -3068,6 +3073,58 @@ async fn marketplace_pins(
     };
     match mp.pins(workspace) {
         Ok(pins) => ok_json(json!({ "workspace": workspace, "pins": pins })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// `?workspace=` → `{workspace, instructionFiles}`: whether the workspace writes module
+/// instruction files into its project roots.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_instruction_files(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let Some(workspace) = q.get("workspace").filter(|w| !w.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing workspace" }));
+    };
+    match mp.instruction_files(workspace) {
+        Ok(on) => ok_json(json!({ "workspace": workspace, "instructionFiles": on })),
+        Err(e) => marketplace_error(e),
+    }
+}
+
+/// `{workspace, enabled}` → `{workspace, instructionFiles}`. Opt-in per workspace; the
+/// modules are re-materialized on the GUI host's next reconcile.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn marketplace_instruction_files_set(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mp = match marketplace_for(&shared, &headers) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let body = match marketplace_body(&body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(workspace) = body_str(&body, "workspace").filter(|w| !w.is_empty()) else {
+        return jstatus(400, json!({ "error": "missing workspace" }));
+    };
+    let Some(on) = body.get("enabled").and_then(|v| v.as_bool()) else {
+        return jstatus(400, json!({ "error": "missing enabled (boolean)" }));
+    };
+    match mp.set_instruction_files(&workspace, on) {
+        Ok(on) => {
+            shared.mark_modules_dirty();
+            ok_json(json!({ "workspace": workspace, "instructionFiles": on }))
+        }
         Err(e) => marketplace_error(e),
     }
 }
@@ -6498,6 +6555,8 @@ mod marketplace_routes {
                 "marketplace.pin",
                 "marketplace.unpin",
                 "marketplace.pins",
+                "marketplace.instruction_files",
+                "marketplace.instruction_files.set",
                 "marketplace.defaults",
                 "marketplace.defaults.set",
                 "marketplace.defaults.clear",
@@ -6545,13 +6604,14 @@ mod marketplace_routes {
                 );
             }
         }
-        // install, enable, disable, pin, unpin, defaults.set, signin, rights.set, profile.
+        // install, enable, disable, pin, unpin, instruction_files.set, defaults.set, signin,
+        // rights.set, profile.
         assert_eq!(
             routes
                 .iter()
                 .filter(|r| matches!(r.verb, Verb::Post))
                 .count(),
-            9
+            10
         );
         // uninstall, defaults.clear.
         assert_eq!(
@@ -6793,6 +6853,45 @@ mod marketplace_routes {
         let (st, v) = get(&s, "/marketplace/jobs/nope").await;
         assert_eq!(st, 404, "{v}");
         assert_eq!(v["error"], "no job `nope`");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn instruction_files_opt_in_round_trips_and_defaults_off() {
+        let s = boot_with_control_tag(true, "mp-instr").await;
+        let r = rig(
+            "routes-instr",
+            files_state(),
+            FakeCargo::Builds,
+            Duration::from_secs(300),
+        )
+        .await;
+        s.shared.install_marketplace(Arc::clone(&r.mp));
+        let (st, v) = get(&s, "/marketplace/instruction-files?workspace=ws1").await;
+        assert_eq!((st, &v["instructionFiles"]), (200, &json!(false)), "{v}");
+        let (st, _) = get(&s, "/marketplace/instruction-files").await;
+        assert_eq!(st, 400);
+        let (st, _) = post(&s, "/marketplace/instruction-files", r#"{"workspace":"ws1"}"#).await;
+        assert_eq!(st, 400, "enabled is required");
+        let (st, v) = post(
+            &s,
+            "/marketplace/instruction-files",
+            r#"{"workspace":"ws1","enabled":true}"#,
+        )
+        .await;
+        assert_eq!((st, &v["instructionFiles"]), (200, &json!(true)), "{v}");
+        let (_, v) = get(&s, "/marketplace/instruction-files?workspace=ws1").await;
+        assert_eq!(v["instructionFiles"], json!(true));
+        let (_, v) = get(&s, "/marketplace/instruction-files?workspace=ws2").await;
+        assert_eq!(v["instructionFiles"], json!(false), "per workspace");
+        post(
+            &s,
+            "/marketplace/instruction-files",
+            r#"{"workspace":"ws1","enabled":false}"#,
+        )
+        .await;
+        let (_, v) = get(&s, "/marketplace/instruction-files?workspace=ws1").await;
+        assert_eq!(v["instructionFiles"], json!(false));
     }
 
     /// Track G6 shipped pinning and provider defaults with no way to reach either.

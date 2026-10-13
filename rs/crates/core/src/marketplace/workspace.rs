@@ -79,6 +79,22 @@ impl WorkspaceStates {
         Ok(state)
     }
 
+    /// Whether workspace `key` opted in to instruction files in its project roots.
+    pub fn instruction_files(&self, key: &str) -> Result<bool, LockfileIoError> {
+        Ok(self.get(key)?.instruction_files)
+    }
+
+    /// Opt workspace `key` in or out of instruction files in its project roots.
+    pub fn set_instruction_files(&self, key: &str, on: bool) -> Result<bool, LockfileIoError> {
+        let path = self.path(key);
+        let mut file = read_workspace_modules(&path)?;
+        let mut state = file.get(key);
+        state.instruction_files = on;
+        file.set(key, state);
+        write_workspace_modules(&path, &file)?;
+        Ok(on)
+    }
+
     /// Every workspace that mentions `id` → whether it is enabled there.
     pub fn enabled_in(&self, id: &ModuleId) -> BTreeMap<String, bool> {
         let mut out = BTreeMap::new();

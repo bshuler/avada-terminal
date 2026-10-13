@@ -1100,6 +1100,22 @@ impl Marketplace {
         Ok(self.workspaces.enabled_in(&id))
     }
 
+    /// Whether `workspace` writes module instruction files into its project roots.
+    pub fn instruction_files(&self, workspace: &str) -> Result<bool, MarketplaceError> {
+        Self::check_workspace(workspace)?;
+        Ok(self.workspaces.instruction_files(workspace)?)
+    }
+
+    /// Opt `workspace` in or out of module instruction files in its project roots.
+    pub fn set_instruction_files(
+        &self,
+        workspace: &str,
+        on: bool,
+    ) -> Result<bool, MarketplaceError> {
+        Self::check_workspace(workspace)?;
+        Ok(self.workspaces.set_instruction_files(workspace, on)?)
+    }
+
     // ---- track G6 resolver
 
     /// Pin `module` to `version` in `workspace`, refusing a pin that would break

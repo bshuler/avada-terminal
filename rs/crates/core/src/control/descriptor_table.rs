@@ -421,6 +421,27 @@ pub fn core_routes() -> Vec<RouteDescriptor> {
             ),
             vec![p("workspace", Query, "string", true, "Workspace key")],
         ),
+        with(
+            route(
+                "marketplace.instruction_files",
+                "/marketplace/instruction-files",
+                Get,
+                "Whether a workspace writes module instruction files into its project roots",
+            ),
+            vec![p("workspace", Query, "string", true, "Workspace key")],
+        ),
+        with(
+            route(
+                "marketplace.instruction_files.set",
+                "/marketplace/instruction-files",
+                Post,
+                "Opt a workspace in or out of module instruction files in its project roots",
+            ),
+            vec![
+                p("workspace", Body, "string", true, "Workspace key"),
+                p("enabled", Body, "boolean", true, "Write instruction files into project roots"),
+            ],
+        ),
         route(
             "marketplace.defaults",
             "/marketplace/defaults",

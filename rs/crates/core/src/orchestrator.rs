@@ -140,12 +140,11 @@ pub fn materialize_modules_into(dest: &Path, modules: &[ModuleInput], tools: &To
     materialize_modules_with(dest, modules, tools, &BTreeMap::new())
 }
 
-/// File in `dest` listing the module ids a run materialized for, so a module that is
-/// uninstalled (and so absent from the next request) still gets its fence swept.
+/// Ledger file name in the orchestrator folder (see [`materialize_root`]).
 const LEDGER: &str = ".avada-materialized-modules.json";
 
-fn read_ledger(dest: &Path) -> Vec<ModuleId> {
-    let Ok(text) = fs::read_to_string(dest.join(LEDGER)) else {
+fn read_ledger(ledger: &Path) -> Vec<ModuleId> {
+    let Ok(text) = fs::read_to_string(ledger) else {
         return Vec::new();
     };
     serde_json::from_str::<Vec<String>>(&text)
@@ -163,15 +162,30 @@ pub fn materialize_modules_with(
     tools: &Tools,
     defaults: &BTreeMap<String, ModuleId>,
 ) -> Applied {
-    let known = read_ledger(dest);
+    // The materializer only sweeps fences for ids in the request, so the retired
+    // pre-module id is dropped here, by name.
+    unfence(&dest.join("CONVENTIONS.md"), "avada/hyperpane");
+    materialize_root(dest, &dest.join(LEDGER), "orchestrator", modules, tools, defaults)
+}
+
+/// One folder's materialize pass. `ledger` records the module ids a run wrote for, so a
+/// module that is uninstalled (and so absent from the next request) still gets its fence
+/// swept. The orchestrator folder keeps its ledger beside the files; a project root never
+/// does (a stray dotfile in a user's repo is exactly the dirt this avoids).
+fn materialize_root(
+    dest: &Path,
+    ledger: &Path,
+    label: &str,
+    modules: &[ModuleInput],
+    tools: &Tools,
+    defaults: &BTreeMap<String, ModuleId>,
+) -> Applied {
+    let known = read_ledger(ledger);
     let retired: Vec<ModuleId> = known
         .iter()
         .filter(|k| !modules.iter().any(|m| &m.id == *k))
         .cloned()
         .collect();
-    // The materializer only sweeps fences for ids in the request, so the retired
-    // pre-module id is dropped here, by name.
-    unfence(&dest.join("CONVENTIONS.md"), "avada/hyperpane");
     let roots = [dest.to_path_buf()];
     let materializer = Materializer::new();
     let plan = materializer.plan(&Request {
@@ -185,23 +199,24 @@ pub fn materialize_modules_with(
         retired: &retired,
     });
     for w in &plan.warnings {
-        tracing::warn!(warning = %w, "orchestrator: skills plan");
+        tracing::warn!(warning = %w, root = label, "skills plan");
     }
     for e in &plan.errors {
-        tracing::warn!(module = %e.module.as_str(), file = %e.path.display(), error = %e.error, "orchestrator: a module skill was not materialized");
+        tracing::warn!(module = %e.module.as_str(), file = %e.path.display(), error = %e.error, root = label, "a module skill was not materialized");
     }
     for s in &plan.skipped {
-        tracing::info!(unit = ?s.unit, tool = %s.tool, reason = %s.reason, "orchestrator: skill skipped");
+        tracing::info!(unit = ?s.unit, tool = %s.tool, reason = %s.reason, root = label, "skill skipped");
     }
     let applied = materializer.apply(&plan);
     for (path, e) in &applied.failed {
-        tracing::warn!(file = %path.display(), error = %e, "orchestrator: could not write a module skill");
+        tracing::warn!(file = %path.display(), error = %e, root = label, "could not write a module skill");
     }
     if !applied.written.is_empty() || !applied.removed.is_empty() {
         tracing::info!(
             written = applied.written.len(),
             removed = applied.removed.len(),
-            "orchestrator: module skills refreshed"
+            root = label,
+            "module skills refreshed"
         );
     }
     // Remember who we wrote for. A sweep that failed keeps its retired ids for the next run.
@@ -211,16 +226,95 @@ pub fn materialize_modules_with(
     }
     ids.sort();
     ids.dedup();
-    let ledger = dest.join(LEDGER);
     if dest.is_dir() && (!ids.is_empty() || ledger.exists()) {
         let text = serde_json::to_string(&ids).expect("ids serialize");
-        if fs::read_to_string(&ledger).ok().as_deref() != Some(text.as_str()) {
-            if let Err(e) = fs::write(&ledger, text) {
-                tracing::warn!(error = %e, "orchestrator: could not record the materialized modules");
+        if fs::read_to_string(ledger).ok().as_deref() != Some(text.as_str()) {
+            if let Some(dir) = ledger.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
+            if let Err(e) = fs::write(ledger, text) {
+                tracing::warn!(error = %e, root = label, "could not record the materialized modules");
             }
         }
     }
     applied
+}
+
+/// One workspace as the project-root pass sees it.
+#[derive(Debug, Clone)]
+pub struct WorkspaceTarget {
+    /// The workspace's marketplace key.
+    pub key: String,
+    /// Its opt-in (`WorkspaceModuleState::instruction_files`). Off writes nothing.
+    pub instruction_files: bool,
+    /// Its project roots (see [`project_roots`]).
+    pub roots: Vec<PathBuf>,
+    /// Every installed module, with `enabled` set **for this workspace**: a module disabled
+    /// here is swept from this workspace's roots and never written to them.
+    pub modules: Vec<ModuleInput>,
+}
+
+/// The distinct project roots (a `.avada/` or `.git` marker) above the given pane
+/// directories, in first-seen order. A directory with no marker above it is not a project
+/// and is skipped: instruction files are never scattered into arbitrary folders.
+pub fn project_roots<I, P>(pane_dirs: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut out: Vec<PathBuf> = Vec::new();
+    for d in pane_dirs {
+        if let Some(r) = crate::workspace::project::find_project_root(d.as_ref()) {
+            if !out.contains(&r.dir) {
+                out.push(r.dir);
+            }
+        }
+    }
+    out
+}
+
+/// Where the ledger for `root` in workspace `key` lives: under `state_dir`, outside the repo.
+fn root_ledger(state_dir: &Path, key: &str, root: &Path) -> PathBuf {
+    // FNV-1a: stable across Rust versions, unlike `DefaultHasher`.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in root.to_string_lossy().as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    state_dir
+        .join("instruction-roots")
+        .join(format!("{key}-{h:016x}.json"))
+}
+
+/// Write one workspace's enabled modules' project-scope instruction files into its project
+/// roots, when it opted in; return what was written or removed so the caller can log it.
+///
+/// - Opted out: nothing is written. Roots that an earlier opted-in run wrote for (they have
+///   a ledger) are swept of those fences, so turning the switch off takes the files back.
+/// - Project scope only: `home` is always `None`, so `~/.claude/CLAUDE.md` is never touched.
+/// - Git: a root that is a repository is written like any folder. The files are the
+///   project's own instruction files; `.gitignore` is never touched.
+/// - The ledgers live in `state_dir`, never in the repo, one per (workspace, root).
+pub fn materialize_workspace_roots(
+    ws: &WorkspaceTarget,
+    state_dir: &Path,
+    tools: &Tools,
+    defaults: &BTreeMap<String, ModuleId>,
+) -> Applied {
+    let mut total = Applied::default();
+    for root in &ws.roots {
+        let ledger = root_ledger(state_dir, &ws.key, root);
+        let modules: &[ModuleInput] = if ws.instruction_files { &ws.modules } else { &[] };
+        if modules.is_empty() && !ledger.exists() {
+            continue;
+        }
+        let label = format!("{}:{}", ws.key, root.display());
+        let a = materialize_root(root, &ledger, &label, modules, tools, defaults);
+        total.written.extend(a.written);
+        total.removed.extend(a.removed);
+        total.failed.extend(a.failed);
+    }
+    total
 }
 
 /// Remove what the host fenced into this directory before the tab's rule moved into the
@@ -758,6 +852,115 @@ mod tests {
         assert!(!dest.join("CLAUDE.md").exists());
         assert!(!dest.join("CONVENTIONS.md").exists());
         untouched(&before);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // ---- B4b: opt-in project roots
+
+    /// A project root: a directory with a `.git` marker, holding the user's own AGENTS.md.
+    fn repo(tmp: &Path, name: &str) -> PathBuf {
+        let r = tmp.join(name);
+        fs::create_dir_all(r.join(".git")).unwrap();
+        fs::write(r.join("AGENTS.md"), "user text\n").unwrap();
+        r
+    }
+
+    fn ws(key: &str, on: bool, roots: &[&PathBuf], modules: Vec<ModuleInput>) -> WorkspaceTarget {
+        WorkspaceTarget {
+            key: key.into(),
+            instruction_files: on,
+            roots: roots.iter().map(|r| (*r).clone()).collect(),
+            modules,
+        }
+    }
+
+    fn run(w: &WorkspaceTarget, state: &Path) -> Applied {
+        let a = materialize_workspace_roots(w, state, &Tools::only(["claude-code"]), &BTreeMap::new());
+        assert!(a.ok(), "{:?}", a.failed);
+        a
+    }
+
+    #[test]
+    fn opted_out_workspace_writes_nothing() {
+        let tmp = scratch("b4b-off");
+        let root = repo(&tmp, "proj");
+        let a = run(&ws("w", false, &[&root], vec![rule_module(&tmp, true)]), &tmp.join("state"));
+        assert!(a.written.is_empty() && a.removed.is_empty(), "{a:?}");
+        assert_eq!(fs::read_to_string(root.join("AGENTS.md")).unwrap(), "user text\n");
+        assert!(!root.join("CLAUDE.md").exists());
+        assert!(!tmp.join("state").exists(), "no ledger for a workspace that wrote nothing");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn opted_in_workspace_fences_the_root_and_leaves_user_text_and_reports_files() {
+        let tmp = scratch("b4b-on");
+        let root = repo(&tmp, "proj");
+        let state = tmp.join("state");
+        let w = ws("w", true, &[&root], vec![rule_module(&tmp, true)]);
+        let a = run(&w, &state);
+        let t = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert!(t.starts_with("user text\n"), "{t}");
+        assert!(t.contains("<!-- avada:module=bshuler/avada-orchestrator -->"), "{t}");
+        assert!(a.written.contains(&root.join("AGENTS.md")), "{a:?}");
+        // A new untracked file is just written; .gitignore and the repo itself stay clean of ledgers.
+        assert!(fs::read_to_string(root.join("CLAUDE.md")).unwrap().contains("@AGENTS.md"));
+        assert!(!root.join(".gitignore").exists());
+        assert!(!root.join(LEDGER).exists(), "ledger must live outside the repo");
+        let again = run(&w, &state);
+        assert!(again.written.is_empty() && again.removed.is_empty(), "{again:?}");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn two_workspaces_with_different_enabled_sets_write_their_own_roots() {
+        let tmp = scratch("b4b-two");
+        let (ra, rb) = (repo(&tmp, "a"), repo(&tmp, "b"));
+        let state = tmp.join("state");
+        let two = provider(&tmp, "acme/two", "avada.y", "TWO-TEXT");
+        let off = |mut m: ModuleInput| {
+            m.enabled = false;
+            m
+        };
+        let one = provider(&tmp, "acme/one", "avada.x", "ONE-TEXT");
+        run(&ws("A", true, &[&ra], vec![off(one.clone()), two.clone()]), &state);
+        run(&ws("B", true, &[&rb], vec![one, off(two)]), &state);
+        let a = fs::read_to_string(ra.join("AGENTS.md")).unwrap();
+        let b = fs::read_to_string(rb.join("AGENTS.md")).unwrap();
+        assert!(a.contains("TWO-TEXT") && !a.contains("ONE-TEXT"), "{a}");
+        assert!(b.contains("ONE-TEXT") && !b.contains("TWO-TEXT"), "{b}");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn disabling_removes_only_the_fence_and_opting_out_takes_the_files_back() {
+        let tmp = scratch("b4b-disable");
+        let root = repo(&tmp, "proj");
+        let state = tmp.join("state");
+        run(&ws("w", true, &[&root], vec![rule_module(&tmp, true)]), &state);
+        assert!(root.join("CLAUDE.md").exists());
+
+        run(&ws("w", true, &[&root], vec![rule_module(&tmp, false)]), &state);
+        assert_eq!(fs::read_to_string(root.join("AGENTS.md")).unwrap(), "user text\n");
+        assert!(!root.join("CLAUDE.md").exists());
+
+        run(&ws("w", true, &[&root], vec![rule_module(&tmp, true)]), &state);
+        assert!(fs::read_to_string(root.join("AGENTS.md")).unwrap().contains("avada:module="));
+        // Opting out sweeps what the opted-in run wrote, user text intact.
+        run(&ws("w", false, &[&root], vec![rule_module(&tmp, true)]), &state);
+        assert_eq!(fs::read_to_string(root.join("AGENTS.md")).unwrap(), "user text\n");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn project_roots_keeps_markered_dirs_once() {
+        let tmp = scratch("b4b-roots");
+        let r = repo(&tmp, "proj");
+        fs::create_dir_all(r.join("sub")).unwrap();
+        let bare = tmp.join("nomarker");
+        fs::create_dir_all(&bare).unwrap();
+        let got = project_roots([r.join("sub"), r.clone(), bare]);
+        assert_eq!(got, vec![r]);
         let _ = fs::remove_dir_all(&tmp);
     }
 }

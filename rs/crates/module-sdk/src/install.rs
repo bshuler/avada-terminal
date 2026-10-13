@@ -187,6 +187,11 @@ pub struct WorkspaceModuleState {
     /// Module → pinned version for this workspace.
     #[serde(default)]
     pub pins: BTreeMap<ModuleId, Version>,
+    /// Opt-in: also write enabled modules' instruction files (`AGENTS.md` fence and the
+    /// like) into this workspace's project roots. Off by default; the orchestrator
+    /// folder is written regardless.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub instruction_files: bool,
 }
 
 impl WorkspaceModuleState {
