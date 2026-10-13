@@ -1153,6 +1153,43 @@ impl ControlHost {
                         changed = true;
                     }
                 }
+                UiOp::ClosePane { session_uid } => {
+                    if let Some((w, ti, idx)) = resolve_pane(windows, &session_uid) {
+                        // `close_pane_menu`, not `close_pane_in`: it parks the pane (session
+                        // alive) on the recently-closed history, so an API caller's mistake is
+                        // one `reopenPane` away. The confirm-first dialog is deliberately skipped
+                        // (nobody is at the keyboard to answer it), matching `CloseTab`. The one
+                        // pane that cannot be parked — the last of the last tab — falls through
+                        // to the real close inside `close_pane_menu`.
+                        w.state.borrow_mut().close_pane_menu(ti, idx, mgr);
+                        changed = true;
+                    }
+                }
+                UiOp::ReopenPane { session_uid } => {
+                    // A specific parked pane lives in exactly one window's history; the
+                    // most-recent restore (no uid) acts on the first window, like the keyboard
+                    // command on a single-window workspace.
+                    match session_uid {
+                        Some(uid) => {
+                            for w in windows {
+                                if w.state.borrow_mut().restore_closed_pane(&uid, mgr) {
+                                    changed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        None => {
+                            // Restore the most recently parked pane in the first window —
+                            // `reopen_closed_pane`, not `reopen_closed`, so the pane verb never
+                            // pops a closed tab out from under the caller.
+                            if let Some(w) = windows.first() {
+                                if w.state.borrow_mut().reopen_closed_pane(mgr) {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
                 UiOp::RenameTab { tab_id, title } => {
                     if let Some((w, idx)) = resolve_tab(windows, &tab_id) {
                         w.state.borrow_mut().rename_tab(idx as i32, &title);
@@ -1725,6 +1762,30 @@ fn resolve_tab<'a>(windows: &'a [Rc<Window>], tab_id: &str) -> Option<(&'a Rc<Wi
     let w = window_by_id(windows, wid.parse().ok()?)?;
     let idx: usize = idx.parse().ok()?;
     (idx < w.state.borrow().tabs.len()).then_some((w, idx))
+}
+
+/// `(window, tab index, pane index)` of the pane hosting session `uid`, across every window.
+/// Panes are addressed by session uid rather than a positional id for the same reason
+/// [`UiOp::MovePane`] is: the slot is resolved when the op is applied, so an earlier close in the
+/// same batch can't leave it pointing at a different pane.
+fn resolve_pane<'a>(
+    windows: &'a [Rc<Window>],
+    uid: &str,
+) -> Option<(&'a Rc<Window>, usize, usize)> {
+    windows.iter().find_map(|w| {
+        // Scope the borrow: the slot is a pair of owned indices, so the `Ref` is dropped before
+        // the window reference is returned.
+        let slot = {
+            let st = w.state.borrow();
+            st.tabs.iter().enumerate().find_map(|(ti, t)| {
+                t.panes
+                    .iter()
+                    .position(|p| p.uid == uid)
+                    .map(|idx| (ti, idx))
+            })
+        };
+        slot.map(|(ti, idx)| (w, ti, idx))
+    })
 }
 
 /// Whether the human is active right now, per the idle-timeout setting. Settings are app-wide

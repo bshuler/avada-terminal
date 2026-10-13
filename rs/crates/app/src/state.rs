@@ -10305,6 +10305,45 @@ impl State {
         self.restore_item(item, mgr);
     }
 
+    /// Reopen the parked PANE whose session is still `uid` — the control-plane `reopenPane` with a
+    /// target (keyed on the session rather than a history-row id, which the caller never sees).
+    /// Only parked panes match, not a session that rode into the history inside a closed *tab*
+    /// (that one comes back via `reopen-tab`/"Reopen closed") — so `reopenPane` never silently
+    /// restores a whole tab. Returns whether an entry was found and restored, so a multi-window
+    /// host can try each window's history in turn. Restores into the active tab, like
+    /// [`Self::restore_closed`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn restore_closed_pane(&mut self, uid: &str, mgr: &SessionManager) -> bool {
+        let Some(i) = self.closed.iter().position(|c| {
+            matches!(c.what, ClosedWhat::Pane(_)) && c.panes().iter().any(|p| p.uid == uid)
+        }) else {
+            return false;
+        };
+        let item = self.closed.remove(i);
+        self.closed_open = false;
+        self.restore_item(item, mgr);
+        true
+    }
+
+    /// The control-plane `reopenPane` with no target: restore the most recently parked PANE.
+    /// Unlike [`Self::reopen_closed`] (the GUI's "Reopen closed", which pops whatever is newest,
+    /// pane or tab), this skips closed tabs so the pane verb only ever brings back a pane.
+    /// Returns whether a parked pane was found.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn reopen_closed_pane(&mut self, mgr: &SessionManager) -> bool {
+        let Some(i) = self
+            .closed
+            .iter()
+            .rposition(|c| matches!(c.what, ClosedWhat::Pane(_)))
+        else {
+            return false;
+        };
+        let item = self.closed.remove(i);
+        self.closed_open = false;
+        self.restore_item(item, mgr);
+        true
+    }
+
     /// Re-host one history entry: a pane re-docks into the ACTIVE tab (the same replay-primed
     /// `adopt_pane` the bell uses), a tab comes back as its own tab, switched to.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -11525,6 +11564,49 @@ mod reminder_tests {
         assert_eq!(st.active_tab().panes.len(), 2);
         let f = st.active_tab().focused;
         assert_eq!(st.active_tab().panes[f].uid, "a");
+    }
+
+    #[test]
+    fn close_pane_menu_parks_and_reopen_restores_by_uid_and_most_recent() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane(&m, det("a"));
+        st.adopt_pane(&m, det("b"));
+        let ti = st.active;
+        assert_eq!(st.active_tab().panes.len(), 2);
+
+        // Closing a pane parks it like closing a tab: it leaves the tab, its session stays
+        // alive, and it lands as one history entry — the recoverable close the control-plane
+        // `closePane` now routes to.
+        assert!(st.close_pane_menu(ti, 0, &m));
+        assert_eq!(st.active_tab().panes.len(), 1);
+        assert!(
+            st.session_uids().iter().any(|u| u == "a"),
+            "parked pane's session must stay alive"
+        );
+        assert_eq!(st.closed.len(), 1);
+
+        // `restore_closed_pane` keyed on the parked session uid (the `reopenPane` target) re-docks
+        // it into the active tab and clears the history row. Only parked PANES match — a session
+        // that entered the history inside a closed *tab* is left for `reopen-tab`, so the pane
+        // verb never restores a whole tab (the `matches!(ClosedWhat::Pane)` guard).
+        assert!(st.restore_closed_pane("a", &m));
+        assert_eq!(st.active_tab().panes.len(), 2);
+        assert!(st.closed.is_empty());
+        assert!(st.session_uids().iter().any(|u| u == "a"));
+
+        // An unknown uid is a no-op (lets a multi-window host try each window in turn).
+        assert!(!st.restore_closed_pane("ghost", &m));
+
+        // The no-target `reopenPane` restores the most recently parked pane, then reports false
+        // once the history holds no parked pane.
+        let ti = st.active;
+        assert!(st.close_pane_menu(ti, 0, &m));
+        assert_eq!(st.closed.len(), 1);
+        assert!(st.reopen_closed_pane(&m));
+        assert!(st.closed.is_empty());
+        assert_eq!(st.active_tab().panes.len(), 2);
+        assert!(!st.reopen_closed_pane(&m));
     }
 
     #[test]

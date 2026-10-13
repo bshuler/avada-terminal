@@ -2046,6 +2046,16 @@ async fn command(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: By
             return tab_command(&shared, &info, ty, &cmd);
         }
     }
+    // `closePane`/`reopenPane` are queued for the UI thread for the same reason the tab verbs
+    // are: the recently-closed history that keeps a closed pane's session alive lives in the
+    // GUI's `State`, out of the read model's reach. The route resolves + scopes the pane here,
+    // then queues the park (`closePane`) or the restore (`reopenPane`). The old `closePane`
+    // reached `dispatch` and killed the session outright — see `control::uiops`.
+    match cmd.get("type").and_then(Value::as_str) {
+        Some("closePane") => return close_pane_command(&shared, &info, &cmd),
+        Some("reopenPane") => return reopen_pane_command(&shared, &info, &cmd),
+        _ => {}
+    }
     // Dictation verbs are handled here, not in dispatch, for two reasons: they need `Shared`
     // (the STT service AND the pty write that delivers the transcript), and `stopDictation`
     // BLOCKS for as long as the transcriber takes — dispatch runs holding the read-model
@@ -2083,16 +2093,9 @@ async fn command(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: By
             });
         }
     }
-    // A closed pane must not leave a microphone running: nothing would ever stop it, and the
-    // pty its transcript was bound for is gone. Cancel discards the audio rather than
-    // transcribing it into nowhere.
-    if cmd.get("type").and_then(Value::as_str) == Some("closePane") && result.status < 300 {
-        if let Some(pane_id) = cmd.get("paneId").and_then(Value::as_str) {
-            shared.dictation.cancel(pane_id);
-        }
-    }
     // Phase-5: keep supervisor policies in lockstep with pane meta (setMeta flips
-    // hp.supervise; newPane carries meta; closePane removes a pane). Cheap + idempotent.
+    // hp.supervise; newPane carries meta). Cheap + idempotent. (`closePane` is handled above
+    // and cancels its own dictation + reconciles there.)
     shared.reconcile_policies();
     if result.notify_state {
         notify_state(&shared);
@@ -2102,6 +2105,59 @@ async fn command(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: By
         shared.mark_projects_dirty();
     }
     jstatus(result.status, result.body)
+}
+
+/// Queue a recoverable pane close. Unlike `tab_command`, this does NOT demand a root token: a
+/// scoped token could always close its own panes through the old `dispatch` path, so it resolves
+/// and scopes per pane via [`find_pane_scoped`] (the same 403/404 as dictation). The pane is
+/// parked with its session alive on the GUI's recently-closed history; [`reopen_pane_command`]
+/// brings it back. Answers `202 Accepted` — the park lands on the next sync tick, and `/state`
+/// reflects it then (the same "accepted, not completed" contract as the tab verbs).
+#[tracing::instrument(level = "debug", skip_all)]
+fn close_pane_command(shared: &Arc<Shared>, info: &TokenInfo, cmd: &Value) -> Response {
+    let pane_id = match cmd.get("paneId").and_then(Value::as_str) {
+        Some(p) if !p.is_empty() => p,
+        _ => return jstatus(400, json!({ "error": "missing string field: paneId" })),
+    };
+    let found = match find_pane_scoped(shared, info.scope.as_ref(), pane_id) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    // A closed pane must not leave a microphone running: nothing would ever stop it, and the pty
+    // its transcript was bound for is going away. Cancel discards the audio rather than
+    // transcribing it into nowhere — exactly what the old dispatch path did on `closePane`.
+    shared.dictation.cancel(&found.pane_id);
+    queue_ui_op(
+        shared,
+        UiOp::ClosePane {
+            session_uid: found.uid.clone(),
+        },
+        json!({ "ok": true, "queued": true, "paneId": found.pane_id, "sessionUid": found.uid }),
+    )
+}
+
+/// Queue a pane restore from the recently-closed history. Root token only: a closed pane is no
+/// longer in the read model, so a scoped grant over named panes cannot be checked against it.
+/// `sessionUid` targets one parked pane by its still-alive session; omit it for the most recent
+/// (the control-plane twin of the Reopen-Closed keyboard command). The pane re-docks into the
+/// active tab and is focused — the GUI's own restore behaviour.
+#[tracing::instrument(level = "debug", skip_all)]
+fn reopen_pane_command(shared: &Arc<Shared>, info: &TokenInfo, cmd: &Value) -> Response {
+    if info.scope.is_some() {
+        return jstatus(403, json!({ "error": "reopenPane needs a root token" }));
+    }
+    let session_uid = cmd
+        .get("sessionUid")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    queue_ui_op(
+        shared,
+        UiOp::ReopenPane {
+            session_uid: session_uid.clone(),
+        },
+        json!({ "ok": true, "queued": true, "sessionUid": session_uid }),
+    )
 }
 
 // ---- tabs + settings (queued for the UI thread) --------------------------------------------
@@ -4890,6 +4946,54 @@ mod golden {
             r#"{"type":"closeTab","tabId":"ordinary"}"#,
         )
         .await;
+        assert_eq!(r.status().as_u16(), 202);
+        assert_eq!(r.json::<Value>().await.unwrap()["queued"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn close_pane_parks_via_queue_and_reopen_is_root_only() {
+        let s = boot(true).await;
+        s.shared.model.lock().unwrap().insert_pane(1, pane("p1", "u1"));
+
+        // `closePane` now PARKS the pane through a queued UiOp (202 + `queued`), carrying the
+        // resolved session uid — it no longer destroys the pane synchronously the way the old
+        // `dispatch` arm did. The park itself runs on the UI thread, which this harness doesn't
+        // spin, so the point here is that the verb ROUTES to the queue with the right payload.
+        let r = post(&s, "/command", &s.token, r#"{"type":"closePane","paneId":"p1"}"#).await;
+        assert_eq!(r.status().as_u16(), 202);
+        let body: Value = r.json().await.unwrap();
+        assert_eq!(body["queued"], json!(true));
+        assert_eq!(body["paneId"], json!("p1"));
+        assert_eq!(body["sessionUid"], json!("u1"));
+
+        // Unknown pane → 404; missing `paneId` → 400.
+        let r = post(&s, "/command", &s.token, r#"{"type":"closePane","paneId":"ghost"}"#).await;
+        assert_eq!(r.status().as_u16(), 404);
+        let r = post(&s, "/command", &s.token, r#"{"type":"closePane"}"#).await;
+        assert_eq!(r.status().as_u16(), 400);
+
+        // A scoped token may still close a pane inside its own scope — parity with the old
+        // dispatch path, where a scoped agent could always close its own panes.
+        let minted: Value = client()
+            .post(format!("{}/tokens", s.base))
+            .header("authorization", format!("Bearer {}", s.token))
+            .header("content-type", "application/json")
+            .body(r#"{"scope":{"paneIds":["p1"]}}"#)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let scoped = minted["token"].as_str().unwrap().to_string();
+        let r = post(&s, "/command", &scoped, r#"{"type":"closePane","paneId":"p1"}"#).await;
+        assert_eq!(r.status().as_u16(), 202);
+
+        // `reopenPane` is a workspace-wide restore, so it is root-only: the scoped token is
+        // refused 403, the master token is queued 202.
+        let r = post(&s, "/command", &scoped, r#"{"type":"reopenPane"}"#).await;
+        assert_eq!(r.status().as_u16(), 403);
+        let r = post(&s, "/command", &s.token, r#"{"type":"reopenPane"}"#).await;
         assert_eq!(r.status().as_u16(), 202);
         assert_eq!(r.json::<Value>().await.unwrap()["queued"], json!(true));
     }
