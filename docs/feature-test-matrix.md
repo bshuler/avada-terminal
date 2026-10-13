@@ -22,12 +22,12 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 189 |
+| callbacks declared | 192 |
 | …bound to Rust | 112 |
 | …proven end-to-end | 112 |
 | …bound but unproven | 0 |
-| …ui-local or dead | 77 |
-| Command variants | 151 |
+| …ui-local or dead | 80 |
+| Command variants | 157 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
@@ -42,6 +42,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 |---|---|---|
 | `acted` | `leftpanel.slint` | `ui-local` |
 | `activate` | `leftpanel.slint` | `e2e` |
+| `add` | `types.slint` | `ui-local` |
 | `add_project` | `sidebar.slint` | `ui-local` |
 | `add_project_submit` | `overlays.slint` | `ui-local` |
 | `adopt_session` | `types.slint` | `e2e` |
@@ -183,6 +184,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `rename_pane` | `app.slint` | `e2e` |
 | `rename_project` | `app.slint` | `e2e` |
 | `rename_tab` | `app.slint` | `e2e` |
+| `refresh` | `types.slint` | `ui-local` |
 | `reopen` | `types.slint` | `e2e` |
 | `reorder_pane` | `types.slint` | `e2e` |
 | `report_geom` | `topbar.slint` | `ui-local` |
@@ -191,6 +193,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `restore` | `sidebar.slint` | `e2e` |
 | `resume` | `sidebar.slint` | `ui-local` |
 | `resume_session` | `app.slint` | `e2e` |
+| `run_now` | `types.slint` | `ui-local` |
 | `row_activate` | `types.slint` | `e2e` |
 | `row_context` | `types.slint` | `e2e` |
 | `scroll` | `topbar.slint` | `ui-local` |
@@ -309,6 +312,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `OpenPathInEditor` | — |
 | `OpenPathWith` | — |
 | `OpenProject` | — |
+| `OpenScheduledTasks` | — |
 | `OpenSet` | — |
 | `OpenTabContext` | — |
 | `OpenTaskbarContext` | — |
@@ -372,6 +376,11 @@ a menu, or the control plane — not being on a key is not a gap.
 | `SubmitModuleArg` | — |
 | `SubmitNewPane` | — |
 | `SwitchTab` | — |
+| `TaskAdd` | — |
+| `TaskEnable` | — |
+| `TaskRemove` | — |
+| `TaskRun` | — |
+| `TasksRefresh` | — |
 | `TerminalAt` | — |
 | `ToggleClosed` | — |
 | `ToggleDictation` | — |

@@ -4,6 +4,7 @@ Updated 2026-10-13. Branch `feat/operating-model-module` (worktree `avada-termin
 
 ## NEEDS BERT
 - **MERGED to main (2026-10-13)** on Bert's decision, onto origin/main c512ef3. Verified on hp1: avada-core 2117 lib + integration tests, module-sdk, operating-model, app `cargo check --tests`. No typed role field exists on main, so the three `meta["role"]` reads were NOT re-pointed. Untested live: supervised-restart role fix, new ctl verb.
+- **Matrix test verdict:** `uitest::matrix::the_feature_matrix_still_describes_this_app` was already red at c512ef3 (run alone on hp1, before this merge), not reddened by it; cause was the scheduled-tasks callbacks/Commands missing from `docs/feature-test-matrix.md`, regenerated and green on hp1.
 - Review the branch and say merge / change. Nothing else blocks.
 - Merge note: `feat/scheduled-tasks` lacks the manager spine (`131ff9d`, only on `main`). Reconcile points: `pane_origin::extract`, `pane_role::apply_to_spec`, `ctl_cli.rs` and one dispatch test read the role from `meta["role"]`; point them at the typed field if 131ff9d has one.
 - Manager must read both `## NEEDS HUMAN` and `## NEEDS BERT`: the manager code is only on `main`, so this is a one-line change at that merge (not done here).
