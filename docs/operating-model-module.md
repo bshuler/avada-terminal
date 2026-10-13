@@ -117,7 +117,7 @@ contract = "^1"
 kind = "source"
 
 [[provides]]
-shape = "avada.agent.operating-model"
+shape = "avada.agent.operating_model"
 version = "1.0.0"
 
 [skills]
@@ -205,7 +205,7 @@ injecting them into every pane costs tokens and invites builders to act as manag
   only (§2.2 item 3). Disable removes this module's fence once the §2.2 sweep gate is in.
 - **Upgrade** rewrites only this module's fence; capability-adding updates are held
   (`HeldUpdate::check`); this module never adds a capability beyond `skills.materialize`.
-- **Swap**: a competing module declares `[[provides]] shape = "avada.agent.operating-model"`
+- **Swap**: a competing module declares `[[provides]] shape = "avada.agent.operating_model"`
   under another id. Because the materializer ignores `provides` (*verified*), swapping by
   enable/disable works only if the old one is disabled; leaving both enabled injects both.
   Required core change (D4): at most one enabled module per shape that carries skills is

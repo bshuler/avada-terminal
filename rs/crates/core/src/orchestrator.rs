@@ -678,7 +678,7 @@ mod tests {
         m
     }
 
-    const SHAPE: &str = "avada.agent.operating-model";
+    const SHAPE: &str = "avada.agent.operating_model";
 
     fn defaults_for(id: &str) -> BTreeMap<String, ModuleId> {
         BTreeMap::from([(SHAPE.to_string(), ModuleId::new(id).unwrap())])

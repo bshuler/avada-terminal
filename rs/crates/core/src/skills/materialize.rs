@@ -84,7 +84,7 @@ pub struct ModuleInput {
 
 /// Shapes with exactly one writer: when several enabled modules provide one, only
 /// the chosen provider materializes and the rest are treated as disabled.
-pub const EXCLUSIVE_SHAPES: &[&str] = &["avada.agent.operating-model"];
+pub const EXCLUSIVE_SHAPES: &[&str] = &["avada.agent.operating_model"];
 
 /// Everything one planning run needs.
 #[derive(Debug, Clone, Copy)]
