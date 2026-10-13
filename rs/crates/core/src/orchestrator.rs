@@ -18,7 +18,7 @@
 //! those modules ship lands here like it would in any project. Seeding a directory is a host
 //! job; deciding what an agent is told is a module's.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -165,7 +165,15 @@ pub fn materialize_modules_with(
     // The materializer only sweeps fences for ids in the request, so the retired
     // pre-module id is dropped here, by name.
     unfence(&dest.join("CONVENTIONS.md"), "avada/hyperpane");
-    materialize_root(dest, &dest.join(LEDGER), "orchestrator", modules, tools, defaults)
+    materialize_root(
+        dest,
+        &[dest.join(LEDGER)],
+        &BTreeSet::new(),
+        "orchestrator",
+        modules,
+        tools,
+        defaults,
+    )
 }
 
 /// One folder's materialize pass. `ledger` records the module ids a run wrote for, so a
@@ -174,16 +182,27 @@ pub fn materialize_modules_with(
 /// does (a stray dotfile in a user's repo is exactly the dirt this avoids).
 fn materialize_root(
     dest: &Path,
-    ledger: &Path,
+    ledgers: &[PathBuf],
+    foreign: &BTreeSet<String>,
     label: &str,
     modules: &[ModuleInput],
     tools: &Tools,
     defaults: &BTreeMap<String, ModuleId>,
 ) -> Applied {
-    let known = read_ledger(ledger);
+    // Several workspaces may share one root; each has its own ledger and the pass
+    // answers for all of them. `foreign` holds ids another workspace's ledger claims:
+    // those are not ours to sweep.
+    let mut known: Vec<ModuleId> = Vec::new();
+    for l in ledgers {
+        for k in read_ledger(l) {
+            if !known.contains(&k) {
+                known.push(k);
+            }
+        }
+    }
     let retired: Vec<ModuleId> = known
         .iter()
-        .filter(|k| !modules.iter().any(|m| &m.id == *k))
+        .filter(|k| !modules.iter().any(|m| &m.id == *k) && !foreign.contains(k.as_str()))
         .cloned()
         .collect();
     let roots = [dest.to_path_buf()];
@@ -223,17 +242,28 @@ fn materialize_root(
     let mut ids: Vec<String> = modules.iter().map(|m| m.id.as_str().to_string()).collect();
     if !applied.failed.is_empty() {
         ids.extend(retired.iter().map(|m| m.as_str().to_string()));
+    } else {
+        // A sweep the plan refused (an unterminated fence, a file that is not text) left
+        // that module's text on disk; forgetting the id would make it permanent.
+        ids.extend(
+            retired
+                .iter()
+                .filter(|m| plan.errors.iter().any(|e| &e.module == *m))
+                .map(|m| m.as_str().to_string()),
+        );
     }
     ids.sort();
     ids.dedup();
-    if dest.is_dir() && (!ids.is_empty() || ledger.exists()) {
+    if dest.is_dir() && (!ids.is_empty() || ledgers.iter().any(|l| l.exists())) {
         let text = serde_json::to_string(&ids).expect("ids serialize");
-        if fs::read_to_string(ledger).ok().as_deref() != Some(text.as_str()) {
-            if let Some(dir) = ledger.parent() {
-                let _ = fs::create_dir_all(dir);
-            }
-            if let Err(e) = fs::write(ledger, text) {
-                tracing::warn!(error = %e, root = label, "could not record the materialized modules");
+        for ledger in ledgers {
+            if fs::read_to_string(ledger).ok().as_deref() != Some(text.as_str()) {
+                if let Some(dir) = ledger.parent() {
+                    let _ = fs::create_dir_all(dir);
+                }
+                if let Err(e) = fs::write(ledger, &text) {
+                    tracing::warn!(error = %e, root = label, "could not record the materialized modules");
+                }
             }
         }
     }
@@ -286,30 +316,121 @@ fn root_ledger(state_dir: &Path, key: &str, root: &Path) -> PathBuf {
         .join(format!("{key}-{h:016x}.json"))
 }
 
+/// Ids recorded by *other* workspaces' ledgers for `root` (any ledger of this root that is
+/// not in `own`). A non-empty answer means another workspace has opted in here.
+fn peer_ids(state_dir: &Path, root: &Path, own: &[PathBuf]) -> BTreeSet<String> {
+    let suffix = {
+        let probe = root_ledger(state_dir, "", root);
+        let name = probe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        name.trim_start_matches('-').to_string()
+    };
+    let mut out = BTreeSet::new();
+    let Ok(dir) = fs::read_dir(state_dir.join("instruction-roots")) else {
+        return out;
+    };
+    for e in dir.flatten() {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(&format!("-{suffix}")) && !own.contains(&path) {
+            out.extend(read_ledger(&path).iter().map(|m| m.as_str().to_string()));
+        }
+    }
+    out
+}
+
 /// Write one workspace's enabled modules' project-scope instruction files into its project
-/// roots, when it opted in; return what was written or removed so the caller can log it.
-///
-/// - Opted out: nothing is written. Roots that an earlier opted-in run wrote for (they have
-///   a ledger) are swept of those fences, so turning the switch off takes the files back.
-/// - Project scope only: `home` is always `None`, so `~/.claude/CLAUDE.md` is never touched.
-/// - Git: a root that is a repository is written like any folder. The files are the
-///   project's own instruction files; `.gitignore` is never touched.
-/// - The ledgers live in `state_dir`, never in the repo, one per (workspace, root).
+/// roots, when it opted in; see [`materialize_workspace_targets`] for the rules.
 pub fn materialize_workspace_roots(
     ws: &WorkspaceTarget,
     state_dir: &Path,
     tools: &Tools,
     defaults: &BTreeMap<String, ModuleId>,
 ) -> Applied {
+    materialize_workspace_targets(std::slice::from_ref(ws), state_dir, tools, defaults)
+}
+
+/// Write the workspaces' enabled modules' project-scope instruction files into their project
+/// roots, for those that opted in; return what was written or removed so the caller can log it.
+///
+/// - Opted out: nothing is written. Roots that an earlier opted-in run wrote for (they have
+///   a ledger) are swept of those fences, so turning the switch off takes the files back.
+/// - Shared root: workspaces that share a root are materialized **once** per root with the
+///   union of their modules (enabled in either is enabled), so one never sweeps the other's
+///   fences. An opted-out workspace whose root is used by an opted-in workspace (in this
+///   call, or one that left a ledger) sweeps nothing and only drops its own ledger.
+/// - Project scope only: `home` is always `None`, so `~/.claude/CLAUDE.md` is never touched.
+/// - Git: a root that is a repository is written like any folder. The files are the
+///   project's own instruction files; `.gitignore` is never touched.
+/// - The ledgers live in `state_dir`, never in the repo, one per (workspace, root).
+pub fn materialize_workspace_targets(
+    targets: &[WorkspaceTarget],
+    state_dir: &Path,
+    tools: &Tools,
+    defaults: &BTreeMap<String, ModuleId>,
+) -> Applied {
     let mut total = Applied::default();
-    for root in &ws.roots {
-        let ledger = root_ledger(state_dir, &ws.key, root);
-        let modules: &[ModuleInput] = if ws.instruction_files { &ws.modules } else { &[] };
-        if modules.is_empty() && !ledger.exists() {
+    let mut roots: Vec<&PathBuf> = Vec::new();
+    for t in targets {
+        for r in &t.roots {
+            if !roots.contains(&r) {
+                roots.push(r);
+            }
+        }
+    }
+    for root in roots {
+        let users: Vec<&WorkspaceTarget> =
+            targets.iter().filter(|t| t.roots.contains(root)).collect();
+        let ledger_of = |t: &WorkspaceTarget| root_ledger(state_dir, &t.key, root);
+        let on: Vec<&WorkspaceTarget> =
+            users.iter().copied().filter(|t| t.instruction_files).collect();
+        let off: Vec<&WorkspaceTarget> =
+            users.iter().copied().filter(|t| !t.instruction_files).collect();
+        let on_ledgers: Vec<PathBuf> = on.iter().map(|t| ledger_of(t)).collect();
+        let off_ledgers: Vec<PathBuf> = off.iter().map(|t| ledger_of(t)).collect();
+        let all_ledgers: Vec<PathBuf> =
+            on_ledgers.iter().chain(&off_ledgers).cloned().collect();
+        let foreign = peer_ids(state_dir, root, &all_ledgers);
+
+        // The union: enabled in any opted-in workspace is enabled.
+        let mut modules: Vec<ModuleInput> = Vec::new();
+        for t in &on {
+            for m in &t.modules {
+                match modules.iter_mut().find(|x| x.id == m.id) {
+                    Some(x) => x.enabled |= m.enabled,
+                    None => modules.push(m.clone()),
+                }
+            }
+        }
+
+        let (ledgers, label_key) = if on.is_empty() {
+            // Nobody here opted in. A leftover ledger is swept, unless another workspace
+            // (one not in this call) still uses the root: then only the ledger goes.
+            if !foreign.is_empty() {
+                for l in &off_ledgers {
+                    let _ = fs::remove_file(l);
+                }
+                continue;
+            }
+            let live: Vec<PathBuf> = off_ledgers.iter().filter(|l| l.exists()).cloned().collect();
+            if live.is_empty() {
+                continue;
+            }
+            (live, off.iter().map(|t| t.key.as_str()).collect::<Vec<_>>().join("+"))
+        } else {
+            // An opted-out sibling's ledger is read into the pass (its ids get swept
+            // unless some opted-in workspace wants them) and dropped afterwards.
+            (all_ledgers.clone(), on.iter().map(|t| t.key.as_str()).collect::<Vec<_>>().join("+"))
+        };
+        if modules.is_empty() && !ledgers.iter().any(|l| l.exists()) {
             continue;
         }
-        let label = format!("{}:{}", ws.key, root.display());
-        let a = materialize_root(root, &ledger, &label, modules, tools, defaults);
+        let label = format!("{label_key}:{}", root.display());
+        let a = materialize_root(root, &ledgers, &foreign, &label, &modules, tools, defaults);
+        if !on.is_empty() {
+            for l in &off_ledgers {
+                let _ = fs::remove_file(l);
+            }
+        }
         total.written.extend(a.written);
         total.removed.extend(a.removed);
         total.failed.extend(a.failed);
@@ -949,6 +1070,83 @@ mod tests {
         // Opting out sweeps what the opted-in run wrote, user text intact.
         run(&ws("w", false, &[&root], vec![rule_module(&tmp, true)]), &state);
         assert_eq!(fs::read_to_string(root.join("AGENTS.md")).unwrap(), "user text\n");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn workspaces_sharing_a_root_are_materialized_once_with_the_union() {
+        let tmp = scratch("f1-union");
+        let root = repo(&tmp, "proj");
+        let state = tmp.join("state");
+        let off = |mut m: ModuleInput| {
+            m.enabled = false;
+            m
+        };
+        let one = provider(&tmp, "acme/one", "avada.x", "ONE-TEXT");
+        let two = provider(&tmp, "acme/two", "avada.y", "TWO-TEXT");
+        let a = ws("A", true, &[&root], vec![one.clone(), off(two.clone())]);
+        let b = ws("B", true, &[&root], vec![off(one), two]);
+        let applied = materialize_workspace_targets(
+            &[a, b],
+            &state,
+            &Tools::only(["claude-code"]),
+            &BTreeMap::new(),
+        );
+        assert!(applied.ok(), "{:?}", applied.failed);
+        let t = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert!(t.contains("ONE-TEXT") && t.contains("TWO-TEXT"), "{t}");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn an_opted_out_workspace_does_not_sweep_a_root_another_workspace_uses() {
+        let tmp = scratch("f1-optout");
+        let root = repo(&tmp, "proj");
+        let state = tmp.join("state");
+        let m = vec![rule_module(&tmp, true)];
+        run(&ws("A", true, &[&root], m.clone()), &state);
+        run(&ws("B", true, &[&root], m.clone()), &state);
+        // B opts out, leaving its ledger behind: A's files must survive.
+        run(&ws("B", false, &[&root], m.clone()), &state);
+        let t = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert!(t.contains("avada:module="), "{t}");
+        assert!(root.join("CLAUDE.md").exists());
+        // Once A opts out too, the sweep happens.
+        run(&ws("A", false, &[&root], m), &state);
+        assert_eq!(fs::read_to_string(root.join("AGENTS.md")).unwrap(), "user text\n");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_retired_modules_blocked_sweep_is_retried_once_the_fence_is_repaired() {
+        let tmp = scratch("f1-stale");
+        let root = repo(&tmp, "proj");
+        let state = tmp.join("state");
+        run(&ws("w", true, &[&root], vec![rule_module(&tmp, true)]), &state);
+        let agents = root.join("AGENTS.md");
+        let good = fs::read_to_string(&agents).unwrap();
+        // Break the closing marker, then uninstall the module (absent from the request).
+        let broken = good.replace("<!-- /avada:module=bshuler/avada-orchestrator -->", "");
+        assert_ne!(broken, good);
+        fs::write(&agents, &broken).unwrap();
+        run(&ws("w", true, &[&root], vec![]), &state);
+        assert_eq!(fs::read_to_string(&agents).unwrap(), broken, "left unchanged");
+        // The user repairs the file; the next run still knows to sweep.
+        fs::write(&agents, &good).unwrap();
+        run(&ws("w", true, &[&root], vec![]), &state);
+        assert_eq!(fs::read_to_string(&agents).unwrap(), "user text\n");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_non_utf8_instruction_file_is_left_alone() {
+        let tmp = scratch("f1-latin1");
+        let root = repo(&tmp, "proj");
+        let state = tmp.join("state");
+        let bytes: &[u8] = b"caf\xe9 au lait\n";
+        fs::write(root.join("AGENTS.md"), bytes).unwrap();
+        run(&ws("w", true, &[&root], vec![rule_module(&tmp, true)]), &state);
+        assert_eq!(fs::read(root.join("AGENTS.md")).unwrap(), bytes);
         let _ = fs::remove_dir_all(&tmp);
     }
 

@@ -915,12 +915,39 @@ fn diff(d: &Desired, plan: &mut Plan) {
     let files: BTreeSet<&PathBuf> = d.sweep_files.iter().chain(d.fenced.keys()).collect();
     for file in files {
         let exists = file.is_file();
+        let wanted: &[(String, String)] = d.fenced.get(file).map(Vec::as_slice).unwrap_or(&[]);
         let current = if exists {
-            fs::read_to_string(file).unwrap_or_default()
+            match fs::read(file).map(String::from_utf8) {
+                Ok(Ok(text)) => text,
+                // A file we cannot read as text is the user's; replacing it with only
+                // our block would destroy it. Skip it, naming every id this pass would
+                // have touched so a retired one stays in the ledger.
+                other => {
+                    let why = match other {
+                        Err(e) => e.to_string(),
+                        _ => "not valid UTF-8".to_string(),
+                    };
+                    let ids: BTreeSet<&str> = d
+                        .owned
+                        .iter()
+                        .map(String::as_str)
+                        .chain(wanted.iter().map(|(w, _)| w.as_str()))
+                        .collect();
+                    for id in ids {
+                        if let Ok(module) = ModuleId::new(id) {
+                            plan.errors.push(UnitError {
+                                module,
+                                path: file.clone(),
+                                error: format!("{why}: file left unchanged"),
+                            });
+                        }
+                    }
+                    continue;
+                }
+            }
         } else {
             String::new()
         };
-        let wanted: &[(String, String)] = d.fenced.get(file).map(Vec::as_slice).unwrap_or(&[]);
         // An unterminated fence we would rewrite or remove: leave the file alone
         // rather than guess where the block ends, and say so.
         if let Some(id) = fence_ids(&current).into_iter().find(|id| {
