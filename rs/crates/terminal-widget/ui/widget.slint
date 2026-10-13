@@ -470,6 +470,9 @@ export component TerminalPane inherits Rectangle {
     // FocusScope so its `key-pressed` routes keys to `on_key` (and thence to the overlay's
     // controller-owned-mirror handler). Skipped while the in-pane search box owns the keyboard.
     changed refocus-tick => {
+        // Only the selected row carries a non-zero tick (see `paneview::pane_item`): a row
+        // whose tick drops back to 0 because panes shifted under it must not touch focus.
+        if (root.refocus-tick != 0) {
         if (!root.search-open) { fs.focus(); }
         // Report the focus state right back, instead of waiting for `changed has-focus`.
         // Slint does not deliver a `changed` for a property that was changed from INSIDE
@@ -478,6 +481,15 @@ export component TerminalPane inherits Rectangle {
         // whatever held it before. `fs.has-focus` reads back correctly here, so this is the
         // acknowledgement; `changed has-focus` still covers the gestures Slint does report.
         root.focus-changed(fs.has-focus);
+        }
+    }
+    // Defense in depth: an element created for the selected pane already carries its tick,
+    // and Slint does not fire `changed` for a property's initial value. Take focus here.
+    init => {
+        if (root.refocus-tick != 0 && !root.search-open) {
+            fs.focus();
+            root.focus-changed(fs.has-focus);
+        }
     }
 
     // The terminal surface (texture or pixel buffer), clipped to the rounded rect.
@@ -806,6 +818,9 @@ export component TerminalPane inherits Rectangle {
         // lost. `ta` explicitly calls `fs.focus()` on every down, so click-to-focus is
         // preserved without letting the scope swallow the press.
         focus-on-click: false;
+        // Tab is a terminal key, never focus traversal: with no pane holding focus Slint
+        // would otherwise move it to the next pane's scope or a rename/search field.
+        focus-on-tab-navigation: false;
         key-pressed(e) => {
             // Track the live Ctrl/Cmd state so the link tooltip can switch its hint while the
             // modifier is held (the modifier flag rides every key event, incl. the bare Ctrl/Meta

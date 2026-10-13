@@ -66,6 +66,7 @@ usage: avada ctl <verb> [args]
     reopen-pane [pane]              bring back a parked pane: by its session uid, else the most recently closed pane
     restart-pane <pane>
     focus-pane <pane>
+    refocus <pane>                  re-run the keyboard hand-off to a pane (un-sticks a dead keyboard)
     rename-pane <pane> <title>
     recolor-pane <pane> <#rrggbb>
     layout <tab> <name>             auto | single | columns | rows | grid |
@@ -305,6 +306,7 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             "restart-pane <pane>",
         )?),
         "focus-pane" => print_json(pane_verb(&conn, "focusPane", &args, "focus-pane <pane>")?),
+        "refocus" => print_json(pane_verb(&conn, "focusPane", &args, "refocus <pane>")?),
         "rename-pane" => {
             let pane = need(args.first(), "rename-pane <pane> <title>");
             let title = args[1..].join(" ");
@@ -495,6 +497,7 @@ pub const HAND_VERBS: &[&str] = &[
     "reopen-pane",
     "restart-pane",
     "focus-pane",
+    "refocus",
     "rename-pane",
     "recolor-pane",
     "layout",

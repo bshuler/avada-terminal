@@ -183,6 +183,7 @@ fn seed_windows(shared: &Arc<Shared>, windows: Vec<WindowSpec>, start_id: i64) {
         let tab_id = new_id();
         model.add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: start_id,
             active_tab_id: Some(tab_id.clone()),
             tabs: vec![TabInfo {
@@ -229,6 +230,7 @@ fn seed_windows(shared: &Arc<Shared>, windows: Vec<WindowSpec>, start_id: i64) {
         }
         model.add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id,
             active_tab_id,
             tabs,

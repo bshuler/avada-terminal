@@ -344,6 +344,10 @@ impl GitOrigin {
 /// hand-off is genuinely still failing.
 const KBD_FOCUS_TRIES: u8 = 64;
 
+/// How often the backstop retry bumps the selected pane once the bounded retry has given up
+/// and nothing holds the keyboard.
+const KBD_FOCUS_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// How long ago a history entry was closed, for its row's second line. Coarse on purpose:
 /// the first minute is one bucket ("just now") so a fresh close doesn't re-push the whole
 /// list into Slint once a second (the pump's signature includes this string).
@@ -1820,6 +1824,17 @@ pub struct State {
     /// spent one per tick until the pane confirms focus. Bounded so a pane that can never take
     /// focus (an unfocused window, a Family-B view pane with no terminal) cannot spin.
     pub kbd_focus_tries: u8,
+    /// The active tab's pane uids as of the last hand-off check. Slint keeps focus on a
+    /// repeater SLOT, not a pane, so any change to this sequence (an insert, a removal, a
+    /// reorder — compared by uid, since a close plus an open keeps the count) invalidates
+    /// the hand-off and re-arms it.
+    pub kbd_focus_uids: Vec<String>,
+    /// When the slow backstop retry may next run, once the bounded retry has given up while
+    /// nothing holds the keyboard. `None` until the budget is spent.
+    pub kbd_focus_retry_at: Option<Instant>,
+    /// Whether the window is the active one, from the winit `Focused` event. The backstop
+    /// retry only runs while it is.
+    pub window_active: bool,
     /// Monotonic source for every `refocus_seq` bump. A per-pane counter is not enough:
     /// the pane model is rebuilt per active tab, so the value Slint compares against is
     /// whatever the OTHER tab's pane at that repeater slot last showed. Two independent
@@ -2205,6 +2220,9 @@ impl State {
             kbd_focus_on: None,
             kbd_focus_live: None,
             kbd_focus_tries: 0,
+            kbd_focus_uids: Vec::new(),
+            kbd_focus_retry_at: None,
+            window_active: true,
             refocus_clock: 0,
             last_blink: Instant::now(),
             cursor_on: true,
@@ -4863,13 +4881,35 @@ impl State {
             return;
         };
         let uid = p.uid.clone();
+        // Slint keeps focus on a repeater SLOT. A pane inserted or removed ahead of the
+        // selection shifts every later slot, so what the focused slot shows (and where
+        // `on_key`'s row index routes keys) no longer matches the selection; and a removed
+        // last slot takes focus with it without telling anyone.
+        let same_row_set = t.panes.len() == self.kbd_focus_uids.len()
+            && t.panes.iter().zip(&self.kbd_focus_uids).all(|(p, u)| &p.uid == u);
+        if !same_row_set {
+            let uids: Vec<String> = t.panes.iter().map(|p| p.uid.clone()).collect();
+            self.kbd_focus_uids = uids;
+            self.rearm_kbd_focus("the active tab's pane rows changed");
+        }
         let now = (self.active, uid.clone());
         if self.kbd_focus_on.as_ref() != Some(&now) {
             self.kbd_focus_on = Some(now);
             self.kbd_focus_tries = KBD_FOCUS_TRIES;
         }
         if self.kbd_focus_tries == 0 {
-            return;
+            // The bounded retry gave up. If nothing holds the keyboard either, keep trying
+            // slowly: it backstops any invalidation the re-arm triggers missed.
+            let due = self.window_active
+                && self.kbd_focus_live.is_none()
+                && self
+                    .kbd_focus_retry_at
+                    .is_some_and(|at| Instant::now() >= at);
+            if !due {
+                return;
+            }
+            self.kbd_focus_retry_at = Some(Instant::now() + KBD_FOCUS_BACKSTOP);
+            self.kbd_focus_tries = 1;
         }
         // Confirmed by the widget — stop, and leave focus alone from here so a click into the
         // left panel or a dialog keeps what it took.
@@ -4882,10 +4922,34 @@ impl State {
         // repeater when the pane COUNT changes, which is exactly what a tab switch usually
         // does), and an element created carrying the new seq never fires `changed`.
         self.kbd_focus_tries -= 1;
+        if self.kbd_focus_tries == 0 {
+            self.kbd_focus_retry_at = Some(Instant::now() + KBD_FOCUS_BACKSTOP);
+        }
         let seq = self.next_refocus();
         let f = self.active_tab().focused;
         self.active_tab_mut().panes[f].refocus_seq = seq;
         self.dirty = true;
+    }
+
+    /// Forget what the widget last confirmed and start the hand-off over for the selected
+    /// pane. Called for every event that can have invalidated it: the active tab's rows
+    /// moved, the window was re-activated, the wrong pane took the keyboard, or the user
+    /// asked (`avada ctl refocus`).
+    #[tracing::instrument(level = "info", skip(self))]
+    pub fn rearm_kbd_focus(&mut self, why: &str) {
+        self.kbd_focus_live = None;
+        self.kbd_focus_tries = KBD_FOCUS_TRIES;
+        self.kbd_focus_retry_at = None;
+        self.dirty = true;
+    }
+
+    /// The window gained or lost OS focus. Losing it clears Slint's focus item
+    /// (`FocusOut(WindowActivation)`), so regaining it re-arms the hand-off.
+    pub fn note_window_focus(&mut self, on: bool) {
+        self.window_active = on;
+        if on {
+            self.rearm_kbd_focus("window re-activated");
+        }
     }
 
     /// The widget for pane `uid` reported that it gained (`on`) or lost the keyboard.
@@ -4894,10 +4958,23 @@ impl State {
     /// Keyed by uid rather than row index because the report is queued by the window and
     /// applied on the next pump (see `Window::focus_acks`): by then the row order may have
     /// moved under it, and a stale index would confirm the hand-off against the wrong pane.
-    #[tracing::instrument(level = "debug", ret, skip(self))]
+    ///
+    /// A gain reported by a pane other than the selected one is a stolen focus (a slot that
+    /// shifted under it, Tab traversal): it is NOT recorded, and the hand-off is re-armed.
+    #[tracing::instrument(level = "info", skip(self))]
     pub fn note_pane_focus(&mut self, uid: &str, on: bool) {
         if on {
-            self.kbd_focus_live = Some(uid.to_string());
+            let t = self.active_tab();
+            let selected = t.panes.get(t.focused).map(|p| p.uid.as_str());
+            let owned_elsewhere =
+                self.overlay_open() || self.editing_tab != -1 || self.editing_pane != -1;
+            if selected == Some(uid) || owned_elsewhere {
+                self.kbd_focus_live = Some(uid.to_string());
+            } else {
+                tracing::info!(uid, ?selected, "keyboard focus taken by a non-selected pane");
+                self.rearm_kbd_focus("a non-selected pane took the keyboard");
+                return;
+            }
         } else if self.kbd_focus_live.as_deref() == Some(uid) {
             // Only the pane that currently holds it can give it up: on a move Slint may
             // report the gain before the loss, and clearing unconditionally would erase the
@@ -14407,6 +14484,112 @@ mod keyboard_focus_tests {
         assert_ne!(seq(&st), before);
     }
 
+    /// The selected pane's uid in the active tab.
+    fn selected_uid(st: &State) -> String {
+        let t = st.active_tab();
+        t.panes[t.focused].uid.clone()
+    }
+
+    /// B7 / F2: a pane inserted ahead of the selection shifts every later slot, so the
+    /// hand-off is re-armed and the next tick bumps the selected pane (and only it).
+    #[test]
+    fn inserting_a_pane_before_the_selection_rearms_the_hand_off() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane_as_tab(&m, det("a"));
+        st.adopt_pane(&m, det("b"));
+        st.sync_pane_keyboard_focus();
+        let sel = selected_uid(&st);
+        st.note_pane_focus(&sel, true);
+        st.sync_pane_keyboard_focus();
+        assert_eq!(st.kbd_focus_tries, 0, "settled");
+
+        // A new pane lands at the front, ahead of the selection; the selection stays on its pane.
+        st.adopt_pane_at(&m, det("sub"), 0);
+        let at = st.active_tab().panes.iter().position(|p| p.uid == sel).unwrap();
+        st.active_tab_mut().focused = at;
+        assert_eq!(selected_uid(&st), sel, "the selection followed its pane");
+
+        st.sync_pane_keyboard_focus();
+        assert_eq!(st.kbd_focus_live, None, "stale confirmation dropped");
+        assert_eq!(st.kbd_focus_tries, KBD_FOCUS_TRIES - 1, "re-armed and bumped once");
+        let t = st.active_tab();
+        for (i, p) in t.panes.iter().enumerate() {
+            if i == t.focused {
+                assert_ne!(p.refocus_seq, 0);
+            }
+        }
+    }
+
+    /// B7 / F2: removing a pane below the selection keeps the selection on the same pane and
+    /// re-arms the hand-off.
+    #[test]
+    fn removing_a_pane_below_the_selection_rearms_and_keeps_the_uid() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane_as_tab(&m, det("a"));
+        st.adopt_pane(&m, det("b"));
+        st.adopt_pane(&m, det("c"));
+        st.sync_pane_keyboard_focus();
+        let sel = selected_uid(&st);
+        st.note_pane_focus(&sel, true);
+        st.sync_pane_keyboard_focus();
+        assert_eq!(st.kbd_focus_tries, 0);
+
+        let idx = st.active_tab().panes.iter().position(|p| p.uid == "a").unwrap();
+        let focused = st.active_tab().focused;
+        assert!(idx < focused, "the removed pane sits below the selection");
+        st.active_tab_mut().panes.remove(idx);
+        st.active_tab_mut().focused = focused - 1;
+        assert_eq!(selected_uid(&st), sel);
+
+        st.sync_pane_keyboard_focus();
+        assert_eq!(st.kbd_focus_live, None);
+        assert!(st.kbd_focus_tries > 0, "re-armed");
+    }
+
+    /// B7 / F2: the winit `Focused(true)` flag, once drained by the pump, re-arms.
+    #[test]
+    fn window_reactivation_rearms_the_hand_off() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane_as_tab(&m, det("a"));
+        st.sync_pane_keyboard_focus();
+        let sel = selected_uid(&st);
+        st.note_pane_focus(&sel, true);
+        st.sync_pane_keyboard_focus();
+        assert_eq!(st.kbd_focus_tries, 0);
+
+        st.note_window_focus(false);
+        assert!(!st.window_active);
+        st.note_window_focus(true);
+        assert_eq!(st.kbd_focus_live, None);
+        assert_eq!(st.kbd_focus_tries, KBD_FOCUS_TRIES);
+    }
+
+    /// B7 / F2.4: once the bounded retry has given up with nothing holding the keyboard, a
+    /// slow backstop retries instead of staying dead.
+    #[test]
+    fn the_backstop_retries_when_the_budget_is_spent_and_nothing_holds_focus() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane_as_tab(&m, det("a"));
+        for _ in 0..(KBD_FOCUS_TRIES as u32 + 2) {
+            st.sync_pane_keyboard_focus();
+        }
+        let spent = seq(&st);
+        st.sync_pane_keyboard_focus();
+        assert_eq!(seq(&st), spent, "not before the backstop interval");
+        st.kbd_focus_retry_at = Some(Instant::now() - std::time::Duration::from_millis(1));
+        st.sync_pane_keyboard_focus();
+        assert_ne!(seq(&st), spent, "the backstop bumps once it is due");
+        st.window_active = false;
+        let after = seq(&st);
+        st.kbd_focus_retry_at = Some(Instant::now() - std::time::Duration::from_millis(1));
+        st.sync_pane_keyboard_focus();
+        assert_eq!(seq(&st), after, "an inactive window is left alone");
+    }
+
     /// The acknowledgement is queued by the window and applied on the NEXT pump, so it can
     /// arrive after the rows it was reported against have moved. Keying it by uid is what
     /// makes that safe: an ack for the pane that really holds the keyboard must confirm THAT
@@ -14420,9 +14603,11 @@ mod keyboard_focus_tests {
         st.sync_pane_keyboard_focus();
 
         // The widget reports for "a" while "b" is the selected pane — the shape of a stale
-        // report. It must land on "a" and leave the hand-off to "b" unconfirmed.
+        // report or a slot that shifted under the focus. It is NOT recorded as the holder,
+        // and the hand-off to "b" starts over.
         st.note_pane_focus("a", true);
-        assert_eq!(st.kbd_focus_live.as_deref(), Some("a"));
+        assert_eq!(st.kbd_focus_live, None, "a non-selected pane's gain is not recorded");
+        assert_eq!(st.kbd_focus_tries, KBD_FOCUS_TRIES);
         let before = seq(&st);
         st.sync_pane_keyboard_focus();
         assert_ne!(seq(&st), before, "an ack for another pane confirms nothing");
