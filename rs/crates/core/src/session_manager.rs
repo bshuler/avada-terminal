@@ -653,6 +653,25 @@ impl SessionRegistry {
         }
     }
 
+    /// The `ssh` target in this session's foreground, if an interactive `ssh` client holds it
+    /// — see [`tools::foreground::foreground_ssh`](crate::tools::foreground::foreground_ssh).
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn foreground_ssh(&self, uid: &str) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let fd = {
+                let map = self.sessions.lock().unwrap();
+                map.get(uid)?.pty.handoff_info()?.master_fd
+            };
+            crate::tools::foreground::foreground_ssh(fd)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = uid;
+            None
+        }
+    }
+
     /// The working directory of this session's foreground process group, asked of the
     /// kernel — see [`tools::foreground::foreground_cwd`](crate::tools::foreground::foreground_cwd).
     ///
@@ -1069,6 +1088,15 @@ impl SessionManager {
         match self {
             SessionManager::InProcess(r) => r.foreground_cwd(uid),
             SessionManager::Daemon(d) => d.foreground_cwd(uid),
+        }
+    }
+
+    /// The `ssh` target in the pane's foreground, by the same split as its neighbours.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn foreground_ssh(&self, uid: &str) -> Option<String> {
+        match self {
+            SessionManager::InProcess(r) => r.foreground_ssh(uid),
+            SessionManager::Daemon(d) => d.foreground_ssh(uid),
         }
     }
 

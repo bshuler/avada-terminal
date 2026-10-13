@@ -61,7 +61,8 @@ reported back — all of them at once, not just the first.
 |---|---|
 | `new-pane --why R [--role ROLE] [--cwd D] [--cmd C] [--label L] [--color #rrggbb] [--shell S] [--project P] [--window N] [--remote HOST]` | `{"type":"newPane","pane":{…,"meta":{"origin.*":…}}}` |
 | `info <pane>` | reads `/state`: who opened the pane, when, from where, and why |
-| `close-pane <pane>` | `{"type":"closePane","paneId":…}` |
+| `close-pane <pane>` | `{"type":"closePane","paneId":…}` — parks the pane (session kept alive), undoable |
+| `reopen-pane [pane]` | `{"type":"reopenPane"[,"sessionUid":…]}` — restore a parked pane (its session uid, else most-recent) |
 | `restart-pane <pane>` | `{"type":"restartPane","paneId":…}` |
 | `focus-pane <pane>` | `{"type":"focusPane","paneId":…}` |
 | `rename-pane <pane> <title>` | `{"type":"renamePane","paneId":…,"label":…}` |

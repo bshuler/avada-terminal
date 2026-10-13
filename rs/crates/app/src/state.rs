@@ -3754,6 +3754,35 @@ impl State {
         }
     }
 
+    /// A live interactive `ssh` holds this local pane's terminal and names `target`
+    /// (`user@host`, or the host as typed). Tags the pane `[ssh …]` even when the far shell
+    /// sets no `user@host` window title to read it from. It only fills an empty tag — a
+    /// title-derived endpoint is the fuller name and is left alone — and the tag is cleared
+    /// by [`Self::note_pane_foreground`] once no ssh client holds the foreground.
+    pub fn note_pane_ssh(&mut self, uid: &str, target: Option<&str>) {
+        let Some(target) = target.filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let Some((ti, pi)) = self.find_pane(uid) else {
+            return;
+        };
+        let p = &mut self.tabs[ti].panes[pi];
+        if p.remote_now.is_some() || avada_core::pane_remote::host(&p.origin).is_some() {
+            return;
+        }
+        let ep = if target.contains('@') {
+            target.to_string()
+        } else {
+            let me = std::env::var("USER").unwrap_or_default();
+            if me.is_empty() { target.to_string() } else { format!("{me}@{target}") }
+        };
+        if avada_core::pane_remote::is_local_endpoint(&ep, avada_core::pane_remote::local_hostname()) {
+            return;
+        }
+        p.remote_now = Some(ep);
+        self.dirty = true;
+    }
+
     /// The shell is back at a prompt (or the foreground command ended): whatever was
     /// running is not running any more. This is D5's **downgrade** — the sniffed identity
     /// and the liveness badge both go, so a pane that ran `claude` once does not wear its
@@ -10291,6 +10320,45 @@ impl State {
         self.restore_item(item, mgr);
     }
 
+    /// Reopen the parked PANE whose session is still `uid` — the control-plane `reopenPane` with a
+    /// target (keyed on the session rather than a history-row id, which the caller never sees).
+    /// Only parked panes match, not a session that rode into the history inside a closed *tab*
+    /// (that one comes back via `reopen-tab`/"Reopen closed") — so `reopenPane` never silently
+    /// restores a whole tab. Returns whether an entry was found and restored, so a multi-window
+    /// host can try each window's history in turn. Restores into the active tab, like
+    /// [`Self::restore_closed`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn restore_closed_pane(&mut self, uid: &str, mgr: &SessionManager) -> bool {
+        let Some(i) = self.closed.iter().position(|c| {
+            matches!(c.what, ClosedWhat::Pane(_)) && c.panes().iter().any(|p| p.uid == uid)
+        }) else {
+            return false;
+        };
+        let item = self.closed.remove(i);
+        self.closed_open = false;
+        self.restore_item(item, mgr);
+        true
+    }
+
+    /// The control-plane `reopenPane` with no target: restore the most recently parked PANE.
+    /// Unlike [`Self::reopen_closed`] (the GUI's "Reopen closed", which pops whatever is newest,
+    /// pane or tab), this skips closed tabs so the pane verb only ever brings back a pane.
+    /// Returns whether a parked pane was found.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn reopen_closed_pane(&mut self, mgr: &SessionManager) -> bool {
+        let Some(i) = self
+            .closed
+            .iter()
+            .rposition(|c| matches!(c.what, ClosedWhat::Pane(_)))
+        else {
+            return false;
+        };
+        let item = self.closed.remove(i);
+        self.closed_open = false;
+        self.restore_item(item, mgr);
+        true
+    }
+
     /// Re-host one history entry: a pane re-docks into the ACTIVE tab (the same replay-primed
     /// `adopt_pane` the bell uses), a tab comes back as its own tab, switched to.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -11098,6 +11166,31 @@ mod session_file_tests {
         assert!(st.dirty);
     }
 
+    /// A local pane whose far shell sets no window title still gets the tag from the live ssh
+    /// argv, never overrides a title-derived one, and drops it when the shell returns.
+    #[test]
+    fn local_pane_takes_the_ssh_tag_from_the_live_argv() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _guard = rt.enter();
+        let mut st = fresh();
+        let seed = WorkspaceFile {
+            groups: Some(vec![GroupSpec {
+                panes: vec![PaneSpec::default()],
+                ..Default::default()
+            }]),
+            active: Some(0),
+            ..Default::default()
+        };
+        st.load_workspace(seed, &mgr());
+        let uid = st.active_tab().panes[0].uid.clone();
+        st.note_pane_ssh(&uid, Some("bert@hp2"));
+        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@hp2"));
+        st.note_pane_ssh(&uid, Some("other@elsewhere"));
+        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@hp2"));
+        st.note_pane_foreground(&uid, Some("zsh"));
+        assert_eq!(st.active_tab().panes[0].remote_now, None);
+    }
+
     /// Session-daemon prep round-trip: a pane LOADED from a spec carrying a `command` keeps
     /// that command on its [`PaneState`] (`make_pane_from_spec`), so the next `to_session_file`
     /// re-records it (the crash-recovery gap fix) AND stamps the pane's live uid. Re-loading the
@@ -11486,6 +11579,49 @@ mod reminder_tests {
         assert_eq!(st.active_tab().panes.len(), 2);
         let f = st.active_tab().focused;
         assert_eq!(st.active_tab().panes[f].uid, "a");
+    }
+
+    #[test]
+    fn close_pane_menu_parks_and_reopen_restores_by_uid_and_most_recent() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane(&m, det("a"));
+        st.adopt_pane(&m, det("b"));
+        let ti = st.active;
+        assert_eq!(st.active_tab().panes.len(), 2);
+
+        // Closing a pane parks it like closing a tab: it leaves the tab, its session stays
+        // alive, and it lands as one history entry — the recoverable close the control-plane
+        // `closePane` now routes to.
+        assert!(st.close_pane_menu(ti, 0, &m));
+        assert_eq!(st.active_tab().panes.len(), 1);
+        assert!(
+            st.session_uids().iter().any(|u| u == "a"),
+            "parked pane's session must stay alive"
+        );
+        assert_eq!(st.closed.len(), 1);
+
+        // `restore_closed_pane` keyed on the parked session uid (the `reopenPane` target) re-docks
+        // it into the active tab and clears the history row. Only parked PANES match — a session
+        // that entered the history inside a closed *tab* is left for `reopen-tab`, so the pane
+        // verb never restores a whole tab (the `matches!(ClosedWhat::Pane)` guard).
+        assert!(st.restore_closed_pane("a", &m));
+        assert_eq!(st.active_tab().panes.len(), 2);
+        assert!(st.closed.is_empty());
+        assert!(st.session_uids().iter().any(|u| u == "a"));
+
+        // An unknown uid is a no-op (lets a multi-window host try each window in turn).
+        assert!(!st.restore_closed_pane("ghost", &m));
+
+        // The no-target `reopenPane` restores the most recently parked pane, then reports false
+        // once the history holds no parked pane.
+        let ti = st.active;
+        assert!(st.close_pane_menu(ti, 0, &m));
+        assert_eq!(st.closed.len(), 1);
+        assert!(st.reopen_closed_pane(&m));
+        assert!(st.closed.is_empty());
+        assert_eq!(st.active_tab().panes.len(), 2);
+        assert!(!st.reopen_closed_pane(&m));
     }
 
     #[test]

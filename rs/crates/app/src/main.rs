@@ -54,6 +54,7 @@ mod sidebar;
 /// The embedded SSH server (mux backend M3): attach to a live pane from a phone.
 mod ssh;
 mod state;
+mod status_tray;
 mod tetris;
 mod theme;
 mod uitest;

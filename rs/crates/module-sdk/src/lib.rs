@@ -49,6 +49,7 @@ pub mod manifest;
 pub mod rail;
 pub mod rights;
 pub mod skills;
+pub mod status;
 
 pub use caps::{Capability, Decision, RightValue};
 pub use contract::CONTRACT_VERSION;

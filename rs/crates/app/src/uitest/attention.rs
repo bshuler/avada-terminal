@@ -78,3 +78,35 @@ fn the_acknowledge_callback_reaches_rust() {
         assert_eq!(*hit.borrow(), 1);
     });
 }
+
+/// A card registered through `status_tray` shows in the drawer, and a click reaches the
+/// handler its owner registered — the whole point of the registration API.
+#[test]
+fn a_registered_status_card_renders_and_activates() {
+    use crate::status_tray::{register, remove, Level, StatusItem};
+    ui(|| {
+        let w = window();
+        let hit = Rc::new(RefCell::new(Vec::new()));
+        let sink = hit.clone();
+        w.global::<crate::StatusAdapter>().on_activate(move |id| sink.borrow_mut().push(id.to_string()));
+        w.global::<crate::StatusAdapter>().set_cards(
+            Rc::new(slint::VecModel::from(vec![crate::StatusCard {
+                id: "t.model".into(),
+                label: "AI MODEL".into(),
+                value: "Arcane-7B".into(),
+                glyph: "✦".into(),
+                level: 1,
+                clickable: true,
+            }]))
+            .into(),
+        );
+        open_bottom_drawer(&w);
+        let c = by_label(&w, "Status: AI MODEL Arcane-7B");
+        assert_eq!(c.len(), 1);
+        click(&w, &c[0]);
+        assert_eq!(*hit.borrow(), vec!["t.model".to_string()]);
+        register(StatusItem::new("t.needs", "X", "y").level(Level::Needs));
+        assert!(crate::status_tray::snapshot().iter().any(|i| i.id == "t.needs"));
+        remove("t.needs");
+    });
+}

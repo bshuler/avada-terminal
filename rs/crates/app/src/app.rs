@@ -203,6 +203,7 @@ pub struct Window {
     /// Signature of the last attention-card set pushed into `AttentionAdapter`, and the ids of
     /// needs-response cards the human has already seen the bottom drawer open over.
     pub last_attention: Cell<Option<u64>>,
+    pub last_status: Cell<Option<u64>>,
     pub attention_seen: RefCell<std::collections::HashSet<String>>,
     /// Focus acknowledgements from the terminal widgets (`(pane uid, gained)`), waiting for
     /// the next pump to fold them into the state.
@@ -477,12 +478,13 @@ impl App {
             // emits none — so every pane spawned without an explicit directory had `cwd:
             // None` for its whole life, and the left panel, which roots itself on the
             // focused pane's cwd, had nothing to follow and sat on `$HOME`.
-            let answers: Vec<(String, Option<String>, Option<String>)> = uids
+            let answers: Vec<(String, Option<String>, Option<String>, Option<String>)> = uids
                 .into_iter()
                 .map(|uid| {
                     let fg = self.mgr.foreground_name(&uid);
                     let cwd = self.mgr.foreground_cwd(&uid);
-                    (uid, fg, cwd)
+                    let ssh = self.mgr.foreground_ssh(&uid);
+                    (uid, fg, cwd, ssh)
                 })
                 .collect();
             // Only panes that actually moved, so the expensive half — git-root walk,
@@ -490,8 +492,9 @@ impl App {
             let mut moved: Vec<(String, String)> = Vec::new();
             {
                 let mut st = w.state.borrow_mut();
-                for (uid, fg, cwd) in answers {
+                for (uid, fg, cwd, ssh) in answers {
                     st.note_pane_foreground(&uid, fg.as_deref());
+                    st.note_pane_ssh(&uid, ssh.as_deref());
                     if let Some(cwd) = cwd {
                         if st.set_pane_cwd(&uid, &cwd) {
                             moved.push((uid, cwd));
@@ -1689,6 +1692,7 @@ impl App {
             last_reminders: Cell::new(None),
             last_closed: Cell::new(None),
             last_attention: Cell::new(None),
+            last_status: Cell::new(None),
             attention_seen: RefCell::new(std::collections::HashSet::new()),
             focus_acks: RefCell::new(Vec::new()),
         });
@@ -2051,6 +2055,7 @@ impl App {
         self.pump_closed(&windows);
         self.pump_attention(&windows);
         self.pump_banner(&windows);
+        self.pump_status(&windows);
 
         // 2f. Left panel (M5): republish the session uids every window in this process is
         //     hosting, so the panel's DETACHED section can subtract them. Cheap (a string
@@ -2616,6 +2621,23 @@ impl App {
                             .unwrap_or_else(|| theme::accent_for(i, palette)),
                     });
                 }
+                // Registered status cards that need the human ride the same cards, so they
+                // count toward the badge and hold the drawer open like a waiting pane does.
+                for it in crate::status_tray::snapshot() {
+                    if it.level == crate::status_tray::Level::Needs && !it.banner {
+                        cards.push(crate::AttentionCard {
+                            id: format!("status:{}:{}", it.id, it.value).into(),
+                            kind: 1,
+                            // tab -2 marks a status card: `uid` is its registry id.
+                            tab: -2,
+                            pane: -1,
+                            uid: it.id.as_str().into(),
+                            title: it.label.into(),
+                            detail: it.value.into(),
+                            tint: slint::Color::from_rgb_u8(0xf9, 0xe2, 0xaf),
+                        });
+                    }
+                }
                 let n = cards.len();
                 (cards, n)
             };
@@ -2651,12 +2673,65 @@ impl App {
         }
     }
 
-    /// Welcome-banner pump (UI thread): version, build date, uptime and host for the top Arcane
-    /// drawer. Uptime is formatted to the minute and each window only writes when the text
-    /// changed, so an idle window renders once a minute at most for this.
+    /// Status-tray pump (UI thread): mirror the `status_tray` registry into `StatusAdapter`.
+    /// Gated on the registry revision, so a module updating a card to the same value costs nothing.
     #[tracing::instrument(level = "debug", ret, skip(self, windows))]
-    fn pump_banner(&self, windows: &[Rc<Window>]) {
+    fn pump_status(&self, windows: &[Rc<Window>]) {
+        use crate::status_tray::{self, Level};
+        let rev = status_tray::revision();
+        for w in windows {
+            if w.last_status.get() == Some(rev) {
+                continue;
+            }
+            w.last_status.set(Some(rev));
+            // Attention cards are built from the same registry; rebuild them too.
+            w.last_attention.set(None);
+            let all = status_tray::snapshot();
+            let fields: Vec<crate::BannerField> = all
+                .iter()
+                .filter(|i| i.banner)
+                .map(|i| crate::BannerField {
+                    k: i.label.as_str().into(),
+                    v: i.value.as_str().into(),
+                })
+                .collect();
+            let b = w.app.global::<crate::BannerAdapter>();
+            b.set_tagline("Premium Magical AI Terminal  •  Power. Precision. Purpose.".into());
+            b.set_fields(slint::ModelRc::from(Rc::new(slint::VecModel::from(fields))));
+            let cards: Vec<crate::StatusCard> = all
+                .into_iter()
+                .filter(|i| i.level != Level::Needs && !i.banner)
+                .map(|i| crate::StatusCard {
+                    id: i.id.as_str().into(),
+                    label: i.label.as_str().into(),
+                    value: i.value.as_str().into(),
+                    glyph: i.glyph.as_str().into(),
+                    level: match i.level {
+                        Level::Info => 0,
+                        Level::Ok => 1,
+                        Level::Warn => 2,
+                        Level::Needs => 3,
+                    },
+                    clickable: i.on_activate.is_some(),
+                })
+                .collect();
+            w.app
+                .global::<crate::StatusAdapter>()
+                .set_cards(slint::ModelRc::from(Rc::new(slint::VecModel::from(cards))));
+        }
+    }
+
+    /// Welcome-banner pump (UI thread): keeps the built-in banner values (version, build
+    /// date, uptime, host) in the status registry. They are ordinary `banner` items, so a
+    /// module can add its own lines to the welcome with `host.status.set { banner: true }`
+    /// and [`Self::pump_status`] draws the lot. Uptime is formatted to the minute, and an
+    /// unchanged value is a no-op for the registry, so an idle window re-renders once a
+    /// minute at most for this.
+    #[tracing::instrument(level = "debug", ret, skip(self, _windows))]
+    fn pump_banner(&self, _windows: &[Rc<Window>]) {
+        use crate::status_tray::{register, update, Level, StatusItem};
         static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        static BUILTINS: std::sync::Once = std::sync::Once::new();
         let secs = START.get_or_init(std::time::Instant::now).elapsed().as_secs();
         let (d, h, m) = (secs / 86400, secs % 86400 / 3600, secs % 3600 / 60);
         let uptime = match (d, h) {
@@ -2664,16 +2739,21 @@ impl App {
             (0, _) => format!("{h}h {m}m"),
             _ => format!("{d}d {h}h {m}m"),
         };
-        for w in windows {
-            let g = w.app.global::<crate::BannerAdapter>();
-            if g.get_uptime().as_str() == uptime {
-                continue;
-            }
-            g.set_version(env!("CARGO_PKG_VERSION").into());
-            g.set_updated(env!("AVADA_BUILD_DATE").into());
-            g.set_host(avada_core::pane_remote::local_hostname().into());
-            g.set_uptime(uptime.clone().into());
-        }
+        BUILTINS.call_once(|| {
+            let host = avada_core::pane_remote::local_hostname();
+            register(StatusItem::new("app.version", "version", env!("CARGO_PKG_VERSION")).banner().order(-40));
+            register(StatusItem::new("app.updated", "last update", env!("AVADA_BUILD_DATE")).banner().order(-30));
+            register(StatusItem::new("app.uptime", "uptime", &uptime).banner().order(-20));
+            register(StatusItem::new("app.host", "host", &host).banner().order(-10));
+            register(
+                StatusItem::new("app.build", "AVADA", env!("CARGO_PKG_VERSION"))
+                    .glyph("✧")
+                    .level(Level::Ok)
+                    .order(-20),
+            );
+            register(StatusItem::new("app.hostcard", "HOST", &host).glyph("◈").order(-10));
+        });
+        update("app.uptime", &uptime, Level::Info);
     }
 
     /// Recently-closed pump (UI thread): mirror each window's close history into its
@@ -4892,6 +4972,11 @@ impl App {
                     }
                 });
         }
+        win.app
+            .global::<crate::StatusAdapter>()
+            .on_activate(|id| {
+                crate::status_tray::activate(id.as_str());
+            });
         {
             let app = app.clone();
             let id = win.id;

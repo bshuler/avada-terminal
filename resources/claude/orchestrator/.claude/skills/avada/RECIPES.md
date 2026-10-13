@@ -54,7 +54,7 @@ avada ctl new-pane --why "run the test suite for the release check" \
 
 The reply is JSON carrying the new pane's id. The pane lands in the window's **active** tab;
 `--window N` picks a different window. Then `read <id> --wait`, and `close-pane <id>` when the user is done with it —
-that one is not undoable, so ask first.
+that parks the pane (its session stays alive); `reopen-pane` brings it back if you need it again.
 
 ## Set up a tab for a task
 

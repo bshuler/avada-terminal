@@ -1,8 +1,10 @@
 //! In-process command execution — replaces the Electron renderer round-trip + correlationId.
 //! POST /command mutates the central `readmodel` directly and returns `{ok, result}`
 //! SYNCHRONOUSLY (the set_meta echo race is now structurally impossible). Commands:
-//! newPane (→ returns new paneId) / closePane / setLayout / renamePane / recolorPane / setMeta /
-//! focusPane / openTab(attach) / restartPane / readScreen / recoverPane. PRESERVE the response
+//! newPane (→ returns new paneId) / setLayout / renamePane / recolorPane / setMeta /
+//! focusPane / openTab(attach) / restartPane / readScreen / recoverPane. (`closePane` is handled
+//! in `routes::command`, not here — it is recoverable and takes the queued UI-thread path.)
+//! PRESERVE the response
 //! shapes + status mapping byte-for-byte: 500 on action error, 404 window-not-found, 400
 //! missing-type/target, 403 scope error. `readScreen` serializes the central `alacritty_terminal`
 //! Term via `session::screen` (`SessionManager::render_screen`).
@@ -523,13 +525,9 @@ fn exec(
                 Ok((Some(Value::Array(tab_ids)), true))
             }
         }
-        "closePane" => {
-            let pane_id = str_field(cmd, "paneId")?;
-            if let Some(uid) = model.remove_pane(&pane_id) {
-                sessions.kill(&uid);
-            }
-            Ok((None, true))
-        }
+        // `closePane` is NOT handled here any more: it is recoverable, so it takes the queued
+        // UI-thread path in `routes::command` (`UiOp::ClosePane`) that parks the pane with its
+        // session alive, the way the GUI "×" does. The old arm here killed the session outright.
         "restartPane" => {
             let pane_id = str_field(cmd, "paneId")?;
             let pane = model

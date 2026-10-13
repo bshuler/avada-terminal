@@ -661,6 +661,7 @@ mod tests {
             rows,
             foreground: None,
             fg_cwd: None,
+            fg_ssh: None,
         }
     }
 

@@ -62,7 +62,8 @@ usage: avada ctl <verb> [args]
                                     (calling pane, Claude session, process) and --why, shown
                                     on the pane's ⓘ button
     info <pane>                     who opened a pane, when, from where, and why
-    close-pane <pane>
+    close-pane <pane>               parks the pane (session kept alive), undoable with reopen-pane
+    reopen-pane [pane]              bring back a parked pane: by its session uid, else the most recently closed pane
     restart-pane <pane>
     focus-pane <pane>
     rename-pane <pane> <title>
@@ -289,6 +290,14 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             println!("{}", text.trim_end_matches("\nClick to copy."));
         }
         "close-pane" => print_json(pane_verb(&conn, "closePane", &args, "close-pane <pane>")?),
+        "reopen-pane" => {
+            // Optional arg: a session uid targets one parked pane; omit it for the most recent.
+            let mut cmd = json!({ "type": "reopenPane" });
+            if let Some(uid) = args.first().filter(|a| !a.is_empty()) {
+                cmd["sessionUid"] = json!(uid);
+            }
+            print_json(post(&conn, "/command", cmd)?);
+        }
         "restart-pane" => print_json(pane_verb(
             &conn,
             "restartPane",
@@ -483,6 +492,7 @@ pub const HAND_VERBS: &[&str] = &[
     "new-pane",
     "info",
     "close-pane",
+    "reopen-pane",
     "restart-pane",
     "focus-pane",
     "rename-pane",

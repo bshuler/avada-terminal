@@ -113,6 +113,20 @@ pub enum HostEvent {
         /// The level.
         level: String,
     },
+    /// A module set or removed status-tray cards (`host.status.set`).
+    StatusSet {
+        /// Which module.
+        module: ModuleId,
+        /// Cards to add or update.
+        items: Vec<avada_module_sdk::status::StatusItem>,
+        /// Module-local ids to drop.
+        remove: Vec<String>,
+    },
+    /// The module stopped: every status card it owned is gone.
+    StatusCleared {
+        /// Which module.
+        module: ModuleId,
+    },
     /// The module's status changed.
     Status {
         /// Which module.
@@ -868,6 +882,16 @@ impl Host {
         self.notify(id, methods::MODULE_GRID_RESIZE, resize)
     }
 
+    /// `module.status.activate` — a status card the module marked `activatable` was clicked.
+    /// A notification: the module answers by updating the card.
+    pub fn activate_status(&self, id: &ModuleId, card: &str) -> Result<(), HostError> {
+        self.notify(
+            id,
+            methods::MODULE_STATUS_ACTIVATE,
+            &avada_module_sdk::status::StatusActivate { id: card.into() },
+        )
+    }
+
     /// Write one notification to a running module. `NotRunning` when it is not — a
     /// keystroke for a dead module is worth reporting, because the pane it was typed into
     /// is still on screen.
@@ -1256,6 +1280,9 @@ impl Slot {
             st.expected_exit
         };
         self.shared.rail_events.send(RailEvent::Gone {
+            module: self.id.clone(),
+        });
+        self.shared.events.send(HostEvent::StatusCleared {
             module: self.id.clone(),
         });
         *lock(&self.dispatcher.rail) = RailState::default();

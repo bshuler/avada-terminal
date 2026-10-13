@@ -13,6 +13,11 @@
 //! each op to `State` before publishing. That is the same shape as the `restartApp` flag —
 //! set off-thread, performed on the UI thread — only with a payload.
 //!
+//! Closing and reopening a *pane* take this path too (`ClosePane` / `ReopenPane`), even though a
+//! pane is otherwise read-model-authoritative: the recently-closed history that keeps a closed
+//! pane's session alive lives in the GUI's `State`, so a recoverable close can only happen here.
+//! The old `dispatch::closePane` killed the session outright; the route now queues a park.
+//!
 //! One consequence is deliberate and worth stating plainly: these commands are **accepted,
 //! not completed**, when the HTTP call returns. `newTab` can still report the id the tab
 //! *will* have, because tab ids are positional (`"{window_id}:{index}"`) and an append lands
@@ -75,6 +80,17 @@ pub enum UiOp {
     },
     /// Close the tab and kill its panes. The GUI refuses this for a system tab.
     CloseTab { tab_id: String },
+    /// Close the pane holding `session_uid` **reopenably**: park it on the GUI's recently-closed
+    /// history with its session alive — the GUI "×", not the old kill path — so an API caller's
+    /// slip is one [`UiOp::ReopenPane`] away, the pane parity of [`UiOp::CloseTab`]. Queued for
+    /// the same reason the tab ops are: that history lives in the GUI's `State`, out of the read
+    /// model's reach. The one irreversible close (the last pane of the last tab) has nowhere to
+    /// park and falls through to the real close in `State::close_pane_menu`.
+    ClosePane { session_uid: String },
+    /// Reopen a pane parked by [`UiOp::ClosePane`] (or the GUI "×"): `Some(uid)` restores the
+    /// entry whose session is still `uid`, `None` the most recent — the control-plane twin of the
+    /// Reopen-Closed keyboard command. It re-docks into the active tab and focuses it.
+    ReopenPane { session_uid: Option<String> },
     /// Retitle the tab.
     RenameTab { tab_id: String, title: String },
     /// Make the tab active in its window.

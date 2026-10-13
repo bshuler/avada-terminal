@@ -95,7 +95,8 @@ Tab verbs answer `202 Accepted` with `{"queued": true}`: they are applied by the
 next frame, not while your command is still running. Re-read `tabs` to confirm, don't assume.
 
 `close-tab` parks the tab rather than destroying it — its sessions stay alive and the user can get
-it back with "Reopen closed tab". `close-pane` is not undoable; confirm with the user first.
+it back with "Reopen closed tab". `close-pane` parks a pane the same way: its session stays alive,
+and `reopen-pane` (or the "Reopen closed pane" menu) brings it back.
 
 You cannot close the Orchestrator tab. It is the app's own tab and the close is refused.
 

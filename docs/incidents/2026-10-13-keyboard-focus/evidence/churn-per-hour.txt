@@ -1,0 +1,10 @@
+subagent pane open/close events per hour, 2026-10-13 (UTC):
+      1 12
+      2 13
+      5 14
+      8 15
+      4 16
+      5 17
+     23 18
+     25 19
+      5 20
