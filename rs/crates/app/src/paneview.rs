@@ -1088,6 +1088,7 @@ pub fn resync(
         Overlay::AskBrowser => 6,
         Overlay::ConfirmClose => 7,
         Overlay::ModuleArg => 8,
+        Overlay::ScheduledTasks => 9,
     };
     app.set_overlay_kind(kind);
 
@@ -1133,6 +1134,11 @@ pub fn resync(
             })
             .collect();
         sync_model(&ui.ask_browsers, rows);
+    }
+
+    // Scheduled-tasks panel: project the snapshot while it is open (re-read on every action).
+    if state.overlay == Overlay::ScheduledTasks {
+        crate::schedtasks::fill(app, &state.tasks);
     }
 
     // Add-Project dialog: mirror the inline validation error (`""` = none). The dialog is

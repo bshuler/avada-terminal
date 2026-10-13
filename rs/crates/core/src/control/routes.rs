@@ -100,6 +100,11 @@ pub(crate) fn handlers() -> Vec<(&'static str, Mount)> {
         h("devices.list", devices_list),
         h("devices.mint", devices_mint),
         h("devices.revoke", devices_revoke),
+        h("scheduled.list", scheduled_list),
+        h("scheduled.add", scheduled_add),
+        h("scheduled.remove", scheduled_remove),
+        h("scheduled.enable", scheduled_enable),
+        h("scheduled.run", scheduled_run),
         h("command", command),
         h("projects.list", projects_list),
         h("projects.add", projects_add),
@@ -728,6 +733,164 @@ async fn devices_revoke(
         persist_devices(&shared);
     }
     ok_json(json!({ "ok": true, "revoked": removed }))
+}
+
+// ---- /scheduled-tasks (the OS scheduler's front end; master token only) ----------------------
+
+/// Map a [`crate::tasks::TaskError`] to its HTTP status.
+fn task_err(e: crate::tasks::TaskError) -> Response {
+    use crate::tasks::TaskError::*;
+    let code = match &e {
+        Invalid(_) => 400,
+        NotFound(_) => 404,
+        Native(_) | Io(_) => 500,
+    };
+    jstatus(code, json!({ "error": e.to_string() }))
+}
+
+/// Authorize and require the master token, or the error response.
+// pre-existing; deferred per repo lint policy (test.yml)
+#[allow(clippy::result_large_err)]
+fn master_only(shared: &Arc<Shared>, headers: &HeaderMap) -> Result<(), Response> {
+    let info = authorize(shared, headers)?;
+    if info.scope.is_some() {
+        return Err(jstatus(403, json!({ "error": "master token required" })));
+    }
+    Ok(())
+}
+
+/// Run a blocking scheduler call (it shells out to launchctl/systemctl/schtasks) off the
+/// async worker threads.
+#[allow(clippy::result_large_err)]
+async fn tasks_blocking<T: Send + 'static>(
+    shared: &Arc<Shared>,
+    f: impl FnOnce(Arc<dyn crate::tasks::TaskScheduler>) -> Result<T, crate::tasks::TaskError>
+        + Send
+        + 'static,
+) -> Result<T, Response> {
+    let sched = shared.tasks();
+    match tokio::task::spawn_blocking(move || f(sched)).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(task_err(e)),
+        Err(e) => Err(jstatus(500, json!({ "error": format!("scheduler task failed: {e}") }))),
+    }
+}
+
+/// GET /scheduled-tasks
+#[tracing::instrument(level = "debug", skip_all)]
+async fn scheduled_list(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if let Err(e) = master_only(&shared, &headers) {
+        return e;
+    }
+    let backend = shared.tasks().backend();
+    match tasks_blocking(&shared, |s| s.list()).await {
+        Ok(tasks) => ok_json(json!({ "ok": true, "backend": backend, "tasks": tasks })),
+        Err(e) => e,
+    }
+}
+
+/// POST /scheduled-tasks — `{ name, command, args?, cwd?, env?, schedule, id?, enabled?, createdBy? }`.
+/// `schedule` is the human string (`"every 15m"`) or the structured object `Task.schedule` serializes to.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn scheduled_add(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(e) = master_only(&shared, &headers) {
+        return e;
+    }
+    let b: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let str_of = |k: &str| b.get(k).and_then(Value::as_str).map(str::to_string);
+    let list_of = |k: &str| -> Vec<String> {
+        b.get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    let (Some(name), Some(command)) = (str_of("name"), str_of("command")) else {
+        return jstatus(400, json!({ "error": "expected { name, command, schedule, … }" }));
+    };
+    let schedule = match b.get("schedule") {
+        Some(Value::String(s)) => crate::tasks::Schedule::parse(s),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| crate::tasks::TaskError::Invalid(format!("schedule: {e}"))),
+        None => Err(crate::tasks::TaskError::Invalid("missing schedule".into())),
+    };
+    let schedule = match schedule {
+        Ok(s) => s,
+        Err(e) => return task_err(e),
+    };
+    let task = crate::tasks::Task {
+        id: str_of("id").unwrap_or_default(),
+        name,
+        command,
+        args: list_of("args"),
+        cwd: str_of("cwd"),
+        env: list_of("env"),
+        schedule,
+        enabled: b.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        created_by: str_of("createdBy").unwrap_or_else(|| "api".into()),
+        created_at: 0,
+        last_run: None,
+        next_run: None,
+        last_status: None,
+    };
+    match tasks_blocking(&shared, move |s| s.create(task)).await {
+        Ok(t) => ok_json(json!({ "ok": true, "task": t })),
+        Err(e) => e,
+    }
+}
+
+/// DELETE /scheduled-tasks/{id}
+#[tracing::instrument(level = "debug", skip_all)]
+async fn scheduled_remove(
+    State(shared): State<Arc<Shared>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = master_only(&shared, &headers) {
+        return e;
+    }
+    match tasks_blocking(&shared, move |s| s.remove(&id)).await {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => e,
+    }
+}
+
+/// POST /scheduled-tasks/{id}/enable — `{ enabled?: bool }` (default true).
+#[tracing::instrument(level = "debug", skip_all)]
+async fn scheduled_enable(
+    State(shared): State<Arc<Shared>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(e) = master_only(&shared, &headers) {
+        return e;
+    }
+    let b: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let enabled = b.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    match tasks_blocking(&shared, move |s| s.set_enabled(&id, enabled)).await {
+        Ok(t) => ok_json(json!({ "ok": true, "task": t })),
+        Err(e) => e,
+    }
+}
+
+/// POST /scheduled-tasks/{id}/run
+#[tracing::instrument(level = "debug", skip_all)]
+async fn scheduled_run(
+    State(shared): State<Arc<Shared>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = master_only(&shared, &headers) {
+        return e;
+    }
+    match tasks_blocking(&shared, move |s| s.run_now(&id)).await {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => e,
+    }
 }
 
 // ---- /panes/{id}/output -------------------------------------------------------------------

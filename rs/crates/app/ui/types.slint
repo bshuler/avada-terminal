@@ -935,3 +935,32 @@ export global StatusAdapter {
     in property <[StatusCard]> cards;
     callback activate(string);
 }
+
+// ===== Scheduled tasks panel (overlay kind 9) =====
+
+// One scheduled task, as the OS scheduler reports it. `last`/`next` are pre-rendered
+// ("3m ago", "in 12m", "never"); `status` is 0 = never ran, 1 = last run exited 0, 2 = failed.
+export struct TaskRow {
+    id: string,
+    name: string,
+    command: string,
+    schedule: string,
+    enabled: bool,
+    last: string,
+    next: string,
+    status: int,
+    status-text: string,
+}
+
+// The panel's bridge to the controller, a GLOBAL like `RightsAdapter`: the panel holds no task
+// state of its own, it projects `rows` and reports intent through the callbacks.
+export global TasksAdapter {
+    in property <[TaskRow]> rows;
+    in property <string> backend;   // "launchd" / "systemd" / "schtasks"
+    in property <string> error;     // inline error from the last action ("" = none)
+    callback refresh();
+    callback toggle(string, bool);          // id, new enabled state
+    callback run-now(string);               // id
+    callback remove(string);                // id
+    callback add(string, string, string);   // name, command line, schedule
+}

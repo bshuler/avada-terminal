@@ -38,6 +38,15 @@ usage: avada ctl <verb> [args]
     panes                           one line per pane: id, tab, status, label
     settings                        the app's preferences, as JSON
     loops                           the status / restart schedules: on, every, last, next
+    tasks                           scheduled tasks in the OS scheduler: on, schedule, last, next, status
+
+  Scheduled tasks (launchd / systemd --user / schtasks; master token)
+    task-add --name N --cmd \"PROG ARGS…\" --schedule S [--cwd D] [--env A,B] [--id ID] [--disabled]
+                                    S is 'every 15m', 'hourly', 'daily 09:30' or 5 cron fields;
+                                    --env lists variable NAMES only, never values
+    task-rm <id>                    unregister and delete the native definition
+    task-enable <id> [--off]        enable (or, with --off, disable) a task
+    task-run <id>                   fire it now, outside its schedule
 
   Terminals
     read <pane> [--tail N] [--raw] [--screen] [--wait]
@@ -104,6 +113,54 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
         "tabs" => print_outline(&get(&conn, "/state")?),
         "panes" => print_panes(&get(&conn, "/state")?),
         "loops" => print_loops(&get(&conn, "/loops")?),
+        "tasks" => print_tasks(&get(&conn, "/scheduled-tasks")?),
+        "task-add" => {
+            let (_, flags) = split_flags_optional(&args);
+            let name = need(flags.get("name"), "task-add --name N --cmd \"PROG ARGS\" --schedule S");
+            let line = need(flags.get("cmd"), "task-add --name N --cmd \"PROG ARGS\" --schedule S");
+            let schedule = need(flags.get("schedule"), "task-add --name N --cmd \"PROG ARGS\" --schedule S");
+            let mut argv = avada_core::tasks::Task::split_command_line(line);
+            if argv.is_empty() {
+                usage("task-add --cmd must not be empty");
+            }
+            let command = argv.remove(0);
+            let mut body = json!({
+                "name": name,
+                "command": command,
+                "args": argv,
+                "schedule": schedule,
+                "enabled": !flags.contains_key("disabled"),
+                "createdBy": "ctl",
+            });
+            put_str(&mut body, "cwd", flags.get("cwd"));
+            put_str(&mut body, "id", flags.get("id"));
+            if let Some(e) = flags.get("env") {
+                let names: Vec<&str> = e.split(',').map(str::trim).filter(|n| !n.is_empty()).collect();
+                body["env"] = json!(names);
+            }
+            print_json(post(&conn, "/scheduled-tasks", body)?);
+        }
+        "task-rm" => {
+            let id = need(args.first(), "task-rm <id>");
+            print_json(send(
+                conn.client.delete(format!("{}/scheduled-tasks/{id}", conn.base)),
+                &conn,
+                "/scheduled-tasks",
+            )?);
+        }
+        "task-enable" => {
+            let (pos, flags) = split_flags_optional(&args);
+            let id = need(pos.first(), "task-enable <id> [--off]");
+            print_json(post(
+                &conn,
+                &format!("/scheduled-tasks/{id}/enable"),
+                json!({ "enabled": !flags.contains_key("off") }),
+            )?);
+        }
+        "task-run" => {
+            let id = need(args.first(), "task-run <id>");
+            print_json(post(&conn, &format!("/scheduled-tasks/{id}/run"), json!({}))?);
+        }
 
         // ---- terminals ----
         "read" => {
@@ -406,6 +463,11 @@ pub const HAND_VERBS: &[&str] = &[
     "tabs",
     "panes",
     "loops",
+    "tasks",
+    "task-add",
+    "task-rm",
+    "task-enable",
+    "task-run",
     "read",
     "send",
     "submit",
@@ -1031,11 +1093,46 @@ fn span(secs: u64) -> String {
 /// A time that is already past while the loop is still armed reads `0s ago` rather than
 /// going negative — that is the honest picture of a firing that is due and has not landed.
 #[tracing::instrument(level = "debug", ret)]
-fn relative(at: Option<u64>, now: u64) -> String {
+pub(crate) fn relative(at: Option<u64>, now: u64) -> String {
     match at {
         None => "never".to_string(),
         Some(t) if t > now => format!("in {}", span(t - now)),
         Some(t) => format!("{} ago", span(now - t)),
+    }
+}
+
+/// `avada ctl tasks`: one line per scheduled task.
+fn print_tasks(v: &Value) {
+    let now = crate::loops::unix_now();
+    println!(
+        "{:<20}{:<5}{:<16}{:<13}{:<13}status",
+        "task", "on", "schedule", "last run", "next run"
+    );
+    let empty = Vec::new();
+    for t in v.get("tasks").and_then(Value::as_array).unwrap_or(&empty) {
+        let s = |k: &str| t.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let on = t.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let status = match t.get("lastStatus").and_then(Value::as_i64) {
+            None => "-".to_string(),
+            Some(0) => "ok".to_string(),
+            Some(c) => format!("exit {c}"),
+        };
+        let sched: avada_core::tasks::Schedule =
+            serde_json::from_value(t.get("schedule").cloned().unwrap_or(Value::Null))
+                .unwrap_or(avada_core::tasks::Schedule::Interval { secs: 0 });
+        println!(
+            "{:<20}{:<5}{:<16}{:<13}{:<13}{}",
+            s("id"),
+            if on { "yes" } else { "no" },
+            sched.describe(),
+            relative(t.get("lastRun").and_then(Value::as_u64), now),
+            if on {
+                relative(t.get("nextRun").and_then(Value::as_u64), now)
+            } else {
+                "-".to_string()
+            },
+            status
+        );
     }
 }
 

@@ -80,6 +80,10 @@ pub struct Shared {
     /// set from `AVADA_MQ` in [`run_server`], forced on by `serve_for_test`. While false, the
     /// wired producers skip publishing and behaviour is byte-for-byte the pre-MQ path.
     pub mq_enabled: AtomicBool,
+    /// The OS-scheduler front end behind `/scheduled-tasks` (`crate::tasks`). Built on first
+    /// use so a server that never schedules anything never probes `launchctl`/`systemctl`;
+    /// tests inject a fake with [`Shared::set_tasks`].
+    tasks: std::sync::OnceLock<Arc<dyn crate::tasks::TaskScheduler>>,
     pub events: EventHub,
     /// Phase-5 auto-restart supervisor: per-pane policy + retry ledger. Default-empty ⇒
     /// every `Exit` runs the legacy path until a pane opts in via `hp.supervise` meta.
@@ -171,6 +175,18 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// The scheduled-task front end for this OS (see [`crate::tasks`]).
+    pub fn tasks(&self) -> Arc<dyn crate::tasks::TaskScheduler> {
+        self.tasks
+            .get_or_init(|| Arc::from(crate::tasks::default_scheduler()))
+            .clone()
+    }
+
+    /// Install a scheduler before first use (tests). A no-op once one is in place.
+    pub fn set_tasks(&self, t: Arc<dyn crate::tasks::TaskScheduler>) {
+        let _ = self.tasks.set(t);
+    }
+
     /// Build the shared state. `allow_input` mirrors control-settings; `control_file` is both the
     /// path written on start and the `AVADA_CONTROL_FILE` injected into spawned panes.
     /// `speech_settings_path` is `speech.json`'s path — a real embedder passes
@@ -193,6 +209,7 @@ impl Shared {
             work: Mutex::new(WorkQueue::open_in_memory().expect("open in-memory work queue")),
             mq: Arc::new(crate::control::mq::Broker::new()),
             mq_enabled: AtomicBool::new(false),
+            tasks: std::sync::OnceLock::new(),
             events: EventHub::new(),
             supervisor: Mutex::new(Supervisor::new()),
             sessions,

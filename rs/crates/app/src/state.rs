@@ -71,6 +71,9 @@ pub enum Overlay {
     /// "Marketplace: Search modules" → the search text). The command waits in
     /// [`State::module_arg_pending`]; submitting routes through [`State::submit_module_arg`].
     ModuleArg,
+    /// The scheduled-tasks panel (palette → "Scheduled tasks"): the OS scheduler's task list
+    /// in [`State::tasks`], with enable/disable, run-now, remove and create.
+    ScheduledTasks,
 }
 
 // Pane/session uid minting moved to the backend: `SessionManager::fresh_uid` picks the
@@ -2002,6 +2005,8 @@ pub struct State {
     )>,
     /// The prompt's inline error (an empty submit).
     pub module_arg_error: String,
+    /// The scheduled-tasks panel's snapshot of the OS scheduler ([`Overlay::ScheduledTasks`]).
+    pub tasks: crate::schedtasks::TasksView,
     /// Capability rights for every installed module — the truth the Preferences rights
     /// page projects and the ask toast answers against (track H2). Constructed empty and
     /// rooted at the real app-support dir; nothing is read or written until a module is
@@ -2280,6 +2285,7 @@ impl State {
             module_commands: Vec::new(),
             module_arg_pending: None,
             module_arg_error: String::new(),
+            tasks: crate::schedtasks::TasksView::default(),
             rights: crate::prefs::rights::shared().clone(),
             rights_selected: None,
             rights_effects: Vec::new(),
@@ -6883,6 +6889,15 @@ impl State {
         // The pane side matters most here: a root that left the list must stop
         // answering, and the smaller set is what makes the pane drop its cache.
         self.reload_projects();
+        self.dirty = true;
+    }
+
+    /// Open the scheduled-tasks panel, reading the OS scheduler's current list.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn open_scheduled_tasks(&mut self) {
+        self.tasks.error.clear();
+        self.tasks.refresh();
+        self.overlay = Overlay::ScheduledTasks;
         self.dirty = true;
     }
 
