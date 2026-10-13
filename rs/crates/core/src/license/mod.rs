@@ -20,6 +20,7 @@
 //! and the `Authorization` header of an introspection call.
 
 pub mod gate;
+pub mod host;
 pub mod introspect;
 pub mod store;
 pub mod stub_issuer;
