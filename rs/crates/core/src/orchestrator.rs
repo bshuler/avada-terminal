@@ -18,11 +18,13 @@
 //! those modules ship lands here like it would in any project. Seeding a directory is a host
 //! job; deciding what an agent is told is a module's.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::persistence::paths;
+use avada_module_sdk::manifest::ModuleId;
 use crate::skills::{Applied, Materializer, ModuleInput, Request, Tools};
 
 /// The shipped copy of the Orchestrator tab's directory, or `None` when the app is running from a tree
@@ -110,17 +112,22 @@ pub fn module_input(installed: &crate::install::Installed, enabled: bool) -> Mod
         skills: record.manifest.skills.clone(),
         accepted: record.accepted.clone(),
         enabled,
+        provides: record.manifest.provides.iter().map(|p| p.shape.clone()).collect(),
     }
 }
 
 /// Write `modules`' skills into [`paths::orchestrator_dir`], and sweep what a module that is no
 /// longer among them left there. See [`materialize_modules_into`].
-pub fn materialize_modules(modules: &[ModuleInput], tools: &Tools) -> Applied {
+pub fn materialize_modules(
+    modules: &[ModuleInput],
+    tools: &Tools,
+    defaults: &BTreeMap<String, ModuleId>,
+) -> Applied {
     let dest = paths::orchestrator_dir();
     // The runtime can get here before the tab's own refresh does; creating `dest` first
     // would strand a pre-0.2.36 directory under its old name.
     move_legacy_dir(&paths::legacy_orchestrator_dir(), &dest);
-    materialize_modules_into(&dest, modules, tools)
+    materialize_modules_with(&dest, modules, tools, defaults)
 }
 
 /// Run the materializer with `dest` as the only project root and the user scope left alone.
@@ -130,6 +137,38 @@ pub fn materialize_modules(modules: &[ModuleInput], tools: &Tools) -> Applied {
 /// is `None`): the agent here already has the full `avada ctl` reference. Problems are
 /// logged, never returned — a module with a bad skill must not keep the tab from opening.
 pub fn materialize_modules_into(dest: &Path, modules: &[ModuleInput], tools: &Tools) -> Applied {
+    materialize_modules_with(dest, modules, tools, &BTreeMap::new())
+}
+
+/// File in `dest` listing the module ids a run materialized for, so a module that is
+/// uninstalled (and so absent from the next request) still gets its fence swept.
+const LEDGER: &str = ".avada-materialized-modules.json";
+
+fn read_ledger(dest: &Path) -> Vec<ModuleId> {
+    let Ok(text) = fs::read_to_string(dest.join(LEDGER)) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(&text)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| ModuleId::new(s).ok())
+        .collect()
+}
+
+/// [`materialize_modules_into`] with the provider `defaults` deciding which provider of an
+/// exclusive shape writes.
+pub fn materialize_modules_with(
+    dest: &Path,
+    modules: &[ModuleInput],
+    tools: &Tools,
+    defaults: &BTreeMap<String, ModuleId>,
+) -> Applied {
+    let known = read_ledger(dest);
+    let retired: Vec<ModuleId> = known
+        .iter()
+        .filter(|k| !modules.iter().any(|m| &m.id == *k))
+        .cloned()
+        .collect();
     // The materializer only sweeps fences for ids in the request, so the retired
     // pre-module id is dropped here, by name.
     unfence(&dest.join("CONVENTIONS.md"), "avada/hyperpane");
@@ -142,7 +181,12 @@ pub fn materialize_modules_into(dest: &Path, modules: &[ModuleInput], tools: &To
         tools,
         schema: None,
         workspace: None,
+        defaults,
+        retired: &retired,
     });
+    for w in &plan.warnings {
+        tracing::warn!(warning = %w, "orchestrator: skills plan");
+    }
     for e in &plan.errors {
         tracing::warn!(module = %e.module.as_str(), file = %e.path.display(), error = %e.error, "orchestrator: a module skill was not materialized");
     }
@@ -159,6 +203,22 @@ pub fn materialize_modules_into(dest: &Path, modules: &[ModuleInput], tools: &To
             removed = applied.removed.len(),
             "orchestrator: module skills refreshed"
         );
+    }
+    // Remember who we wrote for. A sweep that failed keeps its retired ids for the next run.
+    let mut ids: Vec<String> = modules.iter().map(|m| m.id.as_str().to_string()).collect();
+    if !applied.failed.is_empty() {
+        ids.extend(retired.iter().map(|m| m.as_str().to_string()));
+    }
+    ids.sort();
+    ids.dedup();
+    let ledger = dest.join(LEDGER);
+    if dest.is_dir() && (!ids.is_empty() || ledger.exists()) {
+        let text = serde_json::to_string(&ids).expect("ids serialize");
+        if fs::read_to_string(&ledger).ok().as_deref() != Some(text.as_str()) {
+            if let Err(e) = fs::write(&ledger, text) {
+                tracing::warn!(error = %e, "orchestrator: could not record the materialized modules");
+            }
+        }
     }
     applied
 }
@@ -503,7 +563,113 @@ mod tests {
                 avada_module_sdk::caps::Capability::SkillsMaterialize,
             ]),
             enabled,
+            provides: vec![],
         }
+    }
+
+    /// A rule module under `id` providing `shape`, text `body`, in its own directory.
+    fn provider(root: &Path, id: &str, shape: &str, body: &str) -> ModuleInput {
+        let mut m = rule_module(root, true);
+        let dir = root.join(id.replace('/', "_"));
+        let unit = dir.join("skills").join("orchestrator");
+        fs::create_dir_all(&unit).unwrap();
+        fs::write(
+            unit.join("SKILL.md"),
+            format!("---\nname: orchestrator\ndescription: \"d\"\nkind: rule\nactivation: always\n---\n{body}\n"),
+        )
+        .unwrap();
+        m.id = ModuleId::new(id).unwrap();
+        m.version_dir = dir;
+        m.provides = vec![shape.to_string()];
+        m
+    }
+
+    const SHAPE: &str = "avada.agent.operating-model";
+
+    fn defaults_for(id: &str) -> BTreeMap<String, ModuleId> {
+        BTreeMap::from([(SHAPE.to_string(), ModuleId::new(id).unwrap())])
+    }
+
+    /// Two enabled providers of an exclusive shape: only the default writes; swapping the
+    /// default swaps the fence; the user's text outside the fences never moves.
+    #[test]
+    fn exclusive_shape_writes_only_the_default_provider_and_swapping_swaps() {
+        let tmp = scratch("excl-swap");
+        let dest = tmp.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("AGENTS.md"), "my notes\n").unwrap();
+        let tools = Tools::only(["claude-code"]);
+        let mods = [
+            provider(&tmp, "acme/alpha", SHAPE, "ALPHA-TEXT"),
+            provider(&tmp, "acme/beta", SHAPE, "BETA-TEXT"),
+        ];
+        let a = materialize_modules_with(&dest, &mods, &tools, &defaults_for("acme/beta"));
+        assert!(a.ok(), "{:?}", a.failed);
+        let t = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
+        assert!(t.contains("BETA-TEXT") && !t.contains("ALPHA-TEXT"), "{t}");
+        assert!(t.starts_with("my notes\n"), "{t}");
+
+        materialize_modules_with(&dest, &mods, &tools, &defaults_for("acme/alpha"));
+        let t = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
+        assert!(t.contains("ALPHA-TEXT") && !t.contains("BETA-TEXT"), "{t}");
+        assert!(t.starts_with("my notes\n"), "{t}");
+        assert_eq!(t.matches("avada:module=").count(), 2, "one fence, open and close: {t}");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// No usable default: lowest id wins, with a plan warning.
+    #[test]
+    fn exclusive_shape_without_a_default_falls_back_to_lowest_id_with_a_warning() {
+        use crate::skills::{Materializer, Request};
+        let tmp = scratch("excl-fallback");
+        let mods = [
+            provider(&tmp, "acme/beta", SHAPE, "BETA-TEXT"),
+            provider(&tmp, "acme/alpha", SHAPE, "ALPHA-TEXT"),
+        ];
+        let roots = [tmp.join("dest")];
+        let tools = Tools::only(["claude-code"]);
+        let plan = Materializer::new().plan(&Request {
+            modules: &mods,
+            roots: &roots,
+            home: None,
+            tools: &tools,
+            schema: None,
+            workspace: None,
+            defaults: &BTreeMap::new(),
+            retired: &[],
+        });
+        assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+        let text: String = plan
+            .writes
+            .iter()
+            .map(|w| String::from_utf8_lossy(&w.bytes).to_string())
+            .collect();
+        assert!(text.contains("ALPHA-TEXT") && !text.contains("BETA-TEXT"), "{text}");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A module dropped from the request (uninstalled) has its fence swept on the next run;
+    /// a fence of an id never materialized here survives.
+    #[test]
+    fn an_uninstalled_modules_fence_is_swept_and_a_foreign_fence_survives() {
+        let tmp = scratch("uninstall");
+        let dest = tmp.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        let tools = Tools::only(["claude-code"]);
+        let keep = provider(&tmp, "acme/keep", "avada.other", "KEEP-TEXT");
+        let gone = provider(&tmp, "acme/gone", "avada.other", "GONE-TEXT");
+        materialize_modules_into(&dest, &[keep.clone(), gone], &tools);
+        let mut t = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
+        assert!(t.contains("GONE-TEXT"), "{t}");
+        t.push_str("<!-- avada:module=other/tool -->\nFOREIGN\n<!-- /avada:module=other/tool -->\n");
+        fs::write(dest.join("AGENTS.md"), t).unwrap();
+
+        let a = materialize_modules_into(&dest, &[keep], &tools);
+        assert!(a.ok(), "{:?}", a.failed);
+        let t = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
+        assert!(!t.contains("GONE-TEXT") && !t.contains("acme/gone"), "{t}");
+        assert!(t.contains("KEEP-TEXT") && t.contains("FOREIGN"), "{t}");
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// The directory as a long-lived orchestrator folder has it: shipped reference files,

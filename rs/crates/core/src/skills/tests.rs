@@ -42,6 +42,7 @@ fn module(dir: &Path, id: &str) -> ModuleInput {
         },
         accepted: BTreeSet::from([Capability::SkillsMaterialize]),
         enabled: true,
+        provides: vec![],
     }
 }
 
@@ -97,6 +98,8 @@ impl Fx {
             tools,
             schema,
             workspace: Some("ws"),
+            defaults: &Default::default(),
+            retired: &[],
         })
     }
 
@@ -1107,6 +1110,8 @@ fn two_roots_and_a_duplicate_get_one_plan_each() {
         tools: &Tools::none(),
         schema: None,
         workspace: None,
+        defaults: &Default::default(),
+        retired: &[],
     });
     assert_eq!(plan.writes.len(), 2);
     assert!(plan

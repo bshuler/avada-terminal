@@ -302,7 +302,13 @@ impl ModuleRuntime {
             avada_core::persistence::skills_settings::load().disabled_tools,
         )
         .with("claude-code");
-        avada_core::orchestrator::materialize_modules(&inputs, &tools);
+        let defaults = self
+            .store
+            .as_ref()
+            .and_then(|st| avada_core::install::resolver::defaults::Defaults::load(st.paths()).ok())
+            .map(|d| d.shapes)
+            .unwrap_or_default();
+        avada_core::orchestrator::materialize_modules(&inputs, &tools, &defaults);
     }
 
     /// The same runtime rooted at `modules_root`, with `workspace` deciding which modules

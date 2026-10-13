@@ -78,7 +78,13 @@ pub struct ModuleInput {
     /// project scope only; the user scope follows installation, not enablement.
     /// Two workspaces sharing a root pass the union: enabled in either is enabled.
     pub enabled: bool,
+    /// Shapes the manifest's `[[provides]]` declares. Only [`EXCLUSIVE_SHAPES`] matter here.
+    pub provides: Vec<String>,
 }
+
+/// Shapes with exactly one writer: when several enabled modules provide one, only
+/// the chosen provider materializes and the rest are treated as disabled.
+pub const EXCLUSIVE_SHAPES: &[&str] = &["avada.agent.operating-model"];
 
 /// Everything one planning run needs.
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +102,47 @@ pub struct Request<'a> {
     pub schema: Option<&'a SchemaDocument>,
     /// Workspace name shown in the index skill.
     pub workspace: Option<&'a str>,
+    /// Provider defaults (shape to module), as the install store keeps them.
+    pub defaults: &'a BTreeMap<String, ModuleId>,
+    /// Modules that were materialized before and are no longer in `modules` (uninstalled):
+    /// their fences are swept. A fence of an id in neither list survives.
+    pub retired: &'a [ModuleId],
+}
+
+/// Treat the losing provider of each exclusive shape as disabled. The winner is the
+/// provider default when it is among the enabled providers, else the lowest module id,
+/// with a warning in the plan.
+fn resolve_exclusive(req: &Request<'_>, plan: &mut Plan) -> Vec<ModuleInput> {
+    let mut modules = req.modules.to_vec();
+    for shape in EXCLUSIVE_SHAPES {
+        let mut cands: Vec<usize> = (0..modules.len())
+            .filter(|&i| {
+                gated(&modules[i], Scope::Project) && modules[i].provides.iter().any(|p| p == shape)
+            })
+            .collect();
+        if cands.len() < 2 {
+            continue;
+        }
+        cands.sort_by(|&a, &b| modules[a].id.as_str().cmp(modules[b].id.as_str()));
+        let chosen = req
+            .defaults
+            .get(*shape)
+            .and_then(|d| cands.iter().copied().find(|&i| &modules[i].id == d));
+        let winner = chosen.unwrap_or_else(|| {
+            plan.warnings.push(format!(
+                "no usable default provider for {shape}; using {} of {}",
+                modules[cands[0]].id.as_str(),
+                cands.iter().map(|&i| modules[i].id.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+            cands[0]
+        });
+        for i in cands {
+            if i != winner {
+                modules[i].enabled = false;
+            }
+        }
+    }
+    modules
 }
 
 /// Plans and applies. Stateless; exists so track H4 has one handle to hold.
@@ -113,6 +160,11 @@ impl Materializer {
     #[tracing::instrument(level = "debug", skip_all, fields(modules = req.modules.len(), roots = req.roots.len()))]
     pub fn plan(&self, req: &Request<'_>) -> Plan {
         let mut plan = Plan::default();
+        let resolved = resolve_exclusive(req, &mut plan);
+        let req = &Request {
+            modules: &resolved,
+            ..*req
+        };
         let loaded: Vec<Loaded<'_>> = req
             .modules
             .iter()
@@ -126,6 +178,7 @@ impl Materializer {
 
         let mut desired = Desired::default();
         desired.owned = req.modules.iter().map(|m| m.id.as_str().to_string()).collect();
+        desired.owned.extend(req.retired.iter().map(|m| m.as_str().to_string()));
         desired.owned.insert(HOST_ID.to_string());
         let roots: BTreeSet<&PathBuf> = req.roots.iter().collect();
         for root in roots {

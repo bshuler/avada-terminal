@@ -95,6 +95,8 @@ pub struct Plan {
     /// Rules files that ran past a tool's cap once assembled, and what was
     /// dropped from the end to fit.
     pub overflowed: Vec<Overflow>,
+    /// Decisions made on the user's behalf that deserve a line in the UI or log.
+    pub warnings: Vec<String>,
 }
 
 impl Plan {
