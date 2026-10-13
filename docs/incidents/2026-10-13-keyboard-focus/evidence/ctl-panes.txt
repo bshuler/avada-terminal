@@ -1,0 +1,33 @@
+pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715	0:0	running	Avada
+sub:af2128c5ebf52a76b	0:0	exited	Avada › Make close-panel recoverable
+sub:a6c753f8e6ab01de5	0:0	exited	Avada › Panel rename + recoverable close on hp3
+sub:a2afca1c6b5cbb524	0:0	exited	Avada › Fix 3x gfs disk alarm dedup
+7d41f732-8174-4a92-a377-2391c0706cdf	0:0	running	repaint fix
+afa39087-9ab0-4b5a-972b-47835eadf51a	0:0	running	license agent
+pane-43c9eb41-56aa-46e7-8397-bd4088733b3f	0:1	running	Avada Terminal
+pane-aac77e4e-9cc1-4e48-b98f-b9d8587557ab	0:1	running	Avada memory fix
+b5eda3cb-e41d-4e52-8a42-8c52fbcba99b	0:1	running	remote panes
+309e07a7-fd7d-4122-861e-e061b2f4f45a	0:1	running	activity gate
+pane-8354d94a-87df-4860-9615-01252823e40f	0:2	running	VPS Health
+pane-000ead09-b109-4a52-aff3-13e0c054e0b5	0:2	running	Disk Space
+pane-99d1e22a-1ff0-4969-b4cb-ab06118cb5ee	0:2	running	health
+2831fdaa-ffbd-4a6d-8130-99a93e83c241	0:2	running	Proton on hp2
+pane-c07a303b-bba7-4a00-ba72-d53ddc2dab9b	0:3	running	TQL
+pane-a3a58f1c-2b11-4949-8c10-05fe7d2f309b	0:3	running	CEB
+pane-6910a5b6-8f50-449e-891c-8054b3737f1f	0:3	running	ULR
+pane-025ffced-cc2a-4c1b-aeae-65d89b930e68	0:3	running	Survey
+sub:ab57937bceb8b306d	0:4	exited	ULR › Map narrow register re-freeze dependencies
+pane-50a9c43b-8e1e-4ffb-8bd0-85d0c1aa4553	0:5	running	ziti-player
+pane-71fe7afc-cd2b-4d30-80f4-92af1aa85fcb	0:5	running	IPTVCLI
+pane-ef6e4df0-2a4d-40a9-a16e-9ef0447b9cb9	0:5	running	web-player
+pane-d9dd0682-26cb-4dab-be3f-a09056f6e806	0:6	running	NFT
+046c6075-bec5-4472-a006-610e33ef60ec	0:6	running	divi-nft fork
+6a8420e0-06d1-4ac9-9a3f-f23fd321c107	0:6	running	NFT wallet
+pane-033ef0d4-3200-4d5b-ac49-926f75101334	0:7	running	orchestrator
+ae8a03fc-fad5-45c4-9fa6-d87a24aef49b	0:7	running	secret-broker
+ac49441f-d670-4496-887f-5ee76a39412c	0:7	running	supervisor build
+pane-74a03ba2-5c2f-4618-97db-5cd282a6bd43	0:8	running	IronDivi
+pane-b780e3ac-20ce-4f95-ab3b-6cabadf0e11b	0:8	running	health
+03c7d579-eda0-423a-b2d7-f0087f40e41b	0:9	running	divi-basicswap
+54ee320d-8f9d-43ea-ae0c-ed31c87d05f0	0:10	running	scheduler-builder
+274c4a52-5ebc-4be0-85a1-65ddbb991f90	0:11	running	opmodel orch
