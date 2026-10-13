@@ -89,10 +89,11 @@ in the background, if it doesn't exist. Find where it landed with `ctl panes`.
 
 `new-pane --role manager|orchestrator|builder` (raw form: `pane.meta.role`) records the pane's
 operating-model role in its `meta` (`role`, visible in `/state`) and exports it to the pane's
-process as `AVADA_ROLE`, which the injected operating-model rule keys off. Any other value is
-refused (exit 2 from the CLI, HTTP 400 from `/command`). Without `--role` the variable is absent,
-even if Avada itself was started from a role pane. Do not set `env.AVADA_ROLE` by hand: it is
-refused; pass the role.
+process as `AVADA_ROLE`, which the injected operating-model rule keys off. The CLI refuses any
+other value (exit 2). A raw `/command newPane` stores any `meta.role` as sent but exports
+`AVADA_ROLE` only for those three. The role survives restart and relaunch. Without a role the
+variable is absent, even if Avada itself was started from a role pane. Do not set
+`env.AVADA_ROLE` by hand: it is refused (HTTP 400); pass the role.
 
 ### Pane origin
 

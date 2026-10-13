@@ -27,31 +27,47 @@ pub fn validate(role: &str) -> Result<&str, String> {
     }
 }
 
-/// For a `newPane` spec: validate `meta.role` (when present and non-empty) and mirror it into
-/// `env.AVADA_ROLE`. An empty `meta.role` is dropped (unset = absent). A caller-supplied
-/// `env.AVADA_ROLE` with no `meta.role` is also rejected: the role must be stored with the pane,
-/// never exist only in the process env. A non-string `meta.role` is an error.
+/// The canonical role in `meta` (a valid string), if any. A free-form `meta.role` that some
+/// existing caller stores for its own purposes is NOT a role and yields `None`.
+pub fn canonical(meta: Option<&std::collections::BTreeMap<String, String>>) -> Option<&str> {
+    meta.and_then(|m| m.get(META_KEY))
+        .map(String::as_str)
+        .filter(|r| ROLES.contains(r))
+}
+
+/// `env` plus `AVADA_ROLE` when `meta` (or the origin bag, which carries the canonical role
+/// across restarts, re-hosts and relaunches) names a canonical role. Used by every respawn path.
+pub fn env_with_role(
+    env: Option<crate::session::spawn::EnvMap>,
+    meta: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<crate::session::spawn::EnvMap> {
+    match canonical(meta) {
+        None => env,
+        Some(r) => {
+            let mut e = env.unwrap_or_default();
+            e.insert(ENV_VAR.to_string(), r.to_string());
+            Some(e)
+        }
+    }
+}
+
+/// For a `newPane` spec: when `meta.role` is one of [`ROLES`], mirror it into
+/// `env.AVADA_ROLE`. Any other `meta.role` (free-form, empty, non-string) is left stored
+/// exactly as sent, with no env and no error. A caller-supplied `env.AVADA_ROLE` without a
+/// canonical `meta.role` is refused: the role must be stored with the pane, never exist only
+/// in the process env.
 pub fn apply_to_spec(spec: &mut Value) -> Result<(), String> {
     let Some(obj) = spec.as_object_mut() else {
         return Ok(());
     };
     let role = match obj.get("meta").and_then(|m| m.get(META_KEY)) {
-        None => None,
-        Some(Value::String(s)) if s.is_empty() => None,
-        Some(Value::String(s)) => Some(validate(s)?.to_string()),
-        Some(_) => return Err("role must be a string".to_string()),
+        Some(Value::String(s)) if ROLES.contains(&s.as_str()) => Some(s.clone()),
+        _ => None,
     };
-    let env_has_role = obj
-        .get("env")
-        .and_then(|e| e.get(ENV_VAR))
-        .is_some();
     let Some(role) = role else {
-        if let Some(meta) = obj.get_mut("meta").and_then(Value::as_object_mut) {
-            meta.remove(META_KEY);
-        }
-        if env_has_role {
+        if obj.get("env").and_then(|e| e.get(ENV_VAR)).is_some() {
             return Err(format!(
-                "env.{ENV_VAR} is set by the host from the pane's role; pass the role (manager|orchestrator|builder), not the variable"
+                "env.{ENV_VAR} is set by the host from the pane's role; pass meta.role (manager|orchestrator|builder), not the variable"
             ));
         }
         return Ok(());
@@ -96,27 +112,46 @@ mod tests {
     }
 
     #[test]
-    fn no_role_means_no_variable() {
+    fn no_role_means_no_variable_and_free_form_roles_are_kept_without_env() {
         let mut spec = json!({ "command": "claude", "meta": { "origin.why": "x" } });
         apply_to_spec(&mut spec).unwrap();
         assert!(spec.get("env").is_none());
-        let mut empty = json!({ "meta": { "role": "" } });
-        apply_to_spec(&mut empty).unwrap();
-        assert!(empty.get("env").is_none());
-        assert!(empty["meta"].get("role").is_none());
+        for v in [json!("worker"), json!(""), json!("Builder"), json!(3)] {
+            let mut s = json!({ "meta": { "role": v.clone() } });
+            apply_to_spec(&mut s).unwrap();
+            assert!(s.get("env").is_none(), "{v} must not export a role");
+            assert_eq!(s["meta"]["role"], v, "{v} must stay stored");
+        }
         let mut bare = json!({});
         apply_to_spec(&mut bare).unwrap();
         assert_eq!(bare, json!({}));
     }
 
     #[test]
-    fn a_bad_role_or_a_hand_set_variable_is_refused() {
-        let mut bad = json!({ "meta": { "role": "boss" } });
-        let e = apply_to_spec(&mut bad).unwrap_err();
-        assert!(e.contains("manager|orchestrator|builder"), "{e}");
-        let mut num = json!({ "meta": { "role": 3 } });
-        assert!(apply_to_spec(&mut num).is_err());
+    fn a_hand_set_variable_is_refused() {
         let mut raw = json!({ "env": { "AVADA_ROLE": "builder" } });
         assert!(apply_to_spec(&mut raw).is_err());
+        let mut odd = json!({ "env": { "AVADA_ROLE": "x" }, "meta": { "role": "worker" } });
+        assert!(apply_to_spec(&mut odd).is_err());
+    }
+
+    #[test]
+    fn respawn_env_is_rederived_from_the_stored_role() {
+        let m = |r: &str| std::collections::BTreeMap::from([("role".to_string(), r.to_string())]);
+        let e = env_with_role(None, Some(&m("orchestrator"))).unwrap();
+        assert_eq!(e.get("AVADA_ROLE").map(String::as_str), Some("orchestrator"));
+        assert!(env_with_role(None, Some(&m("worker"))).is_none());
+        assert!(env_with_role(None, None).is_none());
+        let base = std::collections::HashMap::from([("A".to_string(), "1".to_string())]);
+        let e = env_with_role(Some(base), Some(&m("builder"))).unwrap();
+        assert_eq!(e.len(), 2);
+    }
+
+    #[test]
+    fn canonical_reads_only_valid_roles() {
+        let m = |r: &str| std::collections::BTreeMap::from([("role".to_string(), r.to_string())]);
+        assert_eq!(canonical(Some(&m("builder"))), Some("builder"));
+        assert_eq!(canonical(Some(&m("worker"))), None);
+        assert_eq!(canonical(None), None);
     }
 }

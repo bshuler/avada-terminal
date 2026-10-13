@@ -45,7 +45,12 @@ pub fn extract(meta: Option<&BTreeMap<String, String>>) -> BTreeMap<String, Stri
             // `remote.*` (see `pane_remote`) rides the same bag: it persists and restores
             // by exactly the same path as provenance.
             .filter(|(k, v)| {
-                (k.starts_with(PREFIX) || k.starts_with(crate::pane_remote::PREFIX))
+                (k.starts_with(PREFIX)
+                    || k.starts_with(crate::pane_remote::PREFIX)
+                    // A canonical operating-model role rides the bag too, so the GUI keeps it
+                    // across restart / re-host / relaunch and can re-export `AVADA_ROLE`.
+                    || (k.as_str() == crate::pane_role::META_KEY
+                        && crate::pane_role::ROLES.contains(&v.as_str())))
                     && !v.is_empty()
             })
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -154,7 +159,7 @@ fn describe_origin(origin: &BTreeMap<String, String>) -> String {
         VIA, AT, WHY, BY_PANE, BY_LABEL, BY_SESSION, BY_AGENT, BY_PROCESS, CWD,
     ];
     for (k, v) in origin {
-        if !known.contains(&k.as_str()) {
+        if k.starts_with(PREFIX) && !known.contains(&k.as_str()) {
             lines.push(format!("{}: {v}", &k[PREFIX.len()..]));
         }
     }
@@ -178,6 +183,15 @@ mod tests {
         let meta = m(&[("origin.via", "x"), ("origin.why", ""), ("role", "w")]);
         assert_eq!(extract(Some(&meta)), m(&[("origin.via", "x")]));
         assert!(extract(None).is_empty());
+    }
+
+    #[test]
+    fn extract_carries_a_canonical_role_only() {
+        assert_eq!(
+            extract(Some(&m(&[("role", "builder")]))),
+            m(&[("role", "builder")])
+        );
+        assert!(extract(Some(&m(&[("role", "worker")]))).is_empty());
     }
 
     #[test]

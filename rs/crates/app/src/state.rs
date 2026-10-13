@@ -8265,7 +8265,15 @@ impl State {
             // thus Preferences → Browser) instead of straight to the OS. Wrapped
             // here and not where the env is recorded on the pane: the shim path is
             // regenerated every run, so it must not be baked into a snapshot.
-            env: avada_core::open::with_browser_shim(env.clone()),
+            // `AVADA_ROLE` is re-derived from the role the pane carries (its origin bag), not
+            // from `env`: a restart drops per-pane overrides, but the role is identity.
+            env: avada_core::open::with_browser_shim(avada_core::pane_role::env_with_role(
+                env.clone(),
+                self.tabs
+                    .get(ti)
+                    .and_then(|t| t.panes.get(idx))
+                    .map(|p| &p.origin),
+            )),
             integration,
             ..Default::default()
         }) {
@@ -9940,7 +9948,10 @@ impl State {
                     // thus Preferences → Browser) instead of straight to the OS. Wrapped
                     // here and not where the env is recorded on the pane: the shim path is
                     // regenerated every run, so it must not be baked into a snapshot.
-                    env: avada_core::open::with_browser_shim(spawn_env),
+                    env: avada_core::open::with_browser_shim(avada_core::pane_role::env_with_role(
+                        spawn_env,
+                        spec.meta.as_ref(),
+                    )),
                     integration,
                     ..Default::default()
                 },

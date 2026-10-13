@@ -1427,18 +1427,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_pane_with_a_bad_role_is_400_and_a_good_one_is_stored() {
+    async fn new_pane_stores_any_role_and_exports_only_canonical_ones() {
         let mut m = model_one_window();
         let s = sessions();
-        let bad = json!({ "type": "newPane", "windowId": 1, "pane": { "meta": { "role": "boss" } } });
-        let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &bad, &speech());
-        assert_eq!(r.status, 400);
-        let good = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi", "meta": { "role": "builder" } } });
-        let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &good, &speech());
-        assert_eq!(r.status, 200);
-        let id = r.body["result"].as_str().unwrap().to_string();
-        let meta = m.pane(&id).unwrap().meta.clone().unwrap();
-        assert_eq!(meta.get("role").map(String::as_str), Some("builder"));
+        for role in ["boss", "builder"] {
+            let cmd = json!({ "type": "newPane", "windowId": 1, "pane": { "command": "echo hi", "meta": { "role": role } } });
+            let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &cmd, &speech());
+            assert_eq!(r.status, 200, "{role}");
+            let id = r.body["result"].as_str().unwrap().to_string();
+            let meta = m.pane(&id).unwrap().meta.clone().unwrap();
+            assert_eq!(meta.get("role").map(String::as_str), Some(role));
+        }
+        let raw = json!({ "type": "newPane", "windowId": 1, "pane": { "env": { "AVADA_ROLE": "builder" } } });
+        let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &raw, &speech());
+        assert_eq!(r.status, 400, "hand-set env is refused");
     }
 
     #[tokio::test]
