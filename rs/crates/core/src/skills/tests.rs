@@ -842,6 +842,33 @@ fn rule_files_sweep_ours_and_leave_foreign_files_alone() {
 }
 
 #[test]
+fn gemini_imports_the_shared_agents_file_in_a_fence_and_is_swept_on_disable() {
+    let fx = fixture("gemini");
+    unit(&fx.module_dir, None, "always", RULE, "shared rule\n");
+    write(&fx.root.join("GEMINI.md"), "# My notes\nkeep me\n");
+    let on = Tools::only(["gemini"]);
+    fx.run(&on, false, None);
+    let fence =
+        format!("<!-- avada:module={HOST_ID} -->\n@AGENTS.md\n<!-- /avada:module={HOST_ID} -->\n");
+    let g = read(&fx.root.join("GEMINI.md"));
+    assert!(g.starts_with("# My notes\nkeep me\n"), "{g}");
+    assert!(g.contains(&fence), "{g}");
+    assert!(!g.contains("shared rule"), "rule lives in AGENTS.md only");
+    assert!(read(&fx.root.join("AGENTS.md")).contains("shared rule"));
+    assert!(!seg(&fx.root, ".gemini").exists(), "no per-tool dirs");
+    // Disabling removes only the fence; the user's text stays.
+    fx.run(&on.clone().disable("gemini"), false, None);
+    assert_eq!(read(&fx.root.join("GEMINI.md")), "# My notes\nkeep me\n");
+    // A GEMINI.md that held only our fence is deleted outright.
+    fs::remove_file(fx.root.join("GEMINI.md")).unwrap();
+    fx.run(&on, false, None);
+    assert_eq!(read(&fx.root.join("GEMINI.md")), fence);
+    fx.run(&on.disable("gemini"), false, None);
+    assert!(!fx.root.join("GEMINI.md").exists());
+    fx.done();
+}
+
+#[test]
 fn a_disabled_tool_is_swept_but_not_written() {
     let fx = fixture("disabled");
     unit(&fx.module_dir, None, "always", RULE, "x\n");
