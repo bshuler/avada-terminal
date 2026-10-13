@@ -37,10 +37,18 @@ pub fn canonical(meta: Option<&std::collections::BTreeMap<String, String>>) -> O
 
 /// `env` plus `AVADA_ROLE` when `meta` (or the origin bag, which carries the canonical role
 /// across restarts, re-hosts and relaunches) names a canonical role. Used by every respawn path.
+///
+/// Any `AVADA_ROLE` already in `env` (a restart override, a workspace-file `env` block) is
+/// dropped first: only the stored role may produce the variable, so a caller can neither
+/// inject a role nor change the one the pane has.
 pub fn env_with_role(
     env: Option<crate::session::spawn::EnvMap>,
     meta: Option<&std::collections::BTreeMap<String, String>>,
 ) -> Option<crate::session::spawn::EnvMap> {
+    let env = env.map(|mut e| {
+        e.remove(ENV_VAR);
+        e
+    });
     match canonical(meta) {
         None => env,
         Some(r) => {
@@ -145,6 +153,26 @@ mod tests {
         let base = std::collections::HashMap::from([("A".to_string(), "1".to_string())]);
         let e = env_with_role(Some(base), Some(&m("builder"))).unwrap();
         assert_eq!(e.len(), 2);
+    }
+
+    #[test]
+    fn an_env_supplied_role_never_survives_unless_it_is_the_stored_one() {
+        let m = |r: &str| std::collections::BTreeMap::from([("role".to_string(), r.to_string())]);
+        let inject = || {
+            std::collections::HashMap::from([
+                ("AVADA_ROLE".to_string(), "manager".to_string()),
+                ("A".to_string(), "1".to_string()),
+            ])
+        };
+        // No stored role: the variable is stripped, other entries stay.
+        let e = env_with_role(Some(inject()), None).unwrap();
+        assert!(!e.contains_key("AVADA_ROLE"));
+        assert_eq!(e.get("A").map(String::as_str), Some("1"));
+        // Free-form stored role: still stripped.
+        assert!(!env_with_role(Some(inject()), Some(&m("worker"))).unwrap().contains_key("AVADA_ROLE"));
+        // Stored builder beats an injected manager.
+        let e = env_with_role(Some(inject()), Some(&m("builder"))).unwrap();
+        assert_eq!(e.get("AVADA_ROLE").map(String::as_str), Some("builder"));
     }
 
     #[test]

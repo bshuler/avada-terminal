@@ -167,6 +167,22 @@ pub fn verb_capability(verb: &str) -> Option<Capability> {
     })
 }
 
+/// The capability a whole `/command` body needs: [`verb_capability`], plus `panes.spawn` for a
+/// `setMeta` that touches the `role` key (a pane's role decides what a respawn exports as
+/// `AVADA_ROLE`, so changing it is as strong as spawning a pane).
+pub fn command_capability(cmd: &Value) -> Option<Capability> {
+    let verb = cmd.get("type").and_then(Value::as_str)?;
+    if verb == "setMeta"
+        && cmd
+            .get("meta")
+            .and_then(Value::as_object)
+            .is_some_and(|m| m.contains_key(crate::pane_role::META_KEY))
+    {
+        return Some(Capability::PanesSpawn);
+    }
+    verb_capability(verb)
+}
+
 /// The HTTP outcome of a `/command` POST: a status, a JSON body, and whether the structure
 /// changed (so the caller fires the coalesced `state` ping).
 pub struct DispatchResult {
@@ -461,7 +477,8 @@ fn exec(
                 for g in &groups {
                     if let Some(panes) = g.get("panes").and_then(Value::as_array) {
                         for ps in panes {
-                            let pane = spawn_pane(sessions, control_file, ps)?;
+                            let ps = attach_spec(ps)?;
+                            let pane = spawn_pane(sessions, control_file, &ps)?;
                             pane_ids.push(Value::String(pane.id.clone()));
                             if !model.insert_pane(window_id, pane) {
                                 return Err(DispatchError::window_not_found(window_id));
@@ -487,7 +504,8 @@ fn exec(
                     let mut panes = Vec::new();
                     if let Some(specs) = g.get("panes").and_then(Value::as_array) {
                         for ps in specs {
-                            panes.push(spawn_pane(sessions, control_file, ps)?);
+                            let ps = attach_spec(ps)?;
+                            panes.push(spawn_pane(sessions, control_file, &ps)?);
                         }
                     }
                     let tab = TabInfo {
@@ -533,6 +551,9 @@ fn exec(
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                         .collect::<EnvMap>()
                 });
+                // The caller cannot set `AVADA_ROLE`; the pane's stored role re-derives it.
+                let env_override =
+                    crate::pane_role::env_with_role(env_override, pane.meta.as_ref());
                 let opts = SpawnOptions {
                     uid: new_uid.clone(),
                     shell: pane.shell.clone(),
@@ -1030,6 +1051,9 @@ fn respawn_resuming(
                 .insert("CLAUDE_CONFIG_DIR".to_string(), dir.to_string());
         }
     }
+    // `AVADA_ROLE` is never caller-supplied: drop any in the override and re-derive it from the
+    // role the pane carries, so a restart keeps a builder a builder and cannot promote it.
+    let env_override = crate::pane_role::env_with_role(env_override, pane.meta.as_ref());
     // The account the effective env resolved to (explicit `env` override wins over the
     // target's) — captured before `env_override` moves into `SpawnOptions`, for the typed
     // shell-pane resume line below. Empty ⇒ the default account.
@@ -1223,6 +1247,14 @@ fn spawn_pane(
         parent_pane_id: None,
         subagent_activity: None,
     })
+}
+
+/// An `attach` pane spec with the same role handling as `newPane`: a valid `meta.role` is
+/// mirrored into `env.AVADA_ROLE`, a hand-set `env.AVADA_ROLE` without one is refused.
+fn attach_spec(spec: &Value) -> Result<Value, DispatchError> {
+    let mut spec = spec.clone();
+    crate::pane_role::apply_to_spec(&mut spec).map_err(DispatchError::BadRequest)?;
+    Ok(spec)
 }
 
 /// If a `newPane` spec names a `project` (a project id or name), resolve it from the registry
@@ -1441,6 +1473,121 @@ mod tests {
         let raw = json!({ "type": "newPane", "windowId": 1, "pane": { "env": { "AVADA_ROLE": "builder" } } });
         let r = handle_command(&mut m, &s, Some("C:/control.json"), None, &raw, &speech());
         assert_eq!(r.status, 400, "hand-set env is refused");
+    }
+
+    /// Wait until `uid`'s replay contains `needle`; panics after 10 s.
+    #[cfg(unix)]
+    async fn wait_for_output(s: &SessionManager, uid: &str, needle: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let out = s.replay(uid).unwrap_or_default();
+            if out.contains(needle) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never saw {needle:?}; got {out:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attach_applies_the_same_role_rules_as_new_pane() {
+        let mut m = model_one_window();
+        let s = sessions();
+        // A hand-set variable with no meta.role is refused, in both attach shapes.
+        for cmd in [
+            json!({ "type": "attach", "windowId": 1, "as": "panes",
+                "groups": [ { "panes": [ { "command": "echo hi", "env": { "AVADA_ROLE": "manager" } } ] } ] }),
+            json!({ "type": "attach", "windowId": 1,
+                "groups": [ { "panes": [ { "command": "echo hi", "env": { "AVADA_ROLE": "manager" } } ] } ] }),
+        ] {
+            let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+            assert_eq!(r.status, 400, "{:?}", r.body);
+        }
+        // meta.role is stored AND exported.
+        let cmd = json!({ "type": "attach", "windowId": 1, "as": "panes",
+            "groups": [ { "panes": [ { "command": "echo ROLE=[$AVADA_ROLE]; sleep 30", "meta": { "role": "builder" } } ] } ] });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        let id = r.body["result"][0].as_str().unwrap().to_string();
+        let pane = m.pane(&id).unwrap();
+        assert_eq!(
+            pane.meta.as_ref().unwrap().get("role").map(String::as_str),
+            Some("builder")
+        );
+        wait_for_output(&s, &pane.session_uid.clone(), "ROLE=[builder]").await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restart_pane_keeps_the_stored_role_and_ignores_an_injected_one() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let open = json!({ "type": "newPane", "windowId": 1,
+            "pane": { "command": "echo ROLE=[$AVADA_ROLE]; sleep 30", "meta": { "role": "builder" } } });
+        let id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let restart = json!({ "type": "restartPane", "paneId": id, "env": { "AVADA_ROLE": "manager", "X": "1" } });
+        let r = handle_command(&mut m, &s, None, None, &restart, &speech());
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        let uid = m.pane(&id).unwrap().session_uid.clone();
+        wait_for_output(&s, &uid, "ROLE=[builder]").await;
+        assert!(!s.replay(&uid).unwrap_or_default().contains("ROLE=[manager]"));
+
+        // A pane with no stored role cannot be given one by a restart override either.
+        let open = json!({ "type": "newPane", "windowId": 1,
+            "pane": { "command": "echo ROLE=[$AVADA_ROLE]; sleep 30" } });
+        let id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let restart = json!({ "type": "restartPane", "paneId": id, "env": { "AVADA_ROLE": "manager" } });
+        assert_eq!(handle_command(&mut m, &s, None, None, &restart, &speech()).status, 200);
+        let uid = m.pane(&id).unwrap().session_uid.clone();
+        wait_for_output(&s, &uid, "ROLE=[]").await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn respawn_resuming_strips_an_injected_role_and_keeps_the_stored_one() {
+        let mut m = model_one_window();
+        let s = sessions();
+        let open = json!({ "type": "newPane", "windowId": 1,
+            "pane": { "command": "echo ROLE=[$AVADA_ROLE]; cat", "meta": { "role": "builder" } } });
+        let id = handle_command(&mut m, &s, None, None, &open, &speech()).body["result"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let pane = m.pane(&id).unwrap().clone();
+        let target = ResumeTarget {
+            session_id: "0198c4a2-1f2e-4d3c-8a5b-9e7f6c5d4b3a".to_string(),
+            cwd: "/tmp".to_string(),
+            config_dir: None,
+        };
+        let env = json!({ "AVADA_ROLE": "manager" });
+        respawn_resuming(&mut m, &s, None, &pane, &target, Some(&env), None, "claude")
+            .expect("respawn should succeed");
+        let uid = m.pane(&id).unwrap().session_uid.clone();
+        wait_for_output(&s, &uid, "ROLE=[builder]").await;
+        assert!(!s.replay(&uid).unwrap_or_default().contains("ROLE=[manager]"));
+    }
+
+    #[test]
+    fn set_meta_of_the_role_key_needs_the_spawn_capability() {
+        let role = json!({ "type": "setMeta", "paneId": "p", "meta": { "role": "manager" } });
+        assert_eq!(command_capability(&role), Some(Capability::PanesSpawn));
+        let clear = json!({ "type": "setMeta", "paneId": "p", "meta": { "role": null } });
+        assert_eq!(command_capability(&clear), Some(Capability::PanesSpawn));
+        let other = json!({ "type": "setMeta", "paneId": "p", "meta": { "task": "x" } });
+        assert_eq!(command_capability(&other), None);
+        let spawn = json!({ "type": "newPane" });
+        assert_eq!(command_capability(&spawn), Some(Capability::PanesSpawn));
+        assert_eq!(command_capability(&json!(null)), None);
     }
 
     #[tokio::test]

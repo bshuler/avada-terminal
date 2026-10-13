@@ -2678,7 +2678,11 @@ impl State {
                     // thus Preferences → Browser) instead of straight to the OS. Wrapped
                     // here and not where the env is recorded on the pane: the shim path is
                     // regenerated every run, so it must not be baked into a snapshot.
-                    env: avada_core::open::with_browser_shim(opts.env.clone()),
+                    // A caller-supplied `AVADA_ROLE` is dropped: only a stored role may produce it.
+                    env: avada_core::open::with_browser_shim(avada_core::pane_role::env_with_role(
+                        opts.env.clone(),
+                        None,
+                    )),
                     integration,
                     ..Default::default()
                 },

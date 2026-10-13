@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 use crate::ansi_strip::strip_ansi;
 use crate::control::descriptor_table;
 use crate::control::dispatch;
-use crate::control::dispatch::{capability_refusal, verb_capability};
+use crate::control::dispatch::{capability_refusal, command_capability};
 use crate::control::events::ControlEvent;
 use crate::control::input::{keys_to_bytes, submit_newlines, KeysResult, SUBMIT_DELAY_MS};
 use crate::control::modules::{match_route, InvokeError, Match, RouteCall};
@@ -1992,11 +1992,7 @@ async fn command(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: By
     // The route's own gate checked `workspace.write`; verbs that spend more (spawn a pane,
     // read a screen, type, restart the host) are checked here, per verb. Master-path tokens
     // hold everything, so this only ever bites a capability-limited token.
-    if let Some(cap) = cmd
-        .get("type")
-        .and_then(Value::as_str)
-        .and_then(verb_capability)
-    {
+    if let Some(cap) = command_capability(&cmd) {
         if let Some(token) = bearer_header(&headers) {
             if let Err(cap) = shared.caps.check(&token, cap) {
                 tracing::warn!(capability = cap.name(), "command refused: capability");

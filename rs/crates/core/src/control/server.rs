@@ -1046,10 +1046,11 @@ fn do_restart(
                 p.args.clone(),
                 p.command.clone(),
                 p.cwd.clone(),
+                p.meta.clone(),
             )
         })
     };
-    let Some((status, current_uid, shell, args, command, cwd)) = recipe else {
+    let Some((status, current_uid, shell, args, command, cwd, meta)) = recipe else {
         tracing::info!(
             pane_id,
             "supervised restart dropped: pane closed during backoff"
@@ -1073,7 +1074,8 @@ fn do_restart(
         args,
         command,
         cwd,
-        env: None,
+        // A supervised restart keeps the pane's role (identity), like every respawn path.
+        env: crate::pane_role::env_with_role(None, meta.as_ref()),
         cols: None,
         rows: None,
         pane_id: Some(pane_id.to_string()),
