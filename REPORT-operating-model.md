@@ -3,6 +3,7 @@
 Updated 2026-10-13. Branch `feat/operating-model-module` (worktree `avada-terminal-opmodel`), based on `feat/scheduled-tasks` 234c805. Not merged, not deployed, live Avada untouched.
 
 ## NEEDS BERT
+- **HOLD: do not merge yet** (fleet manager, 2026-10-13). Bert makes the merge call. The panel-rename is rewriting this repo now; merging before it lands risks conflicts, and parts below are untested.
 - Review the branch and say merge / change. Nothing else blocks.
 - Merge note: `feat/scheduled-tasks` lacks the manager spine (`131ff9d`, only on `main`). Reconcile points: `pane_origin::extract`, `pane_role::apply_to_spec`, `ctl_cli.rs` and one dispatch test read the role from `meta["role"]`; point them at the typed field if 131ff9d has one.
 - Manager must read both `## NEEDS HUMAN` and `## NEEDS BERT`: the manager code is only on `main`, so this is a one-line change at that merge (not done here).
@@ -22,3 +23,21 @@ Updated 2026-10-13. Branch `feat/operating-model-module` (worktree `avada-termin
 - A workspace running alone can sweep a module another workspace sharing the root enabled (ledgers do not record enabled state); closing it needs the app to pass all workspaces together.
 - Supervised-restart role re-derive (`control/server.rs`) and the generated `ctl` verb for the opt-in have no test.
 - Aider only loads `CONVENTIONS.md` with `--read`; Cursor CLI/Cody/Continue AGENTS.md reading undocumented.
+
+## Merge notes (complete)
+- Base is `feat/scheduled-tasks` 234c805, 61 commits ahead of `main`; `main` has the manager spine 131ff9d, which this branch lacks. Merge order matters: land scheduled-tasks/spine first, then this.
+- Panel-rename (pane->panel, `pane-to-panel-rename`) touches the same files: expect conflicts in `control/dispatch.rs`, `control/routes.rs`, `session/spawn.rs`, `app/src/state.rs`, `pane_role.rs`, `pane_origin.rs`, `ctl_cli.rs`, and the avada skill `REFERENCE.md` (`new-pane --role`). Rebase after the rename lands; do not merge ahead of it.
+- Role field: this branch keeps role in the `meta` map under `role`. If 131ff9d makes it typed, change `pane_origin::extract`, `pane_role::apply_to_spec`, `ctl_cli.rs`, and the dispatch tests.
+- Manager must read both `## NEEDS HUMAN` and `## NEEDS BERT`: not done (manager code is only on `main`).
+- `rs/Cargo.lock` gained only the operating-model package entry; `rs/modules/versions.lock` has its hash (verified by `module_versions`).
+
+## Test state
+- Last full run on hp1 at 71b5fd3 code: avada-core lib 2114 pass / 0 fail, all avada-core integration tests pass, module-sdk 69+6, operating-model 2, app crate `cargo check --tests` clean. Local Mac cargo is guarded; nothing was run on the Mac.
+- Not run: the app binary, Windows/Linux check scripts, any live Avada.
+
+## Untested / unverified
+- Supervised-restart role re-derive (`control/server.rs`) and GUI restart/relaunch role survival: compile-checked, no process-level test of the app paths.
+- Generated `avada ctl` verb for the opt-in instruction-files setting: route tested, verb not run.
+- App-side wiring in `module_runtime.rs` (project-root pass, defaults load): compiled only.
+- No golden-file test per adapter; Cline/Kiro/Augment/Continue untested for this module.
+- Never exercised against a real harness reading the injected file.
