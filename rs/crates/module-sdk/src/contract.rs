@@ -381,6 +381,12 @@ pub mod methods {
     pub const HOST_FS_LIST: &str = "host.fs.list";
     /// Host: subscribe to event kinds. Params: `{ kinds: [string] }`.
     pub const HOST_EVENTS_SUBSCRIBE: &str = "host.events.subscribe";
+    /// Host: set status-tray cards on the bottom drawer. Params: [`crate::status::SetStatus`].
+    /// Needs `ui.toast` (the same notification surface). Additive.
+    pub const HOST_STATUS_SET: &str = "host.status.set";
+    /// Module: a status card marked `activatable` was clicked (notification).
+    /// Params: [`crate::status::StatusActivate`].
+    pub const MODULE_STATUS_ACTIVATE: &str = "module.status.activate";
     /// Host: show a toast. Params: `{ text, level? }`.
     pub const HOST_TOAST: &str = "host.toast";
     /// Host: register control-plane routes. Params: `{ routes: [RouteDescriptor] }`.
@@ -529,6 +535,7 @@ pub mod methods {
         HOST_KEYMAP_DECLARE,
         HOST_DOC_SET,
         HOST_IMAGE_SET,
+        HOST_STATUS_SET,
     ];
 
     /// Module methods that are **additive**, for the same reason [`HOST_OPTIONAL`] is.
@@ -536,7 +543,7 @@ pub mod methods {
     /// A host discovers whether a module speaks these from the tier its contributions
     /// declare, not by asking: a tier-5 contribution is the promise that these are served,
     /// and a module with none of them will simply never be sent one.
-    pub const MODULE_OPTIONAL: &[&str] = &[MODULE_GRID_KEY, MODULE_GRID_RESIZE];
+    pub const MODULE_OPTIONAL: &[&str] = &[MODULE_GRID_KEY, MODULE_GRID_RESIZE, MODULE_STATUS_ACTIVATE];
 
     /// The capability a `host.*` method needs, or `None` for the always-allowed ones.
     ///
@@ -556,7 +563,7 @@ pub mod methods {
             HOST_FS_READ | HOST_FS_LIST => C::FsRead,
             HOST_FS_WRITE => C::FsWrite,
             HOST_EVENTS_SUBSCRIBE => C::EventsSubscribe,
-            HOST_TOAST => C::UiToast,
+            HOST_TOAST | HOST_STATUS_SET => C::UiToast,
             HOST_ROUTES_REGISTER => C::ControlRoute,
             HOST_KEYCHAIN_GET | HOST_KEYCHAIN_SET => C::Keychain,
             // A grid surface is a pane the module owns, so it is gated by the same right

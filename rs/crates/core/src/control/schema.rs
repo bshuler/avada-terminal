@@ -203,6 +203,8 @@ fn rpc_summary(method: &str) -> &'static str {
         methods::HOST_FS_LIST => "List a directory",
         methods::HOST_EVENTS_SUBSCRIBE => "Subscribe to event kinds",
         methods::HOST_TOAST => "Show a toast",
+        methods::HOST_STATUS_SET => "Set status-tray cards on the bottom drawer",
+        methods::MODULE_STATUS_ACTIVATE => "A status-tray card was clicked",
         methods::HOST_ROUTES_REGISTER => "Register control-plane routes",
         methods::HOST_KEYCHAIN_GET => "Read a keychain entry the module owns",
         methods::HOST_KEYCHAIN_SET => "Write a keychain entry the module owns",

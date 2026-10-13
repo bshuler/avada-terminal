@@ -93,6 +93,8 @@ pub use avada_module_sdk::grid;
 /// and the host typesets. Re-exported for the same reason as [`grid`]: the app projects these
 /// blocks into its own view rows and reaches the SDK only through this crate.
 pub use avada_module_sdk::doc;
+/// Status-tray card types (`host.status.set`).
+pub use avada_module_sdk::status;
 
 pub use gate::{CapabilityGate, Decision, DeclaredOnly};
 pub use host::{Host, HostConfig, HostError, HostEvent, LaunchSpec, Licensing, Opener};

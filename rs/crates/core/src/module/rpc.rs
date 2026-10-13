@@ -34,6 +34,7 @@ pub const SERVED: &[&str] = &[
     methods::HOST_PREFS_DECLARE,
     methods::HOST_PREFS_GET,
     methods::HOST_TOAST,
+    methods::HOST_STATUS_SET,
     methods::HOST_ROUTES_REGISTER,
     methods::HOST_FS_LIST,
     methods::HOST_FS_READ,
@@ -423,6 +424,7 @@ impl Dispatcher {
             methods::HOST_PREFS_DECLARE => self.prefs_declare(params),
             methods::HOST_PREFS_GET => Ok(self.lock_prefs().as_result()),
             methods::HOST_TOAST => self.toast(params),
+            methods::HOST_STATUS_SET => self.status_set(params),
             methods::HOST_ROUTES_REGISTER => self.routes_register(params),
             methods::HOST_FS_LIST => self.fs_list(params),
             methods::HOST_FS_READ => self.fs_read(params),
@@ -741,6 +743,29 @@ impl Dispatcher {
             module: self.module.clone(),
             text,
             level,
+        });
+        Ok(Value::Null)
+    }
+
+    /// `host.status.set`: upsert this module's status-tray cards and drop the named ones.
+    /// Validated as a batch so a bad card names itself and nothing half-applies; the
+    /// per-module cap bounds what a looping module can push at the app.
+    fn status_set(&self, params: &Value) -> Result<Value, RpcError> {
+        let avada_module_sdk::status::SetStatus { items, remove } =
+            serde_json::from_value(params.clone()).map_err(invalid_params)?;
+        if items.len() > avada_module_sdk::status::MAX_ITEMS {
+            return Err(invalid_params(format!(
+                "at most {} status cards per call",
+                avada_module_sdk::status::MAX_ITEMS
+            )));
+        }
+        if let Some(why) = items.iter().find_map(avada_module_sdk::status::validate_item) {
+            return Err(invalid_params(why));
+        }
+        self.shared.events.send(HostEvent::StatusSet {
+            module: self.module.clone(),
+            items,
+            remove,
         });
         Ok(Value::Null)
     }
@@ -2125,6 +2150,37 @@ pub(crate) mod tests {
             HostEvent::Commands { commands, .. } if commands[0].id == "reveal"
         ));
         assert_eq!(rig.d.commands().len(), 1);
+    }
+
+    #[test]
+    fn status_set_reaches_the_event_stream_and_is_gated_and_validated() {
+        let rig = rig(&[Capability::UiToast]);
+        rig.d
+            .call(
+                methods::HOST_STATUS_SET,
+                &json!({ "items": [{ "id": "m", "label": "AI MODEL", "value": "7B", "level": "ok" }], "remove": ["old"] }),
+            )
+            .unwrap();
+        assert!(matches!(
+            rig.events.recv().unwrap(),
+            HostEvent::StatusSet { items, remove, .. }
+                if items[0].id == "m" && items[0].value == "7B" && remove == vec!["old".to_string()]
+        ));
+        assert_eq!(
+            rig.d
+                .call(methods::HOST_STATUS_SET, &json!({ "items": [{ "id": "", "label": "x" }] }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::InvalidParams
+        );
+        let none = self::rig(&[Capability::UiRail]);
+        assert_eq!(
+            none.d
+                .call(methods::HOST_STATUS_SET, &json!({ "items": [] }))
+                .unwrap_err()
+                .kind(),
+            ErrorCode::CapabilityDenied
+        );
     }
 
     fn route(method: &str, path: &str) -> Value {

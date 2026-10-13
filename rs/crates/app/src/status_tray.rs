@@ -36,6 +36,10 @@ pub struct StatusItem {
     /// Lower sorts first; ties keep registration order.
     pub order: i32,
     pub on_activate: Option<Activate>,
+    /// The module that owns this card, so its cards can go when it stops.
+    pub owner: Option<String>,
+    /// Shown in the top welcome banner as `label  value`, not as a tray card.
+    pub banner: bool,
 }
 
 impl StatusItem {
@@ -48,7 +52,17 @@ impl StatusItem {
             level: Level::Info,
             order: 0,
             on_activate: None,
+            owner: None,
+            banner: false,
         }
+    }
+    pub fn banner(mut self) -> Self {
+        self.banner = true;
+        self
+    }
+    pub fn owner(mut self, o: &str) -> Self {
+        self.owner = Some(o.into());
+        self
     }
     pub fn level(mut self, l: Level) -> Self {
         self.level = l;
@@ -116,6 +130,30 @@ pub fn remove(id: &str) -> bool {
     gone
 }
 
+/// Drop every card an owner registered; true when any went.
+pub fn remove_owner(owner: &str) -> bool {
+    let mut v = items();
+    let n = v.len();
+    v.retain(|i| i.owner.as_deref() != Some(owner));
+    let gone = v.len() != n;
+    if gone {
+        REV.fetch_add(1, Ordering::Relaxed);
+    }
+    gone
+}
+
+static ACTIVATIONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Queue a click on a module's card for the runtime to forward (`owner`, module-local id).
+pub fn post_activation(owner: &str, id: &str) {
+    ACTIVATIONS.lock().unwrap_or_else(|p| p.into_inner()).push((owner.into(), id.into()));
+}
+
+/// Clicks waiting to be forwarded to modules, oldest first.
+pub fn take_activations() -> Vec<(String, String)> {
+    std::mem::take(&mut *ACTIVATIONS.lock().unwrap_or_else(|p| p.into_inner()))
+}
+
 /// Run a card's click handler (outside the lock). False when it has none.
 pub fn activate(id: &str) -> bool {
     let f = items().iter().find(|i| i.id == id).and_then(|i| i.on_activate.clone());
@@ -146,6 +184,20 @@ mod tests {
         assert!(remove("t.rt"));
         assert!(!remove("t.rt"));
         assert!(!update("t.rt", "c", Level::Info));
+    }
+
+    #[test]
+    fn an_owners_cards_go_together_and_clicks_queue() {
+        register(StatusItem::new("t.o1", "A", "1").owner("t/own"));
+        register(StatusItem::new("t.o2", "B", "2").owner("t/own"));
+        register(StatusItem::new("t.keep", "C", "3"));
+        assert!(remove_owner("t/own"));
+        assert!(!remove_owner("t/own"));
+        let ids: Vec<_> = snapshot().into_iter().map(|i| i.id).collect();
+        assert!(ids.contains(&"t.keep".to_string()) && !ids.contains(&"t.o1".to_string()));
+        remove("t.keep");
+        post_activation("t/own", "x");
+        assert!(take_activations().contains(&("t/own".to_string(), "x".to_string())));
     }
 
     #[test]

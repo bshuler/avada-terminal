@@ -913,11 +913,17 @@ export global AttentionAdapter {
 // The Arcane welcome banner's metadata block, pushed by the controller. Uptime is rendered
 // to a string here-side's caller at minute granularity, so an idle window is not re-rendered
 // every second just to tick a clock nobody can read that finely.
+export struct BannerField {
+    k: string,
+    v: string,
+}
+
 export global BannerAdapter {
-    in property <string> version;
-    in property <string> updated;
-    in property <string> uptime;
-    in property <string> host;
+    in property <string> title: "✦ AVADATERMINAL ✦";
+    in property <string> tagline;
+    // `label  value` lines, from the status registry's banner items (version, uptime, host,
+    // plus whatever a module contributes).
+    in property <[BannerField]> fields;
 }
 
 // One status-tray card (INTENT / AI MODEL / CONTEXT …), registered from Rust through

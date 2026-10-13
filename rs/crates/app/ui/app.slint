@@ -10,7 +10,7 @@
 // dispatched against the central `State` (see ARCHITECTURE.md).
 
 import { Theme } from "theme.slint";
-import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter, StatusCard, StatusAdapter } from "types.slint";
+import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter, BannerField, StatusCard, StatusAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
@@ -37,7 +37,7 @@ export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem,
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
-export { AttentionCard, AttentionAdapter, BannerAdapter, StatusCard, StatusAdapter }
+export { AttentionCard, AttentionAdapter, BannerAdapter, BannerField, StatusCard, StatusAdapter }
 // ---- track V3: re-exported so `imagepane::attach` can reach the adapter and the
 // harness can call `invoke_fit`; the UI lives in imagepane.slint.
 export { ImagePaneItem, ImageFit, ImagePaneAdapter }
@@ -473,7 +473,7 @@ export component AppWindow inherits Window {
                 Text {
                     x: 24px;
                     y: 14px;
-                    text: "✦ AVADATERMINAL ✦";
+                    text: BannerAdapter.title;
                     color: Theme.arc-gold;
                     font-size: 22px;
                     font-weight: 700;
@@ -481,19 +481,14 @@ export component AppWindow inherits Window {
                 Text {
                     x: 24px;
                     y: 46px;
-                    text: "Premium Magical AI Terminal  •  Power. Precision. Purpose.";
+                    text: BannerAdapter.tagline;
                     color: Theme.arc-lavender;
                     font-size: 12px;
                 }
                 // metadata block: label in lavender, value in the Arcane accent
-                for m[i] in [
-                    { k: "version", v: BannerAdapter.version },
-                    { k: "last update", v: BannerAdapter.updated },
-                    { k: "uptime", v: BannerAdapter.uptime },
-                    { k: "host", v: BannerAdapter.host },
-                ] : Text {
-                    x: 24px + i * 150px;
-                    y: 74px;
+                for m[i] in BannerAdapter.fields : Text {
+                    x: 24px + mod(i, 4) * 150px;
+                    y: 74px + floor(i / 4) * 16px;
                     width: 140px;
                     text: m.k + "  " + m.v;
                     color: Theme.arc-magenta;
@@ -605,11 +600,22 @@ export component AppWindow inherits Window {
                                 padding-right: 12px;
                                 spacing: 10px;
                                 alignment: start;
-                                Text {
-                                    text: sc.glyph;
-                                    color: sc.level == 3 ? Theme.warn : sc.level == 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
-                                    font-size: 20px;
-                                    vertical-alignment: center;
+                                // glyph in a ring, as in the mockup's footer icons
+                                Rectangle {
+                                    width: 34px;
+                                    height: 34px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 17px;
+                                    border-width: 1px;
+                                    border-color: sc.level >= 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
+                                    background: Theme.surface2.with-alpha(0.5);
+                                    Text {
+                                        text: sc.glyph;
+                                        color: sc.level >= 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
+                                        font-size: 18px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
                                 }
                                 VerticalLayout {
                                     alignment: center;
