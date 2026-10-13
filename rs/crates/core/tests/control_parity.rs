@@ -58,6 +58,7 @@ fn boot() -> u16 {
     // Seed one window with one pane through the public read-model API.
     shared.model.lock().unwrap().add_window(WindowInfo {
         keyboard_focus_pane: None,
+        selected_pane: None,
         window_id: 1,
         active_tab_id: Some("t1".into()),
         tabs: vec![TabInfo {

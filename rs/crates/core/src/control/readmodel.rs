@@ -165,6 +165,10 @@ pub struct WindowInfo {
     /// bug observable (and its fix provable) from outside the GUI — `send`/`submit` write
     /// straight to the pty and cannot tell a focused pane from an unfocused one.
     pub keyboard_focus_pane: Option<String>,
+    /// The pane the controller *selected* in the active tab (`Tab::focused`) — what the app
+    /// asked to hold the keyboard. Published beside [`Self::keyboard_focus_pane`]: the two
+    /// disagreeing is the keyboard-focus bug made visible. `None` = no terminal pane.
+    pub selected_pane: Option<String>,
 }
 
 /// One app-owned scheduler loop's status (see `avada::loops::Loops` — the app crate this
@@ -843,10 +847,14 @@ impl ReadModel {
             let kbd = w.keyboard_focus_pane.clone().filter(|id| {
                 scope.is_none() || tabs.iter().any(|t| t.panes.iter().any(|p| &p.id == id))
             });
+            let sel = w.selected_pane.clone().filter(|id| {
+                scope.is_none() || tabs.iter().any(|t| t.panes.iter().any(|p| &p.id == id))
+            });
             windows.push(WindowOut {
                 window_id: w.window_id,
                 active_tab_id: w.active_tab_id.clone(),
                 keyboard_focus_pane_id: kbd,
+                selected_pane_id: sel,
                 tabs,
             });
         }
@@ -886,6 +894,9 @@ pub struct WindowOut {
     /// (an unfocused window, a dialog, a tab with no terminal pane). Distinct from the active
     /// tab's focused pane, which is only what the app *asked* for.
     pub keyboard_focus_pane_id: Option<String>, // string | null — always present
+    /// The pane the app selected in the active tab; omitted when there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_pane_id: Option<String>,
     pub tabs: Vec<TabOut>,
 }
 
@@ -1019,6 +1030,7 @@ mod tests {
         let mut m = ReadModel::new();
         m.add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: 1,
             active_tab_id: Some("t1".to_string()),
             tabs: vec![TabInfo {
@@ -1112,6 +1124,7 @@ mod tests {
     fn win(id: i64, tab: &str, panes: Vec<PaneInfo>) -> WindowInfo {
         WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: id,
             active_tab_id: Some(tab.to_string()),
             tabs: vec![TabInfo {
@@ -1128,6 +1141,7 @@ mod tests {
     fn win_no_tabs(id: i64) -> WindowInfo {
         WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: id,
             active_tab_id: None,
             tabs: vec![],
@@ -1183,6 +1197,7 @@ mod tests {
         // Add a second window with its own pane.
         m.add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: 2,
             active_tab_id: Some("t2".to_string()),
             tabs: vec![TabInfo {
@@ -1303,6 +1318,7 @@ mod tests {
         // A tool pane names itself with the same string it writes to `meta["pane.kind"]`.
         m.add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: 2,
             active_tab_id: Some("t2".to_string()),
             tabs: vec![TabInfo {

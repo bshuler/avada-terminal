@@ -64,6 +64,8 @@ pub struct Dropped {
 thread_local! {
     /// Bumped each time any window gains focus; see [`focus_gen`].
     static FOCUS_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Whether the last `Focused` event said the window is active; see [`window_active`].
+    static WINDOW_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Bumped on every `RedrawRequested` any window receives; see [`redraw_count`].
     static EVENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static REDRAWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -74,6 +76,11 @@ thread_local! {
 /// it last saw to repaint its panes once per focus gain.
 pub fn focus_gen() -> u64 {
     FOCUS_GEN.with(|g| g.get())
+}
+
+/// Whether the window is active (it last reported `Focused(true)`).
+pub fn window_active() -> bool {
+    WINDOW_ACTIVE.with(|g| g.get())
 }
 
 /// How many redraws the windows have received so far. The tab-show repaint logs it, so a
@@ -96,8 +103,12 @@ pub fn install(win: &slint::Window, key: isize) {
                 WindowEvent::DroppedFile(p) => record(key, p.clone()),
                 WindowEvent::Focused(on) => {
                     tracing::info!(on, "window focus event");
+                    if !*on {
+                        WINDOW_ACTIVE.with(|g| g.set(false));
+                    }
                     if *on {
                         FOCUS_GEN.with(|g| g.set(g.get() + 1));
+                        WINDOW_ACTIVE.with(|g| g.set(true));
                     }
                 }
                 WindowEvent::RedrawRequested => REDRAWS.with(|g| g.set(g.get() + 1)),

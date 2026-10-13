@@ -1038,6 +1038,10 @@ impl ControlHost {
                 let mut st = w.state.borrow_mut();
                 if let Some((ti, pi)) = st.find_pane(&uid) {
                     st.focus_pane_in_tab(ti, pi);
+                    // An explicit request also re-runs the keyboard hand-off: naming the pane
+                    // that is already selected otherwise changes nothing, and `ctl refocus`
+                    // relies on this to un-stick a dead keyboard.
+                    st.rearm_kbd_focus("focusPane request");
                     break;
                 }
             }
@@ -1398,11 +1402,17 @@ impl ControlHost {
                 .kbd_focus_live
                 .as_ref()
                 .map(|uid| pane_ids.get(uid).cloned().unwrap_or_else(|| uid.clone()));
+            let selected_pane = st
+                .tabs
+                .get(st.active)
+                .and_then(|t| t.panes.get(t.focused))
+                .map(|p| pane_ids.get(&p.uid).cloned().unwrap_or_else(|| p.uid.clone()));
             tree.push(WindowInfo {
                 window_id: wid,
                 active_tab_id,
                 tabs,
                 keyboard_focus_pane,
+                selected_pane,
             });
         }
 
@@ -1843,6 +1853,7 @@ mod tests {
         let mut m = ReadModel::new();
         m.add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: 1,
             active_tab_id: Some("1:0".to_string()),
             tabs: vec![TabInfo {

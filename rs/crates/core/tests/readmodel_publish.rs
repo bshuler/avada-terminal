@@ -35,6 +35,7 @@ fn pane(id: &str, uid: &str) -> PaneInfo {
 fn gui_window(panes: Vec<PaneInfo>) -> WindowInfo {
     WindowInfo {
         keyboard_focus_pane: None,
+        selected_pane: None,
         window_id: 1,
         active_tab_id: Some("1:0".to_string()),
         tabs: vec![TabInfo {

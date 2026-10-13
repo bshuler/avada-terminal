@@ -3640,6 +3640,7 @@ mod golden {
         );
         shared.model.lock().unwrap().add_window(WindowInfo {
             keyboard_focus_pane: None,
+            selected_pane: None,
             window_id: 1,
             active_tab_id: Some("t1".into()),
             tabs: vec![TabInfo {
@@ -4687,6 +4688,7 @@ mod golden {
             window_id: 2,
             active_tab_id: Some("sys".into()),
             keyboard_focus_pane: None,
+            selected_pane: None,
             tabs: vec![
                 TabInfo {
                     id: "sys".into(),
@@ -4745,6 +4747,7 @@ mod golden {
             window_id: 3,
             active_tab_id: Some("3:0".into()),
             keyboard_focus_pane: None,
+            selected_pane: None,
             tabs: vec![
                 tab("3:0", vec![pane("pane-mv", "uid-mv")]),
                 tab("3:1", vec![]),
@@ -4815,6 +4818,7 @@ mod golden {
             window_id: 4,
             active_tab_id: Some("4:0".into()),
             keyboard_focus_pane: None,
+            selected_pane: None,
             tabs: vec![
                 tab(
                     "4:0",
@@ -4873,6 +4877,7 @@ mod golden {
             window_id: 4,
             active_tab_id: Some("4:0".into()),
             keyboard_focus_pane: None,
+            selected_pane: None,
             tabs: vec![TabInfo {
                 id: "4:0".into(),
                 title: "agents".into(),

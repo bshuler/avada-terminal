@@ -511,7 +511,9 @@ fn pane_item(
         search_open,
         search_count,
         search_focus_seq: ps.search_focus_seq,
-        refocus_seq: ps.refocus_seq,
+        // Only the selected row may carry a tick: the tick is the trigger for `fs.focus()`,
+        // and a pane shifting between slots must not re-fire it on every row it passes.
+        refocus_seq: if focused { ps.refocus_seq } else { 0 },
         search_rects: ModelRc::from(Rc::new(VecModel::from(search_rects))),
         search_active_on,
         search_active_rect,
@@ -1937,10 +1939,12 @@ pub fn pump(
     }
 
     // A window focus gain repaints the active tab: idle panes get no pty output to dirty them.
+    state.window_active = crate::filedrop::window_active();
     let fg = crate::filedrop::focus_gen();
     if fg != state.focus_gen_seen {
         state.focus_gen_seen = fg;
         state.mark_active_panes_dirty();
+        state.note_window_focus(true);
     }
 
     // A newly shown tab repaints all its panes for a short window, not once: a pane that is
