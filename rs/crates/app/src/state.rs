@@ -10397,6 +10397,28 @@ impl State {
         }
     }
 
+    /// Preferences → "Auto-hide the top and bottom bars". Off (default) pins both in view.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn set_bars_autohide(&mut self, on: bool) {
+        if self.settings.bars_autohide != on {
+            self.settings.bars_autohide = on;
+            prefs::save(&self.settings);
+            self.dirty = true;
+        }
+    }
+
+    /// A drag of either bar's inner edge ended: persist the new heights (clamped).
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn set_bar_heights(&mut self, top: f32, bottom: f32) {
+        let (top, bottom) = (prefs::clamp_bar_h(top), prefs::clamp_bar_h(bottom));
+        if self.settings.top_bar_h != top || self.settings.bottom_bar_h != bottom {
+            self.settings.top_bar_h = top;
+            self.settings.bottom_bar_h = bottom;
+            prefs::save(&self.settings);
+            self.dirty = true;
+        }
+    }
+
     // ---- the history ----
 
     /// Toggle the rail's RECENTLY CLOSED section (collapsing the other two — one panel at a

@@ -14,6 +14,7 @@
 // helpers below. The orchestrator owns this file and the list; a track owns its file.
 mod annotations;
 mod attention;
+mod bars;
 mod ctxmenu;
 mod datatree;
 mod docpane;
@@ -383,8 +384,8 @@ fn the_left_panel_toggle_reaches_rust() {
     });
 }
 
-/// The subagent toggle exists only while the current tab has subagent panes, reads the way
-/// a click would take it, and its click reaches `toggle-subagents` (`Command::ToggleSubagents`).
+/// The subagent toggle is always in the strip (so tabs never shift): inert and dimmed while
+/// the current tab has no subagent panes, live otherwise, and its click reaches `toggle-subagents` (`Command::ToggleSubagents`).
 #[test]
 fn the_subagent_toggle_reaches_rust() {
     ui(|| {
@@ -392,14 +393,20 @@ fn the_subagent_toggle_reaches_rust() {
         install_tabs(&w, &["one"], 0, None);
         let hide = "Hide this tab's subagent panes. Drag to move the window";
         let show = "Show this tab's subagent panes. Drag to move the window";
-        assert!(by_label(&w, hide).is_empty(), "no subagent panes, no button");
-
-        w.set_has_subagents(true);
+        let none = "This tab has no subagent panes. Drag to move the window";
         let fired = std::rc::Rc::new(std::cell::Cell::new(false));
         {
             let fired = fired.clone();
             w.on_toggle_subagents(move || fired.set(true));
         }
+        assert!(by_label(&w, hide).is_empty());
+        let off = by_label(&w, none);
+        assert_eq!(off.len(), 1, "the button stays in the strip, disabled");
+        click(&w, &off[0]);
+        assert!(!fired.get(), "a disabled toggle must not fire");
+
+        w.set_has_subagents(true);
+        assert!(by_label(&w, none).is_empty());
         let found = by_label(&w, hide);
         assert_eq!(found.len(), 1, "shown subagents offer one Hide button");
         click(&w, &found[0]);

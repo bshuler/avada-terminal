@@ -350,8 +350,9 @@ export component TopBar inherits Rectangle {
     // panel's own × uses — one command, three entry points (button, Ctrl+B, app menu).
     in property <bool> left-panel-open: false;
     callback toggle-left-panel();
-    // The current tab's subagent panes (design §3). The button only exists while the tab has
-    // any; `subagent-breath` is the shared Pulse glow alpha, 0 when no subagent is working.
+    // The current tab's subagent panes (design §3). The button is always in the row so the
+    // tab strip never reflows when you switch tabs; it is dimmed and inert while the tab has
+    // none. `subagent-breath` is the shared Pulse glow alpha, 0 when no subagent is working.
     in property <bool> has-subagents: false;
     in property <bool> subagents-hidden: false;
     in property <float> subagent-breath: 0;
@@ -468,15 +469,20 @@ export component TopBar inherits Rectangle {
         }
 
         // ===== subagent toggle =====
-        // Only while the current tab has subagent panes. While any of them is working the
-        // chip breathes on the panes' own Pulse curve — hidden or not, so a hidden subagent
+        // Always instantiated (an `if` here removed it from the row on tabs without subagents
+        // and every tab lurched sideways on switch); it only enables/disables in place.
+        // While any subagent is working the chip breathes on the panes' own Pulse curve — hidden or not, so a hidden subagent
         // that is busy still shows. The breath tints on top of a legible resting chip.
-        if root.has-subagents : VerticalLayout {
+        VerticalLayout {
             alignment: center;
             Rectangle {
                 height: 22px;
+                // Fixed width: "hide"/"show" differ by a pixel or two, which would nudge the
+                // tabs on every toggle.
+                min-width: 114px;
+                opacity: root.has-subagents ? 1.0 : 0.38;
                 border-radius: 6px;
-                background: sta.has-hover ? Theme.surface2
+                background: (sta.has-hover && root.has-subagents) ? Theme.surface2
                     : Theme.brand.with-alpha(root.subagent-breath * 0.35);
                 border-width: 1px;
                 border-color: root.subagent-breath > 0 ? Theme.brand.with-alpha(root.subagent-breath)
@@ -486,15 +492,20 @@ export component TopBar inherits Rectangle {
                     padding-right: 8px;
                     Text {
                         text: root.subagents-hidden ? "show subagents" : "hide subagents";
-                        color: sta.has-hover ? Theme.text : Theme.subtext;
+                        color: (sta.has-hover && root.has-subagents) ? Theme.text : Theme.subtext;
                         font-size: 12px;
+                        horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
                 // A drag handle too — see the hamburger above.
                 sta := TipArea {
                     property <bool> dragged;
-                    tip: root.subagents-hidden
+                    // Disabled in place on a tab with no subagents; the press still drags the
+                    // window, so it is the click alone that is gated below.
+                    tip: !root.has-subagents
+                        ? "This tab has no subagent panes. Drag to move the window"
+                        : root.subagents-hidden
                         ? "Show this tab's subagent panes. Drag to move the window"
                         : "Hide this tab's subagent panes. Drag to move the window";
                     pointer-event(ev) => { if (ev.kind == PointerEventKind.down) { self.dragged = false; } }
@@ -506,7 +517,7 @@ export component TopBar inherits Rectangle {
                             root.start-drag();
                         }
                     }
-                    clicked => { if (!self.dragged) { root.toggle-subagents(); } }
+                    clicked => { if (!self.dragged && root.has-subagents) { root.toggle-subagents(); } }
                 }
             }
         }

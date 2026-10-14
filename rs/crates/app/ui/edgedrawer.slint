@@ -17,7 +17,7 @@ import { Theme } from "theme.slint";
 
 export component EdgeDrawer inherits Rectangle {
     in property <bool> at-top: true;
-    in property <length> drawer-height: 120px;
+    in-out property <length> drawer-height: 120px;
     in property <length> lip: 3px;
     in property <length> hot-zone: 16px;
     in property <color> lip-color: Theme.arc-magenta;
@@ -25,6 +25,16 @@ export component EdgeDrawer inherits Rectangle {
     // the drawer hiding; revealing is still the pointer's job.
     in property <bool> keep-open: false;
     out property <bool> open: false;
+    // Parked in view with no hover needed (the default; auto-hide is the opt-in). The
+    // reveal/hide timers still run, so `open`/`revealed` keep meaning "the pointer is here".
+    in property <bool> pinned: false;
+    // The drag handle on the inner edge. `resizing` is true while the button is held;
+    // `resized` fires once on release so the owner persists the height.
+    in-out property <bool> resizing: false;
+    in property <length> min-h: 48px;
+    in property <length> max-h: 280px;
+    callback resized();
+    property <bool> shown: root.pinned || root.open;
     // A count drawn on the lip when > 0 (the bottom drawer's needs-response badge).
     in property <int> lip-badge: 0;
     // Fired once the drawer has stayed open ~1.5s — long enough to have been read.
@@ -65,10 +75,12 @@ export component EdgeDrawer inherits Rectangle {
         width: parent.width;
         height: root.drawer-height;
         y: root.at-top
-            ? (root.open ? 0px : root.lip - self.height)
-            : (root.open ? parent.height - self.height : parent.height - root.lip);
+            ? (root.shown ? 0px : root.lip - self.height)
+            : (root.shown ? parent.height - self.height : parent.height - root.lip);
         animate y { duration: 200ms; easing: ease-out; }
         background: Theme.arc-bar;
+        // A shorter bar must not let its contents spill over the terminal below it.
+        clip: true;
 
         // Swallows pointer events over the panel so a click on the drawer never reaches the
         // terminal underneath, and holds the drawer open while the pointer is anywhere on it.
@@ -87,6 +99,46 @@ export component EdgeDrawer inherits Rectangle {
                 y: root.at-top ? parent.height - root.lip : 0px;
                 height: root.lip;
                 background: root.lip-color;
+            }
+
+            // Resize handle: a 6px strip over the inner edge (and the lip). Only live while
+            // the bar is in view. Heights come from the pointer's window position, not
+            // `mouse-y`, because the handle itself moves as the bar resizes.
+            grip := TouchArea {
+                property <length> start-y;
+                property <length> start-h;
+                x: 0;
+                width: parent.width;
+                height: 6px;
+                y: root.at-top ? parent.height - self.height : 0px;
+                enabled: root.shown;
+                mouse-cursor: root.shown ? MouseCursor.ns-resize : MouseCursor.default;
+                accessible-role: slider;
+                accessible-label: root.at-top ? "Resize the top bar" : "Resize the bottom bar";
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down) {
+                        self.start-y = self.absolute-position.y + self.mouse-y;
+                        self.start-h = root.drawer-height;
+                        root.resizing = true;
+                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                        if (root.resizing) {
+                            root.resizing = false;
+                            root.resized();
+                        }
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        let dy = self.absolute-position.y + self.mouse-y - self.start-y;
+                        root.drawer-height = clamp(self.start-h + (root.at-top ? dy : -dy),
+                            root.min-h, root.max-h);
+                    }
+                }
+                Rectangle {
+                    y: root.at-top ? parent.height - self.height : 0px;
+                    height: 2px;
+                    background: (grip.has-hover || grip.pressed) ? Theme.arc-gold.with-alpha(0.8) : transparent;
+                }
             }
 
             // Count badge: hangs off the lip into the strip that stays visible when closed? The

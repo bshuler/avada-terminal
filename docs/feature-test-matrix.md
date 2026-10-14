@@ -22,16 +22,16 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 192 |
-| …bound to Rust | 112 |
-| …proven end-to-end | 112 |
+| callbacks declared | 194 |
+| …bound to Rust | 113 |
+| …proven end-to-end | 113 |
 | …bound but unproven | 0 |
-| …ui-local or dead | 80 |
-| Command variants | 157 |
+| …ui-local or dead | 81 |
+| Command variants | 159 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
-End-to-end coverage of the Rust-reaching UI surface is **100%** (112 of 112). "Named by a test" is an *upper* bound on proven:
+End-to-end coverage of the Rust-reaching UI surface is **100%** (113 of 113). "Named by a test" is an *upper* bound on proven:
 a test may mention a callback while asserting something else about it, and a proven
 callback can still front a feature whose real work happens past a boundary the harness
 cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
@@ -53,6 +53,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `attach_image` | `newgoal.slint` | `ui-local` |
 | `attention_ack` | `types.slint` | `e2e` |
 | `attention_focus` | `types.slint` | `e2e` |
+| `bar_heights_changed` | `app.slint` | `e2e` |
 | `begin_rename` | `app.slint` | `ui-local` |
 | `begin_rename_pane` | `app.slint` | `e2e` |
 | `browser_pick` | `overlays.slint` | `ui-local` |
@@ -190,6 +191,7 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 | `report_geom` | `topbar.slint` | `ui-local` |
 | `request_delete` | `sidebar.slint` | `ui-local` |
 | `revealed` | `edgedrawer.slint` | `ui-local` |
+| `resized` | `edgedrawer.slint` | `ui-local` |
 | `restore` | `sidebar.slint` | `e2e` |
 | `resume` | `sidebar.slint` | `ui-local` |
 | `resume_session` | `app.slint` | `e2e` |
@@ -361,6 +363,8 @@ a menu, or the control plane — not being on a key is not a gap.
 | `SearchFocused` | key |
 | `SearchPane` | — |
 | `SelectAllPane` | — |
+| `SetBarHeights` | — |
+| `SetBarsAutohide` | — |
 | `SetConfirmClose` | — |
 | `SetLayout` | — |
 | `SetModulePreset` | — |

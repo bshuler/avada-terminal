@@ -1439,6 +1439,12 @@ pub fn resync(
     app.set_pref_clickable(state.settings.clickable_paths);
     app.set_pref_copy_on_select(state.settings.copy_on_select);
     app.set_pref_confirm_close(state.settings.confirm_close);
+    app.set_pref_bars_autohide(state.settings.bars_autohide);
+    // Not mid-drag: the drag owns the live height until it is released and persisted.
+    if !app.get_bar_dragging() {
+        app.set_top_bar_h(crate::prefs::clamp_bar_h(state.settings.top_bar_h));
+        app.set_bottom_bar_h(crate::prefs::clamp_bar_h(state.settings.bottom_bar_h));
+    }
     app.set_pref_editor(state.settings.editor_command.clone().into());
 
     // sidebar / projects: the rail gating + flyout state + rows

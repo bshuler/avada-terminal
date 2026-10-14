@@ -127,6 +127,21 @@ pub const MIN_FONT_PX: f32 = 8.0;
 pub const MAX_FONT_PX: f32 = 32.0;
 pub const DEFAULT_FONT_PX: f32 = 14.0;
 
+/// Drag bounds and defaults for the top and bottom bars (logical px).
+pub const MIN_BAR_H: f32 = 48.0;
+pub const MAX_BAR_H: f32 = 280.0;
+pub const DEFAULT_TOP_BAR_H: f32 = 112.0;
+pub const DEFAULT_BOTTOM_BAR_H: f32 = 84.0;
+
+/// Clamp a bar height into its drag bounds; NaN falls back to the minimum.
+pub fn clamp_bar_h(h: f32) -> f32 {
+    if h.is_nan() {
+        MIN_BAR_H
+    } else {
+        h.clamp(MIN_BAR_H, MAX_BAR_H)
+    }
+}
+
 /// Idle-alert threshold bounds (seconds a pane must stay output-quiet before it glows).
 /// The dial steps in [`IDLE_STEP_SECONDS`] jumps, so the bounds are whole multiples of it.
 pub const MIN_IDLE_SECONDS: u32 = 30;
@@ -242,6 +257,15 @@ pub struct Settings {
     /// Turning it off only silences the *undoable* closes — the last pane of the last tab
     /// ends the window and nothing can bring it back, so that one asks regardless.
     pub confirm_close: bool,
+    /// `false` (default): the welcome bar on top and the status tray on the bottom stay
+    /// pinned in view. `true`: the original behaviour — each slides in when the pointer
+    /// reaches its edge and away shortly after it leaves.
+    pub bars_autohide: bool,
+    /// Height (logical px) of the top welcome bar, set by dragging its inner edge. Clamped
+    /// to [`MIN_BAR_H`]..=[`MAX_BAR_H`] on use, so a hand-edited file cannot hide the bar.
+    pub top_bar_h: f32,
+    /// Height (logical px) of the bottom status tray; same drag and clamp as the top.
+    pub bottom_bar_h: f32,
     /// Log verbosity for every avada process: one of `error|warn|info|debug|trace`
     /// (see `avada_core::logging::LEVELS`). `debug` logs the entry and exit of every
     /// instrumented function with its parameters and return value. Read at process start;
@@ -298,6 +322,9 @@ impl Default for Settings {
             browser_mode: String::from(BROWSER_MODE_DEFAULT),
             browser_app: String::new(),
             confirm_close: true,
+            bars_autohide: false,
+            top_bar_h: DEFAULT_TOP_BAR_H,
+            bottom_bar_h: DEFAULT_BOTTOM_BAR_H,
             log_level: avada_core::logging::DEFAULT_LEVEL.to_string(),
             status_loop_minutes: 15,
             restart_loop_hours: 24,
@@ -616,6 +643,9 @@ mod tests {
             browser_mode: BROWSER_MODE_ASK.into(),
             browser_app: "com.google.Chrome".into(),
             confirm_close: false, // non-default (defaults to true)
+            bars_autohide: true,  // non-default (defaults to false)
+            top_bar_h: 150.0,
+            bottom_bar_h: 60.0,
             log_level: "debug".into(),
             status_loop_minutes: 5,
             restart_loop_hours: 6,

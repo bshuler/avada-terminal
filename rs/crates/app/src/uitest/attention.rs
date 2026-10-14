@@ -131,6 +131,7 @@ fn wait(ms: u64) {
 fn the_bottom_drawer_stays_open_under_a_resting_pointer() {
     ui(|| {
         let w = window();
+        w.set_pref_bars_autohide(true);
         let g = w.global::<crate::AttentionAdapter>();
         g.set_cards(Rc::new(slint::VecModel::from(vec![card("a", 0, 1, "alpha")])).into());
         open_bottom_drawer(&w);
@@ -162,6 +163,7 @@ fn the_bottom_drawer_stays_open_under_a_resting_pointer() {
 fn the_top_drawer_stays_open_under_a_resting_pointer() {
     ui(|| {
         let w = window();
+        w.set_pref_bars_autohide(true);
         let title = "Welcome to the test";
         w.global::<crate::BannerAdapter>().set_title(title.into());
         settle();

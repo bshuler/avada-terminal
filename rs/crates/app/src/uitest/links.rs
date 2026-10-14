@@ -19,6 +19,9 @@ use super::*;
 /// `declared` is the whole question: true means the program wrapped those cells in an
 /// OSC 8 escape, false means the terminal sniffed a URL out of rendered text.
 fn install_link_pane(w: &crate::AppWindow, declared: bool, grabs: bool) {
+    // The click coordinates below assume the pane area starts under the tab strip; pinned
+    // bars (the default) push it down, so this file asks for the auto-hide overlay layout.
+    w.set_pref_bars_autohide(true);
     w.set_panes(
         std::rc::Rc::new(slint::VecModel::from(vec![crate::PaneItem {
             title: "pane 0".into(),

@@ -5203,6 +5203,15 @@ impl App {
                 }
             });
         }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app.on_bar_heights_changed(move |top, bottom| {
+                if let Some(w) = app.window_by_id(id) {
+                    app.run_command(&w, Command::SetBarHeights(top, bottom));
+                }
+            });
+        }
         cb_i32!(on_pref_confirm, Command::PrefsConfirm);
 
         // ---- keybindings editor: rebind capture + reset (act on state directly) ----
@@ -5531,6 +5540,12 @@ impl App {
                 if kind == 25 {
                     app.run_command(&w, Command::SetConfirmClose(arg != 0));
                     w.app.set_pref_confirm_close(arg != 0);
+                    return;
+                }
+                // Auto-hide vs pinned top/bottom bars (persisted) — mirror the prop back.
+                if kind == 27 {
+                    app.run_command(&w, Command::SetBarsAutohide(arg != 0));
+                    w.app.set_pref_bars_autohide(arg != 0);
                     return;
                 }
                 // Preferences → Tools: star/unstar. `arg` indexes `tools::TOOLS` rather than

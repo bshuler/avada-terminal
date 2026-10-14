@@ -516,6 +516,7 @@ export component OverlayLayer inherits Rectangle {
     in property <bool> auto-update: false;        // persisted "check on startup" toggle
     in property <bool> keep-alive: true;          // session-daemon M3: keep terminals alive on quit
     in property <bool> confirm-close: true;       // ask before closing a pane or a tab
+    in property <bool> bars-autohide: false;      // top/bottom bars slide away vs stay pinned
     in property <string> update-status: "";       // human status line from the updater
     in property <int> update-phase: 0;            // 0 idle · 1 checking · 2 up-to-date · 3 available · 4 downloading · 5 downloaded · 6 error
     in property <bool> update-notify-only: false; // Linux/macOS: no in-app install — "available" opens the releases page
@@ -1506,6 +1507,21 @@ export component OverlayLayer inherits Rectangle {
                 text: "leaves your terminal sessions alive after you quit so they're restored on the next launch — turn off to stop every terminal when Avada closes";
                 color: Theme.faint;
                 font-size: 11px;
+            }
+
+            Rectangle { height: 1px; background: Theme.border; }
+
+            // ---- top & bottom bars ----
+            PrefToggle {
+                label: "Auto-hide the top and bottom bars";
+                on: root.bars-autohide;
+                toggled(v) => { root.pref-action(27, v ? 1 : 0); }
+            }
+            Text {
+                text: "off (the default) keeps the welcome bar and the status tray in view; on tucks each away until the pointer reaches its edge. Either way, drag a bar's inner edge to make it taller or shorter";
+                color: Theme.faint;
+                font-size: 11px;
+                wrap: word-wrap;
             }
 
             Rectangle { height: 1px; background: Theme.border; }

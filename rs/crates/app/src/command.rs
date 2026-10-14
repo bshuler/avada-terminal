@@ -366,6 +366,10 @@ pub enum Command {
     ConfirmCloseGo,
     /// The card's "ask before closing" checkbox.
     SetConfirmClose(bool),
+    /// Preferences: auto-hide (`true`) vs keep the top and bottom bars pinned (`false`).
+    SetBarsAutohide(bool),
+    /// A bar-edge drag ended: the top and bottom bar heights, in logical px.
+    SetBarHeights(f32, f32),
     /// Set tab `0`'s layout to `1`.
     SetTabLayout(usize, Layout),
     /// Move the whole of tab `0` to a new OS window.
@@ -1072,6 +1076,8 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
             }
         }
         Command::SetConfirmClose(on) => state.set_confirm_close(on),
+        Command::SetBarsAutohide(on) => state.set_bars_autohide(on),
+        Command::SetBarHeights(t, b) => state.set_bar_heights(t, b),
         Command::SetTabLayout(i, l) => state.set_tab_layout(i, l),
         Command::GoToTab { window: None, tab } => state.switch_tab(tab),
         Command::GoToTab {

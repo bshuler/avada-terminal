@@ -137,6 +137,13 @@ export component AppWindow inherits Window {
     // session-daemon M3: "keep terminals running in the background when Avada closes".
     in property <bool> pref-keep-alive: true;
     in property <bool> pref-confirm-close: true;
+    // Top welcome bar / bottom status tray. Pinned in view unless `pref-bars-autohide`;
+    // heights are dragged from the bars' inner edges and persisted on release.
+    in-out property <bool> pref-bars-autohide: false;
+    in-out property <length> top-bar-h: 112px;
+    in-out property <length> bottom-bar-h: 84px;
+    in-out property <bool> bar-dragging: false;
+    callback bar-heights-changed(length, length);
     in property <string> pref-update-status: "";
     in property <int> pref-update-phase: 0;
     in property <float> pref-update-progress: 0;
@@ -412,9 +419,15 @@ export component AppWindow inherits Window {
               horizontal-stretch: 1;
               clip: true;
 
+            // Pinned bars take their height out of the pane area (so they never cover a
+            // terminal); auto-hiding bars overlay it as before. Fullscreen has neither.
+            property <length> top-inset: (root.fullscreen || root.pref-bars-autohide) ? 0px : root.top-bar-h;
+            property <length> bottom-inset: (root.fullscreen || root.pref-bars-autohide) ? 0px : root.bottom-bar-h;
+
             PaneView {
+                y: parent.top-inset;
                 width: parent.width;
-                height: parent.height;
+                height: parent.height - parent.top-inset - parent.bottom-inset;
                 panes: root.panes;
                 dividers: root.dividers;
                 zoomed: root.zoomed;
@@ -470,7 +483,10 @@ export component AppWindow inherits Window {
             // Welcome banner: reveals on the top edge.
             if !root.fullscreen : EdgeDrawer {
                 at-top: true;
-                drawer-height: 112px;
+                pinned: !root.pref-bars-autohide;
+                drawer-height <=> root.top-bar-h;
+                resizing <=> root.bar-dragging;
+                resized => { root.bar-heights-changed(root.top-bar-h, root.bottom-bar-h); }
                 Text {
                     x: 24px;
                     y: 14px;
@@ -518,7 +534,10 @@ export component AppWindow inherits Window {
             // drawer open once the pointer has brought it up.
             if !root.fullscreen : EdgeDrawer {
                 at-top: false;
-                drawer-height: 84px;
+                pinned: !root.pref-bars-autohide;
+                drawer-height <=> root.bottom-bar-h;
+                resizing <=> root.bar-dragging;
+                resized => { root.bar-heights-changed(root.top-bar-h, root.bottom-bar-h); }
                 keep-open: AttentionAdapter.unread > 0;
                 lip-color: AttentionAdapter.unread > 0 ? Theme.warn : Theme.arc-magenta;
                 lip-badge: AttentionAdapter.unread;
@@ -808,6 +827,7 @@ export component AppWindow inherits Window {
             auto-update: root.pref-auto-update;
             keep-alive: root.pref-keep-alive;
             confirm-close: root.pref-confirm-close;
+            bars-autohide: root.pref-bars-autohide;
             update-status: root.pref-update-status;
             update-phase: root.pref-update-phase;
             update-progress: root.pref-update-progress;
