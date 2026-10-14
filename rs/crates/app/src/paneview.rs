@@ -1580,13 +1580,14 @@ pub fn resync(
                                 tint: p.accent,
                                 focused: ti == active && pi == t.focused,
                                 live: crate::leftpanel::liveness(last, now_ms),
-                                idle: crate::leftpanel::is_idle(
-                                    &p.shell_title,
-                                    last,
-                                    now_ms,
-                                    idle_on,
-                                    idle_threshold_ms,
-                                ),
+                                idle: State::answers_to_human(p)
+                                    && crate::leftpanel::is_idle(
+                                        &p.shell_title,
+                                        last,
+                                        now_ms,
+                                        idle_on,
+                                        idle_threshold_ms,
+                                    ),
                                 mark: crate::leftpanel::pane_mark_kind(&kind),
                                 brand: crate::leftpanel::pane_mark_ink(&kind, p.accent),
                             }
