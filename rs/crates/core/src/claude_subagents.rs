@@ -20,7 +20,9 @@
 //!
 //! [`subagents_for_pane`] joins both by agent id, scoped to the pane's live conversation (its
 //! session marker): records left in the pane's hook directory by an earlier conversation are
-//! dropped, and a pane with no marker has no subagents.
+//! dropped, and a pane with no marker has no subagents. Records finished for longer than
+//! [`ARCHIVE_AFTER`] are moved to `<pane-id>/_archive/` so a scan reopens only the live few
+//! (B8, `docs/incidents/2026-10-14-subagent-scan-main-thread/`).
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -177,6 +179,67 @@ fn record(agent_id: String, agent_type: String, transcript: PathBuf) -> Subagent
 /// scoping is then the caller's business. Missing directories and malformed files are skipped.
 #[tracing::instrument(level = "debug", ret)]
 pub fn subagents_from(hook_dir: &Path, transcript_dir: Option<&Path>) -> Vec<SubagentRecord> {
+    scan(hook_dir, transcript_dir, None)
+}
+
+/// The subdirectory of a hook directory that holds finished records, moved there by
+/// [`subagents_from_archiving`]. The `_` prefix keeps every scan from reading it as a record.
+pub const ARCHIVE_DIR: &str = "_archive";
+
+/// How long a finished record stays in the hook directory before it is archived: long enough
+/// for every consumer of a scan to have seen it `finished` once (the GUI reconciles at least
+/// once a second and rescans within a few seconds), short enough that a busy session does not
+/// pile up hundreds of records that every scan reopens (B8: 1 448 of 1 451 records on disk
+/// were finished, and the 1 Hz scan of them held the UI thread a third of the time).
+pub const ARCHIVE_AFTER: Duration = Duration::from_secs(30);
+
+/// [`subagents_from`], and move every hook record whose `stoppedAt` is before `archive_before`
+/// into `hook_dir/_archive/`. The record is still part of this scan's result (it is finished,
+/// and the consumer closes its pane on seeing that); the next scan no longer opens it. The
+/// archive's file names stay known to the transcript-directory fallback, so an archived
+/// subagent is not rediscovered from its meta file every scan. One `rename` per record,
+/// once in its life, replaces an `open`+`read`+`close` per record per scan.
+#[tracing::instrument(level = "debug", ret)]
+pub fn subagents_from_archiving(
+    hook_dir: &Path,
+    transcript_dir: Option<&Path>,
+    archive_before: SystemTime,
+) -> Vec<SubagentRecord> {
+    scan(hook_dir, transcript_dir, Some(archive_before))
+}
+
+/// The agent ids whose hook records sit in `hook_dir/_archive/` — file names only, no opens.
+#[tracing::instrument(level = "debug", ret)]
+fn archived_ids(hook_dir: &Path) -> HashSet<String> {
+    fs::read_dir(hook_dir.join(ARCHIVE_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let id = name.to_str()?.strip_suffix(".json")?;
+            (!id.is_empty()).then(|| id.to_string())
+        })
+        .collect()
+}
+
+/// Move `path` (a hook record) into `hook_dir/_archive/`, creating the directory on first use.
+fn archive_record(hook_dir: &Path, path: &Path) {
+    let Some(name) = path.file_name() else {
+        return;
+    };
+    let dir = hook_dir.join(ARCHIVE_DIR);
+    if let Err(e) = fs::create_dir_all(&dir).and_then(|()| fs::rename(path, dir.join(name))) {
+        tracing::debug!(path = %path.display(), error = %e, "subagent record not archived");
+    }
+}
+
+#[tracing::instrument(level = "debug", ret)]
+fn scan(
+    hook_dir: &Path,
+    transcript_dir: Option<&Path>,
+    archive_before: Option<SystemTime>,
+) -> Vec<SubagentRecord> {
     let session = transcript_dir
         .and_then(|d| (d.file_name()? == "subagents").then_some(d)?.parent()?.file_name())
         .and_then(|s| s.to_str());
@@ -195,6 +258,14 @@ pub fn subagents_from(hook_dir: &Path, transcript_dir: Option<&Path>) -> Vec<Sub
         else {
             continue;
         };
+        // Finished long enough ago that every consumer has seen it: out of the scan path.
+        // Records of an earlier conversation in this pane and Claude Code's bare internal
+        // stops are finished too, and leave with the rest.
+        if let (Some(before), Some(stopped)) = (archive_before, h.stopped_at.map(from_ms)) {
+            if stopped < before {
+                archive_record(hook_dir, &path);
+            }
+        }
         let transcript = PathBuf::from(&h.transcript);
         if transcript_dir.is_some() && transcript_session(&transcript) != session {
             continue;
@@ -211,6 +282,9 @@ pub fn subagents_from(hook_dir: &Path, transcript_dir: Option<&Path>) -> Vec<Sub
     }
 
     if let Some(dir) = transcript_dir {
+        // An archived subagent is finished and already known; its meta file must not bring
+        // it back as a "fallback-only" record (one open per archived agent per scan).
+        let archived = archived_ids(hook_dir);
         for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
             let name = entry.file_name();
             let Some(id) = name
@@ -219,7 +293,7 @@ pub fn subagents_from(hook_dir: &Path, transcript_dir: Option<&Path>) -> Vec<Sub
             else {
                 continue;
             };
-            if id.is_empty() || by_id.contains_key(id) {
+            if id.is_empty() || by_id.contains_key(id) || archived.contains(id) {
                 continue;
             }
             let r = record(id.to_string(), String::new(), dir.join(format!("agent-{id}.jsonl")));
@@ -259,7 +333,10 @@ pub fn subagents_for_pane(pane_id: &str) -> Vec<SubagentRecord> {
     let Some(dir) = transcript_dir_for(pane_id) else {
         return Vec::new();
     };
-    subagents_from(&paths::claude_subagents_dir().join(pane_id), Some(&dir))
+    let cutoff = SystemTime::now()
+        .checked_sub(ARCHIVE_AFTER)
+        .unwrap_or(UNIX_EPOCH);
+    subagents_from_archiving(&paths::claude_subagents_dir().join(pane_id), Some(&dir), cutoff)
 }
 
 /// When the orchestrator's last turn in `hook_dir` ended (`_turn.json`), if the hook recorded one.
@@ -534,6 +611,60 @@ mod tests {
         assert_eq!(prune_dirs_in(&root, &live), ["dead"]);
         assert!(root.join("live").is_dir() && !root.join("dead").exists());
         assert!(root.join("stray.json").exists(), "files are not pane dirs");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// B8: a record finished before the cutoff is moved to `_archive/` by the archiving scan —
+    /// still reported that once (so a consumer sees it finished), gone from the next scan,
+    /// and not rediscovered from its meta file by the transcript-directory fallback. A record
+    /// that finished after the cutoff, or never, stays. The plain scan moves nothing.
+    #[test]
+    fn finished_records_past_the_cutoff_are_archived_once_and_stay_known() {
+        let root = tmp("archive");
+        let hook = root.join("hook");
+        let transcripts = root.join("projects/-x").join(SESSION).join("subagents");
+        fs::create_dir_all(&hook).unwrap();
+        fs::create_dir_all(&transcripts).unwrap();
+        let ms = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now = SystemTime::now();
+        for (id, start, stop) in [
+            ("done", ms(now) - 120_000, Some(ms(now) - 90_000)),
+            ("fresh", ms(now) - 5_000, Some(ms(now) - 1_000)),
+            ("live", ms(now) - 2_000, None),
+        ] {
+            let transcript = transcripts.join(format!("agent-{id}.jsonl"));
+            fs::write(&transcript, "").unwrap();
+            fs::write(
+                transcripts.join(format!("agent-{id}.meta.json")),
+                r#"{"agentType":"Explore","description":"d","spawnDepth":1}"#,
+            )
+            .unwrap();
+            write(
+                &hook.join(format!("{id}.json")),
+                serde_json::json!({
+                    "agentId": id, "agentType": "Explore",
+                    "transcript": transcript.to_string_lossy(),
+                    "startedAt": start, "stoppedAt": stop,
+                }),
+            );
+        }
+        let ids = |v: &[SubagentRecord]| v.iter().map(|r| r.agent_id.clone()).collect::<Vec<_>>();
+
+        // The plain scan reads and reports everything, and moves nothing.
+        assert_eq!(ids(&subagents_from(&hook, Some(&transcripts))), ["done", "fresh", "live"]);
+        assert!(hook.join("done.json").exists() && !hook.join(ARCHIVE_DIR).exists());
+
+        let cutoff = now - ARCHIVE_AFTER;
+        let first = subagents_from_archiving(&hook, Some(&transcripts), cutoff);
+        assert_eq!(ids(&first), ["done", "fresh", "live"], "the archiving scan still reports it once");
+        assert!(first[0].stopped_at.is_some());
+        assert!(!hook.join("done.json").exists(), "moved out of the scan path");
+        assert!(hook.join(ARCHIVE_DIR).join("done.json").exists());
+        assert!(hook.join("fresh.json").exists(), "finished after the cutoff: not yet");
+
+        let second = subagents_from_archiving(&hook, Some(&transcripts), cutoff);
+        assert_eq!(ids(&second), ["fresh", "live"], "archived, and not back via its meta file");
+        assert_eq!(ids(&subagents_from(&hook, Some(&transcripts))), ["fresh", "live"]);
         let _ = fs::remove_dir_all(&root);
     }
 
