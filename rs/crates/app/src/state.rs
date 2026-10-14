@@ -3580,6 +3580,20 @@ impl State {
         dest
     }
 
+    /// The uids of the pty panes on every tab — the panes whose Claude sessions may spawn
+    /// subagents, in the order [`Self::reconcile_subagents`] walks them. The off-thread
+    /// scanner (`subagent_scan`) takes this list from the UI thread; view panes have no
+    /// session and are skipped.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn pty_pane_uids(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter(|p| p.kind.is_pty())
+            .map(|p| p.uid.clone())
+            .collect()
+    }
+
     /// Every live session uid this window hosts (used to kill them when the window
     /// closes — in Wave 1 each session is referenced by exactly one window).
     #[tracing::instrument(level = "debug", ret, skip(self))]

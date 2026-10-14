@@ -34,7 +34,7 @@ use crate::command::{dispatch, set_layout_from_id, Command, Effect};
 use crate::drag::{self, DragKind, DragState, Hover};
 use crate::paneview::{self, Ui};
 use crate::state::{
-    DetachedPane, DetachedTab, EscOutcome, NewPaneOpts, Overlay, State, SubagentScan,
+    DetachedPane, DetachedTab, EscOutcome, NewPaneOpts, Overlay, State,
 };
 use crate::{filedrop, theme, window, AppWindow, KeyMsg};
 
@@ -234,6 +234,10 @@ pub struct App {
     /// whole workspace, and a second copy would only be a second agent contending for the
     /// same control API.
     orchestrator_done: Cell<bool>,
+    /// The worker that reads the Claude subagent hook records for every pty pane, so the
+    /// tick's `reconcile_subagents` never touches the disk (B8). Polls every
+    /// [`crate::subagent_scan::SCAN_EVERY`]; a `subagentEvent` from the hook nudges it.
+    subagent_scan: crate::subagent_scan::SubagentScanner,
     /// Whether the once-per-launch prune of stale session markers has run — see
     /// [`Self::prune_session_markers`].
     markers_pruned: Cell<bool>,
@@ -366,6 +370,7 @@ impl App {
             ),
             scaffold_done: Cell::new(false),
             orchestrator_done: Cell::new(false),
+            subagent_scan: crate::subagent_scan::SubagentScanner::new(),
             markers_pruned: Cell::new(false),
             started_at: std::time::Instant::now(),
             ticks: Cell::new(0),
@@ -1180,22 +1185,6 @@ impl App {
     fn pane_claude_marker(&self, uid: &str) -> Option<avada_core::claude_panes::PaneClaudeSession> {
         let ids = self.pane_marker_ids(uid);
         avada_core::claude_panes::read_newest_pane_session(ids.iter().map(String::as_str))
-    }
-
-    /// What [`State::reconcile_subagents`] needs for the pane hosting session `uid`: its live
-    /// Claude conversation's subagents and last turn end, read under the id the newest marker
-    /// was written under. `None` without a marker.
-    #[tracing::instrument(level = "debug", skip(self))]
-    fn pane_subagents(&self, uid: &str) -> Option<SubagentScan> {
-        use avada_core::{claude_panes, claude_subagents};
-        let ids = self.pane_marker_ids(uid);
-        let newest = claude_panes::read_newest_pane_session(ids.iter().map(String::as_str))?;
-        let id = ids.iter().find(|id| {
-            claude_panes::read_pane_session(id).is_some_and(|s| s.session_id == newest.session_id)
-        })?;
-        Some(SubagentScan {
-            records: claude_subagents::subagents_for_pane(id),
-        })
     }
 
     /// Why an automated prompt must not be typed into `uid` right now — `None` when it is
@@ -2087,13 +2076,26 @@ impl App {
         for w in &windows {
             w.state.borrow_mut().reseed_system_tab(&self.mgr);
         }
-        // Subagent panes follow their orchestrators' Claude sessions (at most once a second;
-        // the throttle is the state's own).
+        // Subagent panes follow their orchestrators' Claude sessions. The disk is read by the
+        // scanner's worker thread (every `SCAN_EVERY`, or at once after a hook event); here the
+        // UI thread only names the panes to scan and folds the latest snapshot into the
+        // states (at most once a second; that throttle is the state's own).
         let now = std::time::Instant::now();
+        if self.subagent_scan.due(now) {
+            let targets: Vec<crate::subagent_scan::Target> = windows
+                .iter()
+                .flat_map(|w| w.state.borrow().pty_pane_uids())
+                .map(|uid| {
+                    let ids = self.pane_marker_ids(&uid);
+                    (uid, ids)
+                })
+                .collect();
+            self.subagent_scan.start(targets, now);
+        }
         for w in &windows {
             w.state
                 .borrow_mut()
-                .reconcile_subagents(&self.mgr, now, |uid| self.pane_subagents(uid));
+                .reconcile_subagents(&self.mgr, now, |uid| self.subagent_scan.lookup(uid));
         }
 
         // 3. Render each window from its own state. Aggregate per-window activity so the

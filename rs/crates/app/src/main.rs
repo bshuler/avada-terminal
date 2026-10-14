@@ -55,6 +55,7 @@ mod sidebar;
 mod ssh;
 mod state;
 mod status_tray;
+mod subagent_scan;
 mod tetris;
 mod theme;
 mod uitest;
