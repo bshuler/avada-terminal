@@ -374,21 +374,6 @@ export component TopBar inherits Rectangle {
         height: 1px;
         background: Theme.arc-rule;
     }
-    // Centered brand mark. Visual only (no TouchArea → clicks fall through to the strip)
-    // and drawn behind the tab layout, so tabs and buttons always win the overlap.
-    // Only shown while it clears the tabs: tab chips are transparent when idle, so a mark
-    // under them reads as a second, gold label overprinting the real titles.
-    Text {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        visible: self.x > strip.absolute-position.x + strip.pad + strip.view-w
-            + strip.plus-w + 12px;
-        text: "✦ AvadaTerminal ✦";
-        color: Theme.arc-gold.with-alpha(0.85);
-        font-size: 12px;
-        font-weight: 600;
-    }
-
     // drag/tear-off: a faint wash while the strip is a drop target + an insertion caret at
     // the slot the dragged tab/pane will land in. Visual only (no TouchArea → click-through).
     if root.drop-strip-active : Rectangle {
@@ -581,6 +566,32 @@ export component TopBar inherits Rectangle {
             function scroll-to(v: length) {
                 self.scroll = clamp(v, 0px, self.max-scroll);
                 self.scrolled-at = root.active-tab;
+            }
+
+            // Centred brand mark: window-centred, drawn first so tabs and buttons win any overlap.
+            // Visual only (no TouchArea → clicks fall through to the strip). It lives INSIDE the
+            // strip so its guard reads only the strip's own reactive geometry: the previous guard
+            // read `absolute-position`, which Slint does not re-evaluate when the layout moves
+            // (see TabChip's report-geom note), so it went stale and the mark bled through tab
+            // titles. Everything here is in strip coordinates.
+            property <length> mark-left: root.width / 2 - strip.x - wordmark.width / 2;
+            // Right edge of the tab area: tabs (or both arrows when scrolling), then the ＋.
+            property <length> occupied-end: strip.pad + (strip.overflow ? strip.room : strip.view-w)
+                + strip.plus-w;
+            // Shown only with genuinely clear room: past the tabs and ＋ (12px gap) and not
+            // spilling off the strip onto the HUD / window controls.
+            out property <bool> wordmark-shown: strip.mark-left > strip.occupied-end + 12px
+                && strip.mark-left + wordmark.width <= strip.width;
+            wordmark := Text {
+                x: strip.mark-left;
+                y: (root.height - self.height) / 2 - strip.y;
+                visible: strip.wordmark-shown;
+                accessible-role: text;
+                accessible-label: strip.wordmark-shown ? "AvadaTerminal wordmark" : "";
+                text: "✦ AvadaTerminal ✦";
+                color: Theme.arc-gold.with-alpha(0.85);
+                font-size: 12px;
+                font-weight: 600;
             }
 
             if strip.overflow : ScrollBtn {

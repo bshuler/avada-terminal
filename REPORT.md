@@ -1,5 +1,12 @@
 # Scheduled tasks — builder report
 
+## NEEDS HUMAN
+- **Wordmark overlap fix (B9) — one visual check, needs a GUI restart.** After the next Avada ▸ Quit and relaunch of a build containing this commit: with few tabs the gold "✦ AvadaTerminal ✦" sits dead-centre of the top strip; as tabs fill the strip it disappears before any chip touches it. Not done by the agent: a restart would take Bert's keyboard focus.
+- Also parked from earlier: whether the 27 panes survived the earlier restart, and the B7 live `selectedPaneId == keyboardFocusPaneId` check.
+
+## Wordmark overlap (B9) — fixed, 2026-10-14
+Root cause: the `visible:` guard on the centred wordmark in `ui/topbar.slint` read `strip.absolute-position.x`, which is not reactive to layout moves, so it went stale and the mark showed over the tabs. Fix: wordmark moved inside `strip`; guard is now `mark-left > occupied-end + 12px && mark-left + width <= strip.width`, all strip-local reactive values. Wordmark text, colour, size and weight untouched. Verified on hp3: app tests 1018 passed; the new test fails (4 tabs: wordmark [576,704] overlaps tab [491,619]) when the guard is loosened.
+
 ## NEEDS BERT
 - Nothing blocking. FYI: the janitor is now registered on this Mac's launchd (`to.avada.task.janitor`, every 15 min) and stays until removed with `avada ctl task-rm janitor` (needs the new build) or `launchctl bootout gui/$(id -u)/to.avada.task.janitor`.
 
