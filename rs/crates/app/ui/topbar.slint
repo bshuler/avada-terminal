@@ -376,9 +376,13 @@ export component TopBar inherits Rectangle {
     }
     // Centered brand mark. Visual only (no TouchArea → clicks fall through to the strip)
     // and drawn behind the tab layout, so tabs and buttons always win the overlap.
+    // Only shown while it clears the tabs: tab chips are transparent when idle, so a mark
+    // under them reads as a second, gold label overprinting the real titles.
     Text {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+        visible: self.x > strip.absolute-position.x + strip.pad + strip.view-w
+            + strip.plus-w + 12px;
         text: "✦ AvadaTerminal ✦";
         color: Theme.arc-gold.with-alpha(0.85);
         font-size: 12px;
