@@ -65,6 +65,7 @@ usage: avada ctl <verb> [args]
     close-pane <pane>               parks the pane (session kept alive), undoable with reopen-pane
     reopen-pane [pane]              bring back a parked pane: by its session uid, else the most recently closed pane
     restart-pane <pane>
+    subagent-event <pane>           tell the GUI a Claude subagent started/stopped in the pane (the session hook calls this)
     focus-pane <pane>
     refocus <pane>                  re-run the keyboard hand-off to a pane (un-sticks a dead keyboard)
     rename-pane <pane> <title>
@@ -299,6 +300,20 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             }
             print_json(post(&conn, "/command", cmd)?);
         }
+        "subagent-event" => {
+            // Posted detached by the Claude session hook on every subagent start/stop. A GUI
+            // that is busy must not keep a stray process around for the default 15 s, and the
+            // hook never reads the answer: short timeout, success prints nothing.
+            let quick = Conn {
+                base: conn.base.clone(),
+                token: conn.token.clone(),
+                client: reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(2))
+                    .build()
+                    .map_err(|e| std::io::Error::other(format!("http client: {e}")))?,
+            };
+            pane_verb(&quick, "subagentEvent", &args, "subagent-event <pane>")?;
+        }
         "restart-pane" => print_json(pane_verb(
             &conn,
             "restartPane",
@@ -496,6 +511,7 @@ pub const HAND_VERBS: &[&str] = &[
     "close-pane",
     "reopen-pane",
     "restart-pane",
+    "subagent-event",
     "focus-pane",
     "refocus",
     "rename-pane",

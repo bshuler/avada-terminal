@@ -194,6 +194,10 @@ pub struct ControlHost {
     /// control client asked for. Kept here and not on `Shared` because `Shared` exists only
     /// while the control server is running, and the menu row has to work either way.
     pending_restart: Cell<u8>,
+    /// Pane ids whose Claude hook posted a `subagentEvent` since the App last took them
+    /// (drained from the read-model on [`Self::sync`]; the App turns any entry into a
+    /// subagent-scan nudge). Only ever touched on the UI thread.
+    subagent_events: RefCell<Vec<String>>,
 }
 
 /// How long a live control-spawned session must stay untracked before the self-heal
@@ -235,6 +239,7 @@ impl ControlHost {
             dictation_notices: Arc::new(Mutex::new(Vec::new())),
             heal_pending: RefCell::new(HashMap::new()),
             pending_restart: Cell::new(0),
+            subagent_events: RefCell::new(Vec::new()),
         };
         if host.enabled.get() {
             host.start(mgr);
@@ -297,6 +302,14 @@ impl ControlHost {
     }
 
     /// Take (and clear) a pending `restartApp` request: 0 = none, 1 = gui, 2 = full.
+    /// Pane ids whose Claude hook reported a subagent event since the last take (one-shot).
+    /// Empty when the control server is stopped or no hook has posted — the App then relies
+    /// on the scanner's own poll.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn take_subagent_events(&self) -> Vec<String> {
+        std::mem::take(&mut *self.subagent_events.borrow_mut())
+    }
+
     /// Set by the control route off the UI thread, or by [`Self::request_restart`] on it;
     /// the App tick executes it. The wider scope wins when both asked at once.
     #[tracing::instrument(level = "debug", ret, skip(self))]
@@ -715,6 +728,10 @@ impl ControlHost {
                     .take_pending_focus()
                     .and_then(|pid| model.pane(&pid).map(|p| p.session_uid.clone()))
             };
+            // Subagent hook events ride along the same way; the App nudges its scanner.
+            self.subagent_events
+                .borrow_mut()
+                .extend(model.take_subagent_events());
             let (cur, cur_active, focus_uid) = self.snapshot_model(&model, windows);
 
             // 2. Reconcile the model→GUI deltas (what the control plane changed) on the UI thread.

@@ -233,6 +233,9 @@ pub struct ReadModel {
     focused_pane: Option<String>,
     /// A `focusPane` waiting for the GUI to mirror it — see [`Self::focus_pane`].
     pending_focus: Option<String>,
+    /// Pane ids whose Claude hook reported a subagent event since the GUI host last drained
+    /// them — see [`Self::note_subagent_event`].
+    pending_subagent_events: Vec<String>,
     /// The two app-owned scheduler loops, published for `GET /loops`. Default-empty (both
     /// disabled, never fired) until a GUI publisher calls [`Self::set_loops`] — see
     /// [`LoopsInfo`] for why that is the deliberate stopping point here.
@@ -723,6 +726,25 @@ impl ReadModel {
     #[tracing::instrument(level = "debug", ret)]
     pub fn take_pending_focus(&mut self) -> Option<String> {
         self.pending_focus.take()
+    }
+
+    /// Park a `subagentEvent` from the Claude hook: pane `pane_id`'s conversation started or
+    /// stopped a subagent (or ended a turn), so the GUI should rescan its hook records now
+    /// instead of at the next poll. The pane need not be known — a hook can outlive its pane,
+    /// and the GUI only needs the nudge. Bounded: one entry per pane, so a chatty hook cannot
+    /// grow the queue between syncs.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn note_subagent_event(&mut self, pane_id: &str) {
+        if !self.pending_subagent_events.iter().any(|p| p == pane_id) {
+            self.pending_subagent_events.push(pane_id.to_string());
+        }
+    }
+
+    /// Take every parked subagent event. One-shot, like [`Self::take_pending_focus`]: the GUI
+    /// host drains it on its sync tick.
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    pub fn take_subagent_events(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_subagent_events)
     }
 
     /// Mark a pane exited (from a session `Exit` event), returning its id + coords so the
@@ -1375,6 +1397,19 @@ mod tests {
         assert!(m.focus_pane("p1"));
         assert_eq!(m.take_pending_focus().as_deref(), Some("p1"));
         assert_eq!(m.take_pending_focus(), None);
+    }
+
+    #[test]
+    fn subagent_events_are_parked_once_per_pane_and_handed_over_once() {
+        // The hook fires on every SubagentStart/Stop; between two GUI syncs that can be many
+        // events for one pane. The GUI only needs "rescan", so duplicates collapse, unknown
+        // panes are kept (the hook may outlive its pane), and the take empties the queue.
+        let mut m = seeded();
+        m.note_subagent_event("p1");
+        m.note_subagent_event("p1");
+        m.note_subagent_event("ghost");
+        assert_eq!(m.take_subagent_events(), vec!["p1".to_string(), "ghost".to_string()]);
+        assert!(m.take_subagent_events().is_empty());
     }
 
     #[test]

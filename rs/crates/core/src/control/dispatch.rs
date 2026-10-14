@@ -669,6 +669,14 @@ fn exec(
             model.focus_pane(&pane_id);
             Ok((None, true))
         }
+        // The Claude session hook's push (B8 part 3): a subagent started or stopped in the
+        // pane, rescan its hook records now. Changes nothing in the tree (not dirty); needs
+        // no capability beyond the token's pane scope (`paneId` is scope-checked upstream).
+        "subagentEvent" => {
+            let pane_id = str_field(cmd, "paneId")?;
+            model.note_subagent_event(&pane_id);
+            Ok((None, false))
+        }
         "readScreen" => {
             let pane_id = str_field(cmd, "paneId")?;
             let pane = model
@@ -2138,6 +2146,28 @@ mod tests {
         let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
         assert_eq!(r.status, 200, "{:?}", r.body);
         assert!(!r.projects_dirty, "focusPane must never set projects_dirty");
+    }
+
+    #[test]
+    fn subagent_event_parks_a_nudge_without_dirtying_anything() {
+        let mut m = model_one_window();
+        let s = sessions();
+        // The hook sends only the pane id; the dispatcher resolves the window from it. The
+        // test model has no panes, so name the window the way the `focusPane` test does.
+        let cmd = json!({ "type": "subagentEvent", "windowId": 1, "paneId": "p1" });
+        let r = handle_command(&mut m, &s, None, None, &cmd, &speech());
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        assert!(!r.projects_dirty);
+        assert_eq!(m.take_subagent_events(), vec!["p1".to_string()]);
+        // paneId is mandatory: without it the scope gate would have nothing to check.
+        let r = handle_command(&mut m, &s, None, None, &json!({ "type": "subagentEvent", "windowId": 1 }), &speech());
+        assert_eq!(r.status, 400, "{:?}", r.body);
+        // A hook outliving its pane (the pane closed before SubagentStop fired) gets a 400 the
+        // hook discards; nothing is parked.
+        let r = handle_command(&mut m, &s, None, None, &json!({ "type": "subagentEvent", "paneId": "gone" }), &speech());
+        assert_eq!(r.status, 400, "{:?}", r.body);
+        assert!(m.take_subagent_events().is_empty());
+        assert_eq!(verb_capability("subagentEvent"), None);
     }
 
     #[tokio::test]

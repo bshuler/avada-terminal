@@ -2081,6 +2081,10 @@ impl App {
         // UI thread only names the panes to scan and folds the latest snapshot into the
         // states (at most once a second; that throttle is the state's own).
         let now = std::time::Instant::now();
+        // A hook posted `subagentEvent` since the last tick: scan now, not at the next poll.
+        if !self.control.take_subagent_events().is_empty() {
+            self.subagent_scan.nudge();
+        }
         if self.subagent_scan.due(now) {
             let targets: Vec<crate::subagent_scan::Target> = windows
                 .iter()

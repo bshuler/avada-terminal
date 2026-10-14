@@ -64,6 +64,7 @@ reported back — all of them at once, not just the first.
 | `close-pane <pane>` | `{"type":"closePane","paneId":…}` — parks the pane (session kept alive), undoable |
 | `reopen-pane [pane]` | `{"type":"reopenPane"[,"sessionUid":…]}` — restore a parked pane (its session uid, else most-recent) |
 | `restart-pane <pane>` | `{"type":"restartPane","paneId":…}` |
+| `subagent-event <pane>` | `{"type":"subagentEvent","paneId":…}` — the Claude session hook posts it on SubagentStart/Stop so the GUI rescans that pane's subagent records at once (otherwise every 5 s); prints nothing |
 | `focus-pane <pane>` | `{"type":"focusPane","paneId":…}` |
 | `rename-pane <pane> <title>` | `{"type":"renamePane","paneId":…,"label":…}` |
 | `recolor-pane <pane> <#rrggbb>` | `{"type":"recolorPane","paneId":…,"color":…}` |

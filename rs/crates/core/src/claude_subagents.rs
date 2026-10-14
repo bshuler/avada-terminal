@@ -696,6 +696,7 @@ mod tests {
                 .env("HOME", home)
                 .env_remove("XDG_STATE_HOME")
                 .env_remove("CLAUDE_CONFIG_DIR")
+                .env_remove("HP_CTL")
                 .env("AVADA_PANE_ID", "p7")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
