@@ -264,6 +264,7 @@ fn by_id(w: &crate::AppWindow, id: &str) -> Vec<ElementHandle> {
 /// Publish a tab strip. `active` is the selected index; `system` marks the app-owned tab,
 /// which shows no ×.
 fn install_tabs(w: &crate::AppWindow, titles: &[&str], active: usize, system: Option<usize>) {
+    let fits = crate::paneview::tab_fits(titles.iter().copied());
     let rows: Vec<crate::TabItem> = titles
         .iter()
         .enumerate()
@@ -271,6 +272,8 @@ fn install_tabs(w: &crate::AppWindow, titles: &[&str], active: usize, system: Op
             title: (*t).into(),
             active: i == active,
             system: Some(i) == system,
+            fit_w: fits[i].1,
+            fit_x: fits[i].0,
         })
         .collect();
     w.set_tabs(std::rc::Rc::new(slint::VecModel::from(rows)).into());

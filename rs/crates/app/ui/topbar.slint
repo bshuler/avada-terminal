@@ -176,8 +176,11 @@ component TabChip inherits Rectangle {
     // Otherwise a tab asks for its whole title (preferred = text + padding + ×, capped at
     // max) and gives it back down to `min` when the strip is crowded — past that the strip
     // scrolls instead of squeezing tabs into unreadable slivers.
-    min-width: root.editing ? 166px : 64px;
-    max-width: root.editing ? 320px : 240px;
+    // A tab never gives up its text: its minimum is its whole title (`fit-w`, measured in
+    // Rust), so a crowded strip scrolls (arrows / wheel) rather than eliding names.
+    in property <length> fit-w: 64px;
+    min-width: root.editing ? max(166px, root.fit-w) : root.fit-w;
+    max-width: root.editing ? max(320px, root.fit-w) : max(240px, root.fit-w);
     horizontal-stretch: 0;
     // active tab adopts the pane-area bg (reads connected); hover lifts to surface; a
     // spring-hover (dragged pane resting over it) glows in the brand accent.
@@ -552,11 +555,17 @@ export component TopBar inherits Rectangle {
             property <length> max-scroll: max(0px, row.width - self.view-w);
             in-out property <length> scroll: 0px;
             // The active tab, where the strip lays it out while overflowing: every tab sits at
-            // its min-width (64px, 166px while renaming — keep in step with TabChip) with the
-            // row's 2px spacing between.
-            property <length> active-x: max(0, root.active-tab) * 66px
-                + (root.editing-tab >= 0 && root.editing-tab < root.active-tab ? 102px : 0px);
-            property <length> active-w: root.editing-tab == root.active-tab ? 166px : 64px;
+            // its own minimum (`TabItem.fit-x` / `fit-w`, 166px while renaming) with the row's
+            // 2px spacing between.
+            property <length> active-x: root.active-tab >= 0 && root.active-tab < root.tabs.length
+                ? root.tabs[root.active-tab].fit-x
+                + (root.editing-tab >= 0 && root.editing-tab < root.active-tab
+                    ? max(0px, 166px - root.tabs[root.editing-tab].fit-w) : 0px)
+                : 0px;
+            property <length> active-w: root.active-tab >= 0 && root.active-tab < root.tabs.length
+                ? max(root.tabs[root.active-tab].fit-w,
+                      root.editing-tab == root.active-tab ? 166px : 0px)
+                : 64px;
             // The arrows and the wheel scroll freely, but only until the active tab changes:
             // `scrolled-at` records which tab was active when the user last scrolled, and any
             // other tab being active pulls it into view. Declarative, so a tab that is born
@@ -614,6 +623,7 @@ export component TopBar inherits Rectangle {
 
                         for tab[idx] in root.tabs : TabChip {
                             title: tab.title;
+                            fit-w: tab.fit-w;
                             active: tab.active;
                             editing: root.editing-tab == idx;
                             spring-hover: root.drop-tab-idx == idx;

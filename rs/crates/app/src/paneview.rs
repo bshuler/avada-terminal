@@ -251,6 +251,22 @@ fn push_ui_palette(app: &AppWindow, p: crate::theme::UiPalette) {
 /// A fresh `ModelRc` from a plain `Vec`, for a list that is rebuilt wholesale rather than
 /// diffed into a live `VecModel`. The `changed`-callback hazard [`sync_model`] exists to
 /// avoid does not apply to a list of pure rows with no `changed` handler on them.
+/// Each tab's (x, width) when every tab is exactly as wide as its whole title needs and the
+/// row's 2px spacing sits between. The width estimates the bold 12px title plus the chip's
+/// padding and ×, a little generous, so a title is never cut short ("Orchest…").
+pub(crate) fn tab_fits<'a>(titles: impl Iterator<Item = &'a str>) -> Vec<(f32, f32)> {
+    let mut x = 0.0;
+    titles
+        .map(|t| {
+            let text: f32 = t.chars().map(|c| if c.is_ascii() { 7.4 } else { 13.0 }).sum();
+            let w = (text + 44.0).max(64.0).ceil();
+            let at = x;
+            x += w + 2.0;
+            (at, w)
+        })
+        .collect()
+}
+
 fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(rows))
 }
@@ -943,6 +959,7 @@ pub fn resync(
 
     // tab strip
     let active = state.active;
+    let fits = tab_fits(state.tabs.iter().map(|t| t.title.as_str()));
     let tabs: Vec<TabItem> = state
         .tabs
         .iter()
@@ -951,6 +968,8 @@ pub fn resync(
             title: t.title.clone(),
             active: i == active,
             system: t.system,
+            fit_w: fits[i].1,
+            fit_x: fits[i].0,
         })
         .collect();
     sync_model(&ui.tabs, tabs);

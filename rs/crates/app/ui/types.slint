@@ -234,6 +234,10 @@ export struct TabItem {
     // and ignores the middle-click close — an affordance that does nothing is worse than
     // no affordance.
     system: bool,
+    // The width the whole title needs, and the x it starts at when every tab sits at that
+    // width (measured in Rust; the strip scrolls rather than eliding).
+    fit-w: length,
+    fit-x: length,
 }
 
 // A draggable resize seam (vertical column / horizontal row / main-stack main).

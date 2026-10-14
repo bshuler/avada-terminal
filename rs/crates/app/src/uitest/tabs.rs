@@ -279,9 +279,9 @@ fn a_few_tabs_show_their_whole_titles_without_arrows() {
     });
 }
 
-/// Too many full titles to fit, but not too many tabs: every tab narrows, none hides.
+/// Too many full titles to fit: no tab is squeezed or elided; the strip scrolls instead.
 #[test]
-fn tabs_compress_before_they_scroll() {
+fn tabs_keep_their_full_titles_and_scroll() {
     ui(|| {
         let w = window();
         let titles: Vec<String> = (0..8)
@@ -291,18 +291,18 @@ fn tabs_compress_before_they_scroll() {
         install_tabs(&w, &titles, 0, None);
         settle();
 
-        assert!(
-            by_label(&w, "Scroll the tabs right").is_empty(),
-            "eight tabs fit at their minimum — compress, don't scroll"
+        assert_eq!(
+            by_label(&w, "Scroll the tabs right").len(),
+            1,
+            "eight full titles don't fit — the › arrow must show"
         );
-        let right = strip_right(&w);
+        let fits = crate::paneview::tab_fits(titles.iter().copied());
         for (i, ta) in chips(&w).iter().enumerate() {
-            let (x, width) = (ta.absolute_position().x, ta.size().width);
-            assert!(width >= 63.5, "tab {i} squeezed to {width}px, below its minimum");
+            let width = ta.size().width;
             assert!(
-                x + width <= right + 0.5,
-                "tab {i} ends at {} — past the window's edge at {right}",
-                x + width
+                width >= fits[i].1 - 0.5,
+                "tab {i} squeezed to {width}px, below its full title's {}px",
+                fits[i].1
             );
         }
     });
