@@ -1035,13 +1035,7 @@ impl ControlHost {
         // switches the tab too, so this covers the cross-tab case on its own.
         if let Some(uid) = focus_req {
             for w in windows {
-                let mut st = w.state.borrow_mut();
-                if let Some((ti, pi)) = st.find_pane(&uid) {
-                    st.focus_pane_in_tab(ti, pi);
-                    // An explicit request also re-runs the keyboard hand-off: naming the pane
-                    // that is already selected otherwise changes nothing, and `ctl refocus`
-                    // relies on this to un-stick a dead keyboard.
-                    st.rearm_kbd_focus("focusPane request");
+                if w.state.borrow_mut().focus_pane_request(&uid) {
                     break;
                 }
             }

@@ -2496,6 +2496,20 @@ mod image_arm_tests {
         }
     }
 
+    /// B7 / RC1: only the selected row may carry the refocus tick, or a pane shifting into
+    /// that slot re-fires `fs.focus()` and steals the keyboard.
+    #[test]
+    fn only_the_selected_row_projects_a_refocus_tick() {
+        let mut st = fresh();
+        st.adopt_pane(&mgr(), image_pane("img-seq", "/nonexistent.png"));
+        st.active_tab_mut().panes[0].refocus_seq = 7;
+        let ps = &st.active_tab().panes[0];
+        let sel = pane_item(ps, true, false, false, false, 14.0, &PaneKind::Image, 0, 0);
+        let other = pane_item(ps, false, false, false, false, 14.0, &PaneKind::Image, 0, 0);
+        assert_eq!(sel.refocus_seq, 7);
+        assert_eq!(other.refocus_seq, 0, "a non-selected row never carries a tick");
+    }
+
     #[test]
     fn an_image_pane_projects_a_texture_and_no_rows() {
         let f = TempFile::write("cat.png", &encode(6, 4));

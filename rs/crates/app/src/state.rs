@@ -4940,6 +4940,19 @@ impl State {
         self.dirty = true;
     }
 
+    /// Control `focusPane` / `ctl refocus`: select the named pane (switching tab if needed)
+    /// and re-run the keyboard hand-off even when it is already the selected one — that case
+    /// changes nothing otherwise, and `ctl refocus` relies on this to un-stick a dead
+    /// keyboard. Returns whether this window holds the pane.
+    pub fn focus_pane_request(&mut self, uid: &str) -> bool {
+        let Some((ti, pi)) = self.find_pane(uid) else {
+            return false;
+        };
+        self.focus_pane_in_tab(ti, pi);
+        self.rearm_kbd_focus("focusPane request");
+        true
+    }
+
     /// Forget what the widget last confirmed and start the hand-off over for the selected
     /// pane. Called for every event that can have invalidated it: the active tab's rows
     /// moved, the window was re-activated, the wrong pane took the keyboard, or the user
@@ -14617,6 +14630,31 @@ mod keyboard_focus_tests {
         let t = st.active_tab();
         assert!(!t.is_hidden(t.focused), "selection moved off the hidden pane");
         assert_eq!(t.panes[t.focused].uid, "a");
+    }
+
+    /// B7: `ctl refocus` names the pane that is ALREADY selected; the hand-off must still
+    /// start over (it was settled, so nothing else would), and an unknown pane is refused.
+    #[test]
+    fn a_focus_pane_request_rearms_even_for_the_selected_pane() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane_as_tab(&m, det("a"));
+        st.adopt_pane(&m, det("b"));
+        st.sync_pane_keyboard_focus();
+        let sel = selected_uid(&st);
+        st.note_pane_focus(&sel, true);
+        st.sync_pane_keyboard_focus();
+        assert_eq!(st.kbd_focus_tries, 0, "settled");
+
+        assert!(st.focus_pane_request(&sel));
+        assert_eq!(selected_uid(&st), sel, "selection unchanged");
+        assert_eq!(st.kbd_focus_live, None);
+        assert_eq!(st.kbd_focus_tries, KBD_FOCUS_TRIES);
+
+        let other = if sel == "a" { "b" } else { "a" };
+        assert!(st.focus_pane_request(other));
+        assert_eq!(selected_uid(&st), other, "a sibling is selected");
+        assert!(!st.focus_pane_request("nope"));
     }
 
     /// The acknowledgement is queued by the window and applied on the NEXT pump, so it can
