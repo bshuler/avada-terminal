@@ -9,7 +9,8 @@ attempted) — the handoff itself lost every session.
 
 At 18:38 local (22:38Z) every pane in every Avada tab went blank at once. Within about 90 s most
 panes showed a fresh `claude` session resuming its conversation; three stayed as bare shells
-(the `secret-broker serve` terminal, the Proton-on-hp2 pane, the divi-nft fork pane). The first
+(the terminal `secret-broker serve` had been launched from, the Proton-on-hp2 pane, the
+divi-nft fork pane). The first
 seconds of the new shells printed pyenv rehash lock errors — 33 zsh startups at the same instant.
 
 ## What it is
@@ -87,9 +88,12 @@ it was told; it had no way to learn that the fallback target was gone.
 - 30 panes had resume markers and relaunched `claude --dangerously-skip-permissions --resume
   <uuid>` over ~90 s. That burst (30 Claude startups + 33 zsh) pushed the 1-minute load to 329.
 - 3 panes came back as bare shells, because their process was not a marker-backed Claude
-  session: `pane-6d32969f-…` (**`secret-broker serve`** — the one human-started terminal that
-  pays the Touch ID for every `secret get`; until Bert restarts it, misses raise dialogs),
+  session: `pane-6d32969f-…` (the terminal `secret-broker serve` had been started from),
   `pane-28cd4982-…` (Proton on hp2), `pane-9fe12f45-…` (divi-nft fork).
+- **The broker itself survived.** `secret-broker status` at 18:53 showed pid 71087 running,
+  ppid 1, no tty, up 4h12m — it detaches from its launching shell, so it was never behind a
+  daemon pty master and the hangup never reached it. No Touch ID action was needed; the
+  first write-up of this incident said otherwise and was wrong.
 - One orphan `claude` (pid 82883) for a pane that no longer exists (`pane-20de33e6`, 6 days
   old) survived — it was never behind a daemon pty.
 

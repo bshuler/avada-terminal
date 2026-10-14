@@ -13,8 +13,9 @@ panes: the successor daemon's `take_over` gave up after `TAKEOVER_RECV_TIMEOUT` 
 declared "did not answer", while the incumbent needed 6 s to run `registry.hand_off()`; the
 incumbent then hit `EPIPE` sending to the dead successor and called `lifecycle.shutdown`
 regardless, closing 65 pty masters — every shell got a hangup and nothing was adopted (zero
-adopt lines; 33 fresh `/bin/zsh`). 30 Claude panes resumed from markers; `secret-broker serve`,
-Proton-on-hp2 and the divi-nft fork pane came back as bare shells. Both sides of the handoff
+adopt lines; 33 fresh `/bin/zsh`). 30 Claude panes resumed from markers; the broker's launch
+terminal, Proton-on-hp2 and the divi-nft fork pane came back as bare shells (the
+`secret-broker serve` process itself survived: it was already detached, ppid 1). Both sides of the handoff
 assume a responsive machine and neither confirms the other before giving something up
 (`rs/crates/core/src/session/daemon.rs`: `take_over` ≈358, `hand_over` ≈1117–1163). Write-up,
 log timeline and the fix spec (incumbent relinquishes nothing before an ack and re-adopts on a
