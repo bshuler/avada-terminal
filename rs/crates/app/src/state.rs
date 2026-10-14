@@ -3971,6 +3971,18 @@ impl State {
         }
     }
 
+    /// Whether this pane's questions are answered by the human. Pulsing exists to steer the
+    /// human to the panes that need *them*: a builder is answered by its orchestrator and an
+    /// orchestrator by the manager, so neither calls for the human (and a subagent pane is
+    /// always answered by the Claude pane it hangs under). Manager and role-less panes do.
+    pub fn answers_to_human(ps: &PaneState) -> bool {
+        ps.kind != PaneKind::Subagent
+            && !matches!(
+                avada_core::pane_role::canonical(Some(&ps.origin)),
+                Some("orchestrator" | "builder")
+            )
+    }
+
     /// The liveness badge code for the UI: 0 none, 1 busy, 2 awaiting input, 3 done,
     /// 4 error. An opaque int like every other code crossing the Slint seam.
     #[tracing::instrument(level = "debug", ret, skip(self))]

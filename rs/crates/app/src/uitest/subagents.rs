@@ -152,11 +152,7 @@ fn a_sessions_subagents_open_beside_the_orchestrator_and_the_toggle_hides_them()
                 })
                 .collect()
         };
-        let moving = |b: &[f32]| {
-            let mut d = b.to_vec();
-            d.dedup_by(|a, b| (*a - *b).abs() < 0.01);
-            d.len() >= 3 && b.iter().all(|x| *x > 0.0)
-        };
+        let still_at_zero = |b: &[f32]| b.iter().all(|x| *x == 0.0);
 
         let shown = project(t0);
         assert_eq!(shown.iter().filter(|p| !p.1).count(), 3, "all three tiled: {shown:?}");
@@ -177,7 +173,10 @@ fn a_sessions_subagents_open_beside_the_orchestrator_and_the_toggle_hides_them()
         assert_eq!(state.borrow().active_tab().visible_layout().indices, [0]);
         assert!(hidden[0].2 > orch_w, "the orchestrator takes the room: {orch_w} → {}", hidden[0].2);
         let b = breaths(2000);
-        assert!(moving(&b), "the button breathes while its subagents are hidden: {b:?}");
+        assert!(
+            still_at_zero(&b),
+            "working subagents answer to the orchestrator, so the button never pulses: {b:?}"
+        );
 
         let s = by_label(&w, show);
         assert_eq!(s.len(), 1, "hidden subagents offer Show");

@@ -830,8 +830,8 @@ export component PaneView inherits Rectangle {
             }
         }
 
-        // idle glow: an Arcane Purple glow (the brand's AI energy, lifted so a 2px ring
-        // reads on black) on the pane FRAME once it has gone output-quiet
+        // idle glow: an Arcane gold glow (the attention colour; a 2px ring
+        // reads on black) on the pane FRAME once a human-facing agent has gone output-quiet
         // (the AI-pane quiescence effect). `pane.glow` is the animated opacity the controller
         // computes each tick (firefly/pulse/blink/solid); 0 = no glow. Confined to the frame —
         // a bright ring on the border plus a softer inner ring for bloom — so it never bleeds
@@ -844,7 +844,7 @@ export component PaneView inherits Rectangle {
             height: pane.h;
             border-radius: 7px;
             border-width: 2px;
-            border-color: Theme.accent2.brighter(0.35).with-alpha(pane.glow);
+            border-color: Theme.arc-gold.with-alpha(pane.glow);
             // softer inner ring, inset so the whole effect stays within the pane footprint.
             Rectangle {
                 x: 2px;
@@ -853,7 +853,7 @@ export component PaneView inherits Rectangle {
                 height: parent.height - 4px;
                 border-radius: 5px;
                 border-width: 1px;
-                border-color: Theme.accent2.brighter(0.35).with-alpha(pane.glow * 0.45);
+                border-color: Theme.arc-gold.with-alpha(pane.glow * 0.45);
             }
         }
 

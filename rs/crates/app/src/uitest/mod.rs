@@ -418,10 +418,11 @@ fn the_subagent_toggle_reaches_rust() {
     });
 }
 
-/// The toggle breathes on the Pulse curve while a subagent of the current tab is working —
-/// hidden or shown — and holds still at 0 once none is. Drives the pump's own helper.
+/// The toggle never pulses for a working subagent — hidden or shown. Pulsing steers the human
+/// to panes that need *him*, and a subagent is answered by its orchestrator. Drives the
+/// pump's own helper.
 #[test]
-fn the_subagent_toggle_breathes_only_while_a_subagent_works() {
+fn the_subagent_toggle_holds_still_while_a_subagent_works() {
     use avada_core::claude_subagents::SubagentRecord;
     use avada_core::tools::PaneKind;
     use std::time::{Duration, Instant, SystemTime};
@@ -485,14 +486,7 @@ fn the_subagent_toggle_breathes_only_while_a_subagent_works() {
             let case = format!("stopped {stopped}, hidden {hidden}: {breaths:?}");
             assert!(w.get_has_subagents(), "{case}");
             assert_eq!(w.get_subagents_hidden(), hidden, "{case}");
-            if stopped {
-                assert!(breaths.iter().all(|b| *b == 0.0), "static when idle — {case}");
-            } else {
-                let mut distinct: Vec<f32> = breaths[2..].to_vec();
-                distinct.dedup_by(|a, b| (*a - *b).abs() < 0.01);
-                assert!(distinct.len() >= 3, "breathes across ticks — {case}");
-                assert!(breaths[2..].iter().all(|b| *b > 0.0), "{case}");
-            }
+            assert!(breaths.iter().all(|b| *b == 0.0), "never pulses — {case}");
         }
     });
 }

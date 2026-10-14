@@ -2594,6 +2594,11 @@ impl App {
                 let mut cards: Vec<crate::AttentionCard> = Vec::new();
                 for (ti, t) in st.tabs.iter().enumerate() {
                     for (pi, p) in t.panes.iter().enumerate() {
+                        // Builders and orchestrators are answered by their own chain, not
+                        // by the human, so they never ask for his attention.
+                        if !State::answers_to_human(p) {
+                            continue;
+                        }
                         let (kind, what) = match st.liveness_ui(&p.uid) {
                             2 => (1, "waiting for your reply"),
                             4 => (1, "reported an error"),

@@ -481,9 +481,9 @@ export component TopBar inherits Rectangle {
                 opacity: root.has-subagents ? 1.0 : 0.38;
                 border-radius: 6px;
                 background: (sta.has-hover && root.has-subagents) ? Theme.surface2
-                    : Theme.brand.with-alpha(root.subagent-breath * 0.35);
+                    : Theme.arc-gold.with-alpha(root.subagent-breath * 0.35);
                 border-width: 1px;
-                border-color: root.subagent-breath > 0 ? Theme.brand.with-alpha(root.subagent-breath)
+                border-color: root.subagent-breath > 0 ? Theme.arc-gold.with-alpha(root.subagent-breath)
                     : Theme.border;
                 HorizontalLayout {
                     padding-left: 8px;

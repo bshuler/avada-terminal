@@ -228,7 +228,7 @@ component AppearancePreview inherits Rectangle {
         visible: root.glow > 0.01;
         border-radius: 8px;
         border-width: 2px;
-        border-color: root.accent.with-alpha(root.glow);
+        border-color: Theme.arc-gold.with-alpha(root.glow);
         Rectangle {
             x: 2px;
             y: 2px;
@@ -236,7 +236,7 @@ component AppearancePreview inherits Rectangle {
             height: parent.height - 4px;
             border-radius: 6px;
             border-width: 1px;
-            border-color: root.accent.with-alpha(root.glow * 0.45);
+            border-color: Theme.arc-gold.with-alpha(root.glow * 0.45);
         }
     }
 }

@@ -2118,6 +2118,7 @@ pub fn pump(
         let idle = idle_on
             && ps.visible
             && is_agent
+            && State::answers_to_human(ps)
             && match mgr.last_output_at(&ps.uid) {
                 Some(ms) => glow_now_ms.saturating_sub(ms) >= idle_threshold_ms,
                 None => false,
@@ -2265,9 +2266,16 @@ pub fn pump(
 /// not), 0 otherwise. Returns whether the breath moved enough to warrant the fast cadence.
 #[tracing::instrument(level = "trace", ret, skip(app, state))]
 pub(crate) fn drive_subagent_breath(app: &AppWindow, state: &mut State, now: Instant) -> bool {
-    let (count, any_active) = state.tab_subagent_summary(state.active);
+    let (count, _any_active) = state.tab_subagent_summary(state.active);
     let hidden = state.active_tab().hide_subagents;
-    let breathes = avada_core::claude_subagents::toggle_breathes(true, any_active, hidden);
+    // Working is not a reason to pulse: only a subagent that needs the human is, and a
+    // subagent is answered by its orchestrator (`State::answers_to_human`).
+    let needs_human = state
+        .active_tab()
+        .panes
+        .iter()
+        .any(|p| p.kind == PaneKind::Subagent && State::answers_to_human(p));
+    let breathes = avada_core::claude_subagents::toggle_breathes(true, needs_human, hidden);
     let breath = state
         .subagent_glow
         .update(crate::glow::IdleEffect::Pulse, breathes, now);
