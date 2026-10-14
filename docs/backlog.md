@@ -6,6 +6,23 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B11 — live daemon takeover times out under load and the old daemon shuts down anyway, losing every pane (2026-10-14)
+
+Installing 0.2.45 and relaunching at 18:38 local, with the Mac at load ~300, blanked all 33
+panes: the successor daemon's `take_over` gave up after `TAKEOVER_RECV_TIMEOUT` (5 s) and
+declared "did not answer", while the incumbent needed 6 s to run `registry.hand_off()`; the
+incumbent then hit `EPIPE` sending to the dead successor and called `lifecycle.shutdown`
+regardless, closing 65 pty masters — every shell got a hangup and nothing was adopted (zero
+adopt lines; 33 fresh `/bin/zsh`). 30 Claude panes resumed from markers; `secret-broker serve`,
+Proton-on-hp2 and the divi-nft fork pane came back as bare shells. Both sides of the handoff
+assume a responsive machine and neither confirms the other before giving something up
+(`rs/crates/core/src/session/daemon.rs`: `take_over` ≈358, `hand_over` ≈1117–1163). Write-up,
+log timeline and the fix spec (incumbent relinquishes nothing before an ack and re-adopts on a
+failed send; successor treats a slow peer as alive, up to `TAKEOVER_LOCK_BUDGET_HOLDING`; tests
+on hp2): [`incidents/2026-10-14-takeover-timeout-under-load/`](incidents/2026-10-14-takeover-timeout-under-load/README.md).
+Related: B4 (the launchd fix worked — the daemon survived the GUI quit; this is the handoff
+after it). Until fixed: never install-and-relaunch while `uptime` load exceeds the core count.
+
 ### B10 — avada:// links: one live click on an installed build
 
 **Filed 2026-10-14. Shipped in `1f1bfed`; open: the live check.** `avada://ssh|terminal|doc` and
