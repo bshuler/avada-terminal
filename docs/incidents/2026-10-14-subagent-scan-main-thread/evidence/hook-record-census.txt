@@ -1,0 +1,14 @@
+census taken 2026-10-14 07:57:05 of /Users/bshuler/Library/Application Support/avada/claude-subagents
+pane dirs: 32
+hook records: 1451  finished (stoppedAt set): 1448  unfinished: 3
+age of record (by startedAt): {'>=7d': 1406, '<24h': 36, '<1h': 1, '<7d': 8}
+largest pane dirs:
+    463  pane-d9dd0682-26cb-4dab-be3f-a09056f6e806
+    324  pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715
+    142  274c4a52-5ebc-4be0-85a1-65ddbb991f90
+    122  pane-c2124834-359f-426c-ab88-929c09079559
+     81  pane-36efaa2b-6ff0-4dfc-8aaf-1aa8ee449da0
+     74  pane-c07a303b-bba7-4a00-ba72-d53ddc2dab9b
+     41  pane-93f7374c-b9b0-4889-9a07-fde1172abd0a
+     30  7d41f732-8174-4a92-a377-2391c0706cdf
+age of record by file mtime (the startedAt histogram above over-counts '>=7d': records without startedAt land there): {'<24h': 886, '<1h': 57, '<7d': 541}

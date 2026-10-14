@@ -6,6 +6,24 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B8 — subagent scan on the main thread, 1 Hz, over every hook record ever written
+
+**Filed 2026-10-14.** Bert: "it looks stuck" / "why scan every second? maybe avada could have its
+own message broker data bus. So pushes, no pulls." Report with evidence:
+[`docs/incidents/2026-10-14-subagent-scan-main-thread/README.md`](incidents/2026-10-14-subagent-scan-main-thread/README.md).
+
+`State::reconcile_subagents` runs every second on the UI thread and, through
+`App::pane_subagents` → `claude_subagents::subagents_from`, re-reads every hook record of every
+pty pane: 1451 records (1448 finished) across 29 panes, ~23 k filesystem syscalls/s, a third of
+the main thread's samples, growing ~900 records/day. Fix in three independent parts, cheapest
+first: (1) archive/cached-skip finished hook records so a scan touches only live ones;
+(2) run the scan off the UI thread and hand results back through a tick-drained queue
+(`pane_write_failed_uids` pattern); (3) push: `avada ctl event …` → `POST /events` from the hook
+(backgrounded, silent), control host queues it, tick rescans only that pane; keep a slow
+mtime-gated fallback for hook-less sessions, or FSEvents. Proof: `sample` shows no
+`subagents_from` on the main thread; root `fs_usage` shows no `claude-subagents/` opens between
+real subagent events.
+
 ### B7 · Keyboard focus dies or wanders in the Orchestrator tab under subagent churn (2026-10-13)
 Slint keeps keyboard focus on a *row slot*; `paneview::sync_model` rewrites slots in place
 and drops the tail row, and `PaneState::refocus_seq` is projected for every row, so each

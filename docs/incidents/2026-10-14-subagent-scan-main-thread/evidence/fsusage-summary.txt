@@ -1,0 +1,27 @@
+root: fs_usage -w -f filesys -t 3 63812  (2026-10-14 07:51:58 -> 07:52:01, 29647 lines; raw in scratchpad fsusage.txt)
+
+syscall histogram:
+   8108 read
+   6929 open
+   5889 stat64
+   4152 close
+   4094 fstat64
+    143 kevent
+    110 getdirentries64
+     98 fstatfs64
+     63 PgIn[A]
+     61 PAGE_IN_FILE
+
+top paths (ids collapsed):
+   1701 /Users/bshuler/.claude/projects/-Users-bshuler-code-tplx-lanes-tql/40cb1f4c-14e8-4982-b389-297f8d22ee4b/subagents/agent-<id>.meta.json
+    987 /projects/-Users-bshuler-Library-Application-Support-avada-orchestrator/283de732-9b9b-4fef-b5d6-71fae511cf95/subagents/agent-<id>.meta.json
+    972 /avada/claude-subagents/pane-b0fb6ce9-4fb8-4406-a41a-031ce0443715/<agent>.json
+    498 /Users/bshuler/.claude/projects/-Users-bshuler-code-iptv-project/a5a66852-bb78-4194-be99-564eff73b58c/subagents/agent-<id>.meta.json
+    426 /avada/claude-subagents/274c4a52-5ebc-4be0-85a1-65ddbb991f90/<agent>.json
+    426 /Users/bshuler/.claude/projects/-Users-bshuler-code-avada-avada-terminal/b59cabaf-ccf1-491b-a0d1-9137b3131f56/subagents/agent-<id>.meta.json
+    366 /avada/claude-subagents/pane-c2124834-359f-426c-ab88-929c09079559/<agent>.json
+    219 /avada/claude-subagents/pane-c07a303b-bba7-4a00-ba72-d53ddc2dab9b/<agent>.json
+    210 /avada/claude-subagents/pane-36efaa2b-6ff0-4dfc-8aaf-1aa8ee449da0/<agent>.json
+    210 /Users/bshuler/.claude/projects/-Users-bshuler-code-tplx-lanes-ulr/df6a305a-658b-42fb-91dc-1b5b6b68062c/subagents/agent-<id>.meta.json
+    123 /avada/claude-subagents/pane-93f7374c-b9b0-4889-9a07-fde1172abd0a/<agent>.json
+    123 /-Users-bshuler-code-avada-avada-terminal-worktrees-repaint-on-show/811a329a-7d6f-4eeb-b683-8a26c43ccfea/subagents/agent-<id>.meta.json

@@ -1,0 +1,10 @@
+main thread of evidence/sample5-main-thread.txt (1130 samples over 5 s at 1 ms): largest call-graph node per frame
+   571  update_timers_and_animations
+     0  3app4tick
+   397  reconcile_subagents
+   375  pane_subagents
+   368  subagents_for_pane
+   194  subagents_from
+   145  read_to_string
+     7  read_dir
+2 s sample (evidence not kept; scratchpad avada-sample.txt): 235 main-thread samples, 183 inside State::reconcile_subagents
