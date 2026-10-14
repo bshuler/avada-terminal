@@ -110,3 +110,90 @@ fn a_registered_status_card_renders_and_activates() {
         remove("t.needs");
     });
 }
+
+/// Move the pointer to an element's centre and leave it there.
+fn rest_on(w: &crate::AppWindow, el: &ElementHandle) {
+    let (p, s) = (el.absolute_position(), el.size());
+    let at = LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+    w.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+}
+
+fn wait(ms: u64) {
+    for _ in 0..ms / 50 {
+        i_slint_backend_testing::mock_elapsed_time(50);
+    }
+}
+
+/// A pointer resting on a card is still inside the drawer. The cards carry their own
+/// TouchAreas, which take the hover away from the drawer's body; the drawer must not read
+/// that as the pointer leaving and slide away under it.
+#[test]
+fn the_bottom_drawer_stays_open_under_a_resting_pointer() {
+    ui(|| {
+        let w = window();
+        let g = w.global::<crate::AttentionAdapter>();
+        g.set_cards(Rc::new(slint::VecModel::from(vec![card("a", 0, 1, "alpha")])).into());
+        open_bottom_drawer(&w);
+        let label = "Attention: alpha — waiting for your reply";
+        let c = by_label(&w, label);
+        assert_eq!(c.len(), 1);
+        let open_y = c[0].absolute_position().y;
+        rest_on(&w, &c[0]);
+        wait(3000);
+        let c = by_label(&w, label);
+        assert_eq!(c.len(), 1, "the card left the tree: the drawer closed under the pointer");
+        assert_eq!(c[0].absolute_position().y, open_y, "the drawer slid away under the pointer");
+
+        // Leaving still closes it.
+        let away = LogicalPosition::new(400.0, 300.0);
+        w.window().dispatch_event(WindowEvent::PointerMoved { position: away });
+        wait(1000);
+        let gone = by_label(&w, label);
+        assert!(
+            gone.is_empty() || gone[0].absolute_position().y > open_y + 40.0,
+            "the drawer must still hide once the pointer leaves"
+        );
+    });
+}
+
+/// Same for the welcome banner on the top edge: reading it with the pointer parked in the
+/// middle of the panel, or on its text, must not time it out.
+#[test]
+fn the_top_drawer_stays_open_under_a_resting_pointer() {
+    ui(|| {
+        let w = window();
+        let title = "Welcome to the test";
+        w.global::<crate::BannerAdapter>().set_title(title.into());
+        settle();
+        assert!(by_label(&w, title).is_empty(), "a closed banner is clipped out of the tree");
+        // The banner's hot zone is the top 16px of the centre column, below the top bar.
+        // Walk the pointer down until the banner opens; that y is just inside the edge.
+        let at = |y: f32| WindowEvent::PointerMoved { position: LogicalPosition::new(640.0, y) };
+        let edge = (0..30)
+            .map(|i| i as f32 * 6.0)
+            .find(|&y| {
+                w.window().dispatch_event(at(y));
+                wait(600);
+                !by_label(&w, title).is_empty()
+            })
+            .expect("hovering the top edge never opened the banner");
+        let open_y = by_label(&w, title)[0].absolute_position().y;
+
+        w.window().dispatch_event(at(edge + 60.0));
+        wait(3000);
+        let t = by_label(&w, title);
+        assert_eq!(t.len(), 1, "the banner closed with the pointer in the middle of it");
+        rest_on(&w, &t[0]);
+        wait(3000);
+        let y = by_label(&w, title)[0].absolute_position().y;
+        assert_eq!(y, open_y, "the banner slid away under the pointer");
+
+        w.window().dispatch_event(at(500.0));
+        wait(1000);
+        let gone = by_label(&w, title);
+        assert!(
+            gone.is_empty() || gone[0].absolute_position().y < open_y - 50.0,
+            "the banner must still hide once the pointer leaves"
+        );
+    });
+}
