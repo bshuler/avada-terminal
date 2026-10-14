@@ -14,3 +14,9 @@ ride the same meta bag as `origin.*`; restore re-runs the stored `ssh … tmux n
   check the `[ssh user@host]` title and `ctl info`. Not done: it would take keyboard focus from Bert.
 - Reconnect-on-restart: only proves out on Bert's next manual relaunch (relaunching Avada is barred for agents).
   Running lanes are not tmux-backed until relaunched.
+
+## Cleanup (2026-10-14)
+- `rs/crates/app/target/` (regenerable Mac build output, per BUILD-POLICY.md) was already absent when I went to delete it,
+  so nothing was removed there and I can't quote space freed. Disk afterwards: 66G free (86% used).
+- Removed my private cargo-home symlink dir contents under `/private/tmp/claude-501/ch` (links only; `~/.cargo/registry` intact).
+- No further Mac builds; any later build/test goes through `remote-cargo` on the hp hosts.
