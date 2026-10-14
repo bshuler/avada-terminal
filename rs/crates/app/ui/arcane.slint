@@ -1,0 +1,210 @@
+// Arcane ornaments, drawn as vector paths so they never depend on a font having the glyph
+// (✦ ✧ ✸ fell back to tofu boxes). Shapes follow docs/arcane-mockup.jpg.
+
+import "../assets/fonts/ZillaSlab-Medium.ttf";
+import { Theme } from "theme.slint";
+
+// Four-point sparkle: concave sides meeting at the tips. Filled, or outlined when `line`.
+export component Sparkle inherits Path {
+    in property <color> ink: Theme.arc-gold;
+    in property <bool> line: false;
+    in property <length> thickness: 1px;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 100;
+    viewbox-height: 100;
+    commands: "M 50 0 C 50 32 68 50 100 50 C 68 50 50 68 50 100 C 50 68 32 50 0 50 C 32 50 50 32 50 0 Z";
+    fill: root.line ? transparent : root.ink;
+    stroke: root.line ? root.ink : transparent;
+    stroke-width: root.line ? root.thickness : 0px;
+}
+
+// The title / heading finial: a small outlined sparkle beside a larger filled one.
+export component Finial inherits Rectangle {
+    in property <color> ink: Theme.arc-gold;
+    in property <bool> mirror: false;
+    in property <length> size: 18px;
+    width: root.size * 1.9;
+    height: root.size;
+    Sparkle {
+        x: root.mirror ? parent.width - self.width : 0px;
+        y: (parent.height - self.height) / 2;
+        width: root.size * 0.7;
+        height: root.size * 0.7;
+        line: true;
+        ink: root.ink;
+    }
+    Sparkle {
+        x: root.mirror ? 0px : parent.width - self.width;
+        y: (parent.height - self.height) / 2;
+        width: root.size;
+        height: root.size;
+        ink: root.ink;
+    }
+}
+
+// A hairline ending in a diamond on the right (and optionally the left).
+export component DiamondRule inherits Rectangle {
+    in property <color> ink: Theme.arc-gold;
+    in property <bool> both: false;
+    height: 7px;
+    Rectangle {
+        x: root.both ? 3px : 0px;
+        y: (parent.height - 1px) / 2;
+        width: parent.width - (root.both ? 6px : 3px);
+        height: 1px;
+        background: root.ink.with-alpha(0.75);
+    }
+    for end in (root.both ? 2 : 1) : Path {
+        x: end == 0 ? parent.width - self.width : 0px;
+        width: 7px;
+        height: 7px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: "M 5 0 L 10 5 L 5 10 L 0 5 Z";
+        fill: root.ink;
+    }
+}
+
+// The banner's compass star: purple sparkle in two orbit rings with gold tick marks.
+export component CompassStar inherits Rectangle {
+    width: 140px;
+    height: 110px;
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 100px;
+        height: 100px;
+        border-radius: 50px;
+        border-width: 1px;
+        border-color: Theme.arc-gold.with-alpha(0.55);
+    }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 76px;
+        height: 76px;
+        border-radius: 38px;
+        border-width: 1px;
+        border-color: Theme.arc-gold.with-alpha(0.9);
+    }
+    Sparkle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 112px;
+        height: 112px;
+        line: true;
+        ink: Theme.arc-gold.with-alpha(0.7);
+    }
+    Sparkle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 38px;
+        height: 38px;
+        ink: #a64be0;
+    }
+    Sparkle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        ink: #f6c3fe;
+    }
+    Sparkle {
+        x: 2px;
+        y: parent.height - 24px;
+        width: 12px;
+        height: 12px;
+        ink: Theme.arc-gold;
+    }
+}
+
+// Footer / card icons, line art in one colour. `kind`: brain · orb · shield · focus · sparkle.
+export component ArcIcon inherits Rectangle {
+    in property <string> kind: "sparkle";
+    in property <color> ink: Theme.arc-magenta;
+    width: 30px;
+    height: 30px;
+
+    if root.kind == "brain" : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 50 14 C 40 6 22 10 22 26 C 10 28 8 46 18 52 C 10 62 18 80 32 78 C 36 90 50 90 50 84 Z M 50 14 C 60 6 78 10 78 26 C 90 28 92 46 82 52 C 90 62 82 80 68 78 C 64 90 50 90 50 84 M 50 14 L 50 84 M 26 40 C 34 40 38 46 38 52 M 74 40 C 66 40 62 46 62 52 M 30 62 C 38 62 44 66 44 72 M 70 62 C 62 62 56 66 56 72";
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 3px;
+        stroke-line-join: round;
+    }
+    if root.kind == "orb" : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 50 12 A 32 32 0 1 1 49.9 12 Z M 30 88 L 70 88 M 36 80 L 64 80 M 36 80 C 34 84 32 86 30 88 M 64 80 C 66 84 68 86 70 88 M 38 36 C 42 28 50 26 56 28";
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 3px;
+        stroke-line-cap: round;
+    }
+    if root.kind == "shield" : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 50 8 L 84 20 L 84 50 C 84 70 68 84 50 92 C 32 84 16 70 16 50 L 16 20 Z M 50 34 C 50 46 56 50 64 50 C 56 50 50 56 50 68 C 50 56 44 50 36 50 C 44 50 50 46 50 34 Z";
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 3px;
+        stroke-line-join: round;
+    }
+    if root.kind == "focus" : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 50 2 C 52 36 64 48 98 50 C 64 52 52 64 50 98 C 48 64 36 52 2 50 C 36 48 48 36 50 2 Z M 24 24 L 36 36 M 76 24 L 64 36 M 24 76 L 36 64 M 76 76 L 64 64";
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 3px;
+        stroke-line-join: round;
+    }
+    if root.kind == "sparkle" : Sparkle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: parent.width * 0.7;
+        height: parent.height * 0.7;
+        ink: root.ink;
+    }
+}
+
+// The window logo: a gold A with a grey A behind it, as in the mockup.
+export component Monogram inherits Rectangle {
+    in property <color> ink: Theme.arc-gold;
+    width: 34px;
+    height: 26px;
+    Path {
+        x: 10px;
+        width: 24px;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 4 96 L 50 4 L 96 96 M 24 62 L 76 62";
+        fill: transparent;
+        stroke: #8a8c90;
+        stroke-width: 9px;
+        stroke-line-join: miter;
+    }
+    Path {
+        width: 24px;
+        height: parent.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: "M 4 96 L 50 4 L 96 96 M 24 62 L 76 62";
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 9px;
+        stroke-line-join: miter;
+    }
+}

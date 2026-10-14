@@ -17,18 +17,12 @@ live one). **Open:** after the next release is installed, run `open avada://term
 Then pick Avada under "Open ssh URLs with" (or `avada url register --ssh`) and click an `ssh://`
 link.
 
-### B9 — title-strip gold wordmark overlaps tab titles
+### B9 — title-strip wordmark overlaps tab titles — SUPERSEDED 2026-10-14
 
-**Filed 2026-10-14. Fix landed on the branch; open: one visual check on a restarted GUI.** Bert
-sees the gold "✦ AvadaTerminal ✦" bleeding through his tab titles when several tabs fill the
-32px top strip. The wordmark is approved (mockup `~/Downloads/ZfpL4.jpg`) and unchanged; only the
-overlap was a bug. Cause: its `visible:` guard read `strip.absolute-position.x`, which Slint does
-not re-evaluate when the layout moves, so the guard compared against a stale offset and let the
-mark show over the tabs. The mark now lives inside the strip and its guard uses only the strip's
-own reactive geometry (`mark-left`, `occupied-end`, `wordmark-shown` in `ui/topbar.slint`).
-Test: `uitest::tabs::the_wordmark_never_overlaps_a_tab_and_shows_centred_when_clear` (every tab
-count 1–24, real layout; fails against a shifted guard). **Open:** look at the top bar on the
-next GUI restart — wordmark dead-centre with few tabs, gone as tabs reach it.
+The wordmark no longer shares a row with the tabs. The Arcane mockup puts the centred gold
+"AvadaTerminal" in its own 38px title bar (`TitleBar` in `ui/topbar.slint`) with the tab row
+beneath, so the overlap cannot occur. Test:
+`uitest::tabs::the_title_bar_sits_above_the_tab_row_with_the_title_centred`.
 
 ### B7 · Keyboard focus dies or wanders in the Orchestrator tab under subagent churn (2026-10-13)
 Slint keeps keyboard focus on a *row slot*; `paneview::sync_model` rewrites slots in place

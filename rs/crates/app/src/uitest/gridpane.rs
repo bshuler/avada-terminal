@@ -75,6 +75,7 @@ fn clean() {
 fn a_frame_a_module_painted_is_on_screen_line_for_line() {
     ui(|| {
         let w = window();
+        w.set_pref_bars_autohide(true);
         install(
             &w,
             GridFrame {

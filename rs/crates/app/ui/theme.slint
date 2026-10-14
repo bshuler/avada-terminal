@@ -52,13 +52,13 @@ export global Theme {
     // Fixed, not palette-swapped: the Arcane look is a deliberate identity for the terminal
     // surface and its title bar, so a shell palette pick does not repaint it. The side
     // rails never read these.
-    out property <color> arc-bg: #0a0a0f;       // near-black ground of the center column
-    out property <color> arc-bar: #0d0d14;      // titlebar ground, a step above arc-bg
-    out property <color> arc-gold: #e8b84b;     // titles, headers
-    out property <color> arc-magenta: #c23ae0;  // accent rules, glyphs
-    out property <color> arc-green: #3ee07a;    // prompt arrow, OK status
-    out property <color> arc-lavender: #9a98b5; // labels, body
-    out property <color> arc-rule: #3a2a55;     // dividers
+    out property <color> arc-bg: #000000;       // true black ground (sampled from docs/arcane-mockup.jpg)
+    out property <color> arc-bar: #050607;      // titlebar / tray ground (sampled from the mockup)
+    out property <color> arc-gold: #f0cf7e;     // titles, headers, finials (sampled from the mockup)
+    out property <color> arc-magenta: #b97dd6;  // purple values, glyphs (sampled from the mockup)
+    out property <color> arc-green: #86dc7e;    // prompt arrow, OK status (sampled)
+    out property <color> arc-lavender: #cdcdcd; // labels, body (sampled)
+    out property <color> arc-rule: #5e4172;     // dividers (sampled from the mockup)
 
     // ---- aliases kept for the rest of the UI (paneview/app) ----
     out property <color> brand: self.accent;

@@ -537,6 +537,7 @@ fn an_image_caption_is_reached_by_its_text() {
     ui(|| {
         use crate::imagepane::testpng::{encode, TempFile};
         let w = window();
+        w.set_pref_bars_autohide(true);
         let f = TempFile::write("cat.png", &encode(40, 20));
         crate::imagepane::attach(&w);
         crate::imagepane::project("a11y-img", Some(f.path()));

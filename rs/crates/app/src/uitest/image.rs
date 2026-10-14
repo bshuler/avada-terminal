@@ -153,6 +153,7 @@ fn the_zoom_chord_scales_the_picture() {
 fn the_caption_names_file_dimensions_size_and_format() {
     ui(|| {
         let w = window();
+        w.set_pref_bars_autohide(true);
         let f = TempFile::write("cat.png", &encode(40, 20));
         install_image_pane(&w, "img-cap", f.path(), (600.0, 500.0), 14.0);
         let caption = caption_of("img-cap");

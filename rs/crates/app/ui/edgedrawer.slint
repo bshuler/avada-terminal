@@ -35,6 +35,8 @@ export component EdgeDrawer inherits Rectangle {
     in property <length> max-h: 280px;
     callback resized();
     property <bool> shown: root.pinned || root.open;
+    // A pinned bar keeps only a hairline rule on its edge; the 3px lip is the auto-hide hint.
+    property <length> eff-lip: root.pinned ? 1px : root.lip;
     // A count drawn on the lip when > 0 (the bottom drawer's needs-response badge).
     in property <int> lip-badge: 0;
     // Fired once the drawer has stayed open ~1.5s — long enough to have been read.
@@ -75,8 +77,8 @@ export component EdgeDrawer inherits Rectangle {
         width: parent.width;
         height: root.drawer-height;
         y: root.at-top
-            ? (root.shown ? 0px : root.lip - self.height)
-            : (root.shown ? parent.height - self.height : parent.height - root.lip);
+            ? (root.shown ? 0px : root.eff-lip - self.height)
+            : (root.shown ? parent.height - self.height : parent.height - root.eff-lip);
         animate y { duration: 200ms; easing: ease-out; }
         background: Theme.arc-bar;
         // A shorter bar must not let its contents spill over the terminal below it.
@@ -96,8 +98,8 @@ export component EdgeDrawer inherits Rectangle {
 
             // The lip: the always-visible sliver on the screen-side edge of the panel.
             Rectangle {
-                y: root.at-top ? parent.height - root.lip : 0px;
-                height: root.lip;
+                y: root.at-top ? parent.height - root.eff-lip : 0px;
+                height: root.eff-lip;
                 background: root.lip-color;
             }
 

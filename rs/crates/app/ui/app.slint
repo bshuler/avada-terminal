@@ -15,13 +15,14 @@ import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
 import { GridRun, GridPaneItem, GridPaneAdapter } from "types.slint";
-import { TopBar } from "topbar.slint";
+import { TopBar, TitleBar } from "topbar.slint";
 import { PaneView } from "paneview.slint";
 import { OverlayLayer } from "overlays.slint";
 import { SidebarRail } from "sidebar.slint";
 import { LeftPanel } from "leftpanel.slint";
 import { ContextMenu, ReminderCustom } from "contextmenu.slint";
 import { EdgeDrawer } from "edgedrawer.slint";
+import { Finial, DiamondRule, CompassStar, ArcIcon } from "arcane.slint";
 import { RightsAskToast } from "prefs_rights.slint";   // track H2 (mounted app-wide, below)
 import { TipHost, TipArea } from "tooltip.slint";
 import { KeyMsg, HiRect } from "@widgets";
@@ -140,7 +141,7 @@ export component AppWindow inherits Window {
     // Top welcome bar / bottom status tray. Pinned in view unless `pref-bars-autohide`;
     // heights are dragged from the bars' inner edges and persisted on release.
     in-out property <bool> pref-bars-autohide: false;
-    in-out property <length> top-bar-h: 112px;
+    in-out property <length> top-bar-h: 156px;
     in-out property <length> bottom-bar-h: 84px;
     in-out property <bool> bar-dragging: false;
     callback bar-heights-changed(length, length);
@@ -351,7 +352,15 @@ export component AppWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // The top bar hides in OS fullscreen (chrome-free terminal).
+        // The title bar and tab row hide in OS fullscreen (chrome-free terminal).
+        if !root.fullscreen : TitleBar {
+            macos: root.macos;
+            maximized: root.win-maximized;
+            start-drag => { root.start-drag(); }
+            min-window => { root.min-window(); }
+            max-window => { root.max-window(); }
+            close-window => { root.close-window(); }
+        }
         if !root.fullscreen : TopBar {
             macos: root.macos;
             tabs: root.tabs;
@@ -392,9 +401,7 @@ export component AppWindow inherits Window {
             toggle-zoom => { root.toggle-zoom(); }
             toggle-fullscreen => { root.toggle-fullscreen(); }
             start-drag => { root.start-drag(); }
-            min-window => { root.min-window(); }
             max-window => { root.max-window(); }
-            close-window => { root.close-window(); }
         }
 
         // The left panel + the pane area + the persistent right-edge sidebar rail sit
@@ -484,48 +491,70 @@ export component AppWindow inherits Window {
             if !root.fullscreen : EdgeDrawer {
                 at-top: true;
                 pinned: !root.pref-bars-autohide;
+                lip-color: root.pref-bars-autohide ? Theme.arc-magenta : Theme.arc-rule;
                 drawer-height <=> root.top-bar-h;
                 resizing <=> root.bar-dragging;
                 resized => { root.bar-heights-changed(root.top-bar-h, root.bottom-bar-h); }
-                Text {
+                // title: finial · spaced gold caps in the serif · finial
+                HorizontalLayout {
                     x: 24px;
-                    y: 14px;
-                    text: BannerAdapter.title;
-                    color: Theme.arc-gold;
-                    font-size: 22px;
-                    font-weight: 700;
+                    y: 8px;
+                    height: 28px;
+                    spacing: 10px;
+                    alignment: start;
+                    Finial { size: 18px; y: 5px; }
+                    Text {
+                        text: BannerAdapter.title;
+                        color: Theme.arc-gold;
+                        font-family: "Zilla Slab";
+                        font-size: 24px;
+                        font-weight: 500;
+                        letter-spacing: 3px;
+                        vertical-alignment: center;
+                    }
+                    Finial { size: 18px; y: 5px; mirror: true; }
                 }
                 Text {
                     x: 24px;
-                    y: 46px;
+                    y: 40px;
                     text: BannerAdapter.tagline;
                     color: Theme.arc-lavender;
+                    font-family: "JetBrains Mono";
                     font-size: 12px;
                 }
-                // metadata block: label in lavender, value in the Arcane accent
-                for m[i] in BannerAdapter.fields : Text {
-                    x: 24px + mod(i, 4) * 150px;
-                    y: 74px + floor(i / 4) * 16px;
-                    width: 140px;
-                    text: m.k + "  " + m.v;
-                    color: Theme.arc-magenta;
-                    font-size: 11px;
-                    overflow: elide;
+                DiamondRule {
+                    x: 24px;
+                    y: 60px;
+                    width: min(parent.width - 48px, 500px);
                 }
-                // compass-star glyph art, right side
-                Text {
-                    x: parent.width - self.width - 28px;
-                    y: 8px;
-                    text: "✸";
-                    color: Theme.arc-magenta.with-alpha(0.55);
-                    font-size: 64px;
+                // metadata block: label in light grey, value in the Arcane purple
+                for m[i] in BannerAdapter.fields : Rectangle {
+                    x: 24px;
+                    y: 74px + i * 17px;
+                    width: 330px;
+                    height: 16px;
+                    Text {
+                        x: 0px;
+                        width: 100px;
+                        text: m.k;
+                        color: Theme.arc-lavender;
+                        font-family: "JetBrains Mono";
+                        font-size: 11px;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: 104px;
+                        width: parent.width - 104px;
+                        text: m.v;
+                        color: m.k == "last update" || m.k == "uptime" ? Theme.arc-lavender : Theme.arc-magenta;
+                        font-family: "JetBrains Mono";
+                        font-size: 11px;
+                        overflow: elide;
+                    }
                 }
-                Text {
-                    x: parent.width - self.width - 98px;
-                    y: 30px;
-                    text: "✧";
-                    color: Theme.arc-gold.with-alpha(0.5);
-                    font-size: 22px;
+                CompassStar {
+                    x: 470px;
+                    y: 38px;
                 }
             }
 
@@ -539,22 +568,47 @@ export component AppWindow inherits Window {
                 resizing <=> root.bar-dragging;
                 resized => { root.bar-heights-changed(root.top-bar-h, root.bottom-bar-h); }
                 keep-open: AttentionAdapter.unread > 0;
-                lip-color: AttentionAdapter.unread > 0 ? Theme.warn : Theme.arc-magenta;
+                lip-color: AttentionAdapter.unread > 0 ? Theme.warn : root.pref-bars-autohide ? Theme.arc-magenta : Theme.arc-rule;
                 lip-badge: AttentionAdapter.unread;
                 // Open long enough to be read → count what is on it as seen.
                 revealed => { AttentionAdapter.attention-ack(); }
 
                 if AttentionAdapter.cards.length == 0 && StatusAdapter.cards.length == 0 : Text {
-                    x: 20px;
+                    x: 20px + 22px;
                     y: 26px;
-                    text: "✧ Nothing needs you right now";
+                    text: "Nothing needs you right now";
                     color: Theme.arc-lavender;
+                    font-family: "JetBrains Mono";
                     font-size: 12px;
                 }
                 HorizontalLayout {
                     padding: 8px;
                     padding-bottom: 8px + 3px;
                     spacing: 0px;
+                    // the mockup's footer lead: diamond-star mark, then the intent line
+                    HorizontalLayout {
+                        spacing: 14px;
+                        padding-left: 12px;
+                        padding-right: 22px;
+                        ArcIcon { y: (parent.height - self.height) / 2; width: 34px; height: 34px; kind: "focus"; ink: Theme.arc-gold; }
+                        Text {
+                            text: "INTENT:";
+                            color: Theme.arc-gold;
+                            font-family: "JetBrains Mono";
+                            font-size: 12px;
+                            letter-spacing: 1px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "KNOWLEDGE  ·  CLARITY  ·  ASCENT";
+                            color: Theme.arc-magenta;
+                            font-family: "JetBrains Mono";
+                            font-size: 12px;
+                            letter-spacing: 1px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle { width: 1px; background: Theme.arc-gold.with-alpha(0.6); }
                     for c[i] in AttentionAdapter.cards : HorizontalLayout {
                         spacing: 0px;
                         if i > 0 : Rectangle { width: 1px; background: Theme.arc-rule; }
@@ -576,11 +630,12 @@ export component AppWindow inherits Window {
                                 padding-right: 12px;
                                 spacing: 10px;
                                 alignment: start;
-                                Text {
-                                    text: c.kind == 1 ? "➜" : "✦";
-                                    color: c.kind == 1 ? Theme.warn : Theme.arc-magenta;
-                                    font-size: 16px;
-                                    vertical-alignment: center;
+                                ArcIcon {
+                                    y: (parent.height - self.height) / 2;
+                                    width: 22px;
+                                    height: 22px;
+                                    kind: c.kind == 1 ? "focus" : "sparkle";
+                                    ink: c.kind == 1 ? Theme.warn : Theme.arc-magenta;
                                 }
                                 VerticalLayout {
                                     alignment: center;
@@ -605,7 +660,7 @@ export component AppWindow inherits Window {
                     if AttentionAdapter.cards.length > 0 && StatusAdapter.cards.length > 0 : Rectangle { width: 2px; background: Theme.arc-gold.with-alpha(0.6); }
                     for sc[i] in StatusAdapter.cards : HorizontalLayout {
                         spacing: 0px;
-                        if i > 0 : Rectangle { width: 1px; background: Theme.arc-rule; }
+                        if i > 0 : Rectangle { width: 1px; background: Theme.arc-gold.with-alpha(0.6); }
                         Rectangle {
                             min-width: 130px;
                             max-width: 220px;
@@ -620,28 +675,18 @@ export component AppWindow inherits Window {
                                 padding-right: 12px;
                                 spacing: 10px;
                                 alignment: start;
-                                // glyph in a ring, as in the mockup's footer icons
-                                Rectangle {
+                                ArcIcon {
+                                    y: (parent.height - self.height) / 2;
                                     width: 34px;
                                     height: 34px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: 17px;
-                                    border-width: 1px;
-                                    border-color: sc.level >= 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
-                                    background: Theme.surface2.with-alpha(0.5);
-                                    Text {
-                                        text: sc.glyph;
-                                        color: sc.level >= 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
-                                        font-size: 18px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                    kind: sc.glyph == "✧" ? "brain" : sc.glyph == "◈" ? "shield" : sc.glyph == "✸" ? "focus" : "orb";
+                                    ink: sc.level >= 2 ? Theme.warn : sc.level == 1 ? Theme.arc-gold : Theme.arc-magenta;
                                 }
                                 VerticalLayout {
                                     alignment: center;
                                     spacing: 2px;
-                                    Text { text: sc.label; color: Theme.arc-lavender; font-size: 10px; font-weight: 600; overflow: elide; }
-                                    Text { text: sc.value; color: Theme.arc-gold; font-size: 12px; overflow: elide; }
+                                    Text { text: sc.label; color: #eaeaea; font-family: "JetBrains Mono"; font-size: 11px; letter-spacing: 1px; overflow: elide; }
+                                    Text { text: sc.value; color: #eaeaea; font-family: "JetBrains Mono"; font-size: 11px; overflow: elide; }
                                 }
                             }
                         }
@@ -685,7 +730,7 @@ export component AppWindow inherits Window {
     VerticalLayout {
         width: 300px;
         x: parent.width - self.width - 56px;   // clear of the 44px sidebar rail
-        y: root.fullscreen ? 12px : 44px;      // below the 32px top bar
+        y: root.fullscreen ? 12px : 82px;      // below the 38px title bar and 32px tab row
         spacing: 8px;
         alignment: start;
         // A module asking for a capability rides the same stack, above the reminders: the
@@ -775,16 +820,16 @@ export component AppWindow inherits Window {
             x: 0;
             y: 0;
             width: parent.width - (root.fullscreen ? 0px : 132px);
-            height: root.fullscreen ? 0px : 32px;
+            height: root.fullscreen ? 0px : 38px;
             background: Theme.veil;
             TouchArea { clicked => { root.overlay-dismiss(); } }
         }
         // everything below the top bar (pane area + sidebar rail).
         Rectangle {
             x: 0;
-            y: root.fullscreen ? 0px : 32px;
+            y: root.fullscreen ? 0px : 38px;
             width: parent.width;
-            height: parent.height - (root.fullscreen ? 0px : 32px);
+            height: parent.height - (root.fullscreen ? 0px : 38px);
             background: Theme.veil;
             TouchArea { clicked => { root.overlay-dismiss(); } }
         }

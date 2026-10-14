@@ -7,6 +7,7 @@
 // window controls sit flush in the right corner.
 
 import { Theme } from "theme.slint";
+import { Finial, Monogram } from "arcane.slint";
 import { TabItem, LayoutOption } from "types.slint";
 import { TipArea } from "tooltip.slint";
 
@@ -363,9 +364,7 @@ export component TopBar inherits Rectangle {
     // How far a press on the hamburger or left-panel button must travel before it stops
     // being a click and becomes a window move.
     property <length> drag-slop: 4px;
-    callback min-window();
     callback max-window();
-    callback close-window();
 
     height: 32px;
     background: Theme.arc-bar;
@@ -390,8 +389,7 @@ export component TopBar inherits Rectangle {
     }
 
     HorizontalLayout {
-        // 70px extra leading room on macOS clears the overlaid traffic lights.
-        padding-left: root.macos ? 80px : 10px;
+        padding-left: 10px;
         spacing: 8px;
 
         // ===== hamburger menu =====
@@ -579,32 +577,6 @@ export component TopBar inherits Rectangle {
                 self.scrolled-at = root.active-tab;
             }
 
-            // Centred brand mark: window-centred, drawn first so tabs and buttons win any overlap.
-            // Visual only (no TouchArea → clicks fall through to the strip). It lives INSIDE the
-            // strip so its guard reads only the strip's own reactive geometry: the previous guard
-            // read `absolute-position`, which Slint does not re-evaluate when the layout moves
-            // (see TabChip's report-geom note), so it went stale and the mark bled through tab
-            // titles. Everything here is in strip coordinates.
-            property <length> mark-left: root.width / 2 - strip.x - wordmark.width / 2;
-            // Right edge of the tab area: tabs (or both arrows when scrolling), then the ＋.
-            property <length> occupied-end: strip.pad + (strip.overflow ? strip.room : strip.view-w)
-                + strip.plus-w;
-            // Shown only with genuinely clear room: past the tabs and ＋ (12px gap) and not
-            // spilling off the strip onto the HUD / window controls.
-            out property <bool> wordmark-shown: strip.mark-left > strip.occupied-end + 12px
-                && strip.mark-left + wordmark.width <= strip.width;
-            wordmark := Text {
-                x: strip.mark-left;
-                y: (root.height - self.height) / 2 - strip.y;
-                visible: strip.wordmark-shown;
-                accessible-role: text;
-                accessible-label: strip.wordmark-shown ? "AvadaTerminal wordmark" : "";
-                text: "✦ AvadaTerminal ✦";
-                color: Theme.arc-gold.with-alpha(0.85);
-                font-size: 12px;
-                font-weight: 600;
-            }
-
             if strip.overflow : ScrollBtn {
                 x: strip.pad;
                 y: 6px;                          // centred on the 28px tab band below 4px
@@ -716,7 +688,68 @@ export component TopBar inherits Rectangle {
             }
         }
 
-        // ===== window controls (flush right corner; macOS uses the traffic lights) =====
+    }
+
+    // The application (hamburger) menu contents are rendered by the shared ContextMenu at the
+    // app root (CtxKind::App), opened via `open-app-menu` — so it shares the items/submenu/
+    // separator/shortcut/checkmark/glyph styling and gets Esc / outside-click / select-close
+    // for free, and its cascading Layout submenu can fly out past the bar (a PopupWindow would
+    // clip it).
+}
+
+// The window's title bar, above the tab row (docs/arcane-mockup.jpg): traffic lights (macOS,
+// drawn by the OS) · gold monogram · centred "AvadaTerminal" between finials · window
+// controls (Windows/Linux). Empty space drags the window; a double-click maximises.
+export component TitleBar inherits Rectangle {
+    in property <bool> macos: false;
+    in property <bool> maximized: false;
+    callback start-drag();
+    callback min-window();
+    callback max-window();
+    callback close-window();
+
+    height: 38px;
+    background: Theme.arc-bar;
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: #262729;
+    }
+    drag := TouchArea {
+        moved => { if (self.pressed) { root.start-drag(); } }
+        double-clicked => { root.max-window(); }
+    }
+    Monogram {
+        x: root.macos ? 86px : 14px;
+        y: (parent.height - self.height) / 2;
+    }
+    // Title block, centred in the window; visual only so the drag area beneath still works.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: titletext.preferred-width + 2 * 40px;
+        height: 24px;
+        accessible-role: text;
+        accessible-label: "AvadaTerminal";
+        Finial { x: 0px; y: (parent.height - self.height) / 2; size: 15px; ink: Theme.arc-gold; }
+        titletext := Text {
+            x: 40px;
+            y: 0px;
+            height: parent.height;
+            text: "AvadaTerminal";
+            color: Theme.arc-gold;
+            font-family: "Zilla Slab";
+            font-size: 19px;
+            font-weight: 500;
+            letter-spacing: 2px;
+            vertical-alignment: center;
+        }
+        Finial { x: parent.width - self.width; y: (parent.height - self.height) / 2; size: 15px; mirror: true; ink: Theme.arc-gold; }
+    }
+    HorizontalLayout {
+        x: parent.width - self.preferred-width;
+        width: self.preferred-width;
+        height: parent.height;
         if !root.macos : Rectangle {
             width: 1px;
             height: 18px;
@@ -764,10 +797,4 @@ export component TopBar inherits Rectangle {
             }
         }
     }
-
-    // The application (hamburger) menu contents are rendered by the shared ContextMenu at the
-    // app root (CtxKind::App), opened via `open-app-menu` — so it shares the items/submenu/
-    // separator/shortcut/checkmark/glyph styling and gets Esc / outside-click / select-close
-    // for free, and its cascading Layout submenu can fly out past the bar (a PopupWindow would
-    // clip it).
 }

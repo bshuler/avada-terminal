@@ -368,60 +368,35 @@ fn the_active_tab_scrolls_into_view() {
     });
 }
 
-/// The gold wordmark is window-centred and drawn behind the tabs, and idle chips are
-/// transparent — so any overlap reads as a second gold label printed over the tab titles.
-/// Its guard must therefore hide it the moment the tab area reaches it, and show it centred
-/// when there is clear room. Asserted on real layout geometry at every tab count, because the
-/// earlier guard (read from `absolute-position`) went stale and passed a one-tab check.
+/// The gold title sits in its own title bar, above the tab row (docs/arcane-mockup.jpg), so it
+/// is dead-centre at every tab count and can never touch a tab: asserted on real layout
+/// geometry with up to 24 tabs filling the strip.
 #[test]
-fn the_wordmark_never_overlaps_a_tab_and_shows_centred_when_clear() {
+fn the_title_bar_sits_above_the_tab_row_with_the_title_centred() {
     ui(|| {
         let w = window();
-        let label = "AvadaTerminal wordmark";
-        let mark = |w: &crate::AppWindow| {
-            ElementHandle::find_by_accessible_label(w, label).next()
-        };
-
-        install_tabs(&w, &["one"], 0, None);
-        settle();
-        let m = mark(&w).expect("one tab leaves the centre clear: the wordmark shows");
-        let centre = m.absolute_position().x + m.size().width / 2.0;
-        assert!(
-            (centre - 640.0).abs() < 2.0,
-            "the wordmark is dead-centre of the 1280px window, got {centre}"
-        );
-
-        let mut hidden_at = None;
-        for n in 1..=24usize {
+        let label = "AvadaTerminal";
+        for n in [1usize, 4, 24] {
             let titles: Vec<String> = (0..n).map(|i| format!("terminal tab {i}")).collect();
             let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
             install_tabs(&w, &refs, 0, None);
             settle();
-            match mark(&w) {
-                Some(m) => {
-                    let (l, r) = (
-                        m.absolute_position().x,
-                        m.absolute_position().x + m.size().width,
-                    );
-                    for c in chips(&w) {
-                        let (cl, cr) = (
-                            c.absolute_position().x,
-                            c.absolute_position().x + c.size().width,
-                        );
-                        assert!(
-                            r <= cl || l >= cr,
-                            "{n} tabs: the wordmark [{l},{r}] overlaps a tab [{cl},{cr}]"
-                        );
-                    }
-                }
-                None => {
-                    hidden_at.get_or_insert(n);
-                }
+            let m = ElementHandle::find_by_accessible_label(&w, label)
+                .next()
+                .expect("the title is always shown");
+            let centre = m.absolute_position().x + m.size().width / 2.0;
+            assert!(
+                (centre - 640.0).abs() < 2.0,
+                "{n} tabs: the title is dead-centre of the 1280px window, got {centre}"
+            );
+            let title_bottom = m.absolute_position().y + m.size().height;
+            for c in chips(&w) {
+                assert!(
+                    c.absolute_position().y >= title_bottom,
+                    "{n} tabs: a tab starts at y={} inside the title bar (bottom {title_bottom})",
+                    c.absolute_position().y
+                );
             }
         }
-        assert!(
-            hidden_at.is_some(),
-            "24 tabs fill the strip: the wordmark must have hidden by then"
-        );
     });
 }

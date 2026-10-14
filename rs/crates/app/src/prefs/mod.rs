@@ -130,7 +130,7 @@ pub const DEFAULT_FONT_PX: f32 = 14.0;
 /// Drag bounds and defaults for the top and bottom bars (logical px).
 pub const MIN_BAR_H: f32 = 48.0;
 pub const MAX_BAR_H: f32 = 280.0;
-pub const DEFAULT_TOP_BAR_H: f32 = 112.0;
+pub const DEFAULT_TOP_BAR_H: f32 = 156.0;
 pub const DEFAULT_BOTTOM_BAR_H: f32 = 84.0;
 
 /// Clamp a bar height into its drag bounds; NaN falls back to the minimum.

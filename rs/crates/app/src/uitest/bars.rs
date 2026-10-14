@@ -42,7 +42,7 @@ fn the_bars_are_pinned_by_default() {
         }
         let (top, _) = grip_centre(&w, "Resize the top bar");
         let (bot, _) = grip_centre(&w, "Resize the bottom bar");
-        assert!(top.y > 0.0 && top.y < 200.0, "top bar not in view: {}", top.y);
+        assert!(top.y > 0.0 && top.y < 300.0, "top bar not in view: {}", top.y);
         assert!(bot.y < 800.0 && bot.y > 600.0, "bottom bar not in view: {}", bot.y);
     });
 }

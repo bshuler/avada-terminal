@@ -2316,6 +2316,7 @@ fn the_selected_range_says_which_rows_are_in_it() {
 fn the_pane_toast_announces_itself_when_it_appears() {
     ui(|| {
         let w = window();
+        w.set_pref_bars_autohide(true);
         install_view_pane(
             &w,
             3,
@@ -2481,6 +2482,7 @@ fn every_view_kind_answers_the_zoom_chord() {
 fn the_pane_chrome_holds_its_size_while_the_content_zooms() {
     ui(|| {
         let w = window();
+        w.set_pref_bars_autohide(true);
         let rows = || vec![listing(2, "README.md", "", false)];
 
         install_view_pane_at(
