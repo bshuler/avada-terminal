@@ -23,11 +23,13 @@
 #                    epoch ms from this hook's clock — no payload carries one).
 #   Stop          -> <state dir>/claude-subagents/<pane-id>/_turn.json = { "endedAt" }
 #   anything else -> nothing.
-# After the record is written, when `HP_CTL` (the avada binary, exported into every pane) is
-# set, it posts `ctl subagent-event <pane-id>` to the control API, detached and silent, so the
-# GUI rescans this pane's records now instead of at its next 5 s poll. A failed post (control
-# API off, a scoped token without rights to this pane, a busy GUI) changes nothing: the
-# records are on disk and the poll picks them up.
+# After a SubagentStart / SubagentStop / Stop record is written (the python exits 3 to say
+# so), when `HP_CTL` (the avada binary, exported into every pane) is set, it posts
+# `ctl subagent-event <pane-id>` to the control API, detached and silent, so the GUI rescans
+# this pane's records now instead of at its next 5 s poll. SessionStart / SessionEnd post
+# nothing: they change no subagent record. A failed post (control API off, a scoped token
+# without rights to this pane, a busy GUI) changes nothing: the records are on disk and the
+# poll picks them up.
 # Only SessionStart may write the session marker: rewriting it bumps its mtime, which resets
 # the GUI's resume ready-age check.
 # (Paths must mirror avada-core persistence::paths::claude_sessions_dir / claude_subagents_dir.)
@@ -126,8 +128,11 @@ try:
         replace_json(os.path.join(d, "_turn.json"), {"endedAt": now_ms()})
 except (OSError, ValueError):
     pass
+# 3 = a subagent record changed, tell the GUI; anything else needs no post.
+sys.exit(3 if event in ("SubagentStart", "SubagentStop", "Stop") else 0)
 ' >/dev/null 2>&1
-if [ -n "${HP_CTL:-}" ] && [ -x "$HP_CTL" ]; then
+rc=$?
+if [ "$rc" -eq 3 ] && [ -n "${HP_CTL:-}" ] && [ -x "$HP_CTL" ]; then
   "$HP_CTL" ctl subagent-event "$AVADA_PANE_ID" </dev/null >/dev/null 2>&1 &
 fi
 exit 0
