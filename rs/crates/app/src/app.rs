@@ -2618,7 +2618,7 @@ impl App {
                 }
                 let palette = st.settings.frame_palette;
                 for (i, r) in st.reminders.iter().enumerate() {
-                    if !(r.fired && !r.toast_dismissed) {
+                    if !r.fired || r.toast_dismissed {
                         continue;
                     }
                     cards.push(crate::AttentionCard {

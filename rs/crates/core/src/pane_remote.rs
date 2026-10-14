@@ -267,7 +267,7 @@ pub fn normalize_spec(spec: &mut serde_json::Value, salt: u64) {
         .map(str::to_string);
     let label = obj.get("label").and_then(Value::as_str).map(str::to_string);
     match (explicit, command) {
-        (Some(host), Some(cmd)) if !obj.get("meta").is_some_and(|m| m.get(TMUX).is_some()) => {
+        (Some(host), Some(cmd)) if obj.get("meta").is_none_or(|m| m.get(TMUX).is_none()) => {
             let cwd = obj
                 .remove("cwd")
                 .and_then(|c| c.as_str().map(str::to_string));

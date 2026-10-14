@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Run the core + module-sdk test suite and clippy, plus clippy on the GUI crate,
-# on Linux inside Docker, from any machine. This is the local stand-in for the disabled GitHub test matrix.
+# on Linux inside Docker. This is the local stand-in for the disabled GitHub test matrix.
+#
+# It runs on a Linux build host (default hp2), not on the Mac: the target volume
+# grows past 10 GB. ~/.local/bin/remote-cargo copies the tree git sees to
+# hp2:~/remote-cargo/src/<checkout>-<hash>, then this script reruns itself there.
 #
 # Usage:
 #   scripts/check-linux-docker.sh          # build, test, clippy; blocks until done
 #   scripts/check-linux-docker.sh --wait   # re-attach to a run that is still going
+#   LINUX_CHECK_HOST=hp1 scripts/check-linux-docker.sh   # another build host
+#   LINUX_CHECK_HOST=local scripts/check-linux-docker.sh # this machine's docker
 #
 # Two named volumes make reruns fast: avada-linux-target (build output) and
 # avada-cargo-registry (crate downloads). If a download is ever corrupted
@@ -18,6 +24,19 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+host="${LINUX_CHECK_HOST:-hp2}"
+
+if [[ "$host" != local ]]; then
+  # Same remote layout as remote-cargo and check-windows-remote.sh.
+  key="$(basename "$root")-$(printf '%s' "$root" | shasum | cut -c1-8)"
+  if [[ "${1:-}" != "--wait" ]]; then
+    ( cd "$root" && remote-cargo --host "$host" --version ) >/dev/null
+  fi
+  args=$(printf '%q ' "$@")
+  exec ssh -T -o BatchMode=yes "$host" \
+    "LINUX_CHECK_HOST=local bash \$HOME/remote-cargo/src/$key/scripts/check-linux-docker.sh $args"
+fi
+
 name=avada-linux-test
 image=avada-linux-ci
 dockerfile="$root/scripts/linux-ci.Dockerfile"
