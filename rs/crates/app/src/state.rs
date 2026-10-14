@@ -4862,6 +4862,15 @@ impl State {
         if self.overlay_open() || self.editing_tab != -1 || self.editing_pane != -1 {
             return;
         }
+        // A selected pane that is a hidden subagent has no tile to hold the keyboard; hand
+        // the selection to the first visible pane instead of aiming focus at nothing.
+        if self.active_tab().is_hidden(self.active_tab().focused) {
+            let t = self.active_tab_mut();
+            if let Some(&vi) = t.visible_layout().indices.first() {
+                t.focused = vi;
+                self.dirty = true;
+            }
+        }
         let t = self.active_tab();
         let Some(p) = t.panes.get(t.focused) else {
             // No pane to hand it to (an empty tab). Forget the last one, so returning to
@@ -14476,6 +14485,26 @@ mod keyboard_focus_tests {
         st.kbd_focus_retry_at = Some(Instant::now() - std::time::Duration::from_millis(1));
         st.sync_pane_keyboard_focus();
         assert_eq!(seq(&st), after, "an inactive window is left alone");
+    }
+
+    /// B7 / F3: a selection sitting on a hidden subagent pane is moved to a visible pane
+    /// before the keyboard is handed off.
+    #[test]
+    fn a_hidden_selected_pane_never_receives_the_hand_off() {
+        let mut st = fresh();
+        let m = mgr();
+        st.adopt_pane_as_tab(&m, det("a"));
+        let mut sub = det("sub");
+        sub.kind = PaneKind::Subagent;
+        st.adopt_pane(&m, sub);
+        let t = st.active_tab_mut();
+        t.hide_subagents = true;
+        t.focused = 1;
+        assert!(t.is_hidden(1));
+        st.sync_pane_keyboard_focus();
+        let t = st.active_tab();
+        assert!(!t.is_hidden(t.focused), "selection moved off the hidden pane");
+        assert_eq!(t.panes[t.focused].uid, "a");
     }
 
     /// The acknowledgement is queued by the window and applied on the NEXT pump, so it can
