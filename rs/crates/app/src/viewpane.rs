@@ -1368,6 +1368,49 @@ pub fn kind_for_file(path: &Path) -> PaneKind {
     }
 }
 
+/// Finish the doc panes an `avada://doc` link opened (`avada_core::cli::link`). Core picks the
+/// view from the extension alone and leaves anything it does not know as the plain viewer; the
+/// code and image views need this crate's highlighter and decoders, so the upgrade is here.
+/// A pane any other route made is left exactly as it is.
+#[tracing::instrument(level = "debug", skip_all)]
+pub fn refine_link_docs(ws: &mut avada_core::workspace::model::WorkspaceFile) {
+    let panes = ws
+        .panes
+        .iter_mut()
+        .flatten()
+        .chain(
+            ws.groups
+                .iter_mut()
+                .flatten()
+                .flat_map(|g| g.panes.iter_mut()),
+        )
+        .chain(
+            ws.windows
+                .iter_mut()
+                .flatten()
+                .flat_map(|w| w.groups.iter_mut())
+                .flat_map(|g| g.panes.iter_mut()),
+        );
+    for p in panes {
+        refine_link_doc(p);
+    }
+}
+
+/// [`refine_link_docs`] for one pane.
+pub fn refine_link_doc(p: &mut avada_core::workspace::model::PaneSpec) {
+    let via = p
+        .meta
+        .as_ref()
+        .and_then(|m| m.get(avada_core::pane_origin::VIA))
+        .map(String::as_str);
+    if via != Some("url:doc") || p.pane_kind() != PaneKind::FileViewer {
+        return;
+    }
+    if let Some(path) = p.cwd.clone() {
+        p.set_pane_kind(&kind_for_file(Path::new(&path)));
+    }
+}
+
 // ---- V1 data tree
 
 /// [`rows_for`] with the pane's own fold state: the one projection input that is not

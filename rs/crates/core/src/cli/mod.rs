@@ -4,6 +4,7 @@
 pub mod cache;
 pub mod complete;
 pub mod invoke;
+pub mod link;
 pub mod parse;
 pub mod routing;
 pub mod schema_cli;

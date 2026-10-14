@@ -157,6 +157,12 @@ Section "Install"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}" "" "Avada Workspace"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}\DefaultIcon"        "" "$INSTDIR\icon.ico,0"
   WriteRegStr HKCU "Software\Classes\${WS_PROGID}\shell\open\command" "" '"$INSTDIR\${MAIN_BINARY}" "%1"'
+  ; avada:// links (core/src/cli/link.rs) open a pane in the running window. ssh:// is left
+  ; to whatever owns it; `avada url register --ssh` takes it on request.
+  WriteRegStr HKCU "Software\Classes\avada" "" "URL:Avada link"
+  WriteRegStr HKCU "Software\Classes\avada" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\avada\DefaultIcon"        "" "$INSTDIR\icon.ico,0"
+  WriteRegStr HKCU "Software\Classes\avada\shell\open\command" "" '"$INSTDIR\${MAIN_BINARY}" "%1"'
   ; Tell the shell the association table changed so the icon/verb apply immediately.
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'  ; SHCNE_ASSOCCHANGED
 
@@ -188,6 +194,7 @@ Section "Uninstall"
 
   ; Mirror the .avada association cleanup (leave the extension key alone if
   ; another app has since claimed it).
+  DeleteRegKey   HKCU "Software\Classes\avada"
   DeleteRegKey   HKCU "Software\Classes\${WS_PROGID}"
   ReadRegStr $0 HKCU "Software\Classes\${WS_EXT}" ""
   StrCmp $0 "${WS_PROGID}" 0 +2

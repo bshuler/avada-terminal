@@ -1575,8 +1575,8 @@ impl App {
         *self.last_autosave_json.borrow_mut() = json;
     }
 
-    /// Install the second-instance hand-off receiver (primary instance only). Called once
-    /// from `main` after the single-instance gate resolves to Primary.
+    /// Install the hand-off receiver: second launches (primary instance only) and, on macOS,
+    /// links the OS delivers through `application:openURLs:`. Called once from `main`.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn set_handoff_rx(
         &self,
@@ -3068,7 +3068,12 @@ impl App {
         use avada_core::workspace::model::WorkspaceFile;
         tracing::debug!("second-instance handoff argv={:?}", msg.argv);
         self.wake();
-        let si = avada_core::cli::routing::resolve_second_instance_windows(&msg.argv, &msg.cwd);
+        let mut si = avada_core::cli::routing::resolve_second_instance_windows(&msg.argv, &msg.cwd);
+        for w in si.windows.iter_mut() {
+            for g in w.groups.iter_mut() {
+                g.panes.iter_mut().for_each(crate::viewpane::refine_link_doc);
+            }
+        }
         tracing::debug!(
             "handoff resolved: windows={} routing={:?}",
             si.windows.len(),
@@ -3094,6 +3099,9 @@ impl App {
                 let Some(w) = self.windows.borrow().first().cloned() else {
                     return;
                 };
+                // Whatever asked — a link clicked in a browser, `avada -c …` from another
+                // terminal — is looking at that other app; bring the window it landed in forward.
+                crate::window::raise(w.hwnd.get());
                 let mut st = w.state.borrow_mut();
                 match as_ {
                     AttachAs::Tab => {

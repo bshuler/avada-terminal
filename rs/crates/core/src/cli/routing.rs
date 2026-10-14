@@ -120,4 +120,15 @@ mod tests {
         assert_eq!(r.windows.len(), 1);
         let _ = std::fs::remove_file(&json);
     }
+
+    #[test]
+    fn a_link_hand_off_attaches_one_tab_to_the_focused_window() {
+        let r = resolve_second_instance_windows(&argv(&["avada://ssh/hp3?tmux=w"]), "/");
+        assert_eq!(r.routing, attach_focused_tab());
+        assert_eq!(r.windows.len(), 1);
+        assert_eq!(r.windows[0].groups.len(), 1);
+        let p = &r.windows[0].groups[0].panes[0];
+        assert_eq!(p.command.as_deref(), Some("ssh"));
+        assert_eq!(p.meta.as_ref().unwrap()["origin.via"], "url:ssh");
+    }
 }

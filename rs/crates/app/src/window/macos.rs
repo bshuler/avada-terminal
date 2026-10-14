@@ -24,9 +24,10 @@ use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventModifierFlags, NSEventType, NSScreen, NSView,
     NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
-use objc2_foundation::{NSPoint, NSProcessInfo};
+use objc2_foundation::{NSArray, NSPoint, NSProcessInfo, NSURL};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 /// Nothing to save: native `toggleFullScreen:` restores the prior frame itself.
 pub type SavedPlacement = ();
@@ -313,4 +314,67 @@ pub fn displays() -> Vec<(i32, i32, i32, i32)> {
             )
         })
         .collect()
+}
+
+/// Where [`install_open_urls`] delivers what LaunchServices hands the app.
+static OPEN_URLS: OnceLock<fn(Vec<String>)> = OnceLock::new();
+
+/// Receive the URLs and files macOS opens with Avada — an `avada://`/`ssh://` link clicked in
+/// a browser or picked by the "Open ssh URLs with" setting, or a `.avada` file double-clicked
+/// in Finder. These never reach `argv`: LaunchServices sends `application:openURLs:` to the
+/// app delegate, and winit's delegate does not implement it. So the method is added to its
+/// class here. A `file://` URL is handed on as its path, anything else as the URL text; the
+/// `deliver` callback feeds both into the second-instance hand-off path, where they are
+/// parsed exactly like command-line arguments.
+///
+/// Must run after the event loop exists (winit registers the delegate class there) and before
+/// it starts running (AppKit delivers a launch URL just after `didFinishLaunching`). Adding the
+/// method is a no-op if it is already there.
+#[tracing::instrument(level = "debug", skip_all)]
+pub fn install_open_urls(deliver: fn(Vec<String>)) {
+    let _ = OPEN_URLS.set(deliver);
+    extern "C-unwind" fn open_urls(
+        _: &AnyObject,
+        _: Sel,
+        _app: *const AnyObject,
+        urls: *const NSArray<NSURL>,
+    ) {
+        let Some(urls) = (unsafe { urls.as_ref() }) else {
+            return;
+        };
+        let mut out = Vec::new();
+        for i in 0..urls.count() {
+            let u = urls.objectAtIndex(i);
+            let text = if u.isFileURL() {
+                u.path()
+            } else {
+                u.absoluteString()
+            };
+            if let Some(t) = text {
+                out.push(t.to_string());
+            }
+        }
+        tracing::debug!("application:openURLs: {out:?}");
+        if let (Some(deliver), false) = (OPEN_URLS.get(), out.is_empty()) {
+            deliver(out);
+        }
+    }
+    let Some(cls) = AnyClass::get(c"WinitApplicationDelegate") else {
+        tracing::warn!(
+            "openURLs: winit's app delegate class is not registered; links will not open"
+        );
+        return;
+    };
+    let added = unsafe {
+        objc2::ffi::class_addMethod(
+            cls as *const AnyClass as *mut AnyClass,
+            sel!(application:openURLs:),
+            std::mem::transmute::<
+                extern "C-unwind" fn(&AnyObject, Sel, *const AnyObject, *const NSArray<NSURL>),
+                Imp,
+            >(open_urls),
+            c"v@:@@".as_ptr(),
+        )
+    };
+    tracing::debug!("openURLs handler installed: {}", added.as_bool());
 }

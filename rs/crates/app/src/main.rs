@@ -60,6 +60,7 @@ mod tetris;
 mod theme;
 mod uitest;
 mod update;
+mod url_cli;
 mod viewpane;
 mod window;
 mod winit_hooks;
@@ -127,6 +128,23 @@ fn session_daemon_salt(argv: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+/// The hand-off channel's sender, for links that arrive outside `argv` (macOS
+/// `application:openURLs:`, see `window::install_open_urls`).
+static LINK_TX: std::sync::OnceLock<
+    std::sync::mpsc::Sender<avada_core::single_instance::HandoffMessage>,
+> = std::sync::OnceLock::new();
+
+/// Open links/files as if `avada <items…>` had been run from the home directory: they take the
+/// same route as a second launch, so `parse_cli` is the only place a link is understood.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn deliver_links(items: Vec<String>) {
+    let cwd = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    let argv = std::iter::once("avada".to_string()).chain(items).collect();
+    if let Some(tx) = LINK_TX.get() {
+        let _ = tx.send(avada_core::single_instance::HandoffMessage { argv, cwd });
+    }
 }
 
 /// Whether `argv` carries the `--kill-daemon` flag (the M3 lifecycle entry: connect to the
@@ -320,6 +338,9 @@ USAGE:
     avada revoke <label>      Revoke a paired device by label
     avada attach [<pane>] [--resize] [--detach-key <key>]
                                    Render a live pane in THIS terminal (--list to see them)
+    avada <link>              Open an avada:// or ssh:// link as a tab of the running window
+    avada url <make|register> Build avada:// links (ssh, terminal, doc), or make Avada the
+                                   app that opens them (`url --help` for details)
     avada ssh <status|enable|disable|authorize|keys|revoke|serve>
                                    Manage the embedded SSH server, so a phone running Termius,
                                    Blink or plain ssh can attach to a pane (off by default,
@@ -500,6 +521,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return attach_cli::run(&argv0).map_err(Into::into);
     }
 
+    // `url make|register`: build avada:// links and claim the scheme (`url_cli`). Opening a
+    // link is not this — `avada <link>` takes the ordinary launch/hand-off path.
+    if url_cli::wants_url(&argv0) {
+        return url_cli::run(&argv0).map_err(Into::into);
+    }
+
     // `ssh`: manage the embedded SSH server that lets a phone attach to a pane with no
     // avada software on it (docs/mux-backend-plan.md M3).
     if ssh::wants_ssh(&argv0) {
@@ -622,7 +649,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // modules are told its root — the project above its first pane — so a module that
     // browses files has something to browse. Resolving once keeps the two in step.
     let modules_workspace = avada_core::workspace::launch::launch_workspace_key(&argv);
-    let launch_file = avada_core::workspace::launch::resolve_launch_workspace(&argv, &cwd);
+    let mut launch_file = avada_core::workspace::launch::resolve_launch_workspace(&argv, &cwd);
+    if let Some(ws) = launch_file.as_mut() {
+        viewpane::refine_link_docs(ws);
+    }
     let module_workspace =
         avada_core::workspace::launch::module_workspace(&argv, &cwd, launch_file.as_ref());
     let application = App::new(
@@ -634,9 +664,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Primary: accept hand-offs on a background task; `App::tick` drains the channel on the
     // UI thread (the handler runs on the tokio runtime and must not touch UI state).
+    // The channel exists even without the gate: the macOS link handler feeds it too
+    // (`deliver_links`), and a standalone instance must still open the link it was sent.
+    let (htx, hrx) = std::sync::mpsc::channel();
+    application.set_handoff_rx(hrx);
+    let _ = LINK_TX.set(htx.clone());
     if let Some(primary) = handoff_primary {
-        let (htx, hrx) = std::sync::mpsc::channel();
-        application.set_handoff_rx(hrx);
         rt.spawn(async move {
             let _ = primary
                 .run_server(move |msg| {
@@ -703,6 +736,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
     application.set_timer(timer); // App owns the timer for the whole loop + adjusts its interval
+
+    #[cfg(target_os = "macos")]
+    window::install_open_urls(deliver_links);
 
     slint::run_event_loop()?;
 
@@ -1179,6 +1215,7 @@ fn pipeable_cli(argv: &[String]) -> bool {
         || devices::wants_devices(argv)
         || devices::wants_revoke(argv)
         || attach_cli::wants_attach(argv)
+        || url_cli::wants_url(argv)
 }
 
 /// Put SIGPIPE back to its default disposition, so writing to a closed pipe ends this process

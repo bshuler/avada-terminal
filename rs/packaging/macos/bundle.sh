@@ -195,6 +195,21 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             </array>
         </dict>
     </array>
+    <!-- avada:// opens a pane (core/src/cli/link.rs). ssh:// is declared so Avada appears in
+         "Open ssh URLs with"; it only becomes the handler when the user picks it there or runs
+         `avada url register --ssh`. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>     <string>to.avada.link</string>
+            <key>CFBundleTypeRole</key>    <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>avada</string>
+                <string>ssh</string>
+            </array>
+        </dict>
+    </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>

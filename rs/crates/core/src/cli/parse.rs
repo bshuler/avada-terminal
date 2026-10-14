@@ -16,6 +16,9 @@
 //!   - a positional path is captured only when it (case-insensitively) ends in
 //!     `.json` or `.avada` AND `exists_fn` reports it present, resolved to
 //!     an absolute path.
+//!
+//! Not from the TS source: a positional `avada://…`/`ssh://…` link adds the pane it names to
+//! the current tab, as `-c` does (`super::link`).
 
 use crate::workspace::model::{GroupSpec, PaneSpec, WindowSpec, WorkspaceFile};
 use std::path::{Component, Path, PathBuf};
@@ -326,7 +329,36 @@ pub fn parse_cli_with(argv: &[String], exists_fn: impl Fn(&str) -> bool) -> Pars
                     w.title = v;
                 }
             }
+            _ if super::link::is_link(&a) => {
+                // `avada://…` / `ssh://…`: one pane in the current tab, exactly where a `-c`
+                // would put it — so a link alone becomes a new tab of the running window. A
+                // malformed link opens nothing (`super::link` says why it is strict).
+                let home = std::env::var("HOME").ok();
+                match super::link::parse(&a, home.as_deref()) {
+                    Ok(link) => {
+                        ensure_tab(
+                            &mut windows,
+                            &mut cur_win,
+                            &mut cur_tab,
+                            &mut cur_pane,
+                            &mut pending_layout,
+                        );
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let spec = super::link::to_pane_spec(&link, now, |p| Path::new(p).is_dir());
+                        let (w, t) = (cur_win.unwrap(), cur_tab.unwrap());
+                        let tab = &mut windows[w].tabs[t];
+                        tab.panes.push(spec);
+                        cur_pane = Some(tab.panes.len() - 1);
+                        header_scope = None;
+                    }
+                    Err(e) => tracing::warn!("ignoring link {a:?}: {e}"),
+                }
+            }
             _ => {
+                let a = super::link::file_url_path(&a).unwrap_or(a);
                 let lower = a.to_lowercase();
                 if !a.starts_with('-')
                     && (lower.ends_with(".json") || lower.ends_with(".avada"))
@@ -906,5 +938,37 @@ mod tests {
             r.workspace.unwrap().panes.unwrap(),
             vec![pane("npm run dev", "npm")]
         );
+    }
+
+    #[test]
+    fn a_link_alone_is_one_pane_in_a_new_tab_of_the_running_window() {
+        let r = parse_cli(&argv(&["ssh://bert@hp3"]));
+        assert_eq!(r.routing, attach_focused_tab());
+        let panes = r.workspace.unwrap().panes.unwrap();
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].command.as_deref(), Some("ssh"));
+        assert_eq!(panes[0].args.as_deref().unwrap(), ["--", "bert@hp3"]);
+        assert_eq!(panes[0].label.as_deref(), Some("ssh hp3"));
+    }
+
+    #[test]
+    fn a_bad_link_opens_nothing() {
+        let r = parse_cli(&argv(&["ssh://-oProxyCommand=x"]));
+        assert_eq!(r.workspace, None);
+        assert_eq!(r.json_path, None);
+        let r = parse_cli(&argv(&["avada://terminal?cmd=id"]));
+        assert_eq!(r.workspace, None);
+    }
+
+    #[test]
+    fn links_share_a_tab_like_commands_do() {
+        let r = parse_cli(&argv(&[
+            "avada://terminal?cwd=/tmp",
+            "avada://doc?path=/n/a.md",
+        ]));
+        let panes = r.workspace.unwrap().panes.unwrap();
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].cwd.as_deref(), Some("/tmp"));
+        assert_eq!(panes[1].pane_kind(), crate::tools::kind::PaneKind::Markdown);
     }
 }
