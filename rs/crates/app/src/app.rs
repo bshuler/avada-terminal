@@ -38,6 +38,9 @@ use crate::state::{
 };
 use crate::{filedrop, theme, window, AppWindow, KeyMsg};
 
+/// A pane's foreground answer: (uid, program name, cwd, ssh host).
+type ForegroundAnswer = (String, Option<String>, Option<String>, Option<String>);
+
 /// The GitHub releases page the NotifyOnly update flow (Linux/macOS) points the user at —
 /// the human URL matching `update::LATEST_RELEASE_API`'s repo.
 const RELEASES_PAGE: &str = "https://github.com/bshuler/avada-terminal/releases/latest";
@@ -483,7 +486,7 @@ impl App {
             // emits none — so every pane spawned without an explicit directory had `cwd:
             // None` for its whole life, and the left panel, which roots itself on the
             // focused pane's cwd, had nothing to follow and sat on `$HOME`.
-            let answers: Vec<(String, Option<String>, Option<String>, Option<String>)> = uids
+            let answers: Vec<ForegroundAnswer> = uids
                 .into_iter()
                 .map(|uid| {
                     let fg = self.mgr.foreground_name(&uid);
@@ -2750,14 +2753,14 @@ impl App {
             register(StatusItem::new("app.version", "version", env!("CARGO_PKG_VERSION")).banner().order(-40));
             register(StatusItem::new("app.updated", "last update", env!("AVADA_BUILD_DATE")).banner().order(-30));
             register(StatusItem::new("app.uptime", "uptime", &uptime).banner().order(-20));
-            register(StatusItem::new("app.host", "host", &host).banner().order(-10));
+            register(StatusItem::new("app.host", "host", host).banner().order(-10));
             register(
                 StatusItem::new("app.build", "AVADA", env!("CARGO_PKG_VERSION"))
                     .glyph("✧")
                     .level(Level::Ok)
                     .order(-20),
             );
-            register(StatusItem::new("app.hostcard", "HOST", &host).glyph("◈").order(-10));
+            register(StatusItem::new("app.hostcard", "HOST", host).glyph("◈").order(-10));
         });
         update("app.uptime", &uptime, Level::Info);
     }

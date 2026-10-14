@@ -230,12 +230,13 @@ fn register(ssh: bool) -> Result<(), String> {
     let command = format!("\"{}\" \"%1\"", exe.display());
     for s in schemes(ssh) {
         let key = format!(r"HKCU\Software\Classes\{s}");
+        let open_key = format!(r"{key}\shell\open\command");
         let writes: [Vec<&str>; 3] = [
             vec!["add", &key, "/ve", "/d", "URL:Avada link", "/f"],
             vec!["add", &key, "/v", "URL Protocol", "/d", "", "/f"],
             vec![
                 "add",
-                &format!(r"{key}\shell\open\command"),
+                &open_key,
                 "/ve",
                 "/d",
                 &command,

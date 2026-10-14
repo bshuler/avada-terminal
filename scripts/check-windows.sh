@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Compile-check and clippy the Rust crates for Windows from a Mac, without a
-# Windows machine and without CI. Uses the windows-gnu target through mingw-w64.
+# Compile-check and clippy the Rust crates for Windows from a Mac or a Linux build
+# host, without a Windows machine and without CI. Uses the windows-gnu target
+# through mingw-w64. Prefer a Linux host (hp2) so the ~10 GB target dir stays off
+# the Mac: `REMOTE_CARGO_HOST=hp2 scripts/check-windows-remote.sh`.
 #
 # Why this exists: the GitHub "Test (Rust native)" workflow has been disabled
 # since 2026-08-29, so nothing else catches a `#[cfg(windows)]` arm that does not
 # compile before it lands in a release (7f434e0 broke v0.2.0 exactly that way).
 #
 # One-time setup:
-#   brew install mingw-w64
-#   rustup target add x86_64-pc-windows-gnu
+#   macOS:  brew install mingw-w64
+#   Debian: sudo apt-get install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+#   both:   rustup target add x86_64-pc-windows-gnu
 #
 # Usage:
 #   scripts/check-windows.sh            # core + module-sdk (offline) and the app crate
@@ -19,23 +22,34 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-mingw_root="${MINGW_ROOT:-/opt/homebrew/opt/mingw-w64/toolchain-x86_64/x86_64-w64-mingw32}"
+if [[ "$(uname -s)" == Linux ]]; then
+  default_mingw_root=/usr/x86_64-w64-mingw32
+  install_hint="sudo apt-get install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64"
+  # Debian's default mingw uses the win32 thread model, which has no std::mutex;
+  # whisper.cpp needs the posix variant (Homebrew's mingw is posix already).
+  suffix=-posix
+else
+  default_mingw_root=/opt/homebrew/opt/mingw-w64/toolchain-x86_64/x86_64-w64-mingw32
+  install_hint="brew install mingw-w64"
+  suffix=
+fi
+mingw_root="${MINGW_ROOT:-$default_mingw_root}"
 target=x86_64-pc-windows-gnu
 with_app=1
 [[ "${1:-}" == "--no-app" ]] && with_app=0
 
-for tool in x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ x86_64-w64-mingw32-ar; do
-  command -v "$tool" >/dev/null || { echo "missing $tool: brew install mingw-w64" >&2; exit 2; }
+for tool in x86_64-w64-mingw32-gcc$suffix x86_64-w64-mingw32-g++$suffix x86_64-w64-mingw32-ar; do
+  command -v "$tool" >/dev/null || { echo "missing $tool: $install_hint" >&2; exit 2; }
 done
 rustup target list --installed | grep -qx "$target" || { echo "missing target: rustup target add $target" >&2; exit 2; }
 [[ -d "$mingw_root/include" ]] || { echo "mingw headers not at $mingw_root (set MINGW_ROOT)" >&2; exit 2; }
 
 # whisper-rs-sys runs bindgen at build time; without the mingw include path it
-# reads the Mac headers and fails with "attempt to compute 12_usize - 16_usize".
-export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
-export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
+# reads the host's own headers and fails with "attempt to compute 12_usize - 16_usize".
+export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc$suffix
+export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++$suffix
 export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
-export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc$suffix
 export BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_gnu="--target=x86_64-w64-mingw32 -I$mingw_root/include"
 
 status=0

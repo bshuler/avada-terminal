@@ -755,8 +755,9 @@ impl Daemon {
         let cwds_fg = Arc::clone(&cwds);
         let notices_fg = notices.clone();
         tokio::spawn(async move {
-            let mut last: std::collections::HashMap<String, (Option<String>, Option<String>, Option<String>)> =
-                Default::default();
+            // (program name, cwd, ssh host) of a session's foreground process group.
+            type Sample = (Option<String>, Option<String>, Option<String>);
+            let mut last: std::collections::HashMap<String, Sample> = Default::default();
             let mut tick = tokio::time::interval(FOREGROUND_POLL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -765,7 +766,6 @@ impl Daemon {
                 // neither the pgrp nor its program name, so keying the push on the name
                 // alone would leave a pane's cwd frozen at whatever it was when some
                 // unrelated program last started or stopped.
-                type Sample = (Option<String>, Option<String>, Option<String>);
                 let now: std::collections::HashMap<String, Sample> = registry_fg
                     .uids()
                     .into_iter()

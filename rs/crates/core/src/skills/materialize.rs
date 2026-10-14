@@ -176,8 +176,10 @@ impl Materializer {
             })
             .collect();
 
-        let mut desired = Desired::default();
-        desired.owned = req.modules.iter().map(|m| m.id.as_str().to_string()).collect();
+        let mut desired = Desired {
+            owned: req.modules.iter().map(|m| m.id.as_str().to_string()).collect(),
+            ..Default::default()
+        };
         desired.owned.extend(req.retired.iter().map(|m| m.as_str().to_string()));
         desired.owned.insert(HOST_ID.to_string());
         let roots: BTreeSet<&PathBuf> = req.roots.iter().collect();
