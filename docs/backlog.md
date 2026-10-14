@@ -8,6 +8,12 @@ next-session command line at the end of every session points at the entry it wil
 
 ### B8 — subagent scan on the main thread, 1 Hz, over every hook record ever written
 
+**Fix landed on `main` 2026-10-14** (three commits: `B8 part 1` archive finished records,
+`B8 part 2` scan off the UI thread at 5 s, `B8 part 3` the hook pushes `ctl subagent-event`;
+details in the report's *Fix* section). **Open: proof on a restarted GUI** — `sample` with no
+`subagents_from` on the main thread, root `fs_usage` quiet between subagent events. The
+running 0.2.42 GUI predates the fix.
+
 **Filed 2026-10-14.** Bert: "it looks stuck" / "why scan every second? maybe avada could have its
 own message broker data bus. So pushes, no pulls." Report with evidence:
 [`docs/incidents/2026-10-14-subagent-scan-main-thread/README.md`](incidents/2026-10-14-subagent-scan-main-thread/README.md).

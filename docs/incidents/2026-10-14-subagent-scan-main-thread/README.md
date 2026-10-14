@@ -1,8 +1,9 @@
 # 2026-10-14 — "Avada looks stuck": the subagent scan runs on the main thread, once a second, over every hook record ever written
 
-**Status:** diagnosed, fix filed as B8 in [`docs/backlog.md`](../../backlog.md). Nothing in the app
-was changed; the live state was left as found (see *Mitigation* for the one reversible step that
-needs Bert's decision).
+**Status:** fixed in code on `main` (2026-10-14, the three B8 commits listed under *Fix*);
+**proof pending a GUI restart** on a build that carries them. The running 0.2.42 GUI still has
+the old scan; its live state was left as found (the *Mitigation* below is now moot: the fixed
+build archives those records itself).
 
 ## What Bert saw
 
@@ -105,7 +106,42 @@ first one removes ~99.8 % of the work by itself and should not wait for the othe
 SubagentStart/Stop. Keep the uitest in `rs/crates/app/src/uitest/subagents.rs` green and add one
 that starts a subagent, archives its record on stop, and re-opens nothing on the next scan.
 
-## Mitigation available today (reversible, not applied)
+## Fix (landed on `main` 2026-10-14)
+
+Three commits, in the order B8 named them, each testable on its own:
+
+1. **`B8 part 1: archive finished subagent hook records out of the scan path`** —
+   `claude_subagents::subagents_from_archiving` moves a record whose `stoppedAt` is older than
+   30 s into `<pane dir>/_archive/` (one rename each, once); the archive's file names stay
+   known, so the transcript-directory fallback cannot bring an archived agent back as a
+   "fallback-only" record. A scan now opens the live records plus a directory listing of
+   `_archive/`, not 1448 finished JSON files.
+2. **`B8 part 2: scan subagent hook records off the UI thread`** — new
+   `app/src/subagent_scan.rs`. The tick only lists the pty panes and their marker ids; a
+   short-lived `subagent-scan` thread does the reads and the archiving and swaps in a per-pane
+   snapshot; `reconcile_subagents` reads the snapshot (same signature, so the uitests and the
+   state tests are unchanged). One worker at a time, in-flight flag released by a drop guard, so
+   a panicking scan cannot wedge it. Poll cadence **5 s**, not 1 s.
+3. **`B8 part 3: the Claude hook pushes a subagentEvent instead of being polled`** — Bert's
+   "pushes, no pulls". The session hook, after writing its record, runs
+   `"$HP_CTL" ctl subagent-event "$AVADA_PANE_ID"` detached and silent; the control host parks
+   it in the read-model (`subagentEvent` verb, one entry per pane between syncs), `sync` hands
+   it to the App, and the App nudges the scanner so the pane is rescanned on the next tick.
+   The 5 s poll stays as the fallback for the cases where the post cannot land: the Control API
+   off, a scoped module token without rights to that pane (403), a hook with no `HP_CTL` in its
+   environment (a claude started outside a pane), or a GUI too busy to answer within the
+   client's 2 s timeout.
+
+Not done, by design: a backstop that drops a subagent pane when its record is *absent* from a
+scan. The snapshot persists until the next scan replaces it and `reconcile_subagents` is
+idempotent, so nothing needs it; adding it would turn a transient read error into closed panes.
+
+**Proof still owed** (needs the GUI restarted on a build ≥ this fix): `sample` of the GUI shows no
+`subagents_from` under the main thread, root `fs_usage -f filesys` shows no
+`claude-subagents/` opens between real subagent events, and the per-second syscall count from the
+*Evidence* section drops from ~23 k to the handful the 5 s poll costs.
+
+## Mitigation available today (reversible, not applied — superseded by part 1)
 
 Moving the 1448 finished hook records out of the live dirs would cut the per-second cost to ~3
 files immediately, without a restart. Only `claude_subagents.rs` reads these dirs (checked:
