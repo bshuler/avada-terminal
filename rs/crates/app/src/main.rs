@@ -33,7 +33,6 @@ mod ctl_cli;
 mod datatree;
 mod devices;
 mod drag;
-mod edition_gate;
 mod filedrop;
 mod glow;
 mod gridpane;
@@ -399,15 +398,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // `--install-license <file>`: put a licence where the commercial edition looks for it, say
-    // so, and exit. Before the gate below, because it is how a refused user gets past it.
-    {
-        let args: Vec<String> = std::env::args().collect();
-        if let Some(file) = edition_gate::install_arg(&args) {
-            std::process::exit(edition_gate::run_install(file));
-        }
-    }
-
     // Capture any panic to a crash log (the windowed subsystem has no console), then pop a crash
     // reporter from a fresh process (this one is unwinding) — see `crate::crash`.
     std::panic::set_hook(Box::new(|info| {
@@ -537,15 +527,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rt = tokio::runtime::Runtime::new()?;
     let _guard = rt.enter();
-
-    // The commercial edition runs only under a valid `avada/terminal` licence. Before the
-    // single-instance gate so a refused launch neither becomes the primary nor forwards to one.
-    // A free build returns at once, without touching the store or the network.
-    if !edition_gate::enforce(&rt) {
-        drop(_guard);
-        rt.shutdown_timeout(Duration::from_secs(2));
-        std::process::exit(3);
-    }
 
     // Single-instance gate (replaces Electron `requestSingleInstanceLock`). Salted by the
     // userData dir so an isolated instance (temp APPDATA / XDG dirs) or a differently-housed

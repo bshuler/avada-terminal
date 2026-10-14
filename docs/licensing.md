@@ -222,29 +222,6 @@ What the host does with each answer:
 | `RunWithBanner(why)` | emits a `warn` `HostEvent::Toast` carrying `why`, **then** spawns, so the user hears about an expiring licence before the module is up |
 | `Refuse(why)` | does not spawn: `ModuleStatus::Broken { reason: why }` and `HostError::Unlicensed(why)` |
 
-## The commercial edition itself
-
-Everything above gates a *module*. The commercial build of the app is gated too, as the
-product `avada/terminal` issued by `https://license.avada.to`
-(`avada_core::license::host`).
-
-* A free build never asks. `host::gate(Edition::Free, ..)` is `Gate::Run` without touching
-  the store or the network.
-* A commercial build (`--features commercial`) calls `edition_gate::enforce` in
-  `rs/crates/app/src/main.rs` before the single-instance gate. It binds `avada/terminal` to
-  the issuer, makes a check-in if one is due (so a revoked licence stops the next launch,
-  not only the next grace window), then asks `gate_for_major` with the build's major
-  version. `Refuse` shows a dialog, prints the same text to stderr, and exits 3. A grace
-  window logs a warning and runs.
-* `avada --install-license <file>` installs a token file and exits (0 installed, 1 refused,
-  2 usage). It rejects a token for any product other than `avada/terminal`.
-* The `avada-commercial` crate's `licensed_activate` is the same gate in front of `activate`:
-  publisher pinning and the precompiled loader are switched on only under the licence.
-* The issuer is a constant, not a setting. An environment override would be a bypass.
-
-This is an honest-user gate: it stops an unlicensed copy of the commercial build from running
-as shipped. It does not defend against someone patching the binary.
-
 ## Follow-ups (outside G8)
 
 * **App wiring — done.** The app installs the licence service at start-up
