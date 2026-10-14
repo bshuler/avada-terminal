@@ -1,9 +1,8 @@
 # 2026-10-14 — "Avada looks stuck": the subagent scan runs on the main thread, once a second, over every hook record ever written
 
-**Status:** fixed in code on `main` (2026-10-14, the three B8 commits listed under *Fix*);
-**proof pending a GUI restart** on a build that carries them. The running 0.2.42 GUI still has
-the old scan; its live state was left as found (the *Mitigation* below is now moot: the fixed
-build archives those records itself).
+**Status:** fixed and **proven** on 2026-10-14 (release 0.2.43, the three B8 commits listed
+under *Fix*; measurements under *Proof*). The old live state needed no hand cleanup: the fixed
+build archived 1067 finished records in its first minute (the *Mitigation* below is moot).
 
 ## What Bert saw
 
@@ -136,10 +135,31 @@ Not done, by design: a backstop that drops a subagent pane when its record is *a
 scan. The snapshot persists until the next scan replaces it and `reconcile_subagents` is
 idempotent, so nothing needs it; adding it would turn a transient read error into closed panes.
 
-**Proof still owed** (needs the GUI restarted on a build ≥ this fix): `sample` of the GUI shows no
-`subagents_from` under the main thread, root `fs_usage -f filesys` shows no
-`claude-subagents/` opens between real subagent events, and the per-second syscall count from the
-*Evidence* section drops from ~23 k to the handful the 5 s poll costs.
+## Proof (2026-10-14, 0.2.43 installed and relaunched by Cmd-Q)
+
+Two 10 s `sample` runs of the GUI, 1 ms interval, same workspace (21 pty panes with Claude
+markers), both taken 25 s or more after launch. The 0.2.42 run is the last GUI before the fix,
+the 0.2.43 run the first after it (23 min after launch, past the one-time archive burst).
+
+| 10 s sample of the GUI | 0.2.42 (before) | 0.2.43 (after) |
+|---|---|---|
+| main-thread samples | 3638 | 4474 |
+| of which inside `App::tick` | 566 | 706 |
+| of which inside `reconcile_subagents` | 563 | 1 (a `SubagentScanner::lookup`, no disk) |
+| `subagents_for_pane` / `subagents_from` frames on the main thread | 539 | 0 |
+| `subagent-scan` worker thread | — | 2 short-lived threads, 33 + 26 samples (≈6 ms/s) |
+
+Before, 99 % of the tick was the scan and 15 % of the main thread's time went into it; after,
+the tick's share is the terminal rendering it is supposed to be doing, and the fallback poll's
+reads happen on the worker. On disk, 1067 finished records were moved into `_archive/` within
+the first minute (562 live records remain, 464 of them under a pane that is no longer in the
+workspace, which the scanner therefore never visits). The push works end to end:
+`avada ctl subagent-event <pane>` answers in 13 ms and the GUI log records the parked event.
+
+Not measured: the root `fs_usage -f filesys` syscall count from *Evidence* (~23 k/s). `sudo`
+wanted a password from the agent shell; the `sample` comparison above is the proof that needed
+no root. The file-level count can be re-taken from a human terminal with
+`sudo fs_usage -w -f filesys -p $(pgrep -f 'MacOS/avada$')` whenever wanted; nothing hinges on it.
 
 ## Mitigation available today (reversible, not applied — superseded by part 1)
 

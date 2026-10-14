@@ -6,30 +6,6 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
-### B8 — subagent scan on the main thread, 1 Hz, over every hook record ever written
-
-**Fix landed on `main` 2026-10-14** (three commits: `B8 part 1` archive finished records,
-`B8 part 2` scan off the UI thread at 5 s, `B8 part 3` the hook pushes `ctl subagent-event`;
-details in the report's *Fix* section). **Open: proof on a restarted GUI** — `sample` with no
-`subagents_from` on the main thread, root `fs_usage` quiet between subagent events. The
-running 0.2.42 GUI predates the fix.
-
-**Filed 2026-10-14.** Bert: "it looks stuck" / "why scan every second? maybe avada could have its
-own message broker data bus. So pushes, no pulls." Report with evidence:
-[`docs/incidents/2026-10-14-subagent-scan-main-thread/README.md`](incidents/2026-10-14-subagent-scan-main-thread/README.md).
-
-`State::reconcile_subagents` runs every second on the UI thread and, through
-`App::pane_subagents` → `claude_subagents::subagents_from`, re-reads every hook record of every
-pty pane: 1451 records (1448 finished) across 29 panes, ~23 k filesystem syscalls/s, a third of
-the main thread's samples, growing ~900 records/day. Fix in three independent parts, cheapest
-first: (1) archive/cached-skip finished hook records so a scan touches only live ones;
-(2) run the scan off the UI thread and hand results back through a tick-drained queue
-(`pane_write_failed_uids` pattern); (3) push: `avada ctl event …` → `POST /events` from the hook
-(backgrounded, silent), control host queues it, tick rescans only that pane; keep a slow
-mtime-gated fallback for hook-less sessions, or FSEvents. Proof: `sample` shows no
-`subagents_from` on the main thread; root `fs_usage` shows no `claude-subagents/` opens between
-real subagent events.
-
 ### B7 · Keyboard focus dies or wanders in the Orchestrator tab under subagent churn (2026-10-13)
 Slint keeps keyboard focus on a *row slot*; `paneview::sync_model` rewrites slots in place
 and drops the tail row, and `PaneState::refocus_seq` is projected for every row, so each
@@ -88,6 +64,31 @@ the brand-new-pane rule, add the resumed-pane test beside
 [`dead-session-recovery.md`](dead-session-recovery.md) §0.2.31 last paragraph.
 
 ## Closed
+
+### B8 · Subagent scan on the main thread, 1 Hz, over every hook record ever written (2026-10-14, fixed 2026-10-14)
+
+**Fix landed on `main` 2026-10-14** (three commits: `B8 part 1` archive finished records,
+`B8 part 2` scan off the UI thread at 5 s, `B8 part 3` the hook pushes `ctl subagent-event`;
+details in the report's *Fix* section). **Proven 2026-10-14 on 0.2.43** — `sample`: main-thread
+scan frames 539 → 0, `reconcile_subagents` 563 → 1 of the tick's samples, the poll's reads on a
+worker thread at ≈6 ms/s; 1067 finished records archived at first launch (report, *Proof*).
+Not re-measured: root `fs_usage` (needs a human terminal). **Closed.**
+
+**Filed 2026-10-14.** Bert: "it looks stuck" / "why scan every second? maybe avada could have its
+own message broker data bus. So pushes, no pulls." Report with evidence:
+[`docs/incidents/2026-10-14-subagent-scan-main-thread/README.md`](incidents/2026-10-14-subagent-scan-main-thread/README.md).
+
+`State::reconcile_subagents` runs every second on the UI thread and, through
+`App::pane_subagents` → `claude_subagents::subagents_from`, re-reads every hook record of every
+pty pane: 1451 records (1448 finished) across 29 panes, ~23 k filesystem syscalls/s, a third of
+the main thread's samples, growing ~900 records/day. Fix in three independent parts, cheapest
+first: (1) archive/cached-skip finished hook records so a scan touches only live ones;
+(2) run the scan off the UI thread and hand results back through a tick-drained queue
+(`pane_write_failed_uids` pattern); (3) push: `avada ctl event …` → `POST /events` from the hook
+(backgrounded, silent), control host queues it, tick rescans only that pane; keep a slow
+mtime-gated fallback for hook-less sessions, or FSEvents. Proof: `sample` shows no
+`subagents_from` on the main thread; root `fs_usage` shows no `claude-subagents/` opens between
+real subagent events.
 
 ### B6 · The orchestrator module's always-on rule never reaches its folder (2026-10-11, fixed 2026-10-11)
 `skills::Materializer` had no runtime caller, so the `bshuler/avada-orchestrator` module's rule
