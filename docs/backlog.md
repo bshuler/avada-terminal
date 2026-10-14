@@ -6,6 +6,17 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B10 — avada:// links: one live click on an installed build
+
+**Filed 2026-10-14. Shipped in `1f1bfed`; open: the live check.** `avada://ssh|terminal|doc` and
+`ssh://` links ([`links.md`](links.md)) are unit-tested (core `cli::link`, app `url_cli`) and the
+macOS `application:openURLs:` handler type-checks, but macOS handing a URL to the app has not been
+watched, because that needs an installed Avada.app (a test copy would share the bundle id with the
+live one). **Open:** after the next release is installed, run `open avada://terminal` and
+`open "avada://ssh/hp3?tmux=w"` — each should add a tab to the focused window and bring it forward.
+Then pick Avada under "Open ssh URLs with" (or `avada url register --ssh`) and click an `ssh://`
+link.
+
 ### B9 — title-strip gold wordmark overlaps tab titles
 
 **Filed 2026-10-14. Fix landed on the branch; open: one visual check on a restarted GUI.** Bert
