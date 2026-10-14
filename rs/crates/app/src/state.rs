@@ -11280,7 +11280,10 @@ mod session_file_tests {
     }
 
     /// A local pane whose far shell sets no window title still gets the tag from the live ssh
-    /// argv, never overrides a title-derived one, and drops it when the shell returns.
+    /// argv, never overrides a title-derived one, and drops it when the shell returns. An ssh
+    /// back into this very machine (`localhost`, or the build host's own name) is not remote
+    /// and must leave the tag empty — asserted explicitly here so the test holds wherever the
+    /// suite runs (it once used a fake host that happened to be a real build host's name).
     #[test]
     fn local_pane_takes_the_ssh_tag_from_the_live_argv() {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
@@ -11296,10 +11299,19 @@ mod session_file_tests {
         };
         st.load_workspace(seed, &mgr());
         let uid = st.active_tab().panes[0].uid.clone();
-        st.note_pane_ssh(&uid, Some("bert@hp2"));
-        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@hp2"));
+        // Endpoints that name this machine are ignored while the tag is still empty.
+        st.note_pane_ssh(&uid, Some("bert@localhost"));
+        assert_eq!(st.active_tab().panes[0].remote_now, None);
+        let me = avada_core::pane_remote::local_hostname();
+        if !me.is_empty() {
+            st.note_pane_ssh(&uid, Some(&format!("bert@{me}")));
+            assert_eq!(st.active_tab().panes[0].remote_now, None, "own hostname {me} is local");
+        }
+        // A host that can never be the build host fills the tag; a later one never replaces it.
+        st.note_pane_ssh(&uid, Some("bert@far.example"));
+        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@far.example"));
         st.note_pane_ssh(&uid, Some("other@elsewhere"));
-        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@hp2"));
+        assert_eq!(st.active_tab().panes[0].remote_now.as_deref(), Some("bert@far.example"));
         st.note_pane_foreground(&uid, Some("zsh"));
         assert_eq!(st.active_tab().panes[0].remote_now, None);
     }
