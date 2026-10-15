@@ -131,4 +131,21 @@ mod tests {
         assert_eq!(p.command.as_deref(), Some("ssh"));
         assert_eq!(p.meta.as_ref().unwrap()["origin.via"], "url:ssh");
     }
+
+    #[test]
+    fn a_link_tab_is_named_after_the_link_not_term_n() {
+        let title = |a: &str| {
+            resolve_second_instance_windows(&argv(&[a]), "/").windows[0].groups[0]
+                .title
+                .clone()
+        };
+        assert_eq!(title("avada://terminal?title=build%20box").as_deref(), Some("build box"));
+        assert_eq!(title("avada://ssh/hp3").as_deref(), Some("ssh hp3"));
+        assert_eq!(title("avada://doc?path=/tmp/notes.md").as_deref(), Some("notes.md"));
+        // No title= on a shell link: the tab keeps the generated `term N` name.
+        assert_eq!(title("avada://terminal"), None);
+        // An explicit --name still wins.
+        let r = resolve_second_instance_windows(&argv(&["--name", "mine", "avada://ssh/hp3"]), "/");
+        assert_eq!(r.windows[0].groups[0].title.as_deref(), Some("mine"));
+    }
 }

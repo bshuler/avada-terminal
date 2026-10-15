@@ -350,6 +350,11 @@ pub fn parse_cli_with(argv: &[String], exists_fn: impl Fn(&str) -> bool) -> Pars
                         let spec = super::link::to_pane_spec(&link, now, |p| Path::new(p).is_dir());
                         let (w, t) = (cur_win.unwrap(), cur_tab.unwrap());
                         let tab = &mut windows[w].tabs[t];
+                        // A tab the link opens is named after it (its title=, the file, or
+                        // `ssh host`), not the generic `term N`.
+                        if tab.panes.is_empty() && tab.title.is_none() {
+                            tab.title = spec.label.clone();
+                        }
                         tab.panes.push(spec);
                         cur_pane = Some(tab.panes.len() - 1);
                         header_scope = None;
@@ -440,7 +445,7 @@ pub fn parse_cli_with(argv: &[String], exists_fn: impl Fn(&str) -> bool) -> Pars
         let tab = win.tabs.swap_remove(0);
         return ParsedCli {
             workspace: Some(WorkspaceFile {
-                name,
+                name: name.or(tab.title),
                 layout: tab.layout,
                 panes: Some(tab.panes),
                 ..Default::default()

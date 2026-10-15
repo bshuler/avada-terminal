@@ -59,8 +59,9 @@ running window (tabs 15 and 16 in `avada-app.log`). The doc opened rendered as M
 panes carry the link's title in the pane header and in `last-workspace.json`.
 
 **Open:**
-- The tab strip labels these tabs `term 2` / `term 3`, not the link's `title=`. The title reaches
-  only the pane header.
+- Fixed after 0.2.48, not yet in a release: the tab strip labelled these tabs `term 2` / `term 3`.
+  A tab a link opens is now named after the link: its `title=`, the file name, or `ssh host`
+  (`cli/parse.rs`; test `a_link_tab_is_named_after_the_link_not_term_n`).
 - `avada://ssh/…` has not been clicked live.
 - `ssh://` still opens Terminal.app. It goes to Avada only once Bert picks Avada under "Open ssh URLs
   with" or runs `avada url register --ssh`, which is his setting to change.
