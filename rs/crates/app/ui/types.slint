@@ -238,6 +238,8 @@ export struct TabItem {
     // width (measured in Rust; the strip scrolls rather than eliding).
     fit-w: length,
     fit-x: length,
+    // A pane in this tab (not the one on screen) is waiting for the human: the chip breathes.
+    needs: bool,
 }
 
 // A draggable resize seam (vertical column / horizontal row / main-stack main).

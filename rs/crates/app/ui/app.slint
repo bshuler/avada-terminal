@@ -83,6 +83,8 @@ export component AppWindow inherits Window {
     in property <bool> has-subagents: false;
     in property <bool> subagents-hidden: false;
     in property <float> subagent-breath: 0;
+    // Shared breath of every tab chip flagged `needs` (a pane in that tab waits on the human).
+    in property <float> tab-breath: 0;
     // True while Esc is held → keeps the hint up and fills its progress bar.
     in property <bool> esc-holding: false;
     // Terminal font zoom factor (current font px / 14px base; 1.0 at default zoom). The
@@ -378,6 +380,7 @@ export component AppWindow inherits Window {
             has-subagents: root.has-subagents;
             subagents-hidden: root.subagents-hidden;
             subagent-breath: root.subagent-breath;
+            tab-breath: root.tab-breath;
 
             tab-grab(i) => { root.tab-grab(i); }
             tab-geom(i, x, w) => { root.tab-geom(i, x, w); }

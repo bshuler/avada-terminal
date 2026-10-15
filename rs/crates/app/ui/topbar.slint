@@ -153,6 +153,8 @@ component TabChip inherits Rectangle {
     in property <bool> editing;
     in property <bool> spring-hover: false;   // a dragged pane is hovering this tab
     in property <bool> system: false;         // app-owned tab — no close affordance
+    in property <bool> needs: false;          // a pane here waits on the human
+    in property <float> breath: 0;            // shared gold breath, applied while `needs`
     callback select();
     callback close();
     callback begin-rename();
@@ -185,12 +187,14 @@ component TabChip inherits Rectangle {
     // active tab adopts the pane-area bg (reads connected); hover lifts to surface; a
     // spring-hover (dragged pane resting over it) glows in the brand accent.
     background: root.spring-hover ? Theme.brand.with-alpha(0.14)
+              : (root.needs && !root.active) ? Theme.arc-gold.with-alpha(root.breath * 0.30)
               : root.active ? Theme.bg
               : ((ta.has-hover || xa.has-hover) ? Theme.surface : transparent);
     border-top-left-radius: 9px;
     border-top-right-radius: 9px;
-    border-width: root.spring-hover ? 2px : (root.active ? 1px : 0px);
+    border-width: root.spring-hover ? 2px : ((root.needs && !root.active) ? 1px : (root.active ? 1px : 0px));
     border-color: root.spring-hover ? Theme.brand
+                : (root.needs && !root.active) ? Theme.arc-gold.with-alpha(0.35 + root.breath * 0.65)
                 : (root.active ? Theme.accent.with-alpha(0.55) : Theme.border);
 
     // The selected tab has to be findable without looking for it, and adopting the pane
@@ -360,6 +364,7 @@ export component TopBar inherits Rectangle {
     in property <bool> has-subagents: false;
     in property <bool> subagents-hidden: false;
     in property <float> subagent-breath: 0;
+    in property <float> tab-breath: 0;
     callback toggle-subagents();
     callback toggle-zoom();
     callback toggle-fullscreen();
@@ -628,6 +633,8 @@ export component TopBar inherits Rectangle {
                             editing: root.editing-tab == idx;
                             spring-hover: root.drop-tab-idx == idx;
                             system: tab.system;
+                            needs: tab.needs;
+                            breath: root.tab-breath;
                             select => { root.select-tab(idx); }
                             close => { root.close-tab(idx); }
                             begin-rename => { root.begin-rename(idx); }

@@ -1901,6 +1901,8 @@ pub struct State {
     /// Breathes the TopBar's subagent toggle while the current tab has a working subagent
     /// (same Pulse curve as the panes; driven by `paneview::drive_subagent_breath`).
     pub subagent_glow: Glow,
+    /// Breath of the tab chips whose tab holds a pane waiting on the human.
+    pub tab_glow: Glow,
     /// The self-playing Tetris shown in the preview pane (ambient animation).
     pub preview_tetris: crate::tetris::Tetris,
     /// When the Tetris last advanced a frame (it steps on a fixed cadence, not every tick).
@@ -2256,6 +2258,7 @@ impl State {
             preview_surface: Image::default(),
             preview_glow: Glow::new(0x9E37_79B9_7F4A_7C15),
             subagent_glow: Glow::new(0xC2B2_AE3D_27D4_EB4F),
+            tab_glow: Glow::new(0x7A31_95C4_0B6E_D2A9),
             preview_tetris: crate::tetris::Tetris::new(0x5DEE_CE2F_1234_ABCD),
             preview_tetris_last: Instant::now(),
             // Seed the rail's badge with the remembered projects up front (so the count

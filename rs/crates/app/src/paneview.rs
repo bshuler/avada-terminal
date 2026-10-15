@@ -970,6 +970,7 @@ pub fn resync(
             system: t.system,
             fit_w: fits[i].1,
             fit_x: fits[i].0,
+            needs: false,
         })
         .collect();
     sync_model(&ui.tabs, tabs);
@@ -2261,6 +2262,9 @@ pub fn pump(
     if drive_subagent_breath(app, state, Instant::now()) {
         active = true;
     }
+    if drive_tab_attention(app, state, ui, mgr, Instant::now()) {
+        active = true;
+    }
 
     if state.last_hud.elapsed() >= Duration::from_millis(500) {
         let fps = state.frames as f32 / state.last_hud.elapsed().as_secs_f32();
@@ -2279,6 +2283,60 @@ pub fn pump(
     }
 
     PumpResult { rendered, active }
+}
+
+/// Tab chips breathe gold when a pane in that (background) tab waits on the human: an agent
+/// pane that answers to him and is either reported awaiting input / errored, or has been
+/// output-quiet past the idle threshold. The visible tab's own panes glow themselves, so it
+/// is skipped. Returns whether an animation is in flight.
+pub(crate) fn drive_tab_attention(
+    app: &AppWindow,
+    state: &mut State,
+    ui: &Ui,
+    mgr: &SessionManager,
+    now: Instant,
+) -> bool {
+    let idle_on = state.settings.idle_alert;
+    let threshold_ms = state.settings.idle_alert_seconds as u64 * 1000;
+    let now_ms = crate::glow::now_epoch_ms();
+    let needs: Vec<bool> = (0..state.tabs.len())
+        .map(|ti| {
+            ti != state.active
+                && state.tabs[ti].panes.iter().any(|p| {
+                    if !State::answers_to_human(p) {
+                        return false;
+                    }
+                    if matches!(state.liveness_ui(&p.uid), 2 | 4) {
+                        return true;
+                    }
+                    let is_agent = !matches!(state.effective_kind(p), PaneKind::Terminal)
+                        || crate::glow::is_ai_pane(&p.shell_title);
+                    idle_on
+                        && is_agent
+                        && matches!(mgr.last_output_at(&p.uid),
+                            Some(ms) if now_ms.saturating_sub(ms) >= threshold_ms)
+                })
+        })
+        .collect();
+    let any = needs.iter().any(|n| *n);
+    for (i, n) in needs.iter().enumerate() {
+        if i < ui.tabs.row_count() {
+            if let Some(mut row) = ui.tabs.row_data(i) {
+                if row.needs != *n {
+                    row.needs = *n;
+                    ui.tabs.set_row_data(i, row);
+                }
+            }
+        }
+    }
+    let breath = state
+        .tab_glow
+        .update(crate::glow::IdleEffect::Pulse, any, now);
+    let moved = (app.get_tab_breath() - breath).abs() > 0.004;
+    if moved || (breath == 0.0 && app.get_tab_breath() != 0.0) {
+        app.set_tab_breath(breath);
+    }
+    moved || any
 }
 
 /// Project the current tab's subagent state onto the TopBar toggle: whether it shows, which

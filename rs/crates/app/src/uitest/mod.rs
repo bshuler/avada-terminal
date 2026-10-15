@@ -274,6 +274,7 @@ fn install_tabs(w: &crate::AppWindow, titles: &[&str], active: usize, system: Op
             system: Some(i) == system,
             fit_w: fits[i].1,
             fit_x: fits[i].0,
+            needs: false,
         })
         .collect();
     w.set_tabs(std::rc::Rc::new(slint::VecModel::from(rows)).into());
