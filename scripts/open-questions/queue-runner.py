@@ -40,8 +40,8 @@ AVADA = os.environ.get("HP_CTL", "/Applications/Avada.app/Contents/MacOS/avada")
 RELAY_LABEL = "Open Questions"           # the pane whose label contains this, on a running tab
 OLD_LABEL = "(old)"
 RETRY_SECS = 60
-LIVE_MENU = re.compile(r"Esc to cancel|Enter to select|^\s*❯?\s*\d+\.\s", re.M)
-IDLE_PROMPT = re.compile(r"(?:^|\n)\s*[❯>]\s*(?:\S.*)?\s*$")
+LIVE_MENU = re.compile(r"Esc to cancel|Enter to select")   # the footer every Claude Code menu shows
+PROMPT = re.compile(r"^\s*❯\s?(.*?)\s*$", re.M)                # the input line; group 1 = text after it
 
 
 def log(msg):
@@ -78,17 +78,40 @@ def screen(pane):
     return "\n".join(l for l in out.splitlines() if l.strip())
 
 
+def tail(pane, n=12):
+    return "\n".join(screen(pane).splitlines()[-n:])
+
+
+def prompt_text(t):
+    """Text on the last input line, or None when no prompt is on screen."""
+    ms = PROMPT.findall(t)
+    return ms[-1] if ms else None
+
+
 def pane_free(pane):
+    """Free = pane-safe SAFE, settled, idle prompt, no live menu, no real unsent input.
+    An idle Claude Code prompt usually carries a dim ghost suggestion after the ❯, so text
+    there is probed the way the relay brief does: send one x; if the line then reads just x
+    the text was a ghost, otherwise it is Bert's or the relay's unsent input and we hold."""
     v = verdict(pane)
     if not v.startswith("SAFE"):
         return False, v
     ctl("read", pane, "--wait", timeout=600)
-    s = screen(pane)
-    tail = "\n".join(s.splitlines()[-12:])
-    if LIVE_MENU.search(tail):
+    t = tail(pane)
+    if LIVE_MENU.search(t):
         return False, "live menu on screen"
-    if not IDLE_PROMPT.search(tail):
-        return False, "no idle prompt on screen"
+    if "esc to interrupt" in t:
+        return False, "pane busy"
+    text = prompt_text(t)
+    if text is None:
+        return False, "no prompt on screen"
+    if text:
+        ctl("send", pane, "x")
+        time.sleep(1)
+        after = prompt_text(tail(pane))
+        ctl("keys", pane, "backspace")
+        if after != "x":
+            return False, "input line holds text not ours"
     return True, v
 
 
