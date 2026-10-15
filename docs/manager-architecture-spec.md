@@ -1,6 +1,6 @@
 # Avada built-in Manager / Orchestrator / Agent architecture — direction capture
 
-**Source:** Bert, direct direction 2026-10-12. This file is the authoritative
+**Source:** Bert, direct direction 2026-10-12, extended 2026-10-15 (§1a). This file is the authoritative
 capture of *what Bert wants*. The *how* (implementation plan) is produced by the
 architect/build pass and must **reconcile with the existing docs** listed under
 "Prior art" below rather than re-inventing them.
@@ -48,6 +48,61 @@ architect/build pass and must **reconcile with the existing docs** listed under
 
 8. **Nudge configurable per project.** The nudge (cadence, prompt, enabled/
    disabled, scope) is **per-project** configurable.
+
+---
+
+## 1a. Direction 2026-10-15 — the Open Questions relay and the full chain
+
+**Source:** Bert, direct direction 2026-10-15 (research session in `~/code`), reconciling what
+he asked for 2026-10-12 with how the fleet actually runs today. Same authority as §1.
+
+9. **One human-facing relay, called Open Questions.** Bert interacts with the Manager through
+   exactly one agent, the **Open Questions** agent. He gives his instructions there; the
+   Manager's questions for him surface there. He watches **only** that tab. Any other pane,
+   tab or panel that calls for his attention means the Manager is not working fast enough or
+   correctly (Bert, 2026-10-15, recorded in the Manager's own memory).
+
+10. **The relay only relays — in both directions.** Open Questions forwards Bert's
+    instructions **down** to the Manager and the Manager's questions, options and
+    recommendations **up** to Bert, in full, plain-language detail. It never builds, fixes,
+    investigates on its own account, spawns subagents or worktrees, drives or closes other
+    panes, messages agents other than the Manager, or decides which orchestrator a task
+    belongs to. If a message from Bert is an instruction, the whole job of Open Questions is
+    to hand it to the Manager and tell Bert it did.
+
+11. **Work flows down the chain and nowhere else:**
+
+    ```
+    Bert  ⇄  Open Questions (relay)  ⇄  Manager  →  Orchestrator  →  Builder
+    ```
+
+    The Manager receives the instruction, picks (or creates) the correct Orchestrator for the
+    project or workstream, and the Orchestrator spins up a Builder that does the work. Results
+    and questions travel back up the same chain. No tier skips a level in either direction.
+
+**Naming.** §1 says *Agent* for the bottom tier; Bert says **Builder**, and the operating-model
+module (`docs/operating-model-module.md`) and the Manager's briefs already use
+builder → orchestrator → manager → human. The two are the same tier: read *Agent* in §1 and
+the plan as *Builder*. The module's fourth tier, *human*, is Bert; Open Questions is his relay,
+not a tier of its own — it is a peer of the agents and has no authority over any of them.
+
+**Relation to MUST 4 and MUST 5.** Today the Manager is the always-on Orchestrator tab (the
+hyperpane control session, pane `Avada`), not yet a dedicated leftmost window; the Open
+Questions tab is a plain terminal pane that tab opened on 2026-10-14. The right-panel Q/A panel
+of MUST 5 is the **native form of Open Questions**: when it exists it carries the same two flows
+MUST 5 already names (questions up, answers down) **plus the third flow this section adds —
+Bert's instructions down to the Manager**. Until then the pane is the implementation, and
+MUST 9–11 bind it exactly as they will bind the panel.
+
+**What the relay's brief must say (gap found 2026-10-15).** The brief the Manager wrote for the
+pane says read-only, inform-Bert-only, peer-not-manager — but never says *forward Bert's
+instructions to the Manager*. With that line missing, instructions Bert typed into the pane
+were carried out by the pane's own session (it spawned a worktree builder for the `avada://`
+link work on 2026-10-15 and messaged other agents directly on 2026-10-14/15), which is the
+exact failure MUST 10 forbids. The brief must also live in the repo or the orchestrator data
+directory, not a session scratchpad under `/private/tmp`, and the pane must run in the
+orchestrator data directory, not an unrelated project checkout, so it inherits the
+operating-model rules and no other project's memory. Tracked as backlog B13.
 
 ---
 

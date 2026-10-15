@@ -43,6 +43,7 @@ SQLite or moving the broker into `avadad`.)
 | 6 | Built-in MQ, no cross-talk, event-driven | **Strongly extends** the per-pane inbox + scope-filtered `EventHub` (no-leak already proven). New: the `manager`/`orchestrator:<id>`/`agent:<pane-id>` topic addressing. | **new `control::mq`** (this phase) |
 | 7 | Tasks panel (scheduled, editable) | **Extends** — `queue-gui-roadmap.md` *is* this panel (planned, not built) over the `WorkQueue`. New: recurring/cron tasks (`available_at` re-enqueue), a first-class cancel verb for a still-`Queued` task. | `control::work`, new `ui/` Tasks panel |
 | 8 | Nudge per-project | **Extends** `control::nudge` / `arm_inbox_nudge` (`hp.nudge`, `AVADA_MSG_NUDGE`, 60s rate-limit). New: per-project config surface. | `control::nudge`, per-project config store |
+| 9–11 | Open Questions relay (spec §1a, 2026-10-15): one human-facing relay, relay-only both ways, Bert ⇄ Open Questions ⇄ Manager → Orchestrator → Builder | **Extends** req 5 — the right Q/A panel is the native relay; adds a third flow (Bert's instructions down to the Manager). Today: a plain pane the Orchestrator tab opened + a Manager-written brief (see backlog B13). | phase 3 Q/A panel; until then the pane + brief |
 
 **Two "nudges" must not be conflated.** (a) Today's `control::nudge` is
 **inbox-arrival-triggered** — it types one line into a parked TUI agent when mail
@@ -145,7 +146,9 @@ Polling to retire (from `control::server` tickers + `arm_inbox_nudge`):
 2. **Hierarchy + config model** — `control::org`; per-level harness+model defaults;
    per-project overrides (manager exempt); harness adapter trait + codex/copilot/aider.
 3. **Manager singleton window** (leftmost, non-closable) + **right Q/A panel** as
-   MQ consumer; answers routed back to the origin `agent:` topic.
+   MQ consumer; answers routed back to the origin `agent:` topic. The panel is the
+   native Open Questions relay (spec §1a): questions up, answers down, **and Bert's
+   instructions down to the Manager** — never executed by the panel itself.
 4. **Tasks panel + scheduler** — `WorkQueue` UI; recurring tasks; migrate the
    recurring nudge in as the first managed task; per-project nudge config.
 

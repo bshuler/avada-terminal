@@ -6,6 +6,38 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B13 — the Open Questions relay does work itself instead of handing it to the Manager (2026-10-15)
+
+Bert's direction (`manager-architecture-spec.md` §1a, MUST 9–11): he talks to the Manager only
+through the **Open Questions** agent, which relays in both directions and never builds, fixes,
+spawns or messages anyone but the Manager; work goes Manager → Orchestrator → Builder. Audit of
+the live fleet on 2026-10-15 against that:
+
+- The Open Questions pane (`pane-990350ae…`, tab 0:10, opened by the Orchestrator tab
+  2026-10-14 11:40) runs its Claude session in **`~/code/health`** (project
+  `-Users-bshuler-code-health`, session `2d2e6a48…`), so it carries health's memory and
+  tools, not the orchestrator data directory's operating-model rules.
+- Its brief (`…/283de732…/scratchpad/open-questions-concierge-brief.md`, written by the Manager
+  2026-10-14 11:39) says read-only / inform Bert / peer not manager, but **never says to forward
+  Bert's instructions to the Manager**, and it lives under `/private/tmp`, so it dies with the
+  session store.
+- Consequence, from the pane's transcript: Bert used the pane as his instruction inbox
+  (minecraft backups, iPhone backup, hp1 move, screen captures, `avada://` links …). The pane's
+  session answered or did those itself: on 2026-10-15 11:31 it spawned a worktree subagent
+  `agent-aaf802ef449040b55` "Integrate avada:// scheme into clickable terminal links" and at
+  10:44 Bert asked it "you seem to be sending messages to different agents, do you not know the
+  correct path?". The Manager itself has complied with the 12:14 consolidation ruling (zero
+  `AskUserQuestion` calls in the Manager session since then; 75 before).
+- Nothing in the repo enforces the relay: no code, no module rule, no test. Phase 3 (right
+  Q/A panel) is the native fix and has no code yet.
+
+Fix direction, in order: (1) the Manager rewrites the brief with the forward-to-Manager rule,
+stores it in the orchestrator data directory, and relaunches the pane there with the
+operating-model rules installed; (2) the operating-model module grows an `open-questions` role
+(`AVADA_ROLE=relay`) whose fenced rule is the brief, so it travels with Avada; (3) phase 3 of
+`manager-architecture-plan.md` replaces the pane with the right Q/A panel carrying all three
+flows. Related: B7 (Orchestrator tab focus), `operating-model-module.md`.
+
 ### B12 — a daemon handoff orphans every pane's TCC attribution; screen recording only works in panes opened after the relaunch (2026-10-14)
 
 macOS attributes a pane shell's privacy requests (Screen Recording, etc.) to the process that was
