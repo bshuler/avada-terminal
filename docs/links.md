@@ -60,19 +60,23 @@ below and opens it as a new pane split into the **current tab** — deliberately
 from inside a specific tab's working context, so it stays there, the same way clicking a file
 path reveals it in the left tree instead of jumping away, and a clicked commit hash shows up
 in the left git panel rather than a new pane. A plain click on `http`/`https` instead routes
-through Preferences → Browser, same as always. Ctrl/Cmd-click always copies the literal text,
-regardless of scheme.
+through Preferences → Browser, same as always. Outside a mouse grab (see below), Ctrl/Cmd-click
+copies the literal text instead of opening, regardless of scheme.
 
 This is plain-text detection only. A program can also *declare* a link with an OSC 8 escape
 (the href can differ from the visible label); those stay restricted to `http`/`https`, because
 an arbitrary OSC 8 href is not something the user can see before clicking — unlike text typed
-or printed into the pane, which is exactly the characters on screen.
+or printed into the pane, which is exactly the characters on screen. An OSC 8 `file://` href —
+as emitted by `ls --hyperlink` or `rg --hyperlink-format` — is deliberately not one of the two
+schemes let through, so it never becomes clickable at all; it needs to show up as plain text
+(or get caught by the pane's own path detector) to open.
 
 When the program running in the pane holds the mouse (vim, htop, Claude Code's TUI — DECSET
 1000/1002/1003), a plain click belongs to that program, not to the link: Ctrl/Cmd-click or
-Shift-click is what reaches the link instead (the hover tooltip switches to "Ctrl+click to
-open" to say so). This applies to every link kind, not just avada/ssh — a file path needs the
-same modifier to reveal while, say, `claude` is running in the pane.
+Shift-click is what reaches the link instead — and, held only to get past the grab, opens it
+rather than copying (the hover tooltip switches to "Ctrl+click to open" to say so). This
+applies to every link kind, not just avada/ssh — a file path needs the same modifier to reveal
+while, say, `claude` is running in the pane.
 
 A plain click on a file path (not a URL) reveals it in the left file tree rather than opening
 it directly, same as it always has; right-clicking a path in a pane offers the same context
