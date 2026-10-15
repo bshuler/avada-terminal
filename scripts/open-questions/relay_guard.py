@@ -33,8 +33,8 @@ FORBIDDEN_TOOLS = {"Agent", "Task", "SendMessage", "Workflow", "EnterWorktree", 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 CTL_ALLOWED_VERBS = {"tabs", "panes", "read", "info", "submit", "send", "keys", "--help", "-h", "help"}
-CTL_VERB = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?avada\s+ctl\s+(\S+)(.*)", re.M)
-HP_CTL_VERB = re.compile(r"\$\{?HP_CTL\}?\s+(?:ctl\s+)?(\S+)(.*)", re.M)
+CTL_VERB = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?avada\s+ctl\s+(\S+?)(?=[\s;&|)]|$)(.*)", re.M)
+HP_CTL_VERB = re.compile(r"\$\{?HP_CTL\}?\s+(?:ctl\s+)?(\S+?)(?=[\s;&|)]|$)(.*)", re.M)
 KEYS_ALLOWED = re.compile(r"^\s+\S+\s+(backspace|escape)\s*(?:$|[;&|])", re.I)
 
 BASH_FORBIDDEN = [
