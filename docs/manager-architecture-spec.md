@@ -99,10 +99,24 @@ pane says read-only, inform-Bert-only, peer-not-manager — but never says *forw
 instructions to the Manager*. With that line missing, instructions Bert typed into the pane
 were carried out by the pane's own session (it spawned a worktree builder for the `avada://`
 link work on 2026-10-15 and messaged other agents directly on 2026-10-14/15), which is the
-exact failure MUST 10 forbids. The brief must also live in the repo or the orchestrator data
-directory, not a session scratchpad under `/private/tmp`, and the pane must run in the
-orchestrator data directory, not an unrelated project checkout, so it inherits the
-operating-model rules and no other project's memory. Tracked as backlog B13.
+exact failure MUST 10 forbids. The brief must also live in the repo, not a session scratchpad
+under `/private/tmp`, and the pane must run in a directory of its own, not an unrelated project
+checkout, so it carries no other project's memory.
+
+**Where it lives (done 2026-10-15).** The brief is `docs/open-questions-brief.md` in this repo
+(the source) and is copied verbatim to
+`~/Library/Application Support/avada/open-questions/AGENTS.md`, a sibling of the
+`orchestrator/` data directory, where the pane runs. It is deliberately **not** the orchestrator
+data directory: a session started there inherits the Orchestrator-tab fence *and* the Manager's
+project memory, and the operating-model module's fences only bind a pane that carries an
+accepted `AVADA_ROLE` (`manager|orchestrator|builder`), which the relay has none of until
+B13 step 2 adds `relay`. So the brief carries its own rules, and a PreToolUse hook in that
+directory (`.claude/hooks/relay_guard.py`) refuses the calls MUST 10 forbids: agent spawning
+and messaging tools, writes outside the relay's directory and the Manager's inbox, session
+launches, worktrees, commits, builds, and every `avada ctl` verb except tabs / panes / read /
+info / submit / send and keys backspace|escape. Messages down go as a file in
+`orchestrator/inbox/` plus a one-line pointer submitted into the Manager pane; messages up
+arrive in `open-questions/inbox/` or as lines submitted into the pane. Tracked as backlog B13.
 
 ---
 

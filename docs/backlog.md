@@ -32,12 +32,21 @@ the live fleet on 2026-10-15 against that:
 - Nothing in the repo enforces the relay: no code, no module rule, no test. Phase 3 (right
   Q/A panel) is the native fix and has no code yet.
 
-Fix direction, in order: (1) the Manager rewrites the brief with the forward-to-Manager rule,
-stores it in the orchestrator data directory, and relaunches the pane there with the
-operating-model rules installed; (2) the operating-model module grows an `open-questions` role
-(`AVADA_ROLE=relay`) whose fenced rule is the brief, so it travels with Avada; (3) phase 3 of
-`manager-architecture-plan.md` replaces the pane with the right Q/A panel carrying all three
-flows. Related: B7 (Orchestrator tab focus), `operating-model-module.md`.
+Fix direction, in order: (1) **done 2026-10-15** (by Bert's research session, on his choice,
+not by the Manager): the brief is `docs/open-questions-brief.md`, copied to
+`~/Library/Application Support/avada/open-questions/AGENTS.md`, a sibling of `orchestrator/`,
+with a PreToolUse guard hook (`.claude/hooks/relay_guard.py`, tested against sample tool
+calls) that refuses agent spawning, writes outside the relay dir and `orchestrator/inbox/`,
+session launches, worktrees, commits, builds and every pane-driving `ctl` verb; the pane was
+relaunched there and its first act was to carry Bert's "implement these goals" instruction
+down to the Manager (`orchestrator/inbox/`). Not the orchestrator data directory, because a
+session there inherits the Manager's memory namespace and the operating-model fences only
+bind an accepted `AVADA_ROLE`. The old pane stays until its background agent finishes, then
+the Manager parks it. (2) the operating-model module grows a relay role (`AVADA_ROLE=relay`,
+accepted by `rs/crates/core/src/pane_role.rs`) whose fenced rule is the brief, so it travels
+with Avada and the hook becomes a module file; (3) phase 3 of `manager-architecture-plan.md`
+replaces the pane with the right Q/A panel carrying all three flows. Related: B7 (Orchestrator
+tab focus), `operating-model-module.md`.
 
 ### B12 — a daemon handoff orphans every pane's TCC attribution; screen recording only works in panes opened after the relaunch (2026-10-14)
 
