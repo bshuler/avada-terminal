@@ -4390,12 +4390,43 @@ impl App {
                             // thread on every Ctrl+click (and showed no indicator).
                             win.state.borrow_mut().copy_link_text(i as usize, &path);
                         }
-                        // A clicked URL comes back unopened so it can go through
-                        // Preferences → Browser — the OS default, one chosen browser, or the
-                        // "Open link with…" chooser. `action` was read out of a borrow that
-                        // ended with the statement above, so dispatching here is safe.
+                        // A clicked URL comes back unopened. Avada's own `avada://`/`ssh://`
+                        // grammar (typed or printed into the pane as plain text — e.g. by
+                        // `avada url make`) opens in-process through the exact same parser an
+                        // external deep link uses, as one more pane in the current tab. Any
+                        // other scheme (http/https) goes through Preferences → Browser — the OS
+                        // default, one chosen browser, or the "Open link with…" chooser. `action`
+                        // was read out of a borrow that ended with the statement above, so
+                        // dispatching here is safe.
                         Some(avada_terminal_widget::LinkAction::OpenUrl(url)) => {
-                            app.run_command(&win, Command::OpenLink(url));
+                            if avada_core::cli::link::is_link(&url) {
+                                let home = std::env::var("HOME").ok();
+                                match avada_core::cli::link::parse(&url, home.as_deref()) {
+                                    Ok(link) => {
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        let mut spec = avada_core::cli::link::to_pane_spec(
+                                            &link,
+                                            now,
+                                            |p| std::path::Path::new(p).is_dir(),
+                                        );
+                                        crate::viewpane::refine_link_doc(&mut spec);
+                                        win.state
+                                            .borrow_mut()
+                                            .attach_panes_from_specs(&app.mgr, &[spec]);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("ignoring link {url:?}: {e}");
+                                        win.state
+                                            .borrow_mut()
+                                            .toast_active(&format!("Can't open link: {e}"));
+                                    }
+                                }
+                            } else {
+                                app.run_command(&win, Command::OpenLink(url));
+                            }
                         }
                         // A clicked FILE path does not open anything by itself: it reveals
                         // the file in the left panel's explorer, and the human decides

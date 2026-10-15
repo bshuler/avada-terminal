@@ -436,11 +436,11 @@ impl TerminalPane {
 
     // ---- Clickable file paths --------------------------------------------------------------
     //
-    // Plain click opens the file (editor / OS default); Ctrl/Cmd-click copies the resolved
-    // absolute path. Paths are verified on disk (against this pane's cwd) before they linkify,
-    // so prose tokens don't light up. The grid extraction lives in [`crate::links`]; resolve +
-    // open live in [`avada_core::paths`]. This is the renderer-side glue (Spike's
-    // `Terminal.tsx` link provider, ported to the cell grid).
+    // Plain click reveals the file in the left file tree (see [`LinkAction::Reveal`]);
+    // Ctrl/Cmd-click copies the resolved absolute path instead. Paths are verified on disk
+    // (against this pane's cwd) before they linkify, so prose tokens don't light up. The grid
+    // extraction lives in [`crate::links`]; resolve + open live in [`avada_core::paths`]. This
+    // is the renderer-side glue (Spike's `Terminal.tsx` link provider, ported to the cell grid).
 
     /// Set this pane's working directory (the base for resolving relative path tokens). Clearing
     /// or changing it drops the verify cache, since the same token can resolve elsewhere.
@@ -3365,6 +3365,28 @@ mod tests {
         // Over the bare word "go" → nothing; past the URL → nothing.
         assert!(p.link_at(1.5, 0.5, w, h).is_none());
         assert!(p.link_at(30.5, 0.5, w, h).is_none());
+    }
+
+    #[test]
+    fn an_avada_link_printed_as_plain_text_activates_as_open_url() {
+        // `avada url make` (or a human typing it) prints a literal `avada://…` string into
+        // the pane. It must linkify and activate exactly like an http(s) URL — the app's
+        // `OpenUrl` dispatch is what tells it apart from a browser link, not this layer.
+        let mut p = unit_pane(40, 3);
+        p.feed("open avada://doc?path=/tmp/x.md here");
+        let (w, h) = (40.0, 3.0);
+
+        let hit = p
+            .link_at(10.5, 0.5, w, h)
+            .expect("hover over the avada:// link should hit");
+        assert!(hit.is_url);
+        assert_eq!(hit.abs_path, "avada://doc?path=/tmp/x.md");
+
+        let action = p.activate_link(10.5, 0.5, w, h, false);
+        assert_eq!(
+            action,
+            Some(LinkAction::OpenUrl("avada://doc?path=/tmp/x.md".to_string()))
+        );
     }
 
     #[test]

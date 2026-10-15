@@ -48,6 +48,27 @@ running, the link becomes a new tab of the focused window, and that window comes
 front. On macOS the URL arrives through `application:openURLs:`
 (`crates/app/src/window/macos.rs`) and is handed to the running instance like a second launch.
 
+## Clicking a link printed inside a pane
+
+A terminal pane linkifies `http://`, `https://`, `avada://` and `ssh://` tokens in its own
+rendered output (`crates/terminal-widget/src/links.rs`) — so a link a program prints (e.g.
+`avada url make`'s output, or one typed by hand) is clickable without leaving the pane.
+
+A plain click on an `avada://`/`ssh://` token parses it with the same strict parser described
+below and opens it as a new pane in the current tab — the in-process version of the
+second-instance attach a link clicked outside Avada gets. A plain click on `http`/`https`
+instead routes through Preferences → Browser, same as always. Ctrl/Cmd-click always copies
+the literal text, regardless of scheme.
+
+This is plain-text detection only. A program can also *declare* a link with an OSC 8 escape
+(the href can differ from the visible label); those stay restricted to `http`/`https`, because
+an arbitrary OSC 8 href is not something the user can see before clicking — unlike text typed
+or printed into the pane, which is exactly the characters on screen.
+
+A plain click on a file path (not a URL) reveals it in the left file tree rather than opening
+it directly, same as it always has; right-clicking a path in a pane offers the same context
+menu as right-clicking it in the file tree.
+
 ## What a link can never do
 
 Any web page can put a link in front of a click, so links are parsed strictly

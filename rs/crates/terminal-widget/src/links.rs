@@ -10,9 +10,16 @@
 //! Also detects commit hashes ([`extract_commit_candidates`]) — hex tokens the pane hands to
 //! git for the only verification that means anything, exactly as it hands a path to the disk.
 //!
-//! Also detects `http://`/`https://` URLs ([`extract_url_candidates`]) — same click UX as paths
-//! (plain click opens, Ctrl-click copies), but with no on-disk verification step: a
-//! well-formed URL linkifies as-is and opens in the default browser.
+//! Also detects `http://`/`https://`/`avada://`/`ssh://` URLs ([`extract_url_candidates`]) — same
+//! click UX as paths (plain click opens, Ctrl-click copies), but with no on-disk verification
+//! step: a well-formed URL linkifies as-is. `http`/`https` open in the default browser; an
+//! `avada://`/`ssh://` link opens in-process instead — the same [`avada_core::cli::link`] parser
+//! an external deep link goes through, so a link printed to the screen (e.g. `avada url make doc
+//! …` piped to `cat`) behaves exactly like one clicked outside Avada. This is text-visible-only:
+//! the OSC 8 hyperlink path (`crate::pane::TerminalPane::osc8_hit`) deliberately keeps its
+//! narrower http/https-only allowlist, because an OSC 8 href can carry a scheme the *visible
+//! label* never shows — clickable text here is always what's on the screen, so there's nothing
+//! to spoof.
 //!
 //! Shape rule (decided): a candidate must contain a path separator OR end in a file extension.
 //! Bare words like `build`/`src`/`test` never linkify even when a matching file exists — that
@@ -360,7 +367,8 @@ pub fn leading_path_fragment(text: &str) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
-/// A detected `http://`/`https://` URL and the column range it occupies on the row.
+/// A detected `http://`/`https://`/`avada://`/`ssh://` URL and the column range it occupies on
+/// the row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UrlCandidate {
     /// The URL with any trailing sentence punctuation / unbalanced closers stripped.
@@ -378,36 +386,46 @@ fn url_stop(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>')
 }
 
-/// If `chars[i..]` starts with `http://` or `https://` (scheme case-insensitive), return the
-/// scheme length in chars; else `None`.
+/// The schemes a bare `scheme://` token linkifies as. `http`/`https` are the browser case;
+/// `avada`/`ssh` are Avada's own link grammar (`avada_core::cli::link`) — recognizing them here
+/// is what lets a link PRINTED to a pane (not just one clicked outside Avada) open the same way.
+/// `https` is listed before `http` only so the two are visually ordered by length; matching is
+/// independent per entry, so the order has no effect on which one wins.
+const URL_SCHEMES: &[&str] = &["https", "http", "avada", "ssh"];
+
+/// If `chars[i..]` starts with one of [`URL_SCHEMES`] followed by `://` (case-insensitive),
+/// return the scheme's length in chars (including the `://`); else `None`.
 #[tracing::instrument(level = "debug", ret)]
 fn url_scheme_len(chars: &[char], i: usize) -> Option<usize> {
-    let mut j = i;
-    for want in ['h', 't', 't', 'p'] {
-        if chars.get(j).map(|c| c.to_ascii_lowercase()) != Some(want) {
-            return None;
+    'scheme: for scheme in URL_SCHEMES {
+        let mut j = i;
+        for want in scheme.chars() {
+            if chars.get(j).map(|c| c.to_ascii_lowercase()) != Some(want) {
+                continue 'scheme;
+            }
+            j += 1;
         }
-        j += 1;
-    }
-    if chars.get(j).map(|c| c.to_ascii_lowercase()) == Some('s') {
-        j += 1;
-    }
-    for want in [':', '/', '/'] {
-        if chars.get(j) != Some(&want) {
-            return None;
+        for want in [':', '/', '/'] {
+            if chars.get(j) != Some(&want) {
+                continue 'scheme;
+            }
+            j += 1;
         }
-        j += 1;
+        return Some(j - i);
     }
-    Some(j - i)
+    None
 }
 
-/// Extract every `http://`/`https://` URL from one rendered terminal row.
+/// Extract every [`URL_SCHEMES`] URL from one rendered terminal row.
 ///
-/// Boundary rules: a URL starts at a scheme not preceded by a scheme-ish char (so `xhttp://`
-/// doesn't fire mid-word) and runs to whitespace/quote/angle-bracket. Trailing sentence
-/// punctuation (`.`, `,`, `;`, `:`, `!`, `?`) is stripped, and trailing `)`/`]`/`}` only when
-/// unbalanced within the URL — so `(https://a.com)` drops the paren but a Wikipedia-style
-/// `…/Foo_(bar)` keeps it. No on-disk/network verification: shape alone linkifies.
+/// Boundary rules: a URL starts at a scheme not preceded by a scheme-ish char (so `xhttp://` /
+/// `xavada://` doesn't fire mid-word) and runs to whitespace/quote/angle-bracket. Trailing
+/// sentence punctuation (`.`, `,`, `;`, `:`, `!`, `?`) is stripped, and trailing `)`/`]`/`}` only
+/// when unbalanced within the URL — so `(https://a.com)` drops the paren but a Wikipedia-style
+/// `…/Foo_(bar)` keeps it. No on-disk/network verification: shape alone linkifies — an
+/// `avada://`/`ssh://` candidate is handed to [`avada_core::cli::link::parse`] only on click
+/// (see `crate::pane`'s `LinkAction::OpenUrl` and the app's dispatch of it), the same point a
+/// malformed one is already rejected for an external link.
 #[tracing::instrument(level = "debug", ret)]
 pub fn extract_url_candidates(line: &str) -> Vec<UrlCandidate> {
     let chars: Vec<char> = line.chars().collect();
@@ -803,6 +821,26 @@ mod tests {
         assert_eq!(urls("http://a.com"), vec!["http://a.com"]);
         assert_eq!(urls("HTTPS://A.COM/x"), vec!["HTTPS://A.COM/x"]);
         assert_eq!(urls("Http://mixed.example"), vec!["Http://mixed.example"]);
+    }
+
+    #[test]
+    fn finds_avada_and_ssh_links_the_same_way_as_http() {
+        // Printed by `avada url make …` (or typed by hand) into a pane: these linkify exactly
+        // like an http(s) URL, because a click hands them to the same `avada_core::cli::link`
+        // parser an external deep link goes through (see the app's `OpenUrl` dispatch).
+        assert_eq!(
+            urls("open it: avada://doc?path=/tmp/notes.md"),
+            vec!["avada://doc?path=/tmp/notes.md"]
+        );
+        assert_eq!(urls("avada://terminal"), vec!["avada://terminal"]);
+        assert_eq!(
+            urls("AVADA://SSH/bert@hp3:2222"),
+            vec!["AVADA://SSH/bert@hp3:2222"]
+        );
+        assert_eq!(urls("ssh://bert@hp3:2222"), vec!["ssh://bert@hp3:2222"]);
+        // Scheme-ish word boundary applies the same way it does for http(s).
+        assert_eq!(urls("xavada://nope").len(), 0);
+        assert_eq!(urls("wssh://nope").len(), 0);
     }
 
     #[test]
