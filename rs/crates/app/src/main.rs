@@ -58,6 +58,7 @@ mod status_tray;
 mod subagent_scan;
 mod tetris;
 mod theme;
+mod tips;
 mod uitest;
 mod update;
 mod url_cli;

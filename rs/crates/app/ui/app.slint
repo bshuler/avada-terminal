@@ -10,7 +10,7 @@
 // dispatched against the central `State` (see ARCHITECTURE.md).
 
 import { Theme } from "theme.slint";
-import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter, BannerField, StatusCard, StatusAdapter, TaskRow, TasksAdapter } from "types.slint";
+import { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, FramePaletteOption, KeybindingItem, MenuEntry, CtxTab, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, TipRowUi, TipsAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter, AttentionCard, AttentionAdapter, BannerAdapter, BannerField, StatusCard, StatusAdapter, TaskRow, TasksAdapter } from "types.slint";
 import { ModulePlaceholderAdapter } from "types.slint";
 // ---- track V3: the image pane's row, fit rectangle and adapter.
 import { ImagePaneItem, ImageFit, ImagePaneAdapter } from "types.slint";
@@ -34,7 +34,7 @@ import { KeyMsg, HiRect } from "@widgets";
 // parser bridge; UI in contextmenu.slint).
 export { Theme }
 
-export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, KeybindingItem, MenuEntry, CtxTab, KeyMsg, HiRect, HistoryUi, ReminderItem, RemindersAdapter, ReminderCustom, ClosedItemUi, ClosedAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter }
+export { PaneItem, TabItem, DividerItem, LayoutOption, PaletteItem, ProjectItem, PrefOption, PrefToolRow, PrefBrowserRow, KeybindingItem, MenuEntry, CtxTab, KeyMsg, HiRect, HistoryUi, ReminderItem, RemindersAdapter, ReminderCustom, ClosedItemUi, ClosedAdapter, TipRowUi, TipsAdapter, LeftPaneRow, LeftTabRow, LeftSessionRow, LeftPanelAdapter, RightsModuleRow, RightsCapRow, RightsAdapter, RailEntryRow, RailRowItem, RailAdapter }
 // ---- track H1: the module placeholder adapter, re-exported so the Rust controller can
 // reach it via `global::<ModulePlaceholderAdapter>()`; its UI lives in placeholder.slint.
 export { ModulePlaceholderAdapter }
@@ -705,7 +705,7 @@ export component AppWindow inherits Window {
                 // projects, reminders OR recently-closed section is open (the PaneView
                 // sibling shrinks to match; the three are mutually exclusive — see
                 // sidebar.slint).
-                width: (root.sidebar-open || RemindersAdapter.open || ClosedAdapter.open)
+                width: (root.sidebar-open || RemindersAdapter.open || ClosedAdapter.open || TipsAdapter.open)
                     ? 280px : 44px;
                 projects: root.projects;
                 projects-open: root.sidebar-open;

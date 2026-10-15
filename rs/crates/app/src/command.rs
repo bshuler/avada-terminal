@@ -362,6 +362,10 @@ pub enum Command {
     RestoreClosed(i32),
     /// Drop history entry `0` for good, killing the sessions it held open.
     DiscardClosed(i32),
+    /// Move a harvested agent tip to the tips archive (never deletes).
+    ArchiveTip(i32),
+    /// Bring an archived tip back to the active list.
+    RestoreTip(i32),
     /// The close-confirmation card's "Close" — carry out the close it was holding.
     ConfirmCloseGo,
     /// The card's "ask before closing" checkbox.
@@ -1070,6 +1074,8 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
         Command::ToggleClosed => state.toggle_closed(),
         Command::RestoreClosed(id) => state.restore_closed(id, mgr),
         Command::DiscardClosed(id) => state.discard_closed(id, mgr),
+        Command::ArchiveTip(id) => crate::tips::archive_cmd(id),
+        Command::RestoreTip(id) => crate::tips::restore_cmd(id),
         Command::ConfirmCloseGo => {
             if !state.confirm_close_go(mgr) {
                 return Effect::Quit;

@@ -39,6 +39,7 @@ mod rights;
 mod subagents;
 mod table;
 mod tabs;
+mod tips;
 mod toasts;
 mod viewlink;
 

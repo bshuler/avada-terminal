@@ -22,16 +22,16 @@ These are what `src/uitest/matrix.rs` recomputes and compares, so they cannot ro
 
 | Measure | Count |
 |---|---|
-| callbacks declared | 194 |
-| …bound to Rust | 113 |
-| …proven end-to-end | 113 |
+| callbacks declared | 196 |
+| …bound to Rust | 114 |
+| …proven end-to-end | 114 |
 | …bound but unproven | 0 |
-| …ui-local or dead | 81 |
-| Command variants | 159 |
+| …ui-local or dead | 82 |
+| Command variants | 161 |
 | …reachable by a default keybinding | 15 |
 | keybindings in default_bindings() | 19 |
 
-End-to-end coverage of the Rust-reaching UI surface is **100%** (113 of 113). "Named by a test" is an *upper* bound on proven:
+End-to-end coverage of the Rust-reaching UI surface is **100%** (114 of 114). "Named by a test" is an *upper* bound on proven:
 a test may mention a callback while asserting something else about it, and a proven
 callback can still front a feature whose real work happens past a boundary the harness
 cannot cross — see **Known gaps** below, which is part of this answer, not a footnote.
@@ -40,12 +40,14 @@ cannot cross — see **Known gaps** below, which is part of this answer, not a f
 
 | Callback | Declared in | Status |
 |---|---|---|
+| `act` | `sidebar.slint` | `ui-local` |
 | `acted` | `leftpanel.slint` | `ui-local` |
 | `activate` | `leftpanel.slint` | `e2e` |
 | `add` | `types.slint` | `ui-local` |
 | `add_project` | `sidebar.slint` | `ui-local` |
 | `add_project_submit` | `overlays.slint` | `ui-local` |
 | `adopt_session` | `types.slint` | `e2e` |
+| `archive` | `types.slint` | `e2e` |
 | `area_resized` | `app.slint` | `e2e` |
 | `ask_allow_always` | `types.slint` | `e2e` |
 | `ask_allow_once` | `types.slint` | `e2e` |
@@ -243,6 +245,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | Command | Key |
 |---|---|
 | `ApplySetting` | — |
+| `ArchiveTip` | — |
 | `BeginRename` | — |
 | `BeginRenamePane` | — |
 | `CancelRename` | — |
@@ -350,6 +353,7 @@ a menu, or the control plane — not being on a key is not a gap.
 | `RestartPane` | — |
 | `RestoreClosed` | — |
 | `RestoreReminder` | — |
+| `RestoreTip` | — |
 | `RevealInFiles` | — |
 | `RevealPaneCwd` | — |
 | `RevealPath` | — |

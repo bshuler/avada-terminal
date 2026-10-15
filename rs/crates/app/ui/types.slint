@@ -409,6 +409,28 @@ export global ClosedAdapter {
     callback discard(int);
 }
 
+export struct TipRowUi {
+    id: int,
+    title: string,
+    text: string,
+    context: string,
+    age: string,
+    reason: string,
+}
+
+// The agent-tips bridge (TIPS section in the right rail). `open` and `show-archive` are
+// owned by the UI; Rust pushes the rows and handles archive/restore.
+export global TipsAdapter {
+    in property <[TipRowUi]> rows;
+    in property <[TipRowUi]> archived;
+    in-out property <bool> open;
+    in-out property <bool> show-archive;
+    // A row's Archive clicked → move it to the archive (never deletes).
+    callback archive(int);
+    // An archived row's Restore clicked → back to the active list.
+    callback restore(int);
+}
+
 // One option in a preferences picker (font family). `active` marks the current value.
 // One row in Preferences → Tools: every tool in the registry, favourited or not. `detected`
 // is where `PATH` found the binary ("" when it isn't installed) and `override` is the user's

@@ -203,6 +203,8 @@ pub struct Window {
     pub last_reminders: Cell<Option<u64>>,
     /// Same guard for the `ClosedAdapter` global's recently-closed rows.
     pub last_closed: Cell<Option<u64>>,
+    /// Same guard for the `TipsAdapter` global's rows.
+    pub last_tips: Cell<Option<u64>>,
     /// Signature of the last attention-card set pushed into `AttentionAdapter`, and the ids of
     /// needs-response cards the human has already seen the bottom drawer open over.
     pub last_attention: Cell<Option<u64>>,
@@ -277,6 +279,10 @@ pub struct App {
     /// hash fed to the engine and when, so we feed only on change and at most every
     /// [`AI_FEED_INTERVAL`].
     ai_feed: RefCell<std::collections::HashMap<String, (u64, std::time::Instant)>>,
+    /// When the tips pump last scanned the panes, and when each pane's notice was last
+    /// dismissed (the cooldown that keeps a stuck notice from being hammered).
+    tip_scan_at: RefCell<Option<std::time::Instant>>,
+    tip_dismissed: RefCell<std::collections::HashMap<String, std::time::Instant>>,
     /// Per-pane leftover of the `BROWSER`-shim scan: an `openurl` reply can be split
     /// across two pty reads, so the tail of a chunk that might still be the start of one
     /// is carried into the next. See [`avada_core::session::openurl`].
@@ -325,6 +331,9 @@ pub struct App {
 /// Kept brisk so the subtitle tracks a live agent/chat pane; the real refresh floor is the
 /// model's per-call latency, not this.
 const AI_FEED_INTERVAL: Duration = Duration::from_millis(400);
+/// How often the tips pump scans panes for a notice, and the per-pane dismiss cooldown.
+const TIP_SCAN_EVERY: Duration = Duration::from_millis(1500);
+const TIP_DISMISS_COOLDOWN: Duration = Duration::from_secs(8);
 
 /// How long after launch (and never before the first window is seeded) the dead-session
 /// recovery waits before restarting every pane (see [`App::service_dead_session_restart`]).
@@ -385,6 +394,8 @@ impl App {
             ai: crate::ai::AiBridge::spawn(),
             ai_ctx_sig: RefCell::new(std::collections::HashMap::new()),
             ai_feed: RefCell::new(std::collections::HashMap::new()),
+            tip_scan_at: RefCell::new(None),
+            tip_dismissed: RefCell::new(std::collections::HashMap::new()),
             openurl_carry: RefCell::new(std::collections::HashMap::new()),
             control,
             modules,
@@ -1683,6 +1694,7 @@ impl App {
             last_update: RefCell::new(None),
             last_reminders: Cell::new(None),
             last_closed: Cell::new(None),
+            last_tips: Cell::new(None),
             last_attention: Cell::new(None),
             last_status: Cell::new(None),
             attention_seen: RefCell::new(std::collections::HashSet::new()),
@@ -2045,6 +2057,7 @@ impl App {
         //     unchanged list costs nothing at either tick cadence).
         self.pump_reminders(&windows);
         self.pump_closed(&windows);
+        self.pump_tips(&windows);
         self.pump_attention(&windows);
         self.pump_banner(&windows);
         self.pump_status(&windows);
@@ -2823,6 +2836,102 @@ impl App {
             let g = w.app.global::<crate::ClosedAdapter>();
             g.set_rows(slint::ModelRc::from(Rc::new(slint::VecModel::from(rows))));
             g.set_open(open);
+        }
+    }
+
+    /// Tips pump (UI thread): harvest `✦ Heads up` notices off every pane, dismiss them so
+    /// the agent keeps working, run the hourly review, and mirror the store into each
+    /// window's `TipsAdapter`. Scanning is debounced per pump (`TIP_SCAN_EVERY`) and the
+    /// UI push is signature-gated like [`Self::pump_closed`].
+    #[tracing::instrument(level = "debug", skip(self, windows))]
+    fn pump_tips(&self, windows: &[Rc<Window>]) {
+        let now_ms = crate::glow::now_epoch_ms() as i64;
+        let now = std::time::Instant::now();
+        let mut scan = self.tip_scan_at.borrow_mut();
+        let due = scan.map_or(true, |t| now.duration_since(t) >= TIP_SCAN_EVERY);
+        if due {
+            *scan = Some(now);
+            drop(scan);
+            let dir = crate::tips::dir();
+            let mut store = crate::tips::store().lock().expect("tip store lock");
+            let mut changed = false;
+            for w in windows {
+                let st = w.state.borrow();
+                for tab in &st.tabs {
+                    for p in &tab.panes {
+                        let screen = p.pane.screen_text();
+                        if !screen.contains("Heads up") {
+                            continue;
+                        }
+                        let Some(n) = crate::tips::parse_notice(&screen) else {
+                            continue;
+                        };
+                        if let Some(id) = store.capture(&p.uid, p.title.as_str(), &n, now_ms) {
+                            if let Some(t) = store.tips.iter().find(|t| t.id == id) {
+                                crate::tips::append_feed(&dir, t);
+                            }
+                            changed = true;
+                        }
+                        // Dismiss only onto an empty input line with no human typing, and
+                        // at most once per cooldown per pane, so a key can never land in
+                        // someone's half-written message or loop.
+                        let cool = self.tip_dismissed.borrow().get(&p.uid).copied();
+                        if n.input_empty
+                            && !crate::state::human_line_pending(&p.uid)
+                            && cool.map_or(true, |t| now.duration_since(t) >= TIP_DISMISS_COOLDOWN)
+                        {
+                            self.tip_dismissed.borrow_mut().insert(p.uid.clone(), now);
+                            crate::state::pane_write(&self.mgr, &p.uid, crate::tips::DISMISS_KEY, "tip-dismiss");
+                        }
+                    }
+                }
+            }
+            if now_ms - store.last_review_ms >= crate::tips::REVIEW_EVERY_MS {
+                store.last_review_ms = now_ms;
+                if store.archive_stale(now_ms) > 0 {
+                    changed = true;
+                }
+                crate::tips::archive_stale_questions(&crate::tips::open_questions_dir(), now_ms);
+            }
+            if changed {
+                crate::tips::save(&dir, &store);
+            }
+        } else {
+            drop(scan);
+        }
+        let (sig, active, archived) = {
+            let store = crate::tips::store().lock().expect("tip store lock");
+            let mut h: u64 = 0xcbf29ce484222325;
+            let mut rows = Vec::new();
+            let mut arch = Vec::new();
+            for t in &store.tips {
+                let age = crate::state::rel_age(now_ms as u64, t.captured_ms as u64);
+                for b in t.id.to_le_bytes().iter().chain(age.as_bytes()).chain(&[t.archived() as u8]) {
+                    h ^= *b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                let row = crate::TipRowUi {
+                    id: t.id,
+                    title: t.pane_title.clone().into(),
+                    text: t.text.clone().into(),
+                    context: t.context.clone().into(),
+                    age: age.into(),
+                    reason: t.archive_reason.clone().into(),
+                };
+                if t.archived() { arch.push(row) } else { rows.push(row) }
+            }
+            rows.reverse();
+            arch.reverse();
+            (h, rows, arch)
+        };
+        for w in windows {
+            if w.last_tips.get() == Some(sig) {
+                continue;
+            }
+            w.last_tips.set(Some(sig));
+            let g = w.app.global::<crate::TipsAdapter>();
+            g.set_rows(slint::ModelRc::from(Rc::new(slint::VecModel::from(active.clone()))));
+            g.set_archived(slint::ModelRc::from(Rc::new(slint::VecModel::from(archived.clone()))));
         }
     }
 
@@ -4976,6 +5085,24 @@ impl App {
                         app.run_command(&w, Command::DiscardClosed(cid));
                     }
                 });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app.global::<crate::TipsAdapter>().on_archive(move |tid| {
+                if let Some(w) = app.window_by_id(id) {
+                    app.run_command(&w, Command::ArchiveTip(tid));
+                }
+            });
+        }
+        {
+            let app = app.clone();
+            let id = win.id;
+            win.app.global::<crate::TipsAdapter>().on_restore(move |tid| {
+                if let Some(w) = app.window_by_id(id) {
+                    app.run_command(&w, Command::RestoreTip(tid));
+                }
+            });
         }
         // ---- the left slide-out panel (mux plan M5): the LeftPanelAdapter callbacks ----
         // Same shape as the reminder bridge above: the panel's UI is entirely inside

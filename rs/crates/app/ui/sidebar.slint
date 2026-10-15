@@ -20,7 +20,7 @@
 // self-contained — no new app-level wiring.
 
 import { Theme } from "theme.slint";
-import { ProjectItem, WorktreeRow, ClaudeSessionItem, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter } from "types.slint";
+import { ProjectItem, WorktreeRow, ClaudeSessionItem, HistoryUi, ReminderItem, RemindersAdapter, ClosedItemUi, ClosedAdapter, TipRowUi, TipsAdapter } from "types.slint";
 import { TipArea } from "tooltip.slint";
 
 // "+" quick-pane glyph (two crossed bars — font-independent). `bar` sets the cross size
@@ -773,6 +773,65 @@ component ReminderRowView inherits Rectangle {
     }
 }
 
+// ===== agent tips =====
+// One captured tip: its text, the pane it came from, and when. Archive moves it out of
+// the active list; on the archive view the same slot offers Restore.
+component TipRowView inherits Rectangle {
+    in property <TipRowUi> item;
+    in property <bool> archived;
+    callback act();
+    background: Theme.surface;
+    border-radius: 5px;
+    VerticalLayout {
+        padding: 7px;
+        spacing: 3px;
+        Text {
+            text: root.item.text;
+            color: Theme.text;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Text {
+            text: root.item.title + " · " + root.item.age + (root.item.reason != "" ? " · " + root.item.reason : "");
+            color: Theme.subtext;
+            font-size: 10px;
+            overflow: elide;
+        }
+        Text {
+            text: root.item.context;
+            color: Theme.subtext;
+            font-size: 10px;
+            wrap: word-wrap;
+            max-height: 48px;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            alignment: end;
+            Rectangle {
+                width: 64px;
+                height: 20px;
+                border-radius: 4px;
+                background: aa.has-hover ? Theme.surface2 : transparent;
+                border-width: 1px;
+                border-color: Theme.border;
+                Text {
+                    text: root.archived ? "Restore" : "Archive";
+                    color: Theme.text;
+                    font-size: 10px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                aa := TipArea {
+                    tip: root.archived ? "Move back to the active tips" : "Move to the archive — nothing is deleted";
+                    side: 1;
+                    mouse-cursor: pointer;
+                    clicked => { root.act(); }
+                }
+            }
+        }
+    }
+}
+
 // ===== recently closed =====
 // One history entry: tint dot + title + what-and-when line, with a discard × on hover.
 // Clicking the row re-docks it (the shell is still running); the × gives up on it for good,
@@ -989,6 +1048,7 @@ export component SidebarRail inherits Rectangle {
             clicked => {
                 if (RemindersAdapter.open) { RemindersAdapter.toggle(); }
                 if (ClosedAdapter.open) { ClosedAdapter.toggle(); }
+                TipsAdapter.open = false;
                 root.toggle-projects();
             }
         }
@@ -1036,7 +1096,7 @@ export component SidebarRail inherits Rectangle {
             tip: RemindersAdapter.open ? "Hide reminders" : "Reminders — panels you parked for later";
             side: 1;
             mouse-cursor: pointer;
-            clicked => { RemindersAdapter.toggle(); }
+            clicked => { TipsAdapter.open = false; RemindersAdapter.toggle(); }
         }
     }
 
@@ -1139,13 +1199,13 @@ export component SidebarRail inherits Rectangle {
             tip: ClosedAdapter.open ? "Hide recently closed" : "Recently closed — reopen a panel or tab";
             side: 1;
             mouse-cursor: pointer;
-            clicked => { ClosedAdapter.toggle(); }
+            clicked => { TipsAdapter.open = false; ClosedAdapter.toggle(); }
         }
     }
 
     // The RECENTLY CLOSED section (IN-RAIL, same geometry as REMINDERS above). Gated on the
     // other two so a stray both-open state can't draw two sections on top of each other.
-    if ClosedAdapter.open && !root.projects-open && !RemindersAdapter.open : Rectangle {
+    if ClosedAdapter.open && !root.projects-open && !RemindersAdapter.open && !TipsAdapter.open : Rectangle {
         x: 0;
         y: 0;
         width: root.width - root.rail-icons-w;
@@ -1194,6 +1254,146 @@ export component SidebarRail inherits Rectangle {
                             item: c;
                             restore => { ClosedAdapter.restore(c.id); }
                             discard => { ClosedAdapter.discard(c.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== agent tips: ✦ button + count badge + in-rail TIPS section =====
+    tips-btn := Rectangle {
+        x: root.width - root.rail-icons-w + 6px;
+        y: 152px;                                   // below the ↩ recently-closed button
+        width: 32px;
+        height: 32px;
+        border-radius: 7px;
+        background: (TipsAdapter.open || ta.has-hover) ? Theme.surface2 : transparent;
+        Text {
+            text: "✦";
+            color: TipsAdapter.open ? Theme.accent : (ta.has-hover ? Theme.text : Theme.subtext);
+            font-size: 15px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            x: 0; y: 0;
+            width: parent.width;
+            height: parent.height;
+        }
+        if TipsAdapter.rows.length > 0 : Rectangle {
+            x: parent.width - self.width - 1px;
+            y: 1px;
+            width: 15px;
+            height: 14px;
+            border-radius: 7px;
+            background: Theme.accent;
+            Text {
+                text: TipsAdapter.rows.length;
+                color: Theme.bg;
+                font-size: 9px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        ta := TipArea {
+            tip: TipsAdapter.open ? "Hide agent tips" : "Agent tips — harvested from your agents";
+            side: 1;
+            mouse-cursor: pointer;
+            clicked => {
+                if (RemindersAdapter.open) { RemindersAdapter.toggle(); }
+                if (ClosedAdapter.open) { ClosedAdapter.toggle(); }
+                if (root.projects-open) { root.toggle-projects(); }
+                TipsAdapter.open = !TipsAdapter.open;
+            }
+        }
+    }
+
+    if TipsAdapter.open && !root.projects-open && !RemindersAdapter.open && !ClosedAdapter.open : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width - root.rail-icons-w;
+        height: root.height;
+        background: Theme.mantle;
+        clip: true;
+        TouchArea {}
+        Rectangle { x: parent.width - 1px; width: 1px; height: 100%; background: Theme.border; }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 4px;
+
+            HorizontalLayout {
+                height: 22px;
+                Text {
+                    text: TipsAdapter.show-archive ? "TIPS · ARCHIVE" : "TIPS";
+                    color: Theme.subtext;
+                    font-size: 10px;
+                    font-weight: 700;
+                    letter-spacing: 0.5px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 70px;
+                    border-radius: 4px;
+                    background: va.has-hover ? Theme.surface2 : transparent;
+                    Text {
+                        text: TipsAdapter.show-archive ? "← Active" : "Archive (" + TipsAdapter.archived.length + ")";
+                        color: Theme.text;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    va := TipArea {
+                        tip: "Switch between the active tips and the archive";
+                        side: 1;
+                        mouse-cursor: pointer;
+                        clicked => { TipsAdapter.show-archive = !TipsAdapter.show-archive; }
+                    }
+                }
+            }
+
+            if !TipsAdapter.show-archive && TipsAdapter.rows.length == 0 : Text {
+                text: "No tips yet. When an agent raises a Heads up notice it is captured here with its pane and context, and dismissed so the agent keeps working.";
+                color: Theme.subtext;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            if TipsAdapter.show-archive && TipsAdapter.archived.length == 0 : Text {
+                text: "Nothing archived. Stale tips are moved here by the hourly review — never deleted.";
+                color: Theme.subtext;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                clip: true;
+                Flickable {
+                    width: 100%;
+                    height: 100%;
+                    viewport-width: self.width;
+                    viewport-height: tipsbody.preferred-height;
+                    tipsbody := VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        if !TipsAdapter.show-archive : VerticalLayout {
+                            spacing: 4px;
+                            for t[i] in TipsAdapter.rows : TipRowView {
+                                item: t;
+                                archived: false;
+                                act => { TipsAdapter.archive(t.id); }
+                            }
+                        }
+                        if TipsAdapter.show-archive : VerticalLayout {
+                            spacing: 4px;
+                            for t[i] in TipsAdapter.archived : TipRowView {
+                                item: t;
+                                archived: true;
+                                act => { TipsAdapter.restore(t.id); }
+                            }
                         }
                     }
                 }
