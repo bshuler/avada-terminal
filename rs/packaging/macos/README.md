@@ -72,7 +72,8 @@ Gatekeeper.
 
 Notarization is **mandatory on the Developer ID tier** and never attempted on
 the others, which Apple rejects anyway. A Developer ID build with no reachable
-credential fails before the multi-minute build starts, because an un-notarized
+credential fails before signing (after the compile, before the multi-minute
+sign + dmg + Apple wait), because an un-notarized
 Developer ID dmg is a release that every other Mac refuses. The script also
 refuses to run at all if a password (`AVADA_NOTARY_PASSWORD`,
 `APPLE_APP_SPECIFIC_PASSWORD`, `AC_PASSWORD`, `AVADA_NOTARY_KEY`) has been
@@ -156,7 +157,7 @@ change, so the API key is the path `bundle.sh` is built around.
 rs/packaging/macos/notary-credential-store.sh ~/Downloads/AuthKey_<KEYID>.p8 <KEYID> <ISSUER-UUID>
 ```
 
-Run it from a human terminal (or with the `!` prefix in Claude Code): it costs
+Run it from a Terminal window, not through Claude: it costs
 one Touch ID dialog and the item exists when it returns, at which point the
 script shreds the `.p8` — 1Password is then the only copy. Run from an agent
 shell the write is queued on the secret-broker slate instead and the script
