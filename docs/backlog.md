@@ -48,46 +48,6 @@ with Avada and the hook becomes a module file; (3) phase 3 of `manager-architect
 replaces the pane with the right Q/A panel carrying all three flows. Related: B7 (Orchestrator
 tab focus), `operating-model-module.md`.
 
-### B12 — a daemon handoff orphans every pane's TCC attribution; screen recording only works in panes opened after the relaunch (2026-10-14)
-
-macOS attributes a pane shell's privacy requests (Screen Recording, etc.) to the process that was
-*responsible* for it when it was spawned: the session daemon it was born under. After a GUI quit +
-reopen, the successor daemon adopts the ptys but the kernel's responsibility link still points at
-the retired daemon; once that daemon exits, each old shell is reparented to launchd and becomes
-responsible for itself (`responsibility_get_pid_responsible_for_pid` returns its own pid). A bare
-`zsh` has no TCC row and cannot prompt, so `screencapture` in every pre-relaunch pane fails with
-"could not create image from display" while the identical command in a pane opened after the
-relaunch succeeds. Observed 2026-10-14 21:06 after the 0.2.48 relaunch: test pane opened at
-21:03 under daemon 58577 → `Allowed (System Set)`; test pane from 20:5x under the retired daemon
-51411 → denied, `ps` ppid 1. This is independent of code signing (0.2.48 fixed the *other* half:
-ad-hoc signatures made the grant itself die on every rebuild — commit `3b63dc7`). Every
-install + relaunch therefore still forces users to reopen every pane that needs screen capture,
-including the Avada UI pane's Claude session. Fix direction: the adopted pty's shell cannot be
-re-parented, so the successor must either (a) keep the retired daemon alive as a responsible
-stub for its old shells (it runs from the attic bundle, which the install script already keeps),
-or (b) respawn the shell under the new daemon on request (`avada ctl respawn <pane>`), or (c) use
-`responsibility_spawnattrs_setdisclaim` so panes are responsible for themselves and get their own
-TCC prompt (then the grant is per `zsh`, which macOS shows as "zsh" — worse UX). Proof artefacts:
-`/tmp/tcc6.log` (tccd `AttributionChain` lines) and this session's write-up. Related: B11 (the
-handoff itself), B4.
-
-**Decision 2026-10-15 — (a), as an `exec` into a linger stub.** The retired daemon, after
-`hand_over` has sent every pty to the successor, no longer `exit`s: it unlinks its socket, marks
-every descriptor close-on-exec and `execv`s its *current image* (`proc_pidpath`, i.e. the attic
-copy `install-macos.sh` keeps — never the freshly installed binary) as `avada --daemon-linger
-<salt>` (`rs/crates/core/src/session/linger.rs`). `exec` keeps the pid, the parent/child links,
-the launchd job and the TCC responsibility and drops every thread, fd and destructor, so the
-stub holds no socket, lock or port and cannot type at a shell; it only `waitpid(-1)`s until
-`ECHILD` and exits. Why not (b): `respawn` loses the shell's state (jobs, history, a running
-Claude session) and still needs the user to notice and act; why not (c): a per-`zsh` grant means
-a Screen Recording prompt labelled "zsh" for every pane and a TCC row per shell, worse than the
-bug. Cost of (a): one extra idle process per upgrade (`ps` shows `avada --daemon-linger …`
-with `ppid 1`; `launchctl print gui/$UID/<label>` still names its pid) until the last
-pre-upgrade shell closes, and one upgrade of lag: panes born under a pre-0.2.49 daemon are not
-rescued, because that daemon has no stub to exec into. Unit tests in `linger.rs` and `main.rs`
-(flag parsing, cloexec marking, drain/EINTR, "not a `--session-daemon` superstring" so the
-install script's daemon census and attic prune stay correct).
-
 ### B11 — live daemon takeover times out under load and the old daemon shuts down anyway, losing every pane (2026-10-14)
 
 Installing 0.2.45 and relaunching at 18:38 local, with the Mac at load ~300, blanked all 33
@@ -190,6 +150,61 @@ the brand-new-pane rule, add the resumed-pane test beside
 [`dead-session-recovery.md`](dead-session-recovery.md) §0.2.31 last paragraph.
 
 ## Closed
+
+### B12 · A daemon handoff orphans every pane's TCC attribution; screen recording only works in panes opened after the relaunch (2026-10-14, fixed 2026-10-15)
+
+**Fix landed on `main` 2026-10-15** (commit `f9cc6c7` "B12: the retired daemon execs into a linger
+stub so pre-upgrade panes keep their TCC responsibility", plus the 0.2.50 bump that closes this
+entry). **Proven 2026-10-15 on 0.2.49 → 0.2.50** — two witness panes opened under the 0.2.49
+daemon (pid 98226; shells 98791 and 99060) captured before the upgrade (`CAP_OK_P1/P2`, 12:03),
+then `install-macos.sh` 0.2.50 + `osascript quit` + `open`: the 0.2.49 daemon handed 46
+sessions to the successor (pid 1655) and exec'd into
+`/Applications/.avada-attic/Avada-0.2.49-20261015120814.app/Contents/MacOS/avada --daemon-linger …`
+keeping pid 98226 (`ps`: ppid 1, 05:32 CPU carried over; `launchctl print` of the old daemon's
+job still names pid 98226; daemon log "linger stub started: holding TCC responsibility"). Both
+witness shells still report `PPID=98226` and `screencapture -x` succeeds in both
+(`CAP_OK2_P1/P2`, 12:08). tccd: six `Handling access request to kTCCServiceScreenCapture …
+Resp:{… pid=98226 … responsible_path=/Applications/.avada-attic/Avada-0.2.49-…/Contents/MacOS/avada}`
+lines, all `Allow`. The one-upgrade lag held as predicted: on the 0.2.48 → 0.2.49 hop the
+retired 0.2.48 daemon exited with no stub. Both witness panes were left open. **Closed.**
+
+**Filed 2026-10-14.** macOS attributes a pane shell's privacy requests (Screen Recording, etc.) to the process that was
+*responsible* for it when it was spawned: the session daemon it was born under. After a GUI quit +
+reopen, the successor daemon adopts the ptys but the kernel's responsibility link still points at
+the retired daemon; once that daemon exits, each old shell is reparented to launchd and becomes
+responsible for itself (`responsibility_get_pid_responsible_for_pid` returns its own pid). A bare
+`zsh` has no TCC row and cannot prompt, so `screencapture` in every pre-relaunch pane fails with
+"could not create image from display" while the identical command in a pane opened after the
+relaunch succeeds. Observed 2026-10-14 21:06 after the 0.2.48 relaunch: test pane opened at
+21:03 under daemon 58577 → `Allowed (System Set)`; test pane from 20:5x under the retired daemon
+51411 → denied, `ps` ppid 1. This is independent of code signing (0.2.48 fixed the *other* half:
+ad-hoc signatures made the grant itself die on every rebuild — commit `3b63dc7`). Every
+install + relaunch therefore still forces users to reopen every pane that needs screen capture,
+including the Avada UI pane's Claude session. Fix direction: the adopted pty's shell cannot be
+re-parented, so the successor must either (a) keep the retired daemon alive as a responsible
+stub for its old shells (it runs from the attic bundle, which the install script already keeps),
+or (b) respawn the shell under the new daemon on request (`avada ctl respawn <pane>`), or (c) use
+`responsibility_spawnattrs_setdisclaim` so panes are responsible for themselves and get their own
+TCC prompt (then the grant is per `zsh`, which macOS shows as "zsh" — worse UX). Proof artefacts:
+`/tmp/tcc6.log` (tccd `AttributionChain` lines) and this session's write-up. Related: B11 (the
+handoff itself), B4.
+
+**Decision 2026-10-15 — (a), as an `exec` into a linger stub.** The retired daemon, after
+`hand_over` has sent every pty to the successor, no longer `exit`s: it unlinks its socket, marks
+every descriptor close-on-exec and `execv`s its *current image* (`proc_pidpath`, i.e. the attic
+copy `install-macos.sh` keeps — never the freshly installed binary) as `avada --daemon-linger
+<salt>` (`rs/crates/core/src/session/linger.rs`). `exec` keeps the pid, the parent/child links,
+the launchd job and the TCC responsibility and drops every thread, fd and destructor, so the
+stub holds no socket, lock or port and cannot type at a shell; it only `waitpid(-1)`s until
+`ECHILD` and exits. Why not (b): `respawn` loses the shell's state (jobs, history, a running
+Claude session) and still needs the user to notice and act; why not (c): a per-`zsh` grant means
+a Screen Recording prompt labelled "zsh" for every pane and a TCC row per shell, worse than the
+bug. Cost of (a): one extra idle process per upgrade (`ps` shows `avada --daemon-linger …`
+with `ppid 1`; `launchctl print gui/$UID/<label>` still names its pid) until the last
+pre-upgrade shell closes, and one upgrade of lag: panes born under a pre-0.2.49 daemon are not
+rescued, because that daemon has no stub to exec into. Unit tests in `linger.rs` and `main.rs`
+(flag parsing, cloexec marking, drain/EINTR, "not a `--session-daemon` superstring" so the
+install script's daemon census and attic prune stay correct).
 
 ### B8 · Subagent scan on the main thread, 1 Hz, over every hook record ever written (2026-10-14, fixed 2026-10-14)
 
