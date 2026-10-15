@@ -18,6 +18,9 @@ Free means all of: pane-safe.sh says SAFE (hidden tab, or Bert away), the pane h
 line tells the relay to carry the file down by the Down procedure in its AGENTS.md. Never two
 copies: a line that is not seen on screen after the submit is logged `held`, not re-sent.
 
+Log lines label the time EDT by name; the runner has no zone logic. A pointer that is not seen
+on screen after the submit is logged `held` in runner.log only; nothing else is told.
+
 Stdlib only. Run: python3 -I queue-runner.py [--once]   (the live copy sits beside AGENTS.md)
 """
 import os
@@ -158,29 +161,49 @@ def main(once=False):
             pass
     PIDFILE.write_text(str(os.getpid()))
     try:
+        os.setsid()          # own session: outlive the shell that launched us
+    except OSError:
+        pass
+    try:
         log(f"runner start pid={os.getpid()} once={once}")
         while True:
-            items = pending()
-            if not items:
-                if once:
-                    return 0
+            try:
+                rc = step(once)
+            except Exception as exc:      # a slow or hung ctl must never end the daemon
+                log(f"error {exc!r}; retrying in {RETRY_SECS}s")
                 time.sleep(RETRY_SECS)
                 continue
-            pane = relay_pane()
-            if pane is None:
-                log("no running relay pane found; waiting")
-                time.sleep(RETRY_SECS)
-                continue
-            free, why = pane_free(pane)
-            if not free:
-                log(f"waiting: {len(items)} queued, pane {pane} not free ({why})")
-                time.sleep(RETRY_SECS)
-                continue
-            if not deliver(items[0], pane) and once:
-                return 2
-            time.sleep(5)
+            if rc is not None:
+                return rc
     finally:
         PIDFILE.unlink(missing_ok=True)
+
+
+def step(once):
+    """One pass: deliver the oldest queued file if the pane is free, else wait.
+    Returns an exit code to stop the runner, or None to go round again."""
+    items = pending()
+    if not items:
+        if once:
+            return 0
+        time.sleep(RETRY_SECS)
+        return None
+    pane = relay_pane()
+    if pane is None:
+        log("no running relay pane found; waiting")
+        time.sleep(RETRY_SECS)
+        return None
+    free, why = pane_free(pane)
+    if not free:
+        log(f"waiting: {len(items)} queued, pane {pane} not free ({why})")
+        time.sleep(RETRY_SECS)
+        return None
+    if not deliver(items[0], pane) and once:
+        return 2
+    time.sleep(5)
+    return None
+
+
 
 
 if __name__ == "__main__":
