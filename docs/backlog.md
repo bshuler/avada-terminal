@@ -49,14 +49,21 @@ after it). Until fixed: never install-and-relaunch while `uptime` load exceeds t
 
 ### B10 — avada:// links: one live click on an installed build
 
-**Filed 2026-10-14. Shipped in `1f1bfed`; open: the live check.** `avada://ssh|terminal|doc` and
-`ssh://` links ([`links.md`](links.md)) are unit-tested (core `cli::link`, app `url_cli`) and the
-macOS `application:openURLs:` handler type-checks, but macOS handing a URL to the app has not been
-watched, because that needs an installed Avada.app (a test copy would share the bundle id with the
-live one). **Open:** after the next release is installed, run `open avada://terminal` and
-`open "avada://ssh/hp3?tmux=w"` — each should add a tab to the focused window and bring it forward.
-Then pick Avada under "Open ssh URLs with" (or `avada url register --ssh`) and click an `ssh://`
-link.
+**Filed 2026-10-14. Shipped in `1f1bfed` (released in 0.2.48).** `avada://ssh|terminal|doc` and
+`ssh://` links ([`links.md`](links.md)) are unit-tested (core `cli::link`, app `url_cli`).
+
+**Verified live 2026-10-15 on the installed 0.2.48:** LaunchServices maps `avada://` to
+`/Applications/Avada.app` from the Info.plist alone. `open "avada://terminal?title=…"` and
+`open "avada://doc?path=~/code/avada/avada-terminal/docs/links.md&title=…"` each added a tab to the
+running window (tabs 15 and 16 in `avada-app.log`). The doc opened rendered as Markdown, and both
+panes carry the link's title in the pane header and in `last-workspace.json`.
+
+**Open:**
+- The tab strip labels these tabs `term 2` / `term 3`, not the link's `title=`. The title reaches
+  only the pane header.
+- `avada://ssh/…` has not been clicked live.
+- `ssh://` still opens Terminal.app. It goes to Avada only once Bert picks Avada under "Open ssh URLs
+  with" or runs `avada url register --ssh`, which is his setting to change.
 
 ### B9 — title-strip wordmark overlaps tab titles — SUPERSEDED 2026-10-14
 
