@@ -73,7 +73,7 @@ pub struct HandoffInfo {
     /// `SCM_RIGHTS` duplicates rather than moves).
     pub master_fd: std::os::fd::RawFd,
     /// The child's session/process-group leader, if the platform reports one. The successor
-    /// cannot `waitpid` an adopted child (it is reparented to init), but it can signal this.
+    /// cannot `waitpid` an adopted child (it stays the retired daemon's), but it can signal this.
     pub pgrp: Option<i32>,
 }
 

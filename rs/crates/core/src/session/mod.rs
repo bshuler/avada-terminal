@@ -26,6 +26,16 @@ pub mod env;
 #[cfg(unix)]
 pub mod handoff;
 pub mod launchd;
+/// The retired daemon's post-handoff linger stub, which keeps the responsible pid of every
+/// pre-upgrade shell alive for macOS TCC (unix only, B12).
+#[cfg(unix)]
+pub mod linger;
+
+/// The linger stub's mode flag, on every platform (the stub itself is unix-only, but the
+/// entry point parses argv everywhere). Deliberately *not* a superstring of
+/// `--session-daemon`: anything that counts, kills or parses daemons by that token must
+/// keep ignoring a stub.
+pub const LINGER_FLAG: &str = "--daemon-linger";
 pub mod namespace;
 pub mod openurl;
 pub mod osc133;

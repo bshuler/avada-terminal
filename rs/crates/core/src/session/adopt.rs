@@ -10,8 +10,8 @@
 //! ## What changes when a session is adopted
 //!
 //! **Exit detection moves from `waitpid` to pty EOF.** The child was forked by the *previous*
-//! daemon; once that process exits the child is reparented to init and is no longer waitable
-//! by anyone. EOF on the master is therefore the only available signal that the session
+//! daemon and stays that pid's child (the retired daemon execs into `super::linger`, which
+//! reaps it; if that stub is ever gone, init does), so it is never waitable here. EOF on the master is therefore the only available signal that the session
 //! ended — and it is the reliable one, since a master only reaches EOF once every slave
 //! descriptor is closed. The cost is the **exit code**, which no longer exists to be read:
 //! an adopted session reports [`UNKNOWN_EXIT`], the same `-1` sentinel `spawn_pty` already
@@ -217,8 +217,8 @@ pub fn adopt_pty(
                     Err(_) => break,
                 }
             }
-            // No `waitpid` is possible — the child was reparented when the predecessor
-            // exited. EOF is the exit signal; the code itself is unrecoverable.
+            // No `waitpid` is possible — the child is the predecessor's (its linger stub's)
+            // child, not ours. EOF is the exit signal; the code itself is unrecoverable.
             on_event(PtyEvent::Exit(UNKNOWN_EXIT));
         })
         .map_err(|e| io::Error::other(e.to_string()))?;

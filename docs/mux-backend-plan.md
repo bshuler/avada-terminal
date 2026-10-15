@@ -94,11 +94,13 @@ the moment it bumps `PROTO_VER` (`proto.rs:41`, currently `1`).
 
 **The fix, at that same call site.** Replace the tear-down with a takeover: the incumbent daemon
 hands every PTY master fd plus its session metadata (replay buffer, screen state, cwd, uid) to the
-freshly spawned daemon over `SCM_RIGHTS`, then exits. A shell dies from `SIGHUP` when its *pty
-closes*, not when its parent exits, so nothing downstream notices. One seam, one replaced function.
+freshly spawned daemon over `SCM_RIGHTS`, then execs into a linger stub (`session::linger`,
+B12: it stays the pid macOS holds responsible for its shells' TCC grants, and exits when the
+last of them does). A shell dies from `SIGHUP` when its *pty closes*, not when its parent exits
+or execs, so nothing downstream notices. One seam, one replaced function.
 
-**Consequence to handle:** after handoff the children are reparented to init and are no longer
-waitable, so **exit detection must move from `waitpid` to pty EOF**. Needs a test covering exit
+**Consequence to handle:** after handoff the children belong to another process (the linger
+stub, then init) and are not waitable by the successor, so **exit detection must move from `waitpid` to pty EOF**. Needs a test covering exit
 codes.
 
 **As built.** `PROTO_VER` is `2` and carries `ClientMsg::Takeover`. The successor daemon —

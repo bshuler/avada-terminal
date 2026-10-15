@@ -95,7 +95,9 @@ pub static GUI_RESTARTING: std::sync::atomic::AtomicBool =
 /// GUI's log out from under a bug report.
 #[tracing::instrument(level = "debug", ret)]
 fn log_role(argv: &[String]) -> &'static str {
-    if session_daemon_salt(argv).is_some() {
+    // The linger stub a retired daemon execs into logs beside the daemon it was, so one
+    // file tells the whole upgrade story.
+    if session_daemon_salt(argv).is_some() || daemon_linger_salt(argv).is_some() {
         return "daemon";
     }
     if argv.iter().any(|a| a == "--crash-report") {
@@ -123,6 +125,26 @@ fn session_daemon_salt(argv: &[String]) -> Option<String> {
             }
             if rest.is_empty() {
                 // `--session-daemon <salt>` — the salt is the next argv token.
+                return it.next().cloned();
+            }
+        }
+    }
+    None
+}
+
+/// Parse the hidden `--daemon-linger <salt>` mode a retired session daemon execs itself
+/// into after a live handoff (`avada_core::session::linger`). Same two spellings as
+/// `--session-daemon`; `None` for anything else. Nothing spawns this mode but the daemon.
+#[tracing::instrument(level = "debug", ret)]
+fn daemon_linger_salt(argv: &[String]) -> Option<String> {
+    let flag = avada_core::session::LINGER_FLAG;
+    let mut it = argv.iter();
+    while let Some(arg) = it.next() {
+        if let Some(rest) = arg.strip_prefix(flag) {
+            if let Some(inline) = rest.strip_prefix('=') {
+                return Some(inline.to_string());
+            }
+            if rest.is_empty() {
                 return it.next().cloned();
             }
         }
@@ -453,6 +475,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // survive a GUI crash (session-daemon-plan M0); the logic lives entirely in core, this
     // is just the entry. It builds its own Tokio runtime and blocks until the daemon exits.
     let argv0: Vec<String> = std::env::args().collect();
+    // Linger mode (`--daemon-linger <salt>`): the image a retired daemon exec'd into after
+    // handing its sessions to a successor. No socket, no SSH, no GUI — it only outlives its
+    // shells so macOS keeps attributing their TCC grants to this pid (B12).
+    #[cfg(unix)]
+    if let Some(salt) = daemon_linger_salt(&argv0) {
+        avada_core::session::linger::run(&salt);
+    }
     if let Some(salt) = session_daemon_salt(&argv0) {
         tracing::debug!("session-daemon: starting for salt {salt:?}");
         // The SSH front door (M3) rides along with the daemon: the daemon process is the one
@@ -1359,6 +1388,31 @@ mod tests {
             session_daemon_salt(&argv(&["avada", &format!("--session-daemon={marked}")])),
             Some(marked.to_string())
         );
+    }
+
+    // The linger stub's flag is parsed the same two ways, and the two modes never shadow
+    // each other: a stub is not a daemon (the install script counts daemons by their flag)
+    // and a daemon is not a stub.
+    #[test]
+    fn daemon_linger_salt_parses_both_forms_and_stays_distinct_from_the_daemon_flag() {
+        assert_eq!(
+            daemon_linger_salt(&argv(&["avada", "--daemon-linger", "/data/dir"])),
+            Some("/data/dir".to_string())
+        );
+        assert_eq!(
+            daemon_linger_salt(&argv(&["avada", "--daemon-linger=/data/dir"])),
+            Some("/data/dir".to_string())
+        );
+        assert_eq!(daemon_linger_salt(&argv(&["avada", "--daemon-linger"])), None);
+        assert_eq!(
+            daemon_linger_salt(&argv(&["avada", "--session-daemon", "/data/dir"])),
+            None
+        );
+        assert_eq!(
+            session_daemon_salt(&argv(&["avada", "--daemon-linger", "/data/dir"])),
+            None
+        );
+        assert_eq!(log_role(&argv(&["avada", "--daemon-linger", "/data/dir"])), "daemon");
     }
 
     #[test]

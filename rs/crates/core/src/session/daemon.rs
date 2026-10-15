@@ -256,7 +256,7 @@ pub fn run(salt: &str) -> io::Result<()> {
 
     // M3 lifecycle: shared shutdown flag + connection counter + the socket path (so the exit
     // path unlinks it). The idle monitor watches it; `serve`'s accept loop checks it.
-    let lifecycle = Arc::new(Lifecycle::new(names.socket.clone()));
+    let lifecycle = Arc::new(Lifecycle::new(names.socket.clone(), salt));
     let daemon = Daemon::new(Arc::clone(&lifecycle));
     // Provenance: which launcher made us. The launchd label arrives in our environment
     // (launchd does not put it in `XPC_SERVICE_NAME` for a bootstrapped job) and is removed
@@ -484,17 +484,20 @@ struct Lifecycle {
     socket: PathBuf,
     /// Whether `shutdown` exits the process (production) or only flags (tests).
     mode: TeardownMode,
+    /// The daemon salt, re-supplied to the linger stub a retiring daemon execs into.
+    salt: String,
 }
 
 #[cfg(unix)]
 impl Lifecycle {
     #[tracing::instrument(level = "debug")]
-    fn new(socket: PathBuf) -> Self {
+    fn new(socket: PathBuf, salt: &str) -> Self {
         Lifecycle {
             active_conns: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
             socket,
             mode: TeardownMode::Exit,
+            salt: salt.to_string(),
         }
     }
 
@@ -528,16 +531,8 @@ impl Lifecycle {
     /// is already at 0 sessions).
     #[tracing::instrument(level = "debug", ret, skip(self, kill_sessions))]
     fn shutdown(&self, kill_sessions: impl FnOnce()) {
-        // First-wins: only one caller runs the teardown body. In `Exit` mode a loser parks
-        // until the winner's `exit` takes the process down; in `FlagOnly` mode it just returns.
-        if self.shutting_down.swap(true, Ordering::SeqCst) {
-            match self.mode {
-                TeardownMode::Exit => loop {
-                    std::thread::sleep(Duration::from_millis(50));
-                },
-                #[cfg(test)]
-                TeardownMode::FlagOnly => return,
-            }
+        if !self.latch() {
+            return;
         }
         tracing::info!(socket = %self.socket.display(), "session daemon shutting down");
         kill_sessions();
@@ -549,6 +544,47 @@ impl Lifecycle {
                 // The latch is set + socket unlinked; the in-process accept thread sees the
                 // flag and stops, and the test observes `is_shutting_down()`. No process exit.
             }
+        }
+    }
+
+    /// Stand down after a completed handoff, exactly once: unlink the socket, then **exec
+    /// into the linger stub** (see [`super::linger`]) instead of exiting — same pid, same
+    /// launchd job, same TCC responsibility for every shell this daemon spawned, no threads,
+    /// no descriptors, no destructors. Nothing is killed: the sessions are the successor's
+    /// now. Under test (`FlagOnly`) it stops at the unlinked socket, which is the
+    /// observable the takeover tests assert on. If the exec fails the process exits 0, which
+    /// is the pre-B12 behaviour (the shells live on, parented to launchd).
+    #[tracing::instrument(level = "debug", ret, skip(self))]
+    fn retire(&self) {
+        if !self.latch() {
+            return;
+        }
+        tracing::info!(socket = %self.socket.display(), "session daemon retiring after handoff");
+        let _ = std::fs::remove_file(&self.socket);
+        match self.mode {
+            TeardownMode::Exit => {
+                let e = super::linger::exec_into_linger(&self.salt);
+                tracing::warn!(error = %e, "linger exec failed; exiting instead");
+                std::process::exit(0)
+            }
+            #[cfg(test)]
+            TeardownMode::FlagOnly => {}
+        }
+    }
+
+    /// Claim the teardown. First-wins: only one caller runs a teardown body. In `Exit` mode a
+    /// loser parks forever (the winner's `exit`/`exec` takes the process down); in
+    /// `FlagOnly` mode it returns `false` and the caller does nothing.
+    fn latch(&self) -> bool {
+        if !self.shutting_down.swap(true, Ordering::SeqCst) {
+            return true;
+        }
+        match self.mode {
+            TeardownMode::Exit => loop {
+                std::thread::sleep(Duration::from_millis(50));
+            },
+            #[cfg(test)]
+            TeardownMode::FlagOnly => false,
         }
     }
 }
@@ -1110,9 +1146,11 @@ impl Daemon {
     /// `SCM_RIGHTS`), and **at least one message is always sent**, so a successor can tell an
     /// empty handoff from a peer that never understood the request.
     ///
-    /// Teardown skips `kill_sessions` for the obvious reason, and still unlinks the socket so
-    /// the successor can rebind it. The successor waits for our flock — released by the
-    /// kernel when we exit, i.e. strictly after that unlink — before binding.
+    /// Teardown is [`Lifecycle::retire`]: nothing is killed, the socket is unlinked so the
+    /// successor can rebind it, and then this process execs into the linger stub rather than
+    /// exiting, so it stays the responsible pid of every shell it spawned (B12). The
+    /// successor waits for our flock — the lock file is close-on-exec, so the kernel releases
+    /// it at the exec boundary, strictly after that unlink — before binding.
     #[tracing::instrument(level = "debug", ret, skip(self))]
     fn hand_over(&self, sock: &std::os::unix::net::UnixStream) {
         let handed = self.registry.hand_off();
@@ -1150,14 +1188,14 @@ impl Daemon {
             if let Err(e) = send_with_fds(sock, &payload, &fds) {
                 // The successor is gone or wedged. The sessions are already out of the
                 // registry and their ptys relinquished, so there is nothing to roll back to —
-                // exiting is still right, and the shells stay alive, parented to init, for the
-                // next daemon to discover.
+                // retiring is still right, and the shells stay alive (children of the linger
+                // stub) for the next daemon to discover.
                 tracing::warn!(error = %e, "takeover: descriptor send failed");
                 break;
             }
         }
 
-        self.lifecycle.shutdown(|| {});
+        self.lifecycle.retire();
     }
 
     /// Handle one [`ClientMsg`]. Returns `false` to close the connection. Replies are sent
@@ -1791,6 +1829,7 @@ fn spawn_in_process_inner(
         shutting_down: AtomicBool::new(false),
         socket: socket.to_path_buf(),
         mode: TeardownMode::FlagOnly,
+        salt: "in-process-test".into(),
     });
     let lifecycle_thread = Arc::clone(&lifecycle);
     let accept = std::thread::Builder::new()

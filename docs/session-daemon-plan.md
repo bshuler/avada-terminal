@@ -142,6 +142,33 @@ So on macOS `spawn_daemon_detached` first bootstraps the daemon as its own launc
 Verification: after the daemon runs from a launchd-spawned build, Force Quit the GUI; the
 daemon pid must not change and the relaunched GUI must log `took_over=true`.
 
+### The retired daemon lingers for TCC (macOS, 0.2.49, B12)
+
+macOS attributes a pane shell's privacy requests (Screen Recording first of all) to the
+process that was *responsible* for it when it was spawned — the daemon it was born under —
+and that link is fixed at spawn time. If the retired daemon simply exited after the handoff,
+every pre-upgrade shell was reparented to launchd and became responsible for itself: a bare
+`zsh` with no TCC row, so `screencapture` failed in every old pane until it was reopened
+(`docs/backlog.md` B12).
+
+So after `hand_over` the incumbent does not exit. It unlinks its socket, marks every
+descriptor close-on-exec and `execv`s its own *current* image (`proc_pidpath`, i.e. the attic
+bundle the install script keeps, never the freshly installed one) with
+`--daemon-linger <salt>` (`rs/crates/core/src/session/linger.rs`). `exec` keeps the pid, the
+children, the launchd job and the TCC responsibility, and drops every thread, descriptor and
+destructor at once — no pty reader can steal bytes from the successor, no `portable-pty`
+writer drop can type at a shell. The stub only `waitpid(-1)`s until `ECHILD` and exits 0.
+
+What to expect after an upgrade: `ps` shows one `avada --daemon-linger …` per upgrade whose
+children are the panes from before it; `launchctl print gui/$UID/<label>` still shows the
+old job with that pid (`KeepAlive=false`, so nothing restarts it when it leaves); the attic
+prune keeps the bundle it runs from while it lives. It goes away by itself when the last of
+its shells does. Its flag is deliberately not a superstring of `--session-daemon`, so the
+install script's daemon census, the live-session guard and the daemon salt parser all ignore
+it. Panes from before the first lingering build (0.2.49) were orphaned by that build's
+predecessor and are not rescued; every pane born under a 0.2.49+ daemon keeps its grant
+across later upgrades.
+
 ## Reconnect / re-attach (the payoff — M2)
 
 On GUI launch with a live daemon:

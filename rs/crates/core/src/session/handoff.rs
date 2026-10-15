@@ -5,9 +5,11 @@
 //! M1). Today an upgrade that bumps [`proto::PROTO_VER`](super::proto::PROTO_VER) makes
 //! [`DaemonClient::new`](super::daemon_client::DaemonClient::new) tear the running daemon
 //! down — killing every session. The replacement is a *takeover*: the incumbent hands its
-//! pty master descriptors to the freshly spawned daemon and exits. A shell dies from
-//! `SIGHUP` when its **pty closes**, not when its parent exits, so as long as the successor
-//! holds the master fd open, nothing downstream notices the swap.
+//! pty master descriptors to the freshly spawned daemon and then execs into the linger stub
+//! (`super::linger`) rather than exiting, so it stays the pid macOS holds responsible for
+//! its shells' TCC grants. A shell dies from `SIGHUP` when its **pty closes**, not when its
+//! parent exits or execs, so as long as the successor holds the master fd open, nothing
+//! downstream notices the swap.
 //!
 //! ## Why raw `libc`
 //!

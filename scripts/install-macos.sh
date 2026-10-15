@@ -203,9 +203,14 @@ the GUI:
 
 The new GUI sees a daemon of a different build, spawns a successor from this
 bundle, and the incumbent hands every session over — snapshot and pty master
-descriptor together, over SCM_RIGHTS — then exits WITHOUT killing anything. The
-shells never notice; they are reparented to init and keep running under the new
-daemon (rs/crates/core/src/session/daemon_client.rs, "Build handshake").
+descriptor together, over SCM_RIGHTS — then, WITHOUT killing anything, execs
+itself into a tiny linger stub (\`avada --daemon-linger <salt>\`, still running
+from the attic bundle). The shells never notice: they keep running under the new
+daemon, and stay the stub's children so macOS keeps attributing their privacy
+grants (Screen Recording) to it rather than to a bare zsh. The stub exits by
+itself once the last of those shells is gone; one per upgrade is normal
+(rs/crates/core/src/session/daemon_client.rs, "Build handshake";
+rs/crates/core/src/session/linger.rs).
 
 Nothing here needs \`pkill\`. Killing the daemon closes the pty masters and every
 program in every pane dies with them — the exact loss the handoff exists to

@@ -29,6 +29,23 @@ TCC prompt (then the grant is per `zsh`, which macOS shows as "zsh" — worse UX
 `/tmp/tcc6.log` (tccd `AttributionChain` lines) and this session's write-up. Related: B11 (the
 handoff itself), B4.
 
+**Decision 2026-10-15 — (a), as an `exec` into a linger stub.** The retired daemon, after
+`hand_over` has sent every pty to the successor, no longer `exit`s: it unlinks its socket, marks
+every descriptor close-on-exec and `execv`s its *current image* (`proc_pidpath`, i.e. the attic
+copy `install-macos.sh` keeps — never the freshly installed binary) as `avada --daemon-linger
+<salt>` (`rs/crates/core/src/session/linger.rs`). `exec` keeps the pid, the parent/child links,
+the launchd job and the TCC responsibility and drops every thread, fd and destructor, so the
+stub holds no socket, lock or port and cannot type at a shell; it only `waitpid(-1)`s until
+`ECHILD` and exits. Why not (b): `respawn` loses the shell's state (jobs, history, a running
+Claude session) and still needs the user to notice and act; why not (c): a per-`zsh` grant means
+a Screen Recording prompt labelled "zsh" for every pane and a TCC row per shell, worse than the
+bug. Cost of (a): one extra idle process per upgrade (`ps` shows `avada --daemon-linger …`
+with `ppid 1`; `launchctl print gui/$UID/<label>` still names its pid) until the last
+pre-upgrade shell closes, and one upgrade of lag: panes born under a pre-0.2.49 daemon are not
+rescued, because that daemon has no stub to exec into. Unit tests in `linger.rs` and `main.rs`
+(flag parsing, cloexec marking, drain/EINTR, "not a `--session-daemon` superstring" so the
+install script's daemon census and attic prune stay correct).
+
 ### B11 — live daemon takeover times out under load and the old daemon shuts down anyway, losing every pane (2026-10-14)
 
 Installing 0.2.45 and relaunching at 18:38 local, with the Mac at load ~300, blanked all 33

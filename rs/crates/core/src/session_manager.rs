@@ -173,7 +173,7 @@ pub struct SessionSnapshot {
     #[serde(default)]
     pub fd_index: usize,
     /// The child's process-group leader at handoff time, when the platform reports one. The
-    /// successor cannot `waitpid` an adopted child (it is reparented to init) but it can
+    /// successor cannot `waitpid` an adopted child (it stays the retired daemon's) but it can
     /// still signal this group. Advisory — see `session::adopt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pgrp: Option<i32>,
@@ -558,9 +558,10 @@ impl SessionRegistry {
     /// **The returned descriptors are borrowed from ptys that are now deliberately leaked.**
     /// They stay open until the process image goes away, which is the whole contract: this
     /// is only ever called on the way out. The per-session reader threads are also still
-    /// running, and until this process exits they keep consuming bytes the successor will
-    /// never see — the same brief window nginx accepts across a live binary upgrade, and the
-    /// reason the caller must exit immediately rather than linger.
+    /// running, and until this process image is replaced they keep consuming bytes the
+    /// successor will never see — the same brief window nginx accepts across a live binary
+    /// upgrade, and the reason the caller must `exit` or `exec` immediately (the daemon
+    /// execs into `session::linger`, which drops every thread and descriptor at once).
     #[cfg(unix)]
     #[tracing::instrument(level = "debug", ret, skip(self))]
     pub fn hand_off(&self) -> Vec<(SessionSnapshot, std::os::fd::RawFd)> {
