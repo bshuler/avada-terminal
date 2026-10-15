@@ -33,8 +33,12 @@ FORBIDDEN_TOOLS = {"Agent", "Task", "SendMessage", "Workflow", "EnterWorktree", 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 CTL_ALLOWED_VERBS = {"tabs", "panes", "read", "info", "submit", "send", "keys", "--help", "-h", "help"}
-CTL_VERB = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?avada\s+ctl\s+(\S+?)(?=[\s;&|)]|$)(.*)", re.M)
-HP_CTL_VERB = re.compile(r"\$\{?HP_CTL\}?\s+(?:ctl\s+)?(\S+?)(?=[\s;&|)]|$)(.*)", re.M)
+# The trailing group captures only up to the next command separator (; & | newline),
+# NOT the rest of the line. A greedy `(.*)` would swallow a second chained `avada ctl`
+# so finditer never checked it — that was the chain-hole (2026-10-15, Bert: "check every
+# avada ctl command on a line, not just the first").
+CTL_VERB = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?avada\s+ctl\s+(\S+?)(?=[\s;&|)]|$)([^;&|\n]*)", re.M)
+HP_CTL_VERB = re.compile(r"\$\{?HP_CTL\}?\s+(?:ctl\s+)?(\S+?)(?=[\s;&|)]|$)([^;&|\n]*)", re.M)
 KEYS_ALLOWED = re.compile(r"^\s+\S+\s+(backspace|escape)\s*(?:$|[;&|])", re.I)
 
 BASH_FORBIDDEN = [
