@@ -103,7 +103,7 @@ exact failure MUST 10 forbids. The brief must also live in the repo, not a sessi
 under `/private/tmp`, and the pane must run in a directory of its own, not an unrelated project
 checkout, so it carries no other project's memory.
 
-**Where it lives (done 2026-10-15).** The brief is `docs/open-questions-brief.md` in this repo
+**Where it lives (done 2026-10-15).** The pane is labelled `Riddle's Diary (Open Questions)` on the tab `Riddle's Diary` (Bert's name for it, 2026-10-15); agents find it by the `Open Questions` part of the label. The brief is `docs/open-questions-brief.md` in this repo
 (the source) and is copied verbatim to
 `~/Library/Application Support/avada/open-questions/AGENTS.md`, a sibling of the
 `orchestrator/` data directory, where the pane runs. It is deliberately **not** the orchestrator
