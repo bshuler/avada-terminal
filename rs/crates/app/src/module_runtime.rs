@@ -992,7 +992,9 @@ fn installs_to_start(
             return Vec::new();
         }
     };
-    let workspace_state = workspace.and_then(|key| match states.get(key) {
+    // A bare launch names no file but is still the marketplace's `default` workspace (it is
+    // what `module_workspace` tells modules), so a disable made there must apply to it.
+    let workspace_state = Some(workspace.unwrap_or("default")).and_then(|key| match states.get(key) {
         Ok(state) => Some(state),
         Err(e) => {
             tracing::warn!(error = %e, workspace = key, "workspace module state unreadable; using the defaults");
