@@ -45,7 +45,12 @@ bind an accepted `AVADA_ROLE`. The old pane stays until its background agent fin
 the Manager parks it. (2) the operating-model module grows a relay role (`AVADA_ROLE=relay`,
 accepted by `rs/crates/core/src/pane_role.rs`) whose fenced rule is the brief, so it travels
 with Avada and the hook becomes a module file; (3) phase 3 of `manager-architecture-plan.md`
-replaces the pane with the right Q/A panel carrying all three flows. Related: B7 (Orchestrator
+replaces the pane with the right Q/A panel carrying all three flows, built as an Avada
+**module** in `rs/modules/` (spec MUST 5 "Shape", Bert 2026-10-15): it surfaces the
+questions the relay pane carries and sends the answers back; every question shows four
+options with one marked recommended plus a write-in area, matching Claude Code's
+pick-a-number prompt, and a "More context" button that fetches that question's source
+material on demand. Related: B7 (Orchestrator
 tab focus), `operating-model-module.md`.
 
 ### B11 — live daemon takeover times out under load and the old daemon shuts down anyway, losing every pane (2026-10-14)

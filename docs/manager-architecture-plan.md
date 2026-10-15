@@ -39,7 +39,7 @@ SQLite or moving the broker into `avadad`.)
 | 2 | Harness + model per level | Model-per-level extends (persona tiers `opus/fable/sonnet[1m]`); **harness-per-level new** (only `claude` is wired; `agentType` meta is free-form). | `meta.agentType`, spawn `command`+`args`, new harness adapter contract |
 | 3 | Per-project override (manager exempt) | **Extends** the default→workspace-pin resolution (`WorkspaceModuleState`, `is_enabled`). New: applying it to harness/model + the manager carve-out. | `persistence/projects.rs` `Project`, new per-project config store |
 | 4 | Manager = singleton leftmost window, non-closable | **Mostly new.** Precedents only: root/CEO + master token; `hyperpane.rs` "always-on tab". | `hyperpane.rs`, app window/layout (`ui/app.slint`), `control::tokens` |
-| 5 | Right Q/A panel aggregating questions | **New panel.** Reuses `awaitingInput`/`detectAwaitingInput`, liveness `awaiting-input`, inbox transport, rail `Row`+`marks`. | new `control` aggregator + `ui/` right-rail panel |
+| 5 | Right Q/A panel aggregating questions | **New module** in `rs/modules/` (spec MUST 5 "Shape"). Reuses `awaitingInput`/`detectAwaitingInput`, liveness `awaiting-input`, inbox transport, rail `Row`+`marks`. Per question: 4 options, 1 recommended, write-in area, "More context" button. | new `control` aggregator + `rs/modules/open-questions` right-rail module |
 | 6 | Built-in MQ, no cross-talk, event-driven | **Strongly extends** the per-pane inbox + scope-filtered `EventHub` (no-leak already proven). New: the `manager`/`orchestrator:<id>`/`agent:<pane-id>` topic addressing. | **new `control::mq`** (this phase) |
 | 7 | Tasks panel (scheduled, editable) | **Extends** — `queue-gui-roadmap.md` *is* this panel (planned, not built) over the `WorkQueue`. New: recurring/cron tasks (`available_at` re-enqueue), a first-class cancel verb for a still-`Queued` task. | `control::work`, new `ui/` Tasks panel |
 | 8 | Nudge per-project | **Extends** `control::nudge` / `arm_inbox_nudge` (`hp.nudge`, `AVADA_MSG_NUDGE`, 60s rate-limit). New: per-project config surface. | `control::nudge`, per-project config store |
@@ -148,7 +148,11 @@ Polling to retire (from `control::server` tickers + `arm_inbox_nudge`):
 3. **Manager singleton window** (leftmost, non-closable) + **right Q/A panel** as
    MQ consumer; answers routed back to the origin `agent:` topic. The panel is the
    native Open Questions relay (spec §1a): questions up, answers down, **and Bert's
-   instructions down to the Manager** — never executed by the panel itself.
+   instructions down to the Manager** — never executed by the panel itself. Shipped as
+   an Avada **module** (spec MUST 5 "Shape", 2026-10-15): it shows the questions the
+   relay pane carries and sends answers back; each question is rendered like Claude
+   Code's pick-a-number prompt — **four options, one recommended, a write-in area** —
+   plus a **"More context"** button that pulls the question's source material on demand.
 4. **Tasks panel + scheduler** — `WorkQueue` UI; recurring tasks; migrate the
    recurring nudge in as the first managed task; per-project nudge config.
 

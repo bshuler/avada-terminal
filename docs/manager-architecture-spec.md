@@ -35,6 +35,18 @@ architect/build pass and must **reconcile with the existing docs** listed under
    today.) Each item carries: originating pane/agent, the question, its options,
    and the agent's recommendation; Bert's answer routes back to that agent.
 
+   **Shape (Bert, 2026-10-15).** It is an Avada **module** (`rs/modules/`, like the rest of
+   the right rail), not a terminal pane. It **surfaces the questions the relay pane carries
+   and sends the answers back** the same way. It must be an easy, quick mechanism that
+   **matches Claude Code's pick-a-number choices**: every question shows **four options,
+   one marked recommended**, and **a write-in text area**, so Bert answers with one tap or a
+   line of his own. Every question also has a **"More context" button** that fetches more
+   context about that question (the originating agent's inbox file, its pane screen, the
+   REPORT.md item), shown on demand, never by default. Bert's words: "it surfaces questions
+   from the relay pane, and back, it is meant to be an easy and quick mechanism that matches
+   the claude pick a number choices, 4 options 1 recommendation and a write in area for
+   every question. also, a more context button will get me more context about this question".
+
 6. **Built-in message queue (MQ) — kill polling.** Bert considers the current
    polling mechanism a **flaw**. Avada should have a **built-in MQ** so **all
    tabs communicate instantly** with managers and orchestrators, **with no
