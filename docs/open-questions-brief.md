@@ -101,6 +101,18 @@ tab Bert is looking at while he is at the keyboard. The Manager pane is on the O
 tab, which he does not watch; if the submit is refused anyway, report the refusal to Bert, do
 not route around it.
 
+## Queue: instructions filed while you were busy
+
+When Bert's session cannot hand you an instruction right away (your pane is on the tab he is
+looking at, or it is holding a live menu), it is **filed** instead of dropped: a file in
+`queue/` in this directory, oldest first. `queue-runner.py` (same directory; repo copy in
+`scripts/open-questions/`) watches that folder and, once your pane is free, submits one
+pointer line naming the file, which by then sits in `queue/sent/`. Treat that line exactly like
+a message from Bert: carry the named file to the Manager by the Down procedure above, then tell
+Bert in one line. Deleting a file from `queue/` cancels it; `queue/runner.log` says what the
+runner did. Bert's ruling (2026-10-15): the queue is to become a visible, optional Avada module
+with create/read/update/delete (spec MUST 6 "Shape"); the folder and the runner are the interim.
+
 ## Up: Manager → Bert
 
 The Manager reaches Bert only through you. Where its questions and reports arrive:

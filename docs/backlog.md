@@ -6,6 +6,33 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B14 — undeliverable messages must queue, flow when free, and show in an optional CRUD module (2026-10-15)
+
+On 2026-10-15 Bert's research session could not hand an instruction to the Open Questions pane:
+it was on his front tab and holding a live `AskUserQuestion` menu, so the global guard and the
+relay brief both forbid a submit. Asked how to deliver it, Bert ruled, verbatim: "notify, then
+file it into a queue, once free, it flows automatically, these queue should be visible in avada,
+so we can crud it if needed, it should be a module, and it should function with or without, it
+is a feature, an option". Written up as `manager-architecture-spec.md` MUST 6 "Shape" and
+`manager-architecture-plan.md` row 6.
+
+What ships:
+
+1. **Interim (done 2026-10-15, live only + repo copy):** `~/Library/Application Support/avada/open-questions/queue/`
+   holds filed instructions oldest first; `queue-runner.py` (repo copy
+   `scripts/open-questions/queue-runner.py`, stdlib, pidfile-locked) waits for the relay pane
+   to be free (`pane-safe.sh` SAFE, `ctl read --wait` settled, idle prompt, no live menu), moves
+   the file to `queue/sent/`, submits one pointer line, verifies it on screen, and logs to
+   `queue/runner.log` and `relay-log.md`; a pointer not seen on screen is logged `held`, never
+   re-sent. Delete the file to cancel. The brief's "Queue" section tells the relay what to do
+   with the pointer.
+2. **Real:** `control::mq` (plan row 6) gets a durable per-target queue with the same gate
+   (target free = hidden tab or Bert away, no live dialog) and notify-on-file.
+3. **Module:** optional `rs/modules/message-queue` in the right rail: list, add, edit, delete,
+   per-queue; the chain runs identically when it is not installed.
+
+Closes when (2) and (3) land and the interim runner is retired.
+
 ### B13 — the Open Questions relay does work itself instead of handing it to the Manager (2026-10-15)
 
 Bert's direction (`manager-architecture-spec.md` §1a, MUST 9–11): he talks to the Manager only

@@ -53,6 +53,17 @@ architect/build pass and must **reconcile with the existing docs** listed under
    cross-talk** (strict addressing/topics — a message for one orchestrator's
    agents never leaks to another's). Event-driven, not interval-polled.
 
+   **Shape (Bert, 2026-10-15).** A message that cannot be delivered now (the target pane is
+   on the tab Bert is looking at, or it holds a live menu) is **notified, then filed into a
+   queue**, and **flows automatically once the target is free**. The queue is **visible in
+   Avada** so it can be **created, read, updated and deleted**; it is an **optional module**
+   (`rs/modules/`), a feature, and the chain **works with or without it**. Bert's words: "notify,
+   then file it into a queue, once free, it flows automatically, these queue should be visible
+   in avada, so we can crud it if needed, it should be a module, and it should function with or
+   without, it is a feature, an option". Interim, until the module exists: the Open Questions
+   relay's `queue/` folder and `queue-runner.py` (repo copy `scripts/open-questions/`), which
+   gates on `pane-safe.sh` and an idle prompt before submitting a pointer line.
+
 7. **Tasks panel for scheduled tasks.** A **Tasks panel** where **scheduled
    tasks run and are managed** — visible and **editable** in the UI. The
    **regular nudge** is the canonical example: it becomes a managed scheduled
