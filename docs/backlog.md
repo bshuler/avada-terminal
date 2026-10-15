@@ -26,8 +26,9 @@ the live fleet on 2026-10-15 against that:
   session answered or did those itself: on 2026-10-15 11:31 it spawned a worktree subagent
   `agent-aaf802ef449040b55` "Integrate avada:// scheme into clickable terminal links" and at
   10:44 Bert asked it "you seem to be sending messages to different agents, do you not know the
-  correct path?". The Manager itself has complied with the 12:14 consolidation ruling (zero
-  `AskUserQuestion` calls in the Manager session since then; 75 before).
+  correct path?". The Manager itself has complied with the consolidation ruling it recorded at 08:14 EDT
+  2026-10-15: 278 Manager turns between then and 11:32 EDT with zero `AskUserQuestion` calls
+  (75 before the ruling).
 - Nothing in the repo enforces the relay: no code, no module rule, no test. Phase 3 (right
   Q/A panel) is the native fix and has no code yet.
 
