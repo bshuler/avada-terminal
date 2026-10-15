@@ -243,6 +243,9 @@ pub fn launch_line(host: &str, tmux: &str, cwd: Option<&str>, cmd: &str) -> Stri
     )
 }
 
+/// What a bare `--remote HOST` runs on the host: the user's login shell.
+const DEFAULT_REMOTE_CMD: &str = "${SHELL:-bash} -l";
+
 /// Server-side normalisation of a control-API `newPane` spec.
 ///
 /// * `meta."remote.host"` set (explicit — preferred): `command` is the command to run ON the
@@ -267,7 +270,8 @@ pub fn normalize_spec(spec: &mut serde_json::Value, salt: u64) {
         .map(str::to_string);
     let label = obj.get("label").and_then(Value::as_str).map(str::to_string);
     match (explicit, command) {
-        (Some(host), Some(cmd)) if obj.get("meta").is_none_or(|m| m.get(TMUX).is_none()) => {
+        (Some(host), cmd) if obj.get("meta").is_none_or(|m| m.get(TMUX).is_none()) => {
+            let cmd = cmd.unwrap_or_else(|| DEFAULT_REMOTE_CMD.to_string());
             let cwd = obj
                 .remove("cwd")
                 .and_then(|c| c.as_str().map(str::to_string));
@@ -456,8 +460,14 @@ mod tests {
     fn a_live_ssh_argv_names_its_far_end() {
         let t = |a: &[&str]| ssh_target_from_argv(a);
         assert_eq!(t(&["ssh", "hp2"]).as_deref(), Some("hp2"));
-        assert_eq!(t(&["/usr/bin/ssh", "-p", "22", "bert@hp2", "ls"]).as_deref(), Some("bert@hp2"));
-        assert_eq!(t(&["ssh", "-l", "bert", "-i", "k", "hp2"]).as_deref(), Some("bert@hp2"));
+        assert_eq!(
+            t(&["/usr/bin/ssh", "-p", "22", "bert@hp2", "ls"]).as_deref(),
+            Some("bert@hp2")
+        );
+        assert_eq!(
+            t(&["ssh", "-l", "bert", "-i", "k", "hp2"]).as_deref(),
+            Some("bert@hp2")
+        );
         assert_eq!(t(&["zsh", "hp2"]), None);
         assert_eq!(t(&["ssh"]), None);
     }
@@ -484,12 +494,20 @@ mod tests {
 
     #[test]
     fn local_endpoint_compares_short_hostnames() {
-        assert!(is_local_endpoint("bshuler@Berts-MacBook-Air", "Berts-MacBook-Air.local"));
-        assert!(is_local_endpoint("bshuler@berts-macbook-air.local", "Berts-MacBook-Air"));
+        assert!(is_local_endpoint(
+            "bshuler@Berts-MacBook-Air",
+            "Berts-MacBook-Air.local"
+        ));
+        assert!(is_local_endpoint(
+            "bshuler@berts-macbook-air.local",
+            "Berts-MacBook-Air"
+        ));
         assert!(is_local_endpoint("me@localhost", "anything"));
         assert!(!is_local_endpoint("bshuler@hp2", "Berts-MacBook-Air.local"));
         assert!(!is_local_endpoint("bshuler@hp2", ""));
-        assert!(is_ssh_client("ssh") && is_ssh_client("/usr/bin/ssh") && is_ssh_client("mosh-client"));
+        assert!(
+            is_ssh_client("ssh") && is_ssh_client("/usr/bin/ssh") && is_ssh_client("mosh-client")
+        );
         assert!(!is_ssh_client("zsh") && !is_ssh_client("sshd"));
     }
 
@@ -501,12 +519,38 @@ mod tests {
             display_title("lane", &r, Some("root@inner")),
             "lane [ssh root@inner]"
         );
-        assert_eq!(display_title("lane", &BTreeMap::new(), Some("a@b")), "lane [ssh a@b]");
+        assert_eq!(
+            display_title("lane", &BTreeMap::new(), Some("a@b")),
+            "lane [ssh a@b]"
+        );
         assert_eq!(display_title("lane", &BTreeMap::new(), None), "lane");
         assert_eq!(display_title("lane", &BTreeMap::new(), Some("")), "lane");
         let info = describe_lines(&r).join("\n");
         assert!(info.contains("bert@hp2") && info.contains("avada-x"));
         assert!(!info.contains("inner"));
         assert!(describe_lines(&BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn bare_remote_host_without_a_command_runs_a_login_shell_in_tmux() {
+        let mut spec = serde_json::json!({"label":"demo","meta":{"remote.host":"hp2"}});
+        normalize_spec(&mut spec, 3);
+        let m = extract_meta_for_test(&spec);
+        assert!(m.get(TMUX).is_some_and(|t| t.starts_with("avada-demo-")));
+        assert_eq!(m.get(CMD).map(String::as_str), Some(DEFAULT_REMOTE_CMD));
+        let cmd = spec["command"].as_str().unwrap();
+        assert!(
+            cmd.contains("tmux") && cmd.contains("new-session -A"),
+            "{cmd}"
+        );
+    }
+
+    fn extract_meta_for_test(spec: &serde_json::Value) -> BTreeMap<String, String> {
+        spec["meta"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect()
     }
 }
