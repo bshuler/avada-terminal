@@ -12,7 +12,7 @@ CTL=/Applications/Avada.app/Contents/MacOS/avada
 FILE="$HOME/Library/Application Support/avada/orchestrator/AGENTS.md"
 MOD=(bshuler avada-operating-model)
 
-fences() { grep -c 'avada:module=operating-model' "$FILE" || true; }
+fences() { grep -c 'avada:module=bshuler/avada-operating-model' "$FILE" || true; }
 
 echo "before:   $(fences) fence markers (expect 2)"
 "$CTL" ctl marketplace disable "${MOD[@]}" --workspace default >/dev/null
