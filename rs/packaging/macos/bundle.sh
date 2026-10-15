@@ -1,26 +1,39 @@
 #!/usr/bin/env bash
 # Avada — macOS .app bundle + .dmg packaging (track T6 packaging-macos).
 #
-# Contract (docs/ports-seams.md §3, frozen — release-rust.yml calls this blind):
+# Contract (docs/ports-seams.md §3, frozen):
 #   rs/packaging/macos/bundle.sh <version>   # <version> WITHOUT a leading "v"
 #   -> rs/packaging/out/avada-<version>.dmg
 # Runs from any cwd (resolves the repo root from its own location), exits
 # non-zero on any failure, puts ALL artifacts under rs/packaging/out/.
 #
-# Must work both on the Mac mini and on a GitHub macos-latest (arm64) runner:
-# only stock tools are used (cargo, sips, iconutil, hdiutil, plutil, codesign).
+# Releases are built on this Mac (GitHub Actions does not run on this account);
+# only stock tools are used (cargo, sips, iconutil, hdiutil, plutil, codesign,
+# xcrun notarytool / stapler).
 #
-# Signing and notarization are both opt-in through the environment, and both
-# degrade to a warning rather than a failure, so this stays runnable on a machine
-# with no certificate at all:
+# Signing is picked from the keychain and degrades to a warning rather than a
+# failure, so this stays runnable on a machine with no certificate at all.
+# Notarization is MANDATORY on the Developer ID tier (an un-notarized Developer
+# ID build is a release that Gatekeeper refuses on every other Mac) and never
+# attempted on any other tier:
 #
-#   AVADA_SIGN_ID        codesign identity. Defaults to the first
-#                             "Developer ID Application" in the login keychain,
-#                             then to the first "Apple Development" (local-only:
-#                             keeps TCC grants across rebuilds, cannot ship),
-#                             then to ad-hoc ("-") with a warning.
-#   AVADA_NOTARY_PROFILE `xcrun notarytool store-credentials` profile name.
-#                             Unset -> notarization is skipped.
+#   AVADA_SIGN_ID          codesign identity. Defaults to the first
+#                          "Developer ID Application" in the login keychain,
+#                          then to the first "Apple Development" (local-only:
+#                          keeps TCC grants across rebuilds, cannot ship),
+#                          then to ad-hoc ("-") with a warning.
+#   AVADA_NOTARY_ITEM      1Password item holding the App Store Connect API key,
+#                          as op://<vault>/<item>. Default
+#                          op://global_secret_store/avada-notarytool-api-key.
+#                          Fields read: private_key_b64 (the AuthKey_*.p8,
+#                          base64, one line), key_id, issuer_id. Resolved ONCE
+#                          per build through `secret get` (cache -> broker ->
+#                          op), the key lands in a 0600 file under mktemp -d
+#                          that is removed on exit. See README.md.
+#   AVADA_NOTARY_PROFILE   alternative: an `xcrun notarytool store-credentials`
+#                          keychain profile name. Takes precedence when set.
+#   AVADA_NOTARIZE=0       explicit opt-out: build a Developer ID dmg without
+#                          notarizing (local testing of the signing step only).
 #
 # An ad-hoc signature is not nothing: it is what lets macOS attach TCC grants to
 # the app at all. It just changes on every rebuild, so the grants do too — which
@@ -38,14 +51,15 @@ if [[ "$VERSION" == v* ]]; then
 fi
 
 # Fail before doing any work if someone has exported a password expecting this
-# script to pick it up. It never will: notarization authenticates only through a
-# keychain profile, so a password in the environment is a misunderstanding worth
-# stopping for rather than silently ignoring.
-for leaked in AVADA_NOTARY_PASSWORD APPLE_APP_SPECIFIC_PASSWORD AC_PASSWORD; do
+# script to pick it up. It never will: notarization authenticates with an App
+# Store Connect API key resolved from 1Password, or with a keychain profile, so a
+# password in the environment is a misunderstanding worth stopping for rather
+# than silently ignoring.
+for leaked in AVADA_NOTARY_PASSWORD APPLE_APP_SPECIFIC_PASSWORD AC_PASSWORD AVADA_NOTARY_KEY; do
     if [[ -n "${!leaked:-}" ]]; then
-        echo "error: $leaked is set. This script never accepts a password." >&2
-        echo "       Run: xcrun notarytool store-credentials <profile-name>" >&2
-        echo "       then set AVADA_NOTARY_PROFILE=<profile-name>." >&2
+        echo "error: $leaked is set. This script never accepts a credential from the environment." >&2
+        echo "       Store the App Store Connect API key in 1Password (rs/packaging/macos/README.md," >&2
+        echo "       'Notarization credential'); bundle.sh resolves it itself through 'secret get'." >&2
         exit 2
     fi
 done
@@ -315,6 +329,90 @@ else
          "but this build cannot be notarized or shipped (needs Developer ID Application)"
 fi
 
+# ------------------------------------------------- notarization credentials
+# Resolved BEFORE signing so a missing credential fails here, not after a
+# multi-minute sign + dmg. Only the Developer ID tier notarizes; Apple rejects
+# everything else, so the other tiers skip with a notice and nothing is resolved.
+NOTARY_AUTH=()                    # notarytool auth arguments, empty = do not notarize
+NOTARY_TMP=""
+cleanup_notary() { [[ -n "$NOTARY_TMP" ]] && rm -rf "$NOTARY_TMP"; return 0; }
+trap cleanup_notary EXIT
+
+if [[ "$SIGN_ID" == "-" ]]; then
+    echo "==> notarization skipped (ad-hoc signature: Apple only notarizes Developer ID)"
+elif [[ "$SIGN_TIER" != "developer-id" ]]; then
+    echo "==> notarization skipped ($SIGN_ID is not a Developer ID Application identity; Apple would reject it)"
+elif [[ "${AVADA_NOTARIZE:-1}" == "0" ]]; then
+    echo "WARNING: AVADA_NOTARIZE=0 — Developer ID build will NOT be notarized; do not ship it." >&2
+elif ! xcrun --find notarytool >/dev/null 2>&1; then
+    echo "error: xcrun notarytool unavailable (needs Xcode 13+); set AVADA_NOTARIZE=0 to build without notarizing" >&2
+    exit 1
+elif [[ -n "${AVADA_NOTARY_PROFILE:-}" ]]; then
+    NOTARY_AUTH=(--keychain-profile "$AVADA_NOTARY_PROFILE")
+    echo "==> notarization: keychain profile '$AVADA_NOTARY_PROFILE'"
+else
+    # App Store Connect API key from 1Password. `secret get` is the only sanctioned
+    # reader from a script (secret-management.md §2 rule 10): it answers from its
+    # cache, then the broker, then the CLI, so a warm cache costs no Touch ID at
+    # all. The .p8 is stored base64 on ONE line because the proxy caches
+    # single-line values only; it is decoded into a 0600 file that lives exactly as
+    # long as this script. The key id and issuer id are identifiers, not secrets,
+    # and go to notarytool the way notarytool takes them (as arguments).
+    NOTARY_ITEM="${AVADA_NOTARY_ITEM:-op://global_secret_store/avada-notarytool-api-key}"
+    NOTARY_ITEM="${NOTARY_ITEM%/}"
+    if ! command -v secret >/dev/null 2>&1; then
+        echo "error: 'secret' (claude-standards secret proxy) not on PATH; cannot read $NOTARY_ITEM" >&2
+        echo "       Set AVADA_NOTARY_PROFILE for a keychain profile, or AVADA_NOTARIZE=0 to skip." >&2
+        exit 1
+    fi
+    NOTARY_TMP="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/avada-notary.XXXXXX")"
+    NOTARY_KEY_FILE="$NOTARY_TMP/AuthKey.p8"
+    echo "==> notarization: App Store Connect API key from $NOTARY_ITEM (via secret get)"
+    if ! secret get --name avada-notary-private-key --op-ref "$NOTARY_ITEM/private_key_b64" \
+            | tr -d '[:space:]' | (umask 077 && base64 -d > "$NOTARY_KEY_FILE") \
+       || [[ ! -s "$NOTARY_KEY_FILE" ]]; then
+        echo "error: could not resolve $NOTARY_ITEM/private_key_b64 (secret get failed or empty)." >&2
+        echo "       If the cache is cold and no human is at the keyboard, that is a pause, not a bug:" >&2
+        echo "       retry on the next human turn (secret-management.md §7.1), or AVADA_NOTARIZE=0." >&2
+        exit 1
+    fi
+    if ! grep -q 'BEGIN PRIVATE KEY' "$NOTARY_KEY_FILE"; then
+        echo "error: $NOTARY_ITEM/private_key_b64 did not decode to a PEM private key (store \`base64 < AuthKey_*.p8\`)" >&2
+        exit 1
+    fi
+    NOTARY_KEY_ID="$(secret get --name avada-notary-key-id --op-ref "$NOTARY_ITEM/key_id" | tr -d '[:space:]')"
+    NOTARY_ISSUER="$(secret get --name avada-notary-issuer-id --op-ref "$NOTARY_ITEM/issuer_id" | tr -d '[:space:]')"
+    if [[ -z "$NOTARY_KEY_ID" || -z "$NOTARY_ISSUER" ]]; then
+        echo "error: $NOTARY_ITEM is missing key_id or issuer_id" >&2
+        exit 1
+    fi
+    NOTARY_AUTH=(--key "$NOTARY_KEY_FILE" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+fi
+
+# notarize <path> <label>: submit, wait, and REQUIRE status Accepted. `--wait`
+# alone is not enough — notarytool exits 0 when Apple answers "Invalid", so the
+# JSON status is checked, and on anything else the service log (the per-file
+# reasons) is printed before failing.
+notarize() {
+    local path="$1" label="$2" out status id
+    echo "==> notarizing $label (waits on Apple; usually 1-5 min, 30 min timeout)"
+    if ! out="$(xcrun notarytool submit "$path" "${NOTARY_AUTH[@]}" --wait --timeout 30m --output-format json)"; then
+        printf '%s\n' "$out" >&2
+        echo "error: notarytool submit failed for $label" >&2
+        exit 1
+    fi
+    status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
+    id="$(printf '%s' "$out" | plutil -extract id raw -o - - 2>/dev/null || true)"
+    if [[ "$status" != "Accepted" ]]; then
+        echo "error: notarization of $label ended as '${status:-unknown}' (submission ${id:-?})" >&2
+        if [[ -n "$id" ]]; then
+            xcrun notarytool log "$id" "${NOTARY_AUTH[@]}" >&2 || true
+        fi
+        exit 1
+    fi
+    echo "==> notarization accepted: $label (submission $id)"
+}
+
 echo "==> signing Avada.app (hardened runtime)"
 # Nested Mach-O must be signed inside-out: the seeded module binaries under
 # Contents/Resources/seed-modules/*/bin/* are separate executables, and a signature on
@@ -330,6 +428,21 @@ codesign --force --options runtime "${SIGN_TIMESTAMP[@]}" \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_ID" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
+
+# Two passes: the APP is notarized and stapled first, so the bundle that lands in
+# /Applications carries its own ticket (Contents/CodeResources) and passes
+# Gatekeeper offline; then the dmg is built from that stapled app and notarized
+# and stapled itself, so the download passes too. Stapling only the dmg leaves
+# the installed app dependent on a network check.
+if [[ -n "${NOTARY_AUTH[*]:-}" ]]; then
+    APP_ZIP="$STAGE/Avada.zip"
+    rm -f "$APP_ZIP"
+    ditto -c -k --keepParent "$APP" "$APP_ZIP"      # notarytool takes zip/dmg/pkg, not a bare .app
+    notarize "$APP_ZIP" "Avada.app"
+    rm -f "$APP_ZIP"
+    xcrun stapler staple "$APP"
+    xcrun stapler validate "$APP"
+fi
 
 echo "==> creating dmg"
 DMG_STAGE="$STAGE/dmg-root"
@@ -354,28 +467,19 @@ hdiutil create -volname "Avada" -srcfolder "$DMG_STAGE" -ov -format UDZO \
     -size "${DMG_MB}m" "$DMG"
 codesign --force "${SIGN_TIMESTAMP[@]}" --sign "$SIGN_ID" "$DMG"
 
-# ---------------------------------------------------------------- notarization
-# Opt-in and never on the ad-hoc path, where Apple would reject the submission
-# anyway. Credentials come only from a keychain profile created out of band with
-# `xcrun notarytool store-credentials <name>`; an Apple ID password or
-# app-specific password must never reach this script, its arguments, or its
-# environment, and the check below refuses to continue if one has been exported
-# in the hope that it would; the guard for that is at the top of the script.
-
-NOTARY_PROFILE="${AVADA_NOTARY_PROFILE:-}"
-if [[ -z "$NOTARY_PROFILE" ]]; then
-    echo "==> notarization skipped (AVADA_NOTARY_PROFILE unset)"
-elif [[ "$SIGN_ID" == "-" ]]; then
-    echo "==> notarization skipped (ad-hoc signature: Apple only notarizes Developer ID)"
-elif [[ "$SIGN_TIER" != "developer-id" ]]; then
-    echo "==> notarization skipped ($SIGN_ID is not a Developer ID Application identity; Apple would reject it)"
-elif ! xcrun --find notarytool >/dev/null 2>&1; then
-    echo "==> notarization skipped (xcrun notarytool unavailable — needs Xcode 13+)"
-else
-    echo "==> notarizing $DMG as profile '$NOTARY_PROFILE' (this waits on Apple)"
-    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+if [[ -n "${NOTARY_AUTH[*]:-}" ]]; then
+    notarize "$DMG" "$(basename "$DMG")"
     xcrun stapler staple "$DMG"
     xcrun stapler validate "$DMG"
+
+    # Gatekeeper's own verdict, the way a downloading Mac would see it. Both must
+    # say "accepted" with source=Notarized Developer ID; anything else fails the
+    # release here rather than on someone else's desktop.
+    echo "==> Gatekeeper assessment"
+    spctl -a -vv -t exec "$APP"
+    spctl -a -vv -t open --context context:primary-signature "$DMG"
+    echo "==> designated requirement (what TCC keys permission grants to)"
+    codesign -d -r- "$APP" 2>&1 | sed -n '/^designated/p'
 fi
 
 echo "==> done: $DMG"
