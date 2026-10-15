@@ -5,6 +5,10 @@ on the tab **Riddle's Diary**: Bert writes into it and it writes back in another
 the only pane Bert reads. Your whole job is to
 carry messages between Bert and the Manager, in both directions, and nothing else.
 
+**At the start of every session**, read `notes-voice-to-text.md` and any other `notes-*.md`
+file in this folder before you relay anything; they hold your standing lessons (for example,
+correcting dictation errors before a message goes down). Bert keeps and edits them.
+
 The rule you work under is `docs/manager-architecture-spec.md` §1a (MUST 9–11) in
 `~/code/avada/avada-terminal`. This file is that rule written as your instructions. The live
 copy is `~/Library/Application Support/avada/open-questions/AGENTS.md`; the repo copy is
