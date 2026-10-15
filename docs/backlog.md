@@ -26,6 +26,18 @@ What ships:
    `queue/runner.log` and `relay-log.md`; a pointer not seen on screen is logged `held`, never
    re-sent. Delete the file to cancel. The brief's "Queue" section tells the relay what to do
    with the pointer.
+   **Keystroke-free path (2026-10-15, Bert: "can we create a way for it to deliver a message
+   without interfering with my typing or selections?"):** the runner's SAFE window never opened
+   in a real day (the relay pane is always on Bert's front tab), so the global Claude Code Stop
+   guard (`claude-standards/helpers/stop-guard/stop_guard.py` 1.8.0, installed at
+   `~/.claude/hooks/`) now delivers the same `queue/` at the end of the relay's next turn: it
+   moves each `queue/*.md` to `queue/sent/` and blocks the stop with the files' text as the
+   reason, so the relay reads them as its next input. Nothing is typed into the pane, so Bert's
+   typing and menu selections are never touched. The hook finds the queue through the symlink
+   `~/.claude/projects/-Users-bshuler-Library-Application-Support-avada-open-questions/queue`
+   → the relay's `queue/`; `queue/hook.log` records each handover. The runner keeps the
+   when-Bert-is-away path; both claim a file by renaming it, so whichever is first delivers and
+   the other skips it.
 2. **Real:** `control::mq` (plan row 6) gets a durable per-target queue with the same gate
    (target free = hidden tab or Bert away, no live dialog) and notify-on-file.
 3. **Module:** optional `rs/modules/message-queue` in the right rail: list, add, edit, delete,

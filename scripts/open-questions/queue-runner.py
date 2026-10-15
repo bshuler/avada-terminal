@@ -127,7 +127,11 @@ def pointer_line(sent_path):
 def deliver(path, pane):
     SENT.mkdir(exist_ok=True)
     dest = SENT / path.name
-    path.rename(dest)
+    try:
+        path.rename(dest)
+    except FileNotFoundError:
+        log(f"skipped {path.name}: already claimed (the Stop hook delivered it at turn end)")
+        return False
     line = pointer_line(dest)
     rc, out = ctl("submit", pane, line)
     if rc != 0:

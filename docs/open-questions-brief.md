@@ -114,7 +114,15 @@ looking at, or it is holding a live menu), it is **filed** instead of dropped: a
 pointer line naming the file, which by then sits in `queue/sent/`. Treat that line exactly like
 a message from Bert: carry the named file to the Manager by the Down procedure above, then tell
 Bert in one line. Deleting a file from `queue/` cancels it; `queue/runner.log` says what the
-runner did. Bert's ruling (2026-10-15): the queue is to become a visible, optional Avada module
+runner did.
+
+The same files can also reach you **at the end of one of your turns**, as a Stop-hook message
+that begins `Queue mail from the Stop hook, not a keystroke`. Nobody typed it; it is the global
+Stop guard reading `queue/` for you, so Bert's typing and menu choices are never disturbed. By
+then the files sit in `queue/sent/`. Treat each one exactly like the runner's pointer line:
+carry it to the Manager by the Down procedure, then tell Bert in one line. `queue/hook.log`
+records each handover. A file you have already carried is never delivered twice; whichever
+path moves it first owns it. Bert's ruling (2026-10-15): the queue is to become a visible, optional Avada module
 with create/read/update/delete (spec MUST 6 "Shape"); the folder and the runner are the interim.
 
 ## Up: Manager → Bert

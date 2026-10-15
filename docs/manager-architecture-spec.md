@@ -62,7 +62,11 @@ architect/build pass and must **reconcile with the existing docs** listed under
    in avada, so we can crud it if needed, it should be a module, and it should function with or
    without, it is a feature, an option". Interim, until the module exists: the Open Questions
    relay's `queue/` folder and `queue-runner.py` (repo copy `scripts/open-questions/`), which
-   gates on `pane-safe.sh` and an idle prompt before submitting a pointer line.
+   gates on `pane-safe.sh` and an idle prompt before submitting a pointer line, plus the global
+   Stop guard (`claude-standards/helpers/stop-guard/stop_guard.py` ≥ 1.8.0), which hands the
+   same queue to the relay at the end of its next turn without a keystroke (Bert, 2026-10-15:
+   delivery must not interfere with his typing or selections). Delivery to a pane the human is
+   looking at MUST never type into it; the real `control::mq` keeps that property.
 
 7. **Tasks panel for scheduled tasks.** A **Tasks panel** where **scheduled
    tasks run and are managed** — visible and **editable** in the UI. The
