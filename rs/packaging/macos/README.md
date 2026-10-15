@@ -42,7 +42,7 @@ than a failure, so `bundle.sh` stays runnable on a machine with no certificate:
 
 | Variable | Effect |
 |---|---|
-| `AVADA_SIGN_ID` | `codesign` identity to use. Unset → the first `Developer ID Application` in the login keychain; none → ad-hoc (`-`) with a loud warning. |
+| `AVADA_SIGN_ID` | `codesign` identity to use. Unset → the first `Developer ID Application` in the login keychain; none → the first `Apple Development` (local-only, see below); none → ad-hoc (`-`) with a loud warning. |
 | `AVADA_NOTARY_PROFILE` | An `xcrun notarytool store-credentials` profile name. Unset → notarization is skipped. Also skipped on an ad-hoc signature, which Apple will not notarize. |
 
 No password ever reaches this script. Notarization credentials are created out
@@ -61,8 +61,21 @@ AMFI, the parser `codesign` hands it to, rejects them.
 
 Why it matters beyond Gatekeeper: macOS keys TCC grants to the signing
 identity, so a Screen Recording or Full Disk Access grant made against an
-ad-hoc signature is dropped the next time the app is rebuilt. A Developer ID
-build keeps them.
+ad-hoc signature is dropped the next time the app is rebuilt — silently, because
+the session daemon's process chain is not allowed to re-prompt, so the grant
+looks ON in System Settings while every `screencapture` in a pane fails with
+"could not create image from display". Any certificate-anchored build keeps
+them: the stored requirement becomes `identifier "to.avada.terminal" and
+anchor apple generic and certificate leaf[subject.CN] = "<certificate name>"
+…`, which every rebuild signed by that certificate satisfies.
+
+That is why an `Apple Development` certificate is accepted as the second tier.
+It is a local-only identity: the build is not notarizable and Gatekeeper refuses
+it on any other Mac, but on the Mac that built it the grants stay put across
+reinstalls. The certificate on the Mac mini (`Apple Development: Bert Shuler`,
+team `VGX52CQGPT`) expires 2027-07-16; renewing it under the same name keeps the
+requirement matching, so grants survive the renewal too. Notarization is skipped
+for this tier even when `AVADA_NOTARY_PROFILE` is set.
 
 ## Installing
 

@@ -16,6 +16,8 @@
 #
 #   AVADA_SIGN_ID        codesign identity. Defaults to the first
 #                             "Developer ID Application" in the login keychain,
+#                             then to the first "Apple Development" (local-only:
+#                             keeps TCC grants across rebuilds, cannot ship),
 #                             then to ad-hoc ("-") with a warning.
 #   AVADA_NOTARY_PROFILE `xcrun notarytool store-credentials` profile name.
 #                             Unset -> notarization is skipped.
@@ -261,13 +263,38 @@ ENTITLEMENTS="$SCRIPT_DIR/entitlements.plist"
 plutil -lint "$ENTITLEMENTS"
 
 SIGN_ID="${AVADA_SIGN_ID:-}"
+SIGN_TIER=""
 if [[ -z "$SIGN_ID" ]]; then
-    # `find-identity` prints every usable identity; take the first Developer ID
-    # Application line and nothing else. Apple Development / Apple Distribution
-    # certs are deliberately not accepted: neither notarizes, and shipping one
-    # would produce a build that looks signed and still fails Gatekeeper.
+    # `find-identity` prints every usable identity. First choice: a Developer ID
+    # Application cert, the only kind that notarizes and passes Gatekeeper on
+    # another Mac. Apple Distribution is deliberately never picked: it is
+    # Mac-App-Store-only and would produce a build that looks signed and still
+    # fails Gatekeeper.
     SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
         | awk -F'"' '/"Developer ID Application/ { print $2; exit }')"
+    [[ -n "$SIGN_ID" ]] && SIGN_TIER="developer-id"
+fi
+if [[ -z "$SIGN_ID" ]]; then
+    # Second choice: an Apple Development cert. It cannot ship either (no
+    # notarization, Gatekeeper refuses it on any other Mac), but on the Mac that
+    # built it it is a real, certificate-anchored identity, and that is what
+    # matters for the installed app: TCC (Screen Recording, Accessibility, Full
+    # Disk Access, ...) keys each grant to the app's designated requirement.
+    # With a certificate the requirement is "identifier + team", stable across
+    # rebuilds; ad-hoc has no certificate, so the requirement is the cdhash of
+    # that one build and every reinstall silently drops every grant (and the
+    # daemon chain cannot even re-prompt — the denial is logged, not shown).
+    SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -F'"' '/"Apple Development:/ { print $2; exit }')"
+    [[ -n "$SIGN_ID" ]] && SIGN_TIER="apple-development"
+fi
+if [[ -n "$SIGN_ID" && -z "$SIGN_TIER" ]]; then
+    # AVADA_SIGN_ID was given explicitly: classify it so the notarize step and
+    # the notices below say the right thing.
+    case "$SIGN_ID" in
+        "Developer ID Application"*) SIGN_TIER="developer-id" ;;
+        *)                           SIGN_TIER="other" ;;
+    esac
 fi
 
 SIGN_TIMESTAMP=(--timestamp)
@@ -280,8 +307,12 @@ if [[ -z "$SIGN_ID" ]]; then
     echo "WARNING: macOS will drop every permission grant the moment it is rebuilt." >&2
     echo "WARNING: Set AVADA_SIGN_ID, or install a Developer ID, for a release." >&2
     echo "" >&2
+elif [[ "$SIGN_TIER" == "developer-id" ]]; then
+    echo "==> signing identity: $SIGN_ID"
 else
     echo "==> signing identity: $SIGN_ID"
+    echo "==> local-only identity: permission grants survive rebuilds on this Mac," \
+         "but this build cannot be notarized or shipped (needs Developer ID Application)"
 fi
 
 echo "==> signing Avada.app (hardened runtime)"
@@ -336,6 +367,8 @@ if [[ -z "$NOTARY_PROFILE" ]]; then
     echo "==> notarization skipped (AVADA_NOTARY_PROFILE unset)"
 elif [[ "$SIGN_ID" == "-" ]]; then
     echo "==> notarization skipped (ad-hoc signature: Apple only notarizes Developer ID)"
+elif [[ "$SIGN_TIER" != "developer-id" ]]; then
+    echo "==> notarization skipped ($SIGN_ID is not a Developer ID Application identity; Apple would reject it)"
 elif ! xcrun --find notarytool >/dev/null 2>&1; then
     echo "==> notarization skipped (xcrun notarytool unavailable — needs Xcode 13+)"
 else
