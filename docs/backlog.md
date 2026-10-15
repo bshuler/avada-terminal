@@ -6,6 +6,29 @@ next-session command line at the end of every session points at the entry it wil
 
 ## Open
 
+### B12 — a daemon handoff orphans every pane's TCC attribution; screen recording only works in panes opened after the relaunch (2026-10-14)
+
+macOS attributes a pane shell's privacy requests (Screen Recording, etc.) to the process that was
+*responsible* for it when it was spawned: the session daemon it was born under. After a GUI quit +
+reopen, the successor daemon adopts the ptys but the kernel's responsibility link still points at
+the retired daemon; once that daemon exits, each old shell is reparented to launchd and becomes
+responsible for itself (`responsibility_get_pid_responsible_for_pid` returns its own pid). A bare
+`zsh` has no TCC row and cannot prompt, so `screencapture` in every pre-relaunch pane fails with
+"could not create image from display" while the identical command in a pane opened after the
+relaunch succeeds. Observed 2026-10-14 21:06 after the 0.2.48 relaunch: test pane opened at
+21:03 under daemon 58577 → `Allowed (System Set)`; test pane from 20:5x under the retired daemon
+51411 → denied, `ps` ppid 1. This is independent of code signing (0.2.48 fixed the *other* half:
+ad-hoc signatures made the grant itself die on every rebuild — commit `3b63dc7`). Every
+install + relaunch therefore still forces users to reopen every pane that needs screen capture,
+including the Avada UI pane's Claude session. Fix direction: the adopted pty's shell cannot be
+re-parented, so the successor must either (a) keep the retired daemon alive as a responsible
+stub for its old shells (it runs from the attic bundle, which the install script already keeps),
+or (b) respawn the shell under the new daemon on request (`avada ctl respawn <pane>`), or (c) use
+`responsibility_spawnattrs_setdisclaim` so panes are responsible for themselves and get their own
+TCC prompt (then the grant is per `zsh`, which macOS shows as "zsh" — worse UX). Proof artefacts:
+`/tmp/tcc6.log` (tccd `AttributionChain` lines) and this session's write-up. Related: B11 (the
+handoff itself), B4.
+
 ### B11 — live daemon takeover times out under load and the old daemon shuts down anyway, losing every pane (2026-10-14)
 
 Installing 0.2.45 and relaunching at 18:38 local, with the Mac at load ~300, blanked all 33
