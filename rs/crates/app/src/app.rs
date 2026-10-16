@@ -3216,9 +3216,9 @@ impl App {
                 let Some(w) = self.windows.borrow().first().cloned() else {
                     return;
                 };
-                // Whatever asked — a link clicked in a browser, `avada -c …` from another
-                // terminal — is looking at that other app; bring the window it landed in forward.
-                crate::window::raise(w.hwnd.get());
+                // Never raised, and never switched to: whatever asked (a link, `avada -c …`
+                // from another terminal, an agent) is not Bert choosing where to type, and
+                // stealing focus is not allowed. The new tab waits in the background.
                 let mut st = w.state.borrow_mut();
                 match as_ {
                     AttachAs::Tab => {
@@ -3228,7 +3228,7 @@ impl App {
                                 active: ws.active,
                                 ..Default::default()
                             };
-                            st.load_workspace(file, &self.mgr);
+                            st.load_workspace_in_background(file, &self.mgr);
                         }
                     }
                     AttachAs::Panes => {

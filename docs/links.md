@@ -44,8 +44,11 @@ the first time.
 ## Where the tab goes
 
 A link takes the same path as `avada -c …`. With no window running it starts one. With one
-running, the link becomes a new tab of the focused window, and that window comes to the
-front. On macOS the URL arrives through `application:openURLs:`
+running, the link becomes a new tab of the focused window, **in the background**: Avada does
+not raise its window and does not switch to the new tab. Stealing focus is not allowed, because
+a hand-off (a link, `avada -c` from another terminal, an agent) is not Bert choosing where to
+type, and his keystrokes must not land in a pane he did not pick. When Bert clicks a link
+himself, macOS may bring Avada forward on its own; Avada adds nothing to that. On macOS the URL arrives through `application:openURLs:`
 (`crates/app/src/window/macos.rs`) and is handed to the running instance like a second launch.
 
 ## Clicking a link printed inside a pane

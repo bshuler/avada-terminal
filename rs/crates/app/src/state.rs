@@ -9664,6 +9664,30 @@ impl State {
         n
     }
 
+    /// [`Self::load_workspace`] for a hand-off from outside (a link, `avada -c` from another
+    /// terminal, an agent): the new tabs are appended but the tab Bert is on stays the active
+    /// one. Switching to the new tab would send whatever he is typing into a pane he never
+    /// chose, and stealing focus is not allowed (`docs/links.md`). A tab is found again by
+    /// a pane it held, since tabs carry no id; a tab with no pane falls back to the first
+    /// new one, as there is nothing in it to type into.
+    #[tracing::instrument(level = "debug", ret, skip_all)]
+    pub fn load_workspace_in_background(
+        &mut self,
+        file: WorkspaceFile,
+        mgr: &SessionManager,
+    ) -> Option<usize> {
+        let was = self.active_tab().panes.first().map(|p| p.uid.clone());
+        let landed = self.load_workspace(file, mgr)?;
+        if let Some(i) = was.and_then(|uid| {
+            self.tabs
+                .iter()
+                .position(|t| t.panes.iter().any(|p| p.uid == uid))
+        }) {
+            self.active = i;
+        }
+        Some(landed)
+    }
+
     /// Load a parsed workspace file: append a tab per group of its first window and switch to
     /// the tab it landed on (the file's saved active tab, else the first appended one). Each
     /// pane takes the reattach-or-spawn decision from its spec (uid/label/color/cwd/command/
@@ -11284,6 +11308,32 @@ mod session_file_tests {
             assert_eq!(saved.get(k), meta.get(k), "{k}");
         }
         assert!(saved.values().all(|v| !v.contains("root@inner")));
+    }
+
+    /// A hand-off (link, `avada -c`) adds its tab without taking Bert off the tab he is on.
+    #[test]
+    fn a_handed_off_tab_opens_in_the_background() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _guard = rt.enter();
+        let mut st = fresh();
+        let one = |title: &str| WorkspaceFile {
+            groups: Some(vec![GroupSpec {
+                title: Some(title.into()),
+                panes: vec![PaneSpec::default()],
+                ..Default::default()
+            }]),
+            active: Some(0),
+            ..Default::default()
+        };
+        let m = mgr();
+        st.load_workspace(one("mine"), &m);
+        st.load_workspace(one("also mine"), &m);
+        let typing_in = st.active;
+        assert_eq!(st.active_tab().title.as_str(), "also mine");
+        let landed = st.load_workspace_in_background(one("from a link"), &m).unwrap();
+        assert_eq!(st.tabs[landed].title.as_str(), "from a link");
+        assert_eq!(st.active, typing_in, "the tab Bert is on stays active");
+        assert_eq!(st.active_tab().title.as_str(), "also mine");
     }
 
     /// A local shell the user ssh'd out of by hand wears the `[ssh …]` tag while an ssh
