@@ -1053,6 +1053,9 @@ pub struct PaneState {
     /// Idle-glow animation state — its `alpha` (0 when not glowing) is projected into the
     /// pane model each tick once the pane has been output-quiet past the idle threshold.
     pub glow: Glow,
+    /// "Needs Bert's attention" — the one flag every glow surface reads
+    /// (`docs/attention-glow-spec.md`, [`crate::attention`]).
+    pub attention: crate::attention::Attention,
     /// The pane's latest OSC window title (sniffed from pty output), used to detect an
     /// AI/agent CLI so the idle glow only arms on agent panes (mirrors `isAiPane`). "" until
     /// the shell sets a title.
@@ -1317,6 +1320,7 @@ const HUMAN_INPUT_STALE: std::time::Duration = std::time::Duration::from_secs(30
 #[tracing::instrument(level = "debug", skip(data))]
 pub fn note_human_input(uid: &str, data: &str) {
     note_human_activity();
+    crate::attention::note_touched(uid);
     let clears = data.contains(['\r', '\n', '\x03', '\x15']) || data == "\x1b";
     let starts = !data.starts_with('\x1b') && data.chars().any(|c| c >= ' ' && c != '\x7f');
     let mut pending = pending_human_input()
@@ -2759,6 +2763,7 @@ impl State {
             link: None,
             link_cursor: (0.0, 0.0),
             glow,
+            attention: Default::default(),
             shell_title: String::new(),
             remote_now: None,
             ai_muted: false,
@@ -3123,6 +3128,7 @@ impl State {
             link: None,
             link_cursor: (0.0, 0.0),
             glow,
+            attention: Default::default(),
             shell_title: String::new(),
             remote_now: None,
             ai_muted: false,
@@ -3237,7 +3243,29 @@ impl State {
                 if let Some((ti, idx)) = self.find_pane(&uid) {
                     let done = finished
                         || (fallback_only && !rec.is_active(wall, FALLBACK_CLOSE_IDLE));
-                    if done {
+                    // Bert ruling 2026-10-16 (attention-glow spec §7): a helper that simply
+                    // stops closes and never glows; one that ended in an error stays open,
+                    // glowing, until Bert has seen it or the manager cleared it.
+                    if finished {
+                        let a = &mut self.tabs[ti].panes[idx].attention;
+                        if !a.helper_judged {
+                            a.helper_judged = true;
+                            a.helper_error =
+                                avada_core::claude_subagents::transcript_ended_in_error(&rec.transcript);
+                            if a.helper_error {
+                                tracing::info!(uid = %uid, orchestrator = %orch_uid, "subagent ended in an error; held open for attention");
+                            }
+                        }
+                    }
+                    if done && self.tabs[ti].panes[idx].attention.holds_helper() {
+                        let p = &mut self.tabs[ti].panes[idx];
+                        let subtitle: SharedString = "ended in an error".into();
+                        if p.subtitle.as_ref() != Some(&subtitle) {
+                            p.subtitle = Some(subtitle);
+                            self.dirty = true;
+                        }
+                        p.subagent = Some(rec);
+                    } else if done {
                         tracing::info!(uid = %uid, orchestrator = %orch_uid, finished, "subagent pane closed: done");
                         changed |= self.drop_subagent_pane(ti, idx, mgr);
                     } else {
@@ -8585,6 +8613,7 @@ impl State {
             link: None,
             link_cursor: (0.0, 0.0),
             glow,
+            attention: Default::default(),
             shell_title: String::new(),
             remote_now: None,
             ai_muted: false,
@@ -8898,6 +8927,7 @@ impl State {
                     kind: &p.kind,
                     tool_session: p.tool_session.as_ref(),
                     origin: &p.origin,
+                    attention_unseen: false,
                 },
             )
         };
@@ -9439,6 +9469,7 @@ impl State {
                                 kind: &p.kind,
                                 tool_session: p.tool_session.as_ref(),
                                 origin: &p.origin,
+                                attention_unseen: p.attention.needs,
                             },
                         )
                     })
@@ -10189,6 +10220,11 @@ impl State {
             link: None,
             link_cursor: (0.0, 0.0),
             glow,
+            // An unseen glow outlives the restart (attention-glow spec §5).
+            attention: crate::attention::Attention::restored(
+                spec.meta.as_ref().and_then(|m| m.get(crate::attention::META_KEY)).map(String::as_str)
+                    == Some(crate::attention::META_UNSEEN),
+            ),
             shell_title: String::new(),
             remote_now: None,
             ai_muted: false,
@@ -10827,6 +10863,8 @@ struct SnapPane<'a> {
     kind: &'a PaneKind,
     tool_session: Option<&'a ToolSessionMark>,
     origin: &'a std::collections::BTreeMap<String, String>,
+    /// Glowing and not yet seen: written so the glow survives a restart (attention spec §5).
+    attention_unseen: bool,
 }
 
 /// One pane of the relaunch snapshot. `base` is the configured font px: a pane at it records
@@ -10866,6 +10904,12 @@ fn snapshot_pane_spec(base: u32, p: SnapPane<'_>) -> PaneSpec {
         spec.meta
             .get_or_insert_with(Default::default)
             .extend(p.origin.clone());
+    }
+    if p.attention_unseen {
+        spec.meta.get_or_insert_with(Default::default).insert(
+            crate::attention::META_KEY.to_string(),
+            crate::attention::META_UNSEEN.to_string(),
+        );
     }
     spec
 }
@@ -12420,6 +12464,33 @@ mod tool_session_tests {
             meta.get(avada_core::pane_origin::WHY).map(String::as_str),
             Some("probe op session reuse")
         );
+    }
+
+    // Attention spec §5: a pane glowing unseen when Avada goes down glows again when it comes
+    // back, and one that had been seen stays dark — through the real snapshot and restore.
+    #[tokio::test]
+    async fn an_unseen_glow_survives_a_relaunch_and_a_seen_one_does_not() {
+        let m = mgr();
+        let mut st = State::new(theme::load_font(1.0));
+        st.attach_panes_from_specs(&m, &[spec_with(&[]), spec_with(&[])]);
+        let n = st.active_tab().panes.len();
+        st.active_tab_mut().panes[n - 2].attention.needs = true;
+        let specs: Vec<PaneSpec> = snapshot_panes(&st).into_iter().rev().take(2).rev().collect();
+        let key = |s: &PaneSpec| {
+            s.meta
+                .as_ref()
+                .and_then(|m| m.get(crate::attention::META_KEY))
+                .cloned()
+        };
+        assert_eq!(key(&specs[0]).as_deref(), Some(crate::attention::META_UNSEEN));
+        assert_eq!(key(&specs[1]), None, "a dark pane writes nothing");
+
+        let mut back = State::new(theme::load_font(1.0));
+        back.attach_panes_from_specs(&m, &specs);
+        let panes = &back.active_tab().panes;
+        let k = panes.len();
+        assert!(panes[k - 2].attention.needs, "unseen before, unseen after");
+        assert!(!panes[k - 1].attention.needs, "a restart never lights a pane");
     }
 
     // Spawns a real pty — a `Tool` pane is a terminal pane, that is the whole D1 premise.

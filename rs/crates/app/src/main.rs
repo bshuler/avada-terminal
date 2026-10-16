@@ -22,6 +22,7 @@
 mod ai;
 mod app;
 mod attach_cli;
+mod attention;
 mod command;
 mod contextmenu;
 mod control_cli;

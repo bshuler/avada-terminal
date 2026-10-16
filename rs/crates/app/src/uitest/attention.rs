@@ -199,3 +199,52 @@ fn the_top_drawer_stays_open_under_a_resting_pointer() {
         );
     });
 }
+
+/// The badge counts glowing panes, not unread cards: reading the drawer (the ack) no longer
+/// lowers it, because the panes are still waiting until each one is seen (attention spec §6).
+#[test]
+fn the_lip_badge_counts_glowing_panes_after_the_drawer_is_read() {
+    ui(|| {
+        let w = window();
+        w.set_pref_bars_autohide(true);
+        let g = w.global::<crate::AttentionAdapter>();
+        g.set_cards(Rc::new(slint::VecModel::from(vec![card("a", 0, 1, "alpha"), card("b", 1, 0, "beta")])).into());
+        g.set_unread(0);
+        g.set_badge(2);
+        open_bottom_drawer(&w);
+        assert_eq!(by_label(&w, "2 waiting").len(), 1, "two panes still glow");
+        g.set_badge(0);
+        i_slint_backend_testing::mock_elapsed_time(50);
+        assert!(by_label(&w, "2 waiting").is_empty());
+        assert!(by_label(&w, "0 waiting").is_empty(), "no badge once nothing glows");
+    });
+}
+
+/// A pane the manager cleared shows who checked it, on the pane itself, where Bert looks
+/// (attention spec §3.2); a pane without a note shows nothing.
+#[test]
+fn a_checked_pane_shows_who_checked_it() {
+    ui(|| {
+        let w = window();
+        let rows: Vec<crate::PaneItem> = ["checked by manager · 14:05", ""]
+            .iter()
+            .enumerate()
+            .map(|(i, note)| crate::PaneItem {
+                title: format!("pane {i}").into(),
+                x: 8.0 + i as f32 * 420.0,
+                y: 40.0,
+                w: 400.0,
+                h: 300.0,
+                visible: true,
+                focused: i == 0,
+                checked: (*note).into(),
+                ..Default::default()
+            })
+            .collect();
+        w.set_panes(Rc::new(slint::VecModel::from(rows)).into());
+        let note = by_label(&w, "checked by manager · 14:05");
+        assert_eq!(note.len(), 1, "one note, on the checked pane only");
+        let x = note[0].absolute_position().x;
+        assert!(x < 420.0, "the note sits on the first pane, not its neighbour (x = {x})");
+    });
+}

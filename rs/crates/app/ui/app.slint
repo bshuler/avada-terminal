@@ -571,8 +571,8 @@ export component AppWindow inherits Window {
                 resizing <=> root.bar-dragging;
                 resized => { root.bar-heights-changed(root.top-bar-h, root.bottom-bar-h); }
                 keep-open: AttentionAdapter.unread > 0;
-                lip-color: AttentionAdapter.unread > 0 ? Theme.warn : root.pref-bars-autohide ? Theme.arc-magenta : Theme.arc-rule;
-                lip-badge: AttentionAdapter.unread;
+                lip-color: AttentionAdapter.badge > 0 ? Theme.warn : root.pref-bars-autohide ? Theme.arc-magenta : Theme.arc-rule;
+                lip-badge: AttentionAdapter.badge;
                 // Open long enough to be read → count what is on it as seen.
                 revealed => { AttentionAdapter.attention-ack(); }
 

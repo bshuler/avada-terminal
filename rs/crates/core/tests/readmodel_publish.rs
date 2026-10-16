@@ -27,6 +27,7 @@ fn pane(id: &str, uid: &str) -> PaneInfo {
         kind: avada_core::tools::PaneKind::Terminal,
         parent_pane_id: None,
         subagent_activity: None,
+        attention: None,
     }
 }
 

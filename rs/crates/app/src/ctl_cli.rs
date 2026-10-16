@@ -73,6 +73,12 @@ usage: avada ctl <verb> [args]
     layout <tab> <name>             auto | single | columns | rows | grid |
                                     main-stack | grid-<cols>x<rows>
 
+  Attention glow (docs/attention-glow-spec.md)
+    glow list                       panes that are glowing (stopped, not seen yet), one per line
+    glow clear <pane> [--by NAME]   you looked and Bert does not need to: clears the glow and
+                                    shows \"checked by NAME\" on the pane (default: this pane's
+                                    label, else manager)
+
   Tabs
     new-tab [--window N] [--title T] [--cwd D]
     close-tab <tab>
@@ -292,6 +298,26 @@ pub fn run(argv: &[String]) -> std::io::Result<()> {
             println!("{}", text.trim_end_matches("\nClick to copy."));
         }
         "close-pane" => print_json(pane_verb(&conn, "closePane", &args, "close-pane <pane>")?),
+        "glow" => {
+            let (pos, flags) = split_flags_optional(&args);
+            match pos.first().map(String::as_str) {
+                Some("list") => {
+                    for line in glow_lines(&get(&conn, "/state")?) {
+                        println!("{line}");
+                    }
+                }
+                Some("clear") => {
+                    let pane = need(pos.get(1), "glow clear <pane> [--by NAME]");
+                    let by = flags.get("by").cloned().unwrap_or_else(|| caller_label(&conn));
+                    print_json(post(
+                        &conn,
+                        "/command",
+                        json!({ "type": "clearGlow", "paneId": pane, "by": by }),
+                    )?);
+                }
+                _ => usage("glow list | glow clear <pane> [--by NAME]"),
+            }
+        }
         "reopen-pane" => {
             // Optional arg: a session uid targets one parked pane; omit it for the most recent.
             let mut cmd = json!({ "type": "reopenPane" });
@@ -510,6 +536,7 @@ pub const HAND_VERBS: &[&str] = &[
     "info",
     "close-pane",
     "reopen-pane",
+    "glow",
     "restart-pane",
     "subagent-event",
     "focus-pane",
@@ -958,6 +985,51 @@ fn send(req: reqwest::blocking::RequestBuilder, conn: &Conn, path: &str) -> std:
 #[tracing::instrument(level = "debug", ret)]
 fn print_json(v: Value) {
     println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+}
+
+/// Who a `glow clear` is from when `--by` is not given: the calling pane's label
+/// (`AVADA_PANE_ID`), else `manager`.
+#[tracing::instrument(level = "debug", skip_all, ret)]
+fn caller_label(conn: &Conn) -> String {
+    std::env::var("AVADA_PANE_ID")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .and_then(|pane| {
+            get(conn, "/state").ok().as_ref().and_then(|s| {
+                find_pane(s, &pane)
+                    .and_then(|p| p.get("label").and_then(Value::as_str))
+                    .map(str::to_string)
+            })
+        })
+        .filter(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| "manager".to_string())
+}
+
+/// The `ctl glow list` lines: one per pane whose `attention.needs` is set, as
+/// `<pane id>  <tab id>  <label>`.
+#[tracing::instrument(level = "debug", ret)]
+fn glow_lines(state: &Value) -> Vec<String> {
+    let arr = |v: Option<&Value>| v.and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut out = Vec::new();
+    for w in arr(state.get("windows")) {
+        for t in arr(w.get("tabs")) {
+            let tab = t.get("id").and_then(Value::as_str).unwrap_or("?");
+            for p in arr(t.get("panes")) {
+                let needs = p
+                    .pointer("/attention/needs")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if needs {
+                    out.push(format!(
+                        "{}  {tab}  {}",
+                        p.get("id").and_then(Value::as_str).unwrap_or("?"),
+                        p.get("label").and_then(Value::as_str).unwrap_or("")
+                    ));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// `/state` as an outline. The point is that one screenful answers "what is open, and what is
@@ -1412,6 +1484,19 @@ fn tab_verb(conn: &Conn, ty: &str, args: &[String], msg: &str) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glow_list_names_only_glowing_panes() {
+        let state = json!({ "windows": [{ "windowId": 1, "tabs": [
+            { "id": "1:0", "panes": [
+                { "id": "p1", "label": "builder", "attention": { "needs": true } },
+                { "id": "p2", "label": "checked", "attention": { "needs": false, "checkedBy": "manager" } },
+                { "id": "p3", "label": "shell" },
+            ]},
+            { "id": "1:1", "panes": [{ "id": "p4", "label": "orch", "attention": { "needs": true } }] },
+        ]}]});
+        assert_eq!(glow_lines(&state), vec!["p1  1:0  builder", "p4  1:1  orch"]);
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

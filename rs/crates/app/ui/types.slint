@@ -131,6 +131,9 @@ export struct PaneItem {
     // idle-glow opacity (0 = no glow): the animated alpha of the pane's accent ring once
     // it has been output-quiet past the idle threshold (driven by the controller per tick).
     glow: float,
+    // The manager's "checked by manager · 14:05" note (attention-glow spec §3.2): it cleared
+    // this pane's glow without Bert. "" = no note. Goes when the pane next starts working.
+    checked: string,
     // clickable-path hover overlay (driven by the controller after hit-testing the grid).
     link-visible: bool,
     // True when that hovered link was DECLARED by the running program with an OSC 8
@@ -932,6 +935,9 @@ export global AttentionAdapter {
     // Needs-response cards the human has not yet seen the drawer open over (the lip badge and
     // the "stay open" hold). Cleared by `acknowledge`.
     in property <int> unread;
+    // The lip's count: every glowing pane (one per "needs attention" flag, attention-glow spec
+    // §6) plus unseen needs-response status cards. Opening the drawer does not lower it.
+    in property <int> badge;
     // A card for a pane was clicked → focus that pane (never moves keyboard focus otherwise).
     callback attention-focus(int, int);
     // The drawer has been open long enough to count as seen.

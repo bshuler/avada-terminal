@@ -76,7 +76,8 @@ Rules that matter:
 ## Changing the workspace
 
 Panes: `new-pane`, `close-pane`, `restart-pane`, `focus-pane`, `rename-pane`, `recolor-pane`,
-`layout`. Tabs: `new-tab`, `close-tab`, `rename-tab`, `focus-tab`, `move-tab`,
+`layout`, `glow list` / `glow clear <pane>` (a glowing pane stopped and Bert has not seen it;
+clear it once you have handled it so it stops asking him — see REFERENCE.md). Tabs: `new-tab`, `close-tab`, `rename-tab`, `focus-tab`, `move-tab`,
 `move-pane` (re-hosts a running pane in another tab, or in a new tab with
 `move-pane <pane> new --title T`, without restarting it), `toggle-subagents
 [tab]` (hides/shows the tab's Claude subagent panes; defaults to your own tab).

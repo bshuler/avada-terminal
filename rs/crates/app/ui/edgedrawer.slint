@@ -147,6 +147,8 @@ export component EdgeDrawer inherits Rectangle {
             // lip is only a few px tall, so the badge sits on the panel's inner corner and shows
             // whenever the drawer is open; closed, the lip's colour alone signals "waiting".
             if root.lip-badge > 0 : Rectangle {
+                accessible-role: text;
+                accessible-label: root.lip-badge + " waiting";
                 x: parent.width - self.width - 14px;
                 y: root.at-top ? 8px : 8px;
                 width: 22px;

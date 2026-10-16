@@ -638,7 +638,14 @@ pub fn dispatch(state: &mut State, cmd: Command, mgr: &SessionManager) -> Effect
                 return Effect::Quit;
             }
         }
-        Command::FocusPane(i) => state.focus_pane(i),
+        Command::FocusPane(i) => {
+            state.focus_pane(i);
+            // A click in the pane is Bert seeing it, at once (attention-glow spec §3.1).
+            if let Some(p) = state.active_tab_mut().panes.get_mut(i) {
+                p.attention.touch();
+                state.dirty = true;
+            }
+        }
         Command::ViewNavigate(i, target) => state.view_navigate(i, target),
         Command::FocusDir(d) => state.focus_dir(d),
         Command::SetLayout(l) => state.set_layout(l),

@@ -187,14 +187,14 @@ component TabChip inherits Rectangle {
     // active tab adopts the pane-area bg (reads connected); hover lifts to surface; a
     // spring-hover (dragged pane resting over it) glows in the brand accent.
     background: root.spring-hover ? Theme.brand.with-alpha(0.14)
-              : (root.needs && !root.active) ? Theme.arc-gold.with-alpha(root.breath * 0.30)
+              : root.needs ? Theme.arc-gold.with-alpha(root.breath * 0.30)
               : root.active ? Theme.bg
               : ((ta.has-hover || xa.has-hover) ? Theme.surface : transparent);
     border-top-left-radius: 9px;
     border-top-right-radius: 9px;
-    border-width: root.spring-hover ? 2px : ((root.needs && !root.active) ? 1px : (root.active ? 1px : 0px));
+    border-width: root.spring-hover ? 2px : (root.needs ? 1px : (root.active ? 1px : 0px));
     border-color: root.spring-hover ? Theme.brand
-                : (root.needs && !root.active) ? Theme.arc-gold.with-alpha(0.35 + root.breath * 0.65)
+                : root.needs ? Theme.arc-gold.with-alpha(0.35 + root.breath * 0.65)
                 : (root.active ? Theme.accent.with-alpha(0.55) : Theme.border);
 
     // The selected tab has to be findable without looking for it, and adopting the pane

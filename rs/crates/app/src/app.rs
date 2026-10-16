@@ -2182,6 +2182,7 @@ impl App {
         self.pump_reminders(&windows);
         self.pump_closed(&windows);
         self.pump_tips(&windows);
+        self.service_attention(&windows);
         self.pump_attention(&windows);
         self.pump_banner(&windows);
         self.pump_status(&windows);
@@ -2726,6 +2727,67 @@ impl App {
     /// Signature-gated like [`Self::pump_reminders`] so an unchanged set writes nothing.
     /// `unread` counts needs-response cards whose id is not yet in `attention_seen`.
     #[tracing::instrument(level = "debug", ret, skip(self, windows))]
+    /// Advance every pane's "needs Bert's attention" flag (`docs/attention-glow-spec.md`),
+    /// then keep the status-tray count in step with it. The Claude hook files are re-read at
+    /// most once a second; the flag itself steps every tick so "seen for ~2s" is measured
+    /// against the frame clock.
+    fn service_attention(&self, windows: &[Rc<Window>]) {
+        use crate::attention::{self, HookFacts};
+        use std::collections::HashMap;
+        use std::time::Instant;
+        thread_local! {
+            static HOOKS: RefCell<(Option<Instant>, HashMap<String, HookFacts>)> =
+                RefCell::new((None, HashMap::new()));
+        }
+        let now = Instant::now();
+        let stale = HOOKS.with(|c| {
+            c.borrow().0.is_none_or(|at| now.saturating_duration_since(at) >= Duration::from_secs(1))
+        });
+        if stale {
+            let mut facts = HashMap::new();
+            for w in windows {
+                let st = w.state.borrow();
+                for p in st.tabs.iter().flat_map(|t| t.panes.iter()).filter(|p| p.kind.is_pty()) {
+                    let turn_end_ms = self
+                        .pane_marker_ids(&p.uid)
+                        .iter()
+                        .filter_map(|id| avada_core::claude_subagents::last_turn_end(id))
+                        .max()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64);
+                    let has_hook = self.pane_claude_marker(&p.uid).is_some();
+                    facts.insert(p.uid.clone(), HookFacts { turn_end_ms, has_hook });
+                }
+            }
+            HOOKS.with(|c| *c.borrow_mut() = (Some(now), facts));
+        }
+        let touched = attention::take_touched();
+        let front = crate::filedrop::window_active();
+        let mut total = 0usize;
+        for w in windows {
+            let mut st = w.state.borrow_mut();
+            let changed =
+                HOOKS.with(|c| attention::drive(&mut st, &self.mgr, front, &c.borrow().1, &touched));
+            if changed {
+                w.last_attention.set(None);
+            }
+            total += attention::count(&st);
+        }
+        const TRAY_ID: &str = "attention";
+        if total == 0 {
+            crate::status_tray::remove(TRAY_ID);
+        } else {
+            let value = if total == 1 { "1 panel needs you".to_string() } else { format!("{total} panels need you") };
+            if !crate::status_tray::update(TRAY_ID, &value, crate::status_tray::Level::Warn) {
+                crate::status_tray::register(
+                    crate::status_tray::StatusItem::new(TRAY_ID, "ATTENTION", &value)
+                        .level(crate::status_tray::Level::Warn)
+                        .order(-10),
+                );
+            }
+        }
+    }
+
     fn pump_attention(&self, windows: &[Rc<Window>]) {
         for w in windows {
             let (cards, toast_count) = {
@@ -2733,18 +2795,21 @@ impl App {
                 let mut cards: Vec<crate::AttentionCard> = Vec::new();
                 for (ti, t) in st.tabs.iter().enumerate() {
                     for (pi, p) in t.panes.iter().enumerate() {
-                        // Builders and orchestrators are answered by their own chain, not
-                        // by the human, so they never ask for his attention.
-                        if !State::answers_to_human(p) {
+                        // One flag behind every surface (attention-glow spec §6): a card is
+                        // exactly a glowing pane, and goes when the glow does.
+                        if !p.attention.needs {
                             continue;
                         }
-                        let (kind, what) = match st.liveness_ui(&p.uid) {
-                            2 => (1, "waiting for your reply"),
-                            4 => (1, "reported an error"),
-                            _ => continue,
+                        let what = match st.liveness_ui(&p.uid) {
+                            2 => "waiting for your reply",
+                            4 => "reported an error",
+                            _ if p.attention.helper_error => "helper ended in an error",
+                            _ => "finished · not seen yet",
                         };
+                        let kind = 1;
                         cards.push(crate::AttentionCard {
-                            id: format!("{}:{}", p.uid, what).into(),
+                            // Per stop, so a pane that stops again after being seen is a new card.
+                            id: format!("{}:{}", p.uid, p.attention.stops).into(),
                             kind,
                             tab: ti as i32,
                             pane: pi as i32,
@@ -2799,12 +2864,20 @@ impl App {
             w.attention_seen
                 .borrow_mut()
                 .retain(|id| cards.iter().any(|c| c.id.as_str() == id));
-            let unread = {
+            let (unread, badge) = {
                 let seen = w.attention_seen.borrow();
-                cards
+                let unread = cards
                     .iter()
                     .filter(|c| c.kind == 1 && !seen.contains(c.id.as_str()))
-                    .count() as i32
+                    .count() as i32;
+                // The lip's count is the flag's (§6): a glowing pane counts until its glow
+                // clears, opening the drawer does not acknowledge it. Opening the drawer
+                // only lets it close again (`unread` holds it open).
+                let badge = cards
+                    .iter()
+                    .filter(|c| c.kind == 1 && (c.tab >= 0 || !seen.contains(c.id.as_str())))
+                    .count() as i32;
+                (unread, badge)
             };
             let mut h: u64 = 0xcbf29ce484222325;
             for c in &cards {
@@ -2816,6 +2889,7 @@ impl App {
                 h = h.wrapping_mul(0x100000001b3);
             }
             h ^= (unread as u64).wrapping_mul(0x9e3779b97f4a7c15);
+            h ^= (badge as u64).wrapping_mul(0xc2b2ae3d27d4eb4f);
             if w.last_attention.get() == Some(h) {
                 continue;
             }
@@ -2823,6 +2897,7 @@ impl App {
             let g = w.app.global::<crate::AttentionAdapter>();
             g.set_cards(slint::ModelRc::from(Rc::new(slint::VecModel::from(cards))));
             g.set_unread(unread);
+            g.set_badge(badge);
         }
     }
 

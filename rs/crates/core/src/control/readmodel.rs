@@ -114,6 +114,22 @@ pub struct PaneInfo {
     /// A subagent pane's own state, which replaces `activity` in `/state`: a subagent has
     /// no PTY for the liveness monitor to watch. `None` for every other pane.
     pub subagent_activity: Option<SubagentActivity>,
+    /// The pane's attention-glow flag (docs/attention-glow-spec.md §6) — `None` when the
+    /// pane is neither glowing nor carrying a "checked by" note, so `/state` omits it.
+    pub attention: Option<PaneAttention>,
+}
+
+/// One pane's attention-glow state as `/state` reports it: whether it is glowing
+/// ("stopped, not seen yet"), and who cleared it last if the manager did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneAttention {
+    pub needs: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_by: Option<String>,
+    /// Epoch milliseconds of the manager clear.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<u64>,
 }
 
 /// What a subagent pane's agent is doing, as `/state` reports it in `activity`.
@@ -973,6 +989,10 @@ pub struct PaneOut {
     /// top-level pane so the legacy shape is untouched.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_pane_id: Option<String>,
+    /// Attention glow — additive, omitted for a pane that is not glowing and has no
+    /// "checked by" note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention: Option<PaneAttention>,
 }
 
 /// Most panes one tab may hold; a new pane past this goes to an overflow tab
@@ -1019,6 +1039,7 @@ fn pane_out(p: &PaneInfo, activity: Activity, dims: Option<(u16, u16)>) -> PaneO
         talk: p.talk,
         kind: p.kind.as_meta_value(),
         parent_pane_id: p.parent_pane_id.clone(),
+        attention: p.attention.clone(),
     }
 }
 
@@ -1045,6 +1066,7 @@ mod tests {
             kind: PaneKind::Terminal,
             parent_pane_id: None,
             subagent_activity: None,
+            attention: None,
         }
     }
 

@@ -91,6 +91,11 @@ pub enum UiOp {
     /// entry whose session is still `uid`, `None` the most recent — the control-plane twin of the
     /// Reopen-Closed keyboard command. It re-docks into the active tab and focuses it.
     ReopenPane { session_uid: Option<String> },
+    /// The manager (or an orchestrator) looked at the stopped pane holding `session_uid` and
+    /// decided Bert does not need it: clear its attention glow and leave the "checked by `by`"
+    /// note (`docs/attention-glow-spec.md` §3.2). The flag lives in the GUI's `State`, hence
+    /// the queue. A pane that is not glowing is left as it is.
+    ClearGlow { session_uid: String, by: String },
     /// Retitle the tab.
     RenameTab { tab_id: String, title: String },
     /// Make the tab active in its window.

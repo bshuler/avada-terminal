@@ -339,6 +339,37 @@ pub fn subagents_for_pane(pane_id: &str) -> Vec<SubagentRecord> {
     subagents_from_archiving(&paths::claude_subagents_dir().join(pane_id), Some(&dir), cutoff)
 }
 
+/// Whether a finished subagent's transcript ends in an error: its last assistant record is
+/// Claude Code's API-error message (`isApiErrorMessage`) or carries an `error`. Hooks report no
+/// subagent failure of their own, so this is what "a helper hit an error" means for the
+/// attention glow (`docs/attention-glow-spec.md` §7, Bert ruling 2026-10-16). Reads only the
+/// tail; an unreadable transcript is not an error.
+#[tracing::instrument(level = "debug", ret)]
+pub fn transcript_ended_in_error(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let Ok(mut f) = fs::File::open(path) else {
+        return false;
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    text.lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
+        .find(|v| v.get("type").and_then(|t| t.as_str()) == Some("assistant"))
+        .is_some_and(|v| {
+            v.get("isApiErrorMessage").and_then(|b| b.as_bool()) == Some(true)
+                || v.get("error").is_some_and(|e| !e.is_null())
+        })
+}
+
 /// When the orchestrator's last turn in `hook_dir` ended (`_turn.json`), if the hook recorded one.
 #[tracing::instrument(level = "debug", ret)]
 pub fn turn_end_in(hook_dir: &Path) -> Option<SystemTime> {
@@ -378,6 +409,31 @@ pub fn prune_dirs_in(dir: &Path, live: &HashSet<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transcript_ending_in_an_api_error_is_an_error_and_a_normal_one_is_not() {
+        let dir = std::env::temp_dir().join(format!("hp-sub-err-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ok = dir.join("ok.jsonl");
+        fs::write(
+            &ok,
+            "{\"type\":\"user\",\"message\":{}}\n{\"type\":\"assistant\",\"message\":{\"content\":[]}}\n",
+        )
+        .unwrap();
+        let bad = dir.join("bad.jsonl");
+        fs::write(
+            &bad,
+            "{\"type\":\"assistant\",\"message\":{}}\n{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"message\":{}}\n{\"type\":\"system\"}\n",
+        )
+        .unwrap();
+        let errfield = dir.join("err.jsonl");
+        fs::write(&errfield, "{\"type\":\"assistant\",\"error\":\"rate_limit\"}\n").unwrap();
+        assert!(!transcript_ended_in_error(&ok));
+        assert!(transcript_ended_in_error(&bad));
+        assert!(transcript_ended_in_error(&errfield));
+        assert!(!transcript_ended_in_error(&dir.join("missing.jsonl")));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     const AGENT: &str = "a401878d07b43ff1c";
     const SESSION: &str = "fd3804e5-9743-4a44-afde-65ea8705ee3c";

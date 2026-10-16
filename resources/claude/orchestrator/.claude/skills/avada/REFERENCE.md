@@ -69,10 +69,20 @@ reported back — all of them at once, not just the first.
 | `rename-pane <pane> <title>` | `{"type":"renamePane","paneId":…,"label":…}` |
 | `recolor-pane <pane> <#rrggbb>` | `{"type":"recolorPane","paneId":…,"color":…}` |
 | `layout <tab> <name>` | `{"type":"setLayout","tabId":…,"layout":…}` |
+| `glow list` | reads `/state`: one line per glowing pane (`<pane>  <tab>  <label>`) — stopped and not yet seen by Bert |
+| `glow clear <pane> [--by NAME]` | `{"type":"clearGlow","paneId":…,"by":…}` — you looked and Bert does not need to; the pane shows "checked by NAME · HH:MM" until it next works. `--by` defaults to your pane's label, else `manager` |
 
 A new pane lands in the target window's **active** tab. The spawn spec must be nested under
 `pane` — the server rejects a flat one rather than silently spawning a default shell, and `ctl`
 nests it for you.
+
+**Attention glow** (`docs/attention-glow-spec.md`). A pane glows when its AI stops (Claude's Stop
+hook, awaiting input or an error; a quiet timer for tools without a hook) and Bert has not looked
+yet. Orchestrators and builders glow too. A Claude helper/sub-agent pane glows only if it ends in an
+error. The glow clears after Bert has looked at the pane for about 2 s, or typed or clicked in it, or
+when you `glow clear` it. A glowing pane carries `"attention":{"needs":true}` in `/state`; a cleared
+one `"attention":{"needs":false,"checkedBy":…,"checkedAt":<epoch ms>}`. Clear only what you have
+actually read and handled — a cleared pane no longer asks Bert for anything.
 
 Layout names: `auto`, `single`, `columns`, `rows`, `grid`, `main-stack`, and `grid-<cols>x<rows>`
 (e.g. `grid-2x3`). An unknown name falls back to `auto`.

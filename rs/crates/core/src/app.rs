@@ -300,6 +300,7 @@ fn spawn_seed_pane(
         kind,
         parent_pane_id: None,
         subagent_activity: None,
+        attention: None,
     }
 }
 

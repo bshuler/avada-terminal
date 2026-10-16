@@ -1302,6 +1302,7 @@ mod tests {
             kind: crate::tools::PaneKind::Terminal,
             parent_pane_id: None,
             subagent_activity: None,
+            attention: None,
         };
         shared.model.lock().unwrap().add_window(WindowInfo {
             keyboard_focus_pane: None,
@@ -1621,6 +1622,7 @@ mod tests {
             kind: crate::tools::PaneKind::Markdown,
             parent_pane_id: None,
             subagent_activity: None,
+            attention: None,
         }
     }
 

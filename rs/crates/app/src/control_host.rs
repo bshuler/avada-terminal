@@ -885,6 +885,7 @@ impl ControlHost {
                     kind: PaneKind::Terminal,
                     parent_pane_id: None,
                     subagent_activity: None,
+                    attention: None,
                 },
             );
             if inserted {
@@ -1205,6 +1206,18 @@ impl ControlHost {
                         changed = true;
                     }
                 }
+                UiOp::ClearGlow { session_uid, by } => {
+                    if let Some((w, ti, idx)) = resolve_pane(windows, &session_uid) {
+                        let mut st = w.state.borrow_mut();
+                        let now_ms = crate::glow::now_epoch_ms();
+                        if st.tabs[ti].panes[idx].attention.manager_clear(&by, now_ms) {
+                            tracing::info!(uid = %session_uid, by = %by, "attention glow cleared by the manager");
+                            st.dirty = true;
+                            w.last_attention.set(None);
+                            changed = true;
+                        }
+                    }
+                }
                 UiOp::ReopenPane { session_uid } => {
                     // A specific parked pane lives in exactly one window's history; the
                     // most-recent restore (no uid) acts on the first window, like the keyboard
@@ -1458,6 +1471,13 @@ impl ControlHost {
                             .as_ref()
                             .map(|u| pane_ids.get(u).cloned().unwrap_or_else(|| u.clone())),
                         subagent_activity: p.subagent.as_ref().map(|r| subagent_activity(r, now)),
+                        attention: (p.attention.needs || p.attention.checked.is_some()).then(|| {
+                            avada_core::control::readmodel::PaneAttention {
+                                needs: p.attention.needs,
+                                checked_by: p.attention.checked.as_ref().map(|c| c.by.clone()),
+                                checked_at: p.attention.checked.as_ref().map(|c| c.at_ms),
+                            }
+                        }),
                     });
                 }
                 tabs.push(TabInfo {
@@ -1943,6 +1963,7 @@ mod tests {
             kind: PaneKind::Terminal,
             parent_pane_id: None,
             subagent_activity: None,
+            attention: None,
         }
     }
 

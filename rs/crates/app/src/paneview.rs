@@ -514,6 +514,7 @@ fn pane_item(
         hidden: false,
         focused,
         glow: ps.glow.alpha,
+        checked: ps.attention.checked_label().into(),
         link_visible: link.is_some(),
         // An OSC 8 link opens on a PLAIN click even under a mouse grab (see `widget.slint`).
         link_declared: link.is_some_and(|l| l.is_osc8),
@@ -1575,7 +1576,6 @@ pub fn resync(
         if open {
             let now_ms = crate::glow::now_epoch_ms();
             let idle_on = state.settings.idle_alert;
-            let idle_threshold_ms = state.settings.idle_alert_seconds as u64 * 1000;
             let active = state.active;
             let palette = state.settings.frame_palette;
             let tab_rows: Vec<LeftTabRow> = state
@@ -1600,14 +1600,8 @@ pub fn resync(
                                 tint: p.accent,
                                 focused: ti == active && pi == t.focused,
                                 live: crate::leftpanel::liveness(last, now_ms),
-                                idle: State::answers_to_human(p)
-                                    && crate::leftpanel::is_idle(
-                                        &p.shell_title,
-                                        last,
-                                        now_ms,
-                                        idle_on,
-                                        idle_threshold_ms,
-                                    ),
+                                // The pane's attention flag, the same one its frame reads.
+                                idle: idle_on && p.attention.needs,
                                 mark: crate::leftpanel::pane_mark_kind(&kind),
                                 brand: crate::leftpanel::pane_mark_ink(&kind, p.accent),
                             }
@@ -2097,9 +2091,7 @@ pub fn pump(
     // ---- idle-glow inputs (read once per tick) ----
     let idle_on = state.settings.idle_alert;
     let idle_effect = crate::glow::IdleEffect::from_token(&state.settings.idle_effect);
-    let idle_threshold_ms = state.settings.idle_alert_seconds as u64 * 1000;
     let glow_now = Instant::now();
-    let glow_now_ms = crate::glow::now_epoch_ms();
 
     // ---- render dirty (visible) panes of the active tab → model ----
     // Per-pane chrome inputs (read before the tab borrow): the global frame/dot prefs each
@@ -2124,26 +2116,11 @@ pub fn pump(
     let mut rendered = 0usize;
     for (i, tool) in tool_row.iter().enumerate().take(n) {
         let ps = &mut tab.panes[i];
-        // Advance this pane's idle glow every tick. A pane is "idle" once it's been
-        // output-quiet past the threshold (the agent finished + is waiting); the alpha
-        // animates while idle and resets to 0 otherwise.
+        // Advance this pane's glow every tick. The frame breathes while the pane's one
+        // "needs Bert's attention" flag is up (`attention::drive`, attention-glow spec §6);
+        // the alpha animates in while it is and back to 0 once the flag clears.
         let prev_glow = ps.glow.alpha;
-        // Only AGENT panes glow — a plain quiet shell never does, matching the Electron
-        // `isAiPane && idle` gate. "Is this an agent" now has two answers and either will
-        // do: the pane's merged tool identity (authoritative for a pane spawned AS a tool,
-        // which may never print a title at all) or the title sniff (which catches the
-        // agents that do). Before the first, a `avada claude` pane sat there quiet and
-        // unglowing because nothing had written a title for it to match.
-        let is_agent =
-            !matches!(tool.0, PaneKind::Terminal) || crate::glow::is_ai_pane(&ps.shell_title);
-        let idle = idle_on
-            && ps.visible
-            && is_agent
-            && State::answers_to_human(ps)
-            && match mgr.last_output_at(&ps.uid) {
-                Some(ms) => glow_now_ms.saturating_sub(ms) >= idle_threshold_ms,
-                None => false,
-            };
+        let idle = idle_on && ps.visible && ps.attention.needs;
         ps.glow.update(idle_effect, idle, glow_now);
         let glow_changed = (ps.glow.alpha - prev_glow).abs() > 0.004;
 
@@ -2285,39 +2262,18 @@ pub fn pump(
     PumpResult { rendered, active }
 }
 
-/// Tab chips breathe gold when a pane in that (background) tab waits on the human: an agent
-/// pane that answers to him and is either reported awaiting input / errored, or has been
-/// output-quiet past the idle threshold. The visible tab's own panes glow themselves, so it
-/// is skipped. Returns whether an animation is in flight.
+/// Tab chips breathe gold while any pane on the tab glows (attention-glow spec §4): the
+/// tab has no glow state of its own, it reads its panes' one flag, so it can never get out
+/// of step with them. The active tab's chip glows too while a pane on it is still unseen
+/// (hidden behind a zoomed pane, say). Returns whether an animation is in flight.
 pub(crate) fn drive_tab_attention(
     app: &AppWindow,
     state: &mut State,
     ui: &Ui,
-    mgr: &SessionManager,
+    _mgr: &SessionManager,
     now: Instant,
 ) -> bool {
-    let idle_on = state.settings.idle_alert;
-    let threshold_ms = state.settings.idle_alert_seconds as u64 * 1000;
-    let now_ms = crate::glow::now_epoch_ms();
-    let needs: Vec<bool> = (0..state.tabs.len())
-        .map(|ti| {
-            ti != state.active
-                && state.tabs[ti].panes.iter().any(|p| {
-                    if !State::answers_to_human(p) {
-                        return false;
-                    }
-                    if matches!(state.liveness_ui(&p.uid), 2 | 4) {
-                        return true;
-                    }
-                    let is_agent = !matches!(state.effective_kind(p), PaneKind::Terminal)
-                        || crate::glow::is_ai_pane(&p.shell_title);
-                    idle_on
-                        && is_agent
-                        && matches!(mgr.last_output_at(&p.uid),
-                            Some(ms) if now_ms.saturating_sub(ms) >= threshold_ms)
-                })
-        })
-        .collect();
+    let needs = crate::attention::tab_needs(state);
     let any = needs.iter().any(|n| *n);
     for (i, n) in needs.iter().enumerate() {
         if i < ui.tabs.row_count() {

@@ -5,8 +5,8 @@
 //! the window's own state:
 //!
 //! * **WORKSPACE tree** — pure projection over `State.tabs`, done in [`crate::paneview`];
-//!   the only thing needed here is the per-pane liveness ([`liveness`] / [`is_idle`]),
-//!   which reads the SAME activity source the idle glow does
+//!   the only thing needed here is the per-pane liveness ([`liveness`]), which reads the
+//!   SAME activity source the pane frame does
 //!   (`SessionManager::last_output_at` vs [`crate::glow::now_epoch_ms`]) — there is no
 //!   second activity clock in the app, and this module must never introduce one.
 //! * **LIBRARY** — the saved workspaces under [`library_dir`]. Cached in a thread-local and
@@ -51,26 +51,6 @@ pub fn liveness(last: Option<u64>, now_ms: u64) -> f32 {
         return 0.0;
     }
     1.0 - (age as f32 / LIVE_WINDOW_MS as f32)
-}
-
-/// Whether a pane's idle alert has armed: the same gate `paneview::pump` uses to light the
-/// glow ring (the feature is on, the pane runs an agent CLI, and it has been output-quiet
-/// past the threshold). Reproduced here rather than read off `PaneState::glow` because the
-/// pump only advances the glow for the ACTIVE tab's panes — the tree shows every tab, and
-/// a background tab's stale `glow.alpha` would lie.
-#[tracing::instrument(level = "debug", ret)]
-pub fn is_idle(
-    shell_title: &str,
-    last: Option<u64>,
-    now_ms: u64,
-    on: bool,
-    threshold_ms: u64,
-) -> bool {
-    on && crate::glow::is_ai_pane(shell_title)
-        && match last {
-            Some(ms) => now_ms.saturating_sub(ms) >= threshold_ms,
-            None => false,
-        }
 }
 
 /// The mark kinds the workspace tree draws for a pane that is **not** a tool this build
@@ -973,22 +953,6 @@ mod tests {
         ] {
             assert_eq!(pane_mark_ink(&kind, accent), accent, "{kind:?}");
         }
-    }
-
-    #[test]
-    fn idle_gate_matches_the_glow_gate() {
-        let now = 1_000_000u64;
-        let thr = 30_000u64;
-        // off → never idle, whatever the pane is
-        assert!(!is_idle("claude", Some(now - 60_000), now, false, thr));
-        // a plain shell never arms, however quiet
-        assert!(!is_idle("zsh", Some(now - 60_000), now, true, thr));
-        // an agent pane quiet past the threshold arms
-        assert!(is_idle("claude", Some(now - 60_000), now, true, thr));
-        // …but not before it
-        assert!(!is_idle("claude", Some(now - 1_000), now, true, thr));
-        // no output at all is not "idle" (the pane never started)
-        assert!(!is_idle("claude", None, now, true, thr));
     }
 
     #[test]

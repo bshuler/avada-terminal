@@ -857,6 +857,29 @@ export component PaneView inherits Rectangle {
             }
         }
 
+        // "checked by manager · 14:05": the manager cleared this pane's glow without Bert
+        // (attention-glow spec §3.2), so a handled pane reads differently from one that never
+        // asked. Bottom-left of the frame, clear of the bottom-right toast.
+        for pane[idx] in root.panes : Rectangle {
+            visible: pane.visible && !pane.hidden && pane.checked != "";
+            x: pane.x + 10px;
+            y: pane.y + pane.h - self.height - 10px;
+            width: checked-note.preferred-width + 14px;
+            height: checked-note.preferred-height + 6px;
+            border-radius: 4px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.arc-gold.with-alpha(0.55);
+            // The Text below is the accessible element: it is named by its text.
+            checked-note := Text {
+                x: 7px;
+                y: 3px;
+                text: pane.checked;
+                font-size: 11px;
+                color: Theme.subtext;
+            }
+        }
+
         // resize seams, drawn over the panes
         for d in root.dividers : DividerHandle {
             desc: d;

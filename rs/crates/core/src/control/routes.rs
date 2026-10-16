@@ -2066,6 +2066,7 @@ async fn command(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: By
     match cmd.get("type").and_then(Value::as_str) {
         Some("closePane") => return close_pane_command(&shared, &info, &cmd),
         Some("reopenPane") => return reopen_pane_command(&shared, &info, &cmd),
+        Some("clearGlow") => return clear_glow_command(&shared, &info, &cmd),
         _ => {}
     }
     // Dictation verbs are handled here, not in dispatch, for two reasons: they need `Shared`
@@ -2145,6 +2146,39 @@ fn close_pane_command(shared: &Arc<Shared>, info: &TokenInfo, cmd: &Value) -> Re
             session_uid: found.uid.clone(),
         },
         json!({ "ok": true, "queued": true, "paneId": found.pane_id, "sessionUid": found.uid }),
+    )
+}
+
+/// Queue a manager clear of a pane's attention glow (`docs/attention-glow-spec.md` §3.2).
+/// `by` names who checked it, for the pane's "checked by" note (default `manager`). The pane is
+/// resolved and scoped here, so a scoped orchestrator token can clear only its own workers.
+#[tracing::instrument(level = "debug", skip_all)]
+fn clear_glow_command(shared: &Arc<Shared>, info: &TokenInfo, cmd: &Value) -> Response {
+    let pane_id = match cmd.get("paneId").and_then(Value::as_str) {
+        Some(p) if !p.is_empty() => p,
+        _ => return jstatus(400, json!({ "error": "missing string field: paneId" })),
+    };
+    let by: String = cmd
+        .get("by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("manager")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(40)
+        .collect();
+    let found = match find_pane_scoped(shared, info.scope.as_ref(), pane_id) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    queue_ui_op(
+        shared,
+        UiOp::ClearGlow {
+            session_uid: found.uid.clone(),
+            by: by.clone(),
+        },
+        json!({ "ok": true, "queued": true, "paneId": found.pane_id, "sessionUid": found.uid, "by": by }),
     )
 }
 
@@ -3970,6 +4004,7 @@ mod golden {
             kind: crate::tools::PaneKind::Terminal,
             parent_pane_id: None,
             subagent_activity: None,
+            attention: None,
         }
     }
 
@@ -5057,6 +5092,23 @@ mod golden {
         let r = post(&s, "/command", &scoped, r#"{"type":"closePane","paneId":"p1"}"#).await;
         assert_eq!(r.status().as_u16(), 202);
 
+        // `clearGlow` (attention-glow-spec §3.2): queued with the resolved uid and a cleaned
+        // `by` (control chars dropped, default `manager`); 404 / 400 like `closePane`; a
+        // scoped token may clear a pane in its own scope.
+        let r = post(&s, "/command", &s.token, r#"{"type":"clearGlow","paneId":"p1","by":" orch\u0007 "}"#).await;
+        assert_eq!(r.status().as_u16(), 202);
+        let body: Value = r.json().await.unwrap();
+        assert_eq!(body["sessionUid"], json!("u1"));
+        assert_eq!(body["by"], json!("orch"));
+        let r = post(&s, "/command", &s.token, r#"{"type":"clearGlow","paneId":"p1"}"#).await;
+        assert_eq!(r.json::<Value>().await.unwrap()["by"], json!("manager"));
+        let r = post(&s, "/command", &s.token, r#"{"type":"clearGlow","paneId":"ghost"}"#).await;
+        assert_eq!(r.status().as_u16(), 404);
+        let r = post(&s, "/command", &s.token, r#"{"type":"clearGlow"}"#).await;
+        assert_eq!(r.status().as_u16(), 400);
+        let r = post(&s, "/command", &scoped, r#"{"type":"clearGlow","paneId":"p1"}"#).await;
+        assert_eq!(r.status().as_u16(), 202);
+
         // `reopenPane` is a workspace-wide restore, so it is root-only: the scoped token is
         // refused 403, the master token is queued 202.
         let r = post(&s, "/command", &scoped, r#"{"type":"reopenPane"}"#).await;
@@ -5224,6 +5276,7 @@ mod golden {
                         kind: crate::tools::PaneKind::Subagent,
                         parent_pane_id: Some("pane-orch".into()),
                         subagent_activity: Some(crate::control::readmodel::SubagentActivity::Finished),
+                        attention: None,
                         ..pane("pane-sub", "")
                     },
                 ],
