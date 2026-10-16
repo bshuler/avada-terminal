@@ -12,6 +12,7 @@ pub mod work;
 
 pub mod descriptor_table;
 pub mod dictation_service;
+pub mod revisions;
 pub mod discovery_guard;
 pub mod dispatch;
 pub mod events;

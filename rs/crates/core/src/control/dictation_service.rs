@@ -195,6 +195,7 @@ fn watched() -> &'static Mutex<HashMap<String, Arc<AtomicU8>>> {
 /// whether they held an Enter.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn note_human_keystroke(uid: &str, data: &str) {
+    crate::control::revisions::note_keystroke(uid, data);
     let w = watched().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(flag) = w.get(uid) {
         let bits = if data.contains(['\r', '\n']) {
@@ -259,6 +260,7 @@ pub fn start_dictation(
 ) -> Result<&'static str, String> {
     let sunk = Arc::clone(shared);
     let target = uid.to_string();
+    crate::control::revisions::end(uid); // a new dictation replaces the last one's list
     let touched = watch(uid);
     shared.dictation.start_live(
         pane_id,
@@ -289,7 +291,7 @@ pub fn start_dictation(
 /// erase with it. The insert, meanwhile, wants to be a paste for the reason the batch
 /// delivery does: it can be longer than the tty's 1024-byte input queue.
 #[tracing::instrument(level = "debug", ret, skip(shared))]
-fn apply(shared: &Shared, uid: &str, edit: &Edit) -> Result<(), String> {
+pub(crate) fn apply(shared: &Shared, uid: &str, edit: &Edit) -> Result<(), String> {
     if edit.backspaces > 0 {
         shared
             .sessions
@@ -413,6 +415,10 @@ fn deliver(
         // bracketed-paste TUI reads the Enter as a keypress and not as pasted content.
         std::thread::sleep(Duration::from_millis(SUBMIT_DELAY_MS));
         submitted = shared.sessions.write(uid, "\r").is_ok();
+    }
+    if !submitted {
+        // Left in the pane for the human to send: Ctrl+←/→ can now swap it for a rewrite.
+        crate::control::revisions::begin(uid, &text);
     }
     Ok(Delivered {
         text,

@@ -622,10 +622,12 @@ impl ControlHost {
         if !recording.is_empty() {
             note_human_activity(); // talking counts as being here
         }
-        let notices: Vec<(String, String)> = match self.dictation_notices.lock() {
+        let mut notices: Vec<(String, String)> = match self.dictation_notices.lock() {
             Ok(mut q) => q.drain(..).collect(),
             Err(_) => Vec::new(),
         };
+        // Haiku's rewrites arrive on worker threads; they reach the pane here, on this thread.
+        notices.extend(avada_core::control::revisions::poll(shared));
         if recording.is_empty() && notices.is_empty() {
             // The overwhelmingly common case: nothing is recording and nothing came back.
             // Panes still holding a stale `recording` flag are cleared by the loop below only

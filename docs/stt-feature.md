@@ -153,6 +153,33 @@ text (logged: 1356 backspaces on 1390 live characters), because the whole-file t
 and the windowed live one disagree early. (`dictation_service::note_human_keystroke`, fed
 from the GUI's `pane_write`.) The control API's `stopDictation` reports it as `takenOver`.
 
+## Ctrl+← / Ctrl+→: Haiku's rewrites of what you said
+
+Recognizers pick the wrong homophone ("right a test for the pain"). After a dictation lands in
+a pane and is not sent, that pane keeps a short list (`core/src/control/revisions.rs`):
+
+- Position 1 is the transcript exactly as delivered. Later positions are rewrites Haiku
+  suggested, in the order they arrived.
+- **Ctrl+→** moves right. At the end of the list it asks Haiku for more and moves as soon as
+  they arrive. **Ctrl+←** moves back, as far as the words as dictated.
+- Each step swaps the pane's text with the live-typing diff (backspaces for the part that
+  changed, then a paste), and a toast shows where you are: `2/4 · Haiku`, `1/4 · as dictated`.
+- **Enter** sends the message and clears the list. **Any other key** also ends it: once you
+  edit the line, a backspace counted against it could eat your own words. With no list open,
+  Ctrl+←/→ go to the pane as usual (word left/right).
+
+Haiku is asked for the first three as soon as the dictation lands, because a call takes 7–11
+seconds; it is asked for three more each time you reach the last one. The call is the
+`claude` CLI you already have (`claude -p --model haiku`, no tools, no session file, no MCP,
+none of your settings or hooks, run from the temp directory), so it uses your existing login
+and needs no key. The real binary is preferred over a Preferences → Tools wrapper. Answers are
+control-stripped, deduplicated, and dropped if they run far longer than what was said. Only
+the GUI thread writes them into the pane.
+
+On macOS, Ctrl+←/→ are also the Mission Control "move a Space" shortcuts. If they switch
+desktops instead of reaching Avada, turn those off in System Settings → Keyboard → Keyboard
+Shortcuts → Mission Control.
+
 ## The transcript is untrusted input
 
 Whisper transcribes whatever sound is in the room — a podcast, a colleague, a video call — and

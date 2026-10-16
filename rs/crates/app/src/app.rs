@@ -3399,6 +3399,25 @@ impl App {
         // `pty_ctrl`, not `msg.control`: on macOS the two are different keys, and the pty wants
         // the physical Control (see `crate::pty_ctrl`).
         let ctrl = crate::pty_ctrl(&msg);
+        // Ctrl+←/→ right after a dictation step through Haiku's rewrites of it
+        // (`avada_core::control::revisions`). Only while the pane has such a list; otherwise
+        // the chord goes to the pane as the usual word-left/word-right.
+        if ctrl && !msg.alt && !msg.shift {
+            let right = crate::is_key(&msg.text, Key::RightArrow);
+            if right || crate::is_key(&msg.text, Key::LeftArrow) {
+                if let Some(shared) = self.control.shared_handle() {
+                    let mut st = win.state.borrow_mut();
+                    if let Some(ps) = st.active_tab_mut().panes.get_mut(idx) {
+                        if let Some(toast) =
+                            avada_core::control::revisions::step(&shared, &ps.uid, right)
+                        {
+                            ps.pane.set_toast(toast);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // On a Mac, Command+Backspace/Delete/arrows and Option+arrows edit the line the way they
         // do in any text field. Checked after the keymap above, so a chord the user bound wins.
         let line_edit = if cfg!(target_os = "macos") {
