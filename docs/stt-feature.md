@@ -153,33 +153,53 @@ text (logged: 1356 backspaces on 1390 live characters), because the whole-file t
 and the windowed live one disagree early. (`dictation_service::note_human_keystroke`, fed
 from the GUI's `pane_write`.) The control API's `stopDictation` reports it as `takenOver`.
 
-## Ctrl+← / Ctrl+→: Haiku's rewrites of what you said
+## Ctrl+← / Ctrl+→: a model's rewrites of what you said, Ctrl+↑ / Ctrl+↓: which model
 
 Recognizers pick the wrong homophone ("right a test for the pain"). After a dictation lands in
 a pane and is not sent, that pane keeps a short list (`core/src/control/revisions.rs`):
 
-- Position 1 is the transcript exactly as delivered. Later positions are rewrites Haiku
+- Position 1 is the transcript exactly as delivered. Later positions are rewrites a model
   suggested, in the order they arrived.
-- **Ctrl+→** moves right. At the end of the list it asks Haiku for more and moves as soon as
+- **Ctrl+→** moves right. At the end of the list it asks the selected model for more and moves as soon as
   they arrive. **Ctrl+←** moves back, as far as the words as dictated.
 - Each step swaps the pane's text with the live-typing diff (backspaces for the part that
-  changed, then a paste), and a toast shows where you are: `2/4 · Haiku`, `1/4 · as dictated`.
+  changed, then a paste), and a toast shows where you are and who wrote it:
+  `2/4 · on this Mac`, `3/4 · Sonnet`, `1/4 · as dictated`.
+- **Ctrl+↓ / Ctrl+↑** pick who writes the next suggestions, in this order: the model on this
+  Mac, Haiku, Sonnet, Opus, Fable (↓ goes right, ↑ goes left, and both stop at the ends). Picking one
+  asks it for a batch straight away; the toast shows the order with the current one in
+  brackets. New suggestions are added to the end of the list, so Ctrl+→ reaches them.
 - **Enter** sends the message and clears the list. **Any other key** also ends it: once you
   edit the line, a backspace counted against it could eat your own words. Text an agent writes through
   `/panes/{id}/input` (or a nudge) counts the same as your typing, here and for the
   keep-hands-off rule above. With no list open,
   Ctrl+←/→ go to the pane as usual (word left/right).
 
-Haiku is asked for the first three as soon as the dictation lands, because a call takes 7–11
-seconds; it is asked for three more each time you reach the last one. The call is the
-`claude` CLI you already have (`claude -p --model haiku`, no tools, no session file, no MCP,
+Every list starts on the model on this Mac, and that is the only one asked without a key
+press: it gets the first three as soon as the dictation lands, so they are usually there by
+the time you look. Nothing you said leaves the Mac unless you press Ctrl+↓ to choose a cloud
+model. Whichever model is selected is asked for three more each time you reach the last one.
+
+The local model is `gemma3:4b`, served by Ollama on `127.0.0.1:11434` (`brew install
+ollama && brew services start ollama && ollama pull gemma3:4b`). It stays loaded for 15
+minutes after a call. If Ollama is not running or the model is not pulled, the toast says
+so. Measured on an M4 with five mis-heard coding sentences: gemma3:4b took 5–9 seconds and
+usually fixed one or two of the wrong words; Haiku took 7.5–10 seconds and its first
+suggestion fixed every one. qwen2.5:3b was faster (3–4.5 s) but fixed less. llama3.2:3b and
+qwen2.5:7b were no better, and qwen3:4b, a reasoning model, did not answer within two
+minutes. So the local model is a private first pass, and Haiku and up are there when it misses.
+
+The cloud models are the
+`claude` CLI you already have (`claude -p --model haiku|sonnet|opus|fable`, no tools, no session file, no MCP,
 none of your settings or hooks, run from the temp directory), so it uses your existing login
 and needs no key. The real binary is preferred over a Preferences → Tools wrapper. Answers are
-control-stripped, deduplicated, and dropped if they run far longer than what was said. Only
+split on `===` wherever it appears (small models put it inline), or one per line if there is
+none. They are control-stripped, deduplicated, and dropped if they run far longer than what was said. Only
 the GUI thread writes them into the pane.
 
-On macOS, Ctrl+←/→ are also the Mission Control "move a Space" shortcuts. If they switch
-desktops instead of reaching Avada, turn those off in System Settings → Keyboard → Keyboard
+On macOS, Ctrl+←/→ are also the Mission Control "move a Space" shortcuts, and Ctrl+↑/↓ are
+Mission Control and App Windows. If they switch
+desktops or open Mission Control instead of reaching Avada, turn those off in System Settings → Keyboard → Keyboard
 Shortcuts → Mission Control.
 
 ## The transcript is untrusted input

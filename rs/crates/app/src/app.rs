@@ -3417,6 +3417,17 @@ impl App {
                     }
                 }
             }
+            // Ctrl+↑/↓ while the list is open: who writes the suggestions.
+            let down = crate::is_key(&msg.text, Key::DownArrow);
+            if down || crate::is_key(&msg.text, Key::UpArrow) {
+                let mut st = win.state.borrow_mut();
+                if let Some(ps) = st.active_tab_mut().panes.get_mut(idx) {
+                    if let Some(toast) = avada_core::control::revisions::switch(&ps.uid, down) {
+                        ps.pane.set_toast(toast);
+                        return;
+                    }
+                }
+            }
         }
         // On a Mac, Command+Backspace/Delete/arrows and Option+arrows edit the line the way they
         // do in any text field. Checked after the keymap above, so a chord the user bound wins.

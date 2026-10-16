@@ -1,10 +1,10 @@
-//! Ctrl+← / Ctrl+→ after a dictation: step through Haiku's rewrites of what was heard.
+//! Ctrl+← / Ctrl+→ after a dictation: step through a model's rewrites of what was heard.
 //!
 //! Speech recognition gets homophones wrong ("right a test for the pain"), and the human is
 //! the only one who knows which reading was meant. So after a dictation lands in a pane and
 //! is not sent, the pane holds a short list: position 0 is the transcript exactly as
-//! delivered, and every later position is a rewrite Haiku suggested. Ctrl+→ moves right,
-//! asking Haiku for more when it runs off the end; Ctrl+← moves back, all the way to the
+//! delivered, and every later position is a rewrite a model suggested. Ctrl+→ moves right,
+//! asking for more when it runs off the end; Ctrl+← moves back, all the way to the
 //! words as dictated. Each step swaps the pane's text with the same backspace-and-paste diff
 //! live dictation uses, so it can only ever take back text it typed itself.
 //!
@@ -12,10 +12,14 @@
 //! once the human has edited the line, the diff no longer knows what the pane holds, and a
 //! backspace counted against an edited line would eat the human's own words.
 //!
-//! Haiku runs through the `claude` CLI the human already has (`claude -p --model haiku`), so
-//! it uses the login they already have and needs no key of its own. It is slow (about ten
-//! seconds), so the first batch is asked for the moment a dictation lands, not on the first
-//! keypress. Background threads only fetch; every write to the pane happens on the GUI thread
+//! Who suggests is a choice, made with Ctrl+↑/↓ while the list is open: a model on this Mac
+//! first (Ollama), then Haiku, Sonnet, Opus and Fable. Every list starts on the local model,
+//! and only the local model is asked before a keypress: the first batch is requested the
+//! moment a dictation lands, so nothing leaves the machine unless the human picks a cloud
+//! model and presses Ctrl+→. The cloud models run through the `claude` CLI the human
+//! already has (`claude -p --model …`), so they use the existing login and need no key.
+//!
+//! Background threads only fetch; every write to the pane happens on the GUI thread
 //! ([`step`] and [`poll`]), so a suggestion can never interleave with a keystroke.
 
 use std::collections::{BTreeMap, HashMap};
@@ -30,14 +34,60 @@ use crate::control::dictation_service::{apply, sanitize_for_pane};
 use crate::control::server::Shared;
 use crate::stt::live::Typed;
 
-/// Suggestions asked for per Haiku call.
+/// Suggestions asked for per model call.
 const BATCH: usize = 3;
 /// When stepping right leaves fewer than this many unseen suggestions, ask for more.
 const PREFETCH_WHEN_LEFT: usize = 1;
-/// A Haiku call that has not answered by now is abandoned.
+/// A model call that has not answered by now is abandoned.
 const ASK_TIMEOUT: Duration = Duration::from_secs(60);
 /// The list stops growing here; a human does not page through more than this.
 const MAX_ITEMS: usize = 40;
+/// Where the local model is served (`ollama serve`'s default).
+const OLLAMA: &str = "http://127.0.0.1:11434";
+/// The local model. Picked by measuring it against Haiku on mis-heard sentences on an M4.
+const LOCAL_MODEL: &str = "gemma3:4b";
+
+/// Who writes the suggestions, in Ctrl+↓ order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Local,
+    Haiku,
+    Sonnet,
+    Opus,
+    Fable,
+}
+
+const PROVIDERS: [Provider; 5] = [
+    Provider::Local,
+    Provider::Haiku,
+    Provider::Sonnet,
+    Provider::Opus,
+    Provider::Fable,
+];
+
+impl Provider {
+    /// The name the toast shows.
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Local => "on this Mac",
+            Provider::Haiku => "Haiku",
+            Provider::Sonnet => "Sonnet",
+            Provider::Opus => "Opus",
+            Provider::Fable => "Fable",
+        }
+    }
+
+    /// The `claude --model` value, for the cloud ones.
+    fn claude_model(self) -> Option<&'static str> {
+        match self {
+            Provider::Local => None,
+            Provider::Haiku => Some("haiku"),
+            Provider::Sonnet => Some("sonnet"),
+            Provider::Opus => Some("opus"),
+            Provider::Fable => Some("fable"),
+        }
+    }
+}
 
 const SYSTEM_PROMPT: &str = "You correct speech-to-text transcripts. The user dictated a \
 message, usually to an AI coding assistant, and the recognizer may have picked the wrong \
@@ -52,14 +102,18 @@ separated by a line containing exactly ===, with no numbering and no commentary.
 /// One pane's list.
 #[derive(Debug)]
 struct Carousel {
-    /// `items[0]` is the transcript as delivered; the rest are Haiku's, in arrival order.
+    /// `items[0]` is the transcript as delivered; the rest are suggestions, in arrival order.
     items: Vec<String>,
+    /// Who wrote each item; `None` for `items[0]`.
+    from: Vec<Option<Provider>>,
+    /// Who the next request goes to (Ctrl+↑/↓).
+    provider: Provider,
     /// The item the pane holds now.
     at: usize,
     /// What this carousel has typed into the pane, for the next diff.
     typed: Typed,
-    /// A Haiku call is in flight.
-    asking: bool,
+    /// The providers with a request in flight.
+    asking: Vec<Provider>,
     /// The human pressed → at the end of the list: move as soon as more arrive.
     want_next: bool,
     /// Distinguishes this carousel from an earlier one on the same pane, so a late answer
@@ -67,10 +121,11 @@ struct Carousel {
     generation: u64,
 }
 
-/// What a background Haiku call hands back to the GUI thread.
+/// What a background model call hands back to the GUI thread.
 struct Answer {
     uid: String,
     generation: u64,
+    provider: Provider,
     result: Result<Vec<String>, String>,
 }
 
@@ -90,7 +145,7 @@ fn next_generation() -> u64 {
 }
 
 /// A dictation of `text` was just typed into `uid` and not sent: start its list and ask
-/// Haiku for the first batch.
+/// the local model for the first batch.
 #[tracing::instrument(level = "debug")]
 pub fn begin(uid: &str, text: &str) {
     if text.trim().is_empty() {
@@ -99,9 +154,11 @@ pub fn begin(uid: &str, text: &str) {
     let generation = next_generation();
     let mut c = Carousel {
         items: vec![text.to_string()],
+        from: vec![None],
+        provider: Provider::Local,
         at: 0,
         typed: Typed::already(text),
-        asking: false,
+        asking: Vec::new(),
         want_next: false,
         generation,
     };
@@ -161,7 +218,7 @@ pub fn step(shared: &Shared, uid: &str, right: bool) -> Option<String> {
         }
         c.want_next = true;
         ask(uid, c);
-        return Some(format!("{} · asking Haiku…", label(c)));
+        return Some(format!("{} · asking {}…", label(c), c.provider.name()));
     }
     c.want_next = false;
     if c.at == 0 {
@@ -175,7 +232,38 @@ pub fn step(shared: &Shared, uid: &str, right: bool) -> Option<String> {
     Some(label(c))
 }
 
-/// Take in whatever Haiku has answered since the last call, and move any pane whose human
+/// Ctrl+↓ (`down`, towards Fable) or Ctrl+↑ (towards the local model) in `uid`: pick who
+/// the next suggestions come from, and ask it for a batch. `None` when the pane has no list.
+#[tracing::instrument(level = "debug")]
+pub fn switch(uid: &str, down: bool) -> Option<String> {
+    let mut all = carousels().lock().unwrap_or_else(|e| e.into_inner());
+    let c = all.get_mut(uid)?;
+    let i = PROVIDERS.iter().position(|p| *p == c.provider).unwrap_or(0);
+    let j = if down {
+        (i + 1).min(PROVIDERS.len() - 1)
+    } else {
+        i.saturating_sub(1)
+    };
+    c.provider = PROVIDERS[j];
+    // Choosing a provider is the human asking for its suggestions: start fetching now, so
+    // they are likely there by the time Ctrl+→ reaches the end of the list.
+    if j != i {
+        ask(uid, c);
+    }
+    let order: Vec<String> = PROVIDERS
+        .iter()
+        .map(|p| {
+            if *p == c.provider {
+                format!("[{}]", p.name())
+            } else {
+                p.name().to_string()
+            }
+        })
+        .collect();
+    Some(format!("Suggestions from: {}", order.join(" · ")))
+}
+
+/// Take in whatever a model has answered since the last call, and move any pane whose human
 /// was waiting at the end of its list. Called from the GUI thread's tick; returns the toasts
 /// to show, as `(uid, message)`.
 pub fn poll(shared: &Shared) -> Vec<(String, String)> {
@@ -190,24 +278,27 @@ pub fn poll(shared: &Shared) -> Vec<(String, String)> {
         if c.generation != a.generation {
             continue;
         }
-        c.asking = false;
+        c.asking.retain(|p| *p != a.provider);
         let added = match a.result {
-            Ok(new) => merge(&mut c.items, new),
+            Ok(new) => merge(c, new, a.provider),
             Err(e) => {
-                tracing::warn!(uid = %a.uid, error = %e, "Haiku revisions failed");
-                if c.want_next {
+                tracing::warn!(uid = %a.uid, provider = a.provider.name(), error = %e, "dictation revisions failed");
+                if c.want_next && a.provider == c.provider {
                     c.want_next = false;
-                    notices.push((a.uid.clone(), format!("Haiku: {e}")));
+                    notices.push((a.uid.clone(), format!("{}: {e}", a.provider.name())));
                 }
                 continue;
             }
         };
-        if !c.want_next {
+        if !c.want_next || a.provider != c.provider {
             continue;
         }
         c.want_next = false;
         if added == 0 {
-            notices.push((a.uid.clone(), format!("{} · Haiku has no other suggestions", label(c))));
+            notices.push((
+                a.uid.clone(),
+                format!("{} · {} has no other suggestions", label(c), a.provider.name()),
+            ));
             continue;
         }
         c.at += 1;
@@ -230,41 +321,48 @@ fn show(shared: &Shared, uid: &str, c: &mut Carousel) -> Result<(), String> {
 
 /// "2/4 · Haiku", or "1/4 · as dictated" at the start.
 fn label(c: &Carousel) -> String {
-    let whose = if c.at == 0 { "as dictated" } else { "Haiku" };
+    let whose = c.from[c.at].map(Provider::name).unwrap_or("as dictated");
     format!("{}/{} · {whose}", c.at + 1, c.items.len())
 }
 
 /// Append the suggestions in `new` that are not already listed; how many were added.
-fn merge(items: &mut Vec<String>, new: Vec<String>) -> usize {
-    let before = items.len();
+fn merge(c: &mut Carousel, new: Vec<String>, from: Provider) -> usize {
+    let before = c.items.len();
     for s in new {
-        if items.len() >= MAX_ITEMS {
+        if c.items.len() >= MAX_ITEMS {
             break;
         }
-        if !items.iter().any(|i| i == &s) {
-            items.push(s);
+        if !c.items.iter().any(|i| i == &s) {
+            c.items.push(s);
+            c.from.push(Some(from));
         }
     }
-    items.len() - before
+    c.items.len() - before
 }
 
-/// Ask Haiku for another batch for `c`, unless a call is already out.
+/// Ask the selected provider for another batch for `c`, unless it is already asked.
 fn ask(uid: &str, c: &mut Carousel) {
-    if c.asking || c.items.len() >= MAX_ITEMS {
+    let provider = c.provider;
+    if c.asking.contains(&provider) || c.items.len() >= MAX_ITEMS {
         return;
     }
-    c.asking = true;
+    c.asking.push(provider);
     let (uid, generation) = (uid.to_string(), c.generation);
     let original = c.items[0].clone();
     let prompt = build_prompt(&c.items);
     std::thread::spawn(move || {
-        let result = run_haiku(&prompt).map(|out| parse_suggestions(&out, &original));
+        let out = match provider.claude_model() {
+            Some(model) => run_claude(model, &prompt),
+            None => run_local(&prompt),
+        };
+        let result = out.map(|out| parse_suggestions(&out, &original));
         answers()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(Answer {
                 uid,
                 generation,
+                provider,
                 result,
             });
     });
@@ -284,14 +382,23 @@ fn build_prompt(items: &[String]) -> String {
     p
 }
 
-/// Haiku's answer as clean, pane-safe suggestions. Anything that cannot be a rewrite of the
+/// A model's answer as clean, pane-safe suggestions. Anything that cannot be a rewrite of the
 /// transcript (empty, identical, or far longer than what was said) is dropped: the text goes
 /// straight into someone's prompt.
 fn parse_suggestions(out: &str, original: &str) -> Vec<String> {
     let longest = original.chars().count() * 2 + 40;
     let mut found: Vec<String> = Vec::new();
-    for chunk in out.split("\n===") {
-        let chunk = chunk.trim_start_matches('=');
+    // Small local models often put the separator inline ("a === b") or forget it and give
+    // one reading per line; a one-line transcript makes either readable.
+    let chunks: Vec<&str> = if out.contains("===") {
+        out.split("===").collect()
+    } else if !original.contains('\n') {
+        out.lines().collect()
+    } else {
+        vec![out]
+    };
+    for chunk in chunks {
+        let chunk = chunk.trim_matches('=');
         let s = sanitize_for_pane(chunk.trim());
         let s = s.trim().to_string();
         if s.is_empty() || s == original || s.chars().count() > longest || found.contains(&s) {
@@ -316,20 +423,20 @@ fn claude_binary() -> Option<PathBuf> {
     crate::tools::detect::resolve(tool, &overrides).map(|r| r.path)
 }
 
-/// One `claude -p --model haiku` call with `prompt` on stdin; its stdout.
+/// One `claude -p --model <model>` call with `prompt` on stdin; its stdout.
 ///
 /// No tools, no session file, no MCP servers and none of the human's settings, so none of
 /// their hooks fire for it (a Stop hook would otherwise make some pane glow). Run from the
 /// temp directory so no project's CLAUDE.md is read. The Anthropic environment overrides a
 /// shell may carry are removed, the same ones `claude_auto` removes, so the call goes to the
 /// human's own login.
-fn run_haiku(prompt: &str) -> Result<String, String> {
+fn run_claude(model: &str, prompt: &str) -> Result<String, String> {
     let bin = claude_binary().ok_or("the claude CLI was not found")?;
     let mut child = Command::new(&bin)
         .args([
             "-p",
             "--model",
-            "haiku",
+            model,
             "--tools",
             "",
             "--no-session-persistence",
@@ -355,7 +462,7 @@ fn run_haiku(prompt: &str) -> Result<String, String> {
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(prompt.as_bytes())
-            .map_err(|e| format!("could not ask Haiku: {e}"))?;
+            .map_err(|e| format!("could not ask {model}: {e}"))?;
     }
     // Read on a thread so a full pipe can never stall the wait below.
     let mut stdout = child.stdout.take().ok_or("no output pipe")?;
@@ -384,6 +491,55 @@ fn run_haiku(prompt: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// One request to the local model through Ollama; its text.
+///
+/// A fresh single-threaded runtime per call: this runs on a worker thread that has none, and
+/// a call is seconds long, so the runtime's cost is noise. The model is kept loaded for a
+/// while afterwards, because the next Ctrl+→ is likely to follow soon.
+fn run_local(prompt: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": LOCAL_MODEL,
+        "stream": false,
+        "keep_alive": "15m",
+        "messages": [
+            { "role": "system", "content": SYSTEM_PROMPT },
+            { "role": "user", "content": prompt },
+        ],
+        "options": { "temperature": 0.7 },
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("no runtime: {e}"))?;
+    rt.block_on(async {
+        let res = reqwest::Client::new()
+            .post(format!("{OLLAMA}/api/chat"))
+            .json(&body)
+            .timeout(ASK_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    "the local model is not running (start Ollama)".to_string()
+                } else {
+                    e.to_string()
+                }
+            })?;
+        let status = res.status();
+        if status.as_u16() == 404 {
+            return Err(format!("the local model is not installed (ollama pull {LOCAL_MODEL})"));
+        }
+        if !status.is_success() {
+            return Err(format!("Ollama answered {status}"));
+        }
+        let v: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+        v.pointer("/message/content")
+            .and_then(|c| c.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "Ollama sent no text".to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +561,19 @@ mod tests {
     }
 
     #[test]
+    fn inline_separators_and_bare_lines_both_split() {
+        let t = "their going to merge the brunch";
+        assert_eq!(
+            parse_suggestions("=== they're going to merge the branch === there going ===", t),
+            vec!["they're going to merge the branch", "there going"]
+        );
+        assert_eq!(
+            parse_suggestions("they're going to merge the branch\n\nthere going\n", t),
+            vec!["they're going to merge the branch", "there going"]
+        );
+    }
+
+    #[test]
     fn a_runaway_answer_is_not_a_suggestion() {
         let essay = "word ".repeat(100);
         assert!(parse_suggestions(&essay, "a short line").is_empty());
@@ -422,9 +591,11 @@ mod tests {
 
     #[test]
     fn merging_keeps_order_and_skips_repeats() {
-        let mut items = vec!["a".to_string(), "b".to_string()];
-        assert_eq!(merge(&mut items, vec!["b".into(), "c".into(), "c".into()]), 1);
-        assert_eq!(items, vec!["a", "b", "c"]);
+        let mut c = carousel(&["a", "b"]);
+        assert_eq!(merge(&mut c, vec!["b".into(), "c".into(), "c".into()], Provider::Opus), 1);
+        assert_eq!(c.items, vec!["a", "b", "c"]);
+        assert_eq!(c.from.len(), 3);
+        assert_eq!(c.from[2], Some(Provider::Opus));
     }
 
     #[test]
@@ -432,14 +603,7 @@ mod tests {
         let uid = "revisions-test-pane";
         carousels().lock().unwrap().insert(
             uid.into(),
-            Carousel {
-                items: vec!["x".into()],
-                at: 0,
-                typed: Typed::already("x"),
-                asking: true,
-                want_next: false,
-                generation: 0,
-            },
+            carousel(&["x"]),
         );
         assert!(is_open(uid));
         note_keystroke(uid, "\r");
@@ -448,16 +612,54 @@ mod tests {
 
     #[test]
     fn labels_say_whose_words_the_pane_holds() {
-        let mut c = Carousel {
-            items: vec!["x".into(), "y".into()],
+        let mut c = carousel(&["x"]);
+        merge(&mut c, vec!["y".into()], Provider::Haiku);
+        merge(&mut c, vec!["z".into()], Provider::Local);
+        assert_eq!(label(&c), "1/3 · as dictated");
+        c.at = 1;
+        assert_eq!(label(&c), "2/3 · Haiku");
+        c.at = 2;
+        assert_eq!(label(&c), "3/3 · on this Mac");
+    }
+
+    #[test]
+    fn up_and_down_walk_the_providers_and_stop_at_the_ends() {
+        let uid = "revisions-test-switch";
+        carousels().lock().unwrap().insert(uid.into(), carousel(&["x"]));
+        let now = |uid: &str| carousels().lock().unwrap()[uid].provider;
+        assert_eq!(now(uid), Provider::Local);
+        assert!(switch(uid, false).unwrap().contains("[on this Mac]"));
+        assert_eq!(now(uid), Provider::Local);
+        for want in [Provider::Haiku, Provider::Sonnet, Provider::Opus, Provider::Fable, Provider::Fable] {
+            switch(uid, true);
+            assert_eq!(now(uid), want);
+        }
+        assert!(switch(uid, false).unwrap().contains("[Opus]"));
+        assert!(switch("revisions-no-such-pane", true).is_none());
+        end(uid);
+    }
+
+    #[test]
+    fn only_the_local_model_stays_on_this_machine() {
+        assert_eq!(Provider::Local.claude_model(), None);
+        for p in &PROVIDERS[1..] {
+            assert!(p.claude_model().is_some());
+        }
+    }
+
+    fn carousel(items: &[&str]) -> Carousel {
+        Carousel {
+            items: items.iter().map(|s| s.to_string()).collect(),
+            from: std::iter::once(None)
+                .chain(std::iter::repeat(Some(Provider::Haiku)))
+                .take(items.len())
+                .collect(),
+            provider: Provider::Local,
             at: 0,
-            typed: Typed::already("x"),
-            asking: false,
+            typed: Typed::already(items[0]),
+            asking: Vec::new(),
             want_next: false,
             generation: 0,
-        };
-        assert_eq!(label(&c), "1/2 · as dictated");
-        c.at = 1;
-        assert_eq!(label(&c), "2/2 · Haiku");
+        }
     }
 }
