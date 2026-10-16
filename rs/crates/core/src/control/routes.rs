@@ -1235,7 +1235,12 @@ async fn input(
             .unwrap_or_default();
         let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
         return match keys_to_bytes(&refs) {
-            KeysResult::Ok { bytes } => match shared.sessions.write(&uid, &bytes) {
+            KeysResult::Ok { bytes } => match {
+                // Another writer in the pane is the same as the human typing: dictation and
+                // its rewrite list stop counting on knowing what the line holds.
+                crate::control::dictation_service::note_human_keystroke(&uid, &bytes);
+                shared.sessions.write(&uid, &bytes)
+            } {
                 Ok(()) => jstatus(200, json!({ "ok": true, "keys": keys })),
                 Err(e) => write_failed(&found.pane_id, &e),
             },
@@ -1248,6 +1253,11 @@ async fn input(
 
     let data = b.get("data").and_then(Value::as_str).unwrap_or("");
     let platform = if cfg!(windows) { "win32" } else { "linux" };
+    let submits = b.get("submit").and_then(Value::as_bool) == Some(true);
+    crate::control::dictation_service::note_human_keystroke(
+        &uid,
+        if submits { "\r" } else { data },
+    );
     if let Err(e) = shared
         .sessions
         .write(&uid, &submit_newlines(data, platform))
@@ -1444,6 +1454,7 @@ fn arm_inbox_nudge(shared: &Arc<Shared>, pane_id: &str, seq: u64) {
                     // reported to — but it still means the following CRs would be typed
                     // at a pane that is not there. Give up instead of pressing Enter into
                     // the void.
+                    crate::control::dictation_service::note_human_keystroke(&uid, "\r");
                     if sessions.write(&uid, &text).is_err() {
                         return;
                     }

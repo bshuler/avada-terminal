@@ -165,7 +165,9 @@ a pane and is not sent, that pane keeps a short list (`core/src/control/revision
 - Each step swaps the pane's text with the live-typing diff (backspaces for the part that
   changed, then a paste), and a toast shows where you are: `2/4 · Haiku`, `1/4 · as dictated`.
 - **Enter** sends the message and clears the list. **Any other key** also ends it: once you
-  edit the line, a backspace counted against it could eat your own words. With no list open,
+  edit the line, a backspace counted against it could eat your own words. Text an agent writes through
+  `/panes/{id}/input` (or a nudge) counts the same as your typing, here and for the
+  keep-hands-off rule above. With no list open,
   Ctrl+←/→ go to the pane as usual (word left/right).
 
 Haiku is asked for the first three as soon as the dictation lands, because a call takes 7–11
