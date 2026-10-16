@@ -46,3 +46,30 @@ tab, including the "allow input" permission that lets the agent type into panes.
 loopback only and every request needs the token in `control.json`; nothing is exposed off this
 machine. To turn it back off, use **Preferences → Control API** — the app will not re-enable it,
 because it only touches the setting when it creates this tab, and the tab already exists.
+
+## "Update installed · Restart to update"
+
+That line, in a Claude pane's footer (yours included), is **Claude Code's** notice, not Avada's.
+The `claude` CLI has updated itself on disk, and the running process keeps the old version until
+it restarts. It has nothing to do with the Avada app, so it is never a reason to hold off on, or
+ask about, an Avada update or relaunch. Do not log it as "benign, ignore" either: the pane really
+is running a stale Claude Code.
+
+Avada handles it on its own. About every 30 seconds it restarts such a pane into the same
+conversation (`claude --resume`), once it is safe. Safe means:
+
+- the pane has a live session marker;
+- Claude is idle: no "esc to interrupt", no option form, no half-typed human line;
+- no background task or shell is running;
+- Bert is not using that tab right now.
+
+Each conversation is restarted at most once per 30 minutes. Queued prompts survive the restart.
+You should rarely need to act. When you do:
+
+- `recoverPane {"action":"inspect"}` reports `"updatePending": true` while the notice is on the
+  pane's screen.
+- If a worker has sat with the notice for a long time, find out why the restart is held. It is
+  usually busy, or has a background shell. Once it is idle, restart it yourself with
+  `restartPane {"resume": true}`. Never do that while it is working or while Bert is typing in it.
+- If the notice is still there after a restart, the update did not take (e.g. the launcher points
+  at an old binary). Tell Bert; do not restart it again in a loop.

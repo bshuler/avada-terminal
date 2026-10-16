@@ -19,6 +19,24 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+// ===================== 0) Claude Code self-update notice =====================
+
+/// Whether a Claude pane's *live screen* (not its scrollback) shows Claude Code's own
+/// "Update installed · Restart to update" notice: the CLI auto-updated its binary on disk,
+/// and the running process keeps the old version until it is restarted. This is Claude
+/// Code's notice, never Avada's. The cure is a restart into the same conversation
+/// (`claude --resume <session>`), which the app does on its own when the pane is safe to
+/// restart (`App::service_update_restarts`).
+///
+/// Both phrases must be present, on any line, matched case-insensitively; the separator
+/// glyph between them is not relied on. Pass the rendered screen, so a notice that has
+/// since scrolled off or been redrawn away does not count.
+#[tracing::instrument(level = "debug", ret, skip(screen))]
+pub fn screen_shows_update_pending(screen: &str) -> bool {
+    let lower = screen.to_lowercase();
+    lower.contains("update installed") && lower.contains("restart to update")
+}
+
 // ===================== 1) Detection =====================
 
 /// One `API Error` line found in a pane's (already ANSI-stripped) tail text.
@@ -395,6 +413,25 @@ mod tests {
 
     const POISONED_FIXTURE: &str = include_str!("../tests/fixtures/g2-poisoned-transcript.jsonl");
     const INCIDENT_DETAIL_ID: &str = "srvtoolu_01UeFmBLSL1NEDjQSCnjjdtx";
+
+    // ---- 0) update notice ----
+
+    #[test]
+    fn update_notice_is_recognised_whatever_the_separator() {
+        assert!(screen_shows_update_pending(
+            "> \n  ? for shortcuts            Update installed · Restart to update\n"
+        ));
+        assert!(screen_shows_update_pending("Update installed - restart to update"));
+        assert!(screen_shows_update_pending("UPDATE INSTALLED\nRestart to update"));
+    }
+
+    #[test]
+    fn half_a_notice_or_other_update_talk_is_not_the_notice() {
+        assert!(!screen_shows_update_pending("Update installed"));
+        assert!(!screen_shows_update_pending("Restart to update"));
+        assert!(!screen_shows_update_pending("Avada 0.2.51 is available — update now"));
+        assert!(!screen_shows_update_pending(""));
+    }
 
     // ---- 1) detection ----
 

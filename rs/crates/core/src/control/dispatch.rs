@@ -794,9 +794,16 @@ fn recover_inspect(sessions: &SessionManager, pane: &PaneInfo) -> Result<Value, 
         })
     };
 
+    // Claude Code's own self-update notice, read off the live screen (scrollback would
+    // keep reporting a notice the restart already cleared).
+    let update_pending = sessions
+        .render_screen(&pane.session_uid)
+        .is_some_and(|screen| claude_recovery::screen_shows_update_pending(&screen));
+
     Ok(json!({
         "activity": activity.as_str(),
         "apiError": api_error,
+        "updatePending": update_pending,
         "class": class.map(error_class_str),
         "session": session,
     }))

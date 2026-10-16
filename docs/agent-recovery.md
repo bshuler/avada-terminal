@@ -110,6 +110,7 @@ POST /command
   "activity": "...",
   "apiError": { "code": "...", "detail": "...", "retrying": true } ,
   "class": "transient" | "account-limit" | "poisoned" | "unknown" | null,
+  "updatePending": false,
   "session": { "source": "marker", "sessionId": "...", "configDir": "...", "cwd": "..." }
 }
 ```
@@ -122,6 +123,9 @@ or, when there's no marker:
 
 `apiError` is `null` when the last meaningful pane activity wasn't an API error. Always
 inspect before acting — never repair or resume on a guess.
+
+`updatePending` is `true` while the pane's live screen shows Claude Code's own "Update installed ·
+Restart to update" notice (see "Claude Code self-update" below).
 
 ### `action: "repair"`
 
@@ -199,3 +203,29 @@ happened three times in one session while building this very feature. Two rules 
 - A watchdog seeing sudden `unauthorized` or `"no such pane"` for panes that were just
   alive must **re-read control.json** before concluding anything died: the symptoms of a
   hijacked control file lie about their cause.
+
+## Claude Code self-update
+
+When the `claude` CLI updates itself on disk, it shows **"Update installed · Restart to update"**
+in the pane's footer. The running process keeps the old version until it restarts. The notice
+is Claude Code's. Avada never shows it about itself.
+
+`App::service_update_restarts` (`crates/app/src/app.rs`) reads every Claude pane's live screen
+every 30 s, the manager's pane included. It tests the screen with
+`claude_recovery::screen_shows_update_pending`, which needs both phrases on screen, in any
+case, with any separator. When the notice is up, it restarts the pane into the same
+conversation through `State::restart_monitored_pane` and puts a toast on the new pane. It does
+this only when all of these hold:
+
+- a live Claude session marker names the conversation, so the restart resumes it;
+- `prompt_hold_reason` is clear: no unsent human line, no option form, no "esc to interrupt";
+- the footer reports no background task or shell, which the restart would kill;
+- the pane is not on a window's active tab while a human has been active within
+  `idle_activity_timeout_seconds` (at least 120 s).
+
+A held pane keeps its notice and is tried again next sweep. Each conversation is restarted at
+most once per 30 minutes. A notice that outlives its restart is logged once
+(`update notice: still shown after the restart`) and left alone, rather than retried in a loop.
+Queued prompts are keyed by session id and survive the restart. The orchestrator rule
+(`modules/orchestrator/skills/orchestrator/SKILL.md`) tells the manager all this, so it stops
+taking the notice for an Avada update.

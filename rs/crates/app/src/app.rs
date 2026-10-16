@@ -317,6 +317,12 @@ pub struct App {
     last_prompt_delivery: Cell<Option<std::time::Instant>>,
     /// The Avada status / restart-all-agents schedules (see `crate::loops`).
     loops: crate::loops::Loops,
+    /// Throttle for the Claude Code update-notice sweep (see
+    /// [`App::service_update_restarts`]).
+    last_update_sweep: Cell<Option<std::time::Instant>>,
+    /// Per Claude conversation (session id): when the update sweep last restarted it, and
+    /// whether the "notice survived the restart" warning has been logged since.
+    update_restarts: RefCell<std::collections::HashMap<String, (std::time::Instant, bool)>>,
     /// Throttle for the foreground-process sniff (D5): when the panes' foreground programs
     /// were last read. On the daemon backend the read is a shadow-map lookup, but the
     /// in-process backend does two syscalls per pane, so it never rides the 8 ms pump.
@@ -338,6 +344,10 @@ const TIP_DISMISS_COOLDOWN: Duration = Duration::from_secs(8);
 /// How long after launch (and never before the first window is seeded) the dead-session
 /// recovery waits before restarting every pane (see [`App::service_dead_session_restart`]).
 const DEAD_SESSION_RESTART_DELAY: Duration = Duration::from_secs(3);
+/// How often [`App::service_update_restarts`] reads the Claude panes' screens.
+const UPDATE_SWEEP_EVERY: Duration = Duration::from_secs(30);
+/// The least time between two update restarts of the same Claude conversation.
+const UPDATE_RESTART_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
 /// How long after launch the stale-marker prune waits: long enough for every pane to have
 /// re-attached and the control alias map to be loaded, so nothing live reads as gone.
@@ -408,6 +418,8 @@ impl App {
             last_autosave_json: RefCell::new(String::new()),
             last_prompt_delivery: Cell::new(None),
             loops: crate::loops::Loops::new(),
+            last_update_sweep: Cell::new(None),
+            update_restarts: RefCell::new(std::collections::HashMap::new()),
             last_foreground_sniff: Cell::new(None),
             last_session_adopt: Cell::new(None),
         })
@@ -1337,6 +1349,118 @@ impl App {
         }
     }
 
+    /// Claude Code updates its own binary in the background and then shows "Update installed
+    /// · Restart to update" in the pane's footer: the running process keeps the old version
+    /// until it is restarted. That notice is Claude Code's, never Avada's. This sweep restarts
+    /// such a pane into the same conversation (`claude --resume <session>`), but only when
+    /// nothing is lost by doing it now:
+    ///
+    /// - the pane's Claude marker is live, so the restart resumes the conversation rather
+    ///   than starting a new one;
+    /// - [`Self::prompt_hold_reason`] is clear: no half-typed human line, no option form,
+    ///   and Claude is not working;
+    /// - the footer reports no background task or shell, which a restart would kill;
+    /// - the pane is not on a tab a human is using right now (the active tab of a window,
+    ///   while [`crate::state::human_active`] holds).
+    ///
+    /// A pane that fails any check keeps its notice and is looked at again next sweep. Each
+    /// conversation is restarted at most once per [`UPDATE_RESTART_COOLDOWN`]; a notice
+    /// that is still there after that restart is logged once, not retried in a loop.
+    /// Queued prompts are keyed by session id, so they survive the restart.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn service_update_restarts(&self, windows: &[Rc<Window>]) {
+        let now = std::time::Instant::now();
+        if self.first_seed.get() || windows.is_empty() {
+            return;
+        }
+        if self
+            .last_update_sweep
+            .get()
+            .is_some_and(|last| now.duration_since(last) < UPDATE_SWEEP_EVERY)
+        {
+            return;
+        }
+        self.last_update_sweep.set(Some(now));
+        self.update_restarts
+            .borrow_mut()
+            .retain(|_, (at, _)| now.duration_since(*at) < UPDATE_RESTART_COOLDOWN * 4);
+        for w in windows {
+            // Every Claude pane, the manager's own included; subagent panes are part of
+            // their parent's process and are never restarted on their own.
+            let (targets, active_tab, hold_secs) = {
+                let st = w.state.borrow();
+                let mut targets = Vec::new();
+                for (ti, t) in st.tabs.iter().enumerate() {
+                    for (pi, p) in t.panes.iter().enumerate() {
+                        let claude = matches!(&p.kind, PaneKind::Tool(tool) if tool == "claude");
+                        if claude || st.is_orchestrator_pane(ti, pi) {
+                            targets.push((ti, p.uid.clone()));
+                        }
+                    }
+                }
+                (targets, st.active, st.settings.idle_activity_timeout_seconds.max(120))
+            };
+            for (ti, uid) in targets {
+                let Some(screen) = self.mgr.render_screen(&uid) else {
+                    continue;
+                };
+                if !avada_core::claude_recovery::screen_shows_update_pending(&screen) {
+                    continue;
+                }
+                let Some(marker) = self.pane_claude_marker(&uid) else {
+                    tracing::debug!(uid = %uid, "update notice: no live Claude marker, not restarting");
+                    continue;
+                };
+                if let Some((at, warned)) =
+                    self.update_restarts.borrow_mut().get_mut(&marker.session_id)
+                {
+                    if now.duration_since(*at) < UPDATE_RESTART_COOLDOWN {
+                        if !*warned && now.duration_since(*at) > UPDATE_SWEEP_EVERY * 4 {
+                            *warned = true;
+                            tracing::warn!(uid = %uid, session = %marker.session_id, "update notice: still shown after the restart; leaving the pane alone");
+                        }
+                        continue;
+                    }
+                }
+                if let Some(why) = self.prompt_hold_reason(&uid) {
+                    tracing::debug!(uid = %uid, why, "update notice: holding the restart");
+                    continue;
+                }
+                if screen_shows_background_work(&screen) {
+                    tracing::debug!(uid = %uid, "update notice: background work running, holding the restart");
+                    continue;
+                }
+                if ti == active_tab && crate::state::human_active(hold_secs) {
+                    tracing::debug!(uid = %uid, "update notice: a human is on this tab, holding the restart");
+                    continue;
+                }
+                let rebound = {
+                    let mut st = w.state.borrow_mut();
+                    let at = st.find_pane(&uid);
+                    at.and_then(|(ti, pi)| st.restart_monitored_pane(ti, pi, &self.mgr, Some(&marker)))
+                };
+                match rebound {
+                    Some((old, new)) => {
+                        self.rekey_restarted_pane(&old, &new);
+                        self.update_restarts
+                            .borrow_mut()
+                            .insert(marker.session_id.clone(), (now, false));
+                        let mut st = w.state.borrow_mut();
+                        if let Some((ti, pi)) = st.find_pane(&new) {
+                            st.tabs[ti].panes[pi]
+                                .pane
+                                .set_toast("Restarted to load the Claude Code update".to_string());
+                        }
+                        tracing::info!(old = %old, new = %new, session = %marker.session_id, "update notice: pane restarted into its conversation");
+                    }
+                    None => {
+                        tracing::warn!(uid = %uid, "update notice: pane not restarted")
+                    }
+                }
+            }
+        }
+    }
+
     /// After a launch escaped a daemon whose login session was dead, restart every pty pane
     /// once — the sessions moved to a healthy daemon, but each shell (and everything under
     /// it) still holds the dead bootstrap port, so ssh-through-1Password, `open` and the like
@@ -2234,6 +2358,8 @@ impl App {
         self.service_restart_request();
         // 5e. The Avada scheduler loops: a throttled clock compare unless one is due.
         self.service_loops(&windows);
+        // 5e'. Claude Code's "Update installed · Restart to update": restart idle panes.
+        self.service_update_restarts(&windows);
         // 5f. One-shot repair after escaping a dead-session daemon. Not behind the loops'
         //     startup grace: this is a repair of a known-broken state, not a schedule.
         self.service_dead_session_restart(&windows);
@@ -6055,6 +6181,22 @@ fn screen_shows_busy(screen: &str) -> bool {
     screen.contains("esc to interrupt")
 }
 
+/// Whether Claude Code's footer (the last few screen lines) reports work running in the
+/// background — a background task or a shell it started. Restarting the process would kill
+/// it, so the update restart waits for the footer to clear.
+fn screen_shows_background_work(screen: &str) -> bool {
+    let lines: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(6)..].iter().any(|line| {
+        let l = line.to_lowercase();
+        l.contains("background")
+            || l.split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|w| w[0].parse::<u32>().is_ok() && (w[1] == "shell" || w[1] == "shells"))
+    })
+}
+
 /// Decode an image file (any of the goal picker's formats) to RGBA8 and place it on the OS
 /// clipboard, so a following Ctrl+V into a Claude pane pastes the actual image. Returns `false`
 /// (a no-op) on a read/decode/clipboard error — the goal's text already carries the file path,
@@ -6127,7 +6269,7 @@ fn control_status_line(enabled: bool, allow_input: bool, port: Option<u16>) -> S
 
 #[cfg(test)]
 mod option_form_tests {
-    use super::{screen_shows_busy, screen_shows_option_form};
+    use super::{screen_shows_background_work, screen_shows_busy, screen_shows_option_form};
 
     #[test]
     fn detects_a_working_claude_by_its_offer_to_interrupt() {
@@ -6145,6 +6287,16 @@ mod option_form_tests {
         ));
         // Ordinary output that merely mentions esc is not a working indicator.
         assert!(!screen_shows_busy("press esc to go back\n"));
+    }
+
+    #[test]
+    fn background_work_in_the_footer_holds_an_update_restart() {
+        let footer = |f: &str| format!("{}> \n{f}\n", "earlier output\n".repeat(30));
+        assert!(screen_shows_background_work(&footer("  1 background task · Update installed · Restart to update")));
+        assert!(screen_shows_background_work(&footer("  ? for shortcuts · 2 shells")));
+        assert!(!screen_shows_background_work(&footer("  ? for shortcuts   Update installed · Restart to update")));
+        // Talk about shells far up the screen is not the footer.
+        assert!(!screen_shows_background_work(&format!("ran 3 shells in the background\n{}", footer("  ? for shortcuts"))));
     }
 
     #[test]
