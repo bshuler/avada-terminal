@@ -73,6 +73,13 @@ DMG="$OUT/avada-$VERSION.dmg"
 
 echo "==> repo root: $ROOT"
 echo "==> building rs/crates/app (release)"
+# Build against the selected Xcode's SDK. Left to itself, xcrun can pick a newer Command
+# Line Tools SDK whose libSystem.tbd that Xcode's linker cannot read ("unknown architecture
+# arm64e.x1"), which fails whisper.cpp's CMake compiler check.
+if [[ -z "${SDKROOT:-}" ]]; then
+    SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+    export SDKROOT
+fi
 cargo build --release --manifest-path "$ROOT/rs/crates/app/Cargo.toml" -j 4
 
 # The app crate is NOT a workspace member: depending on local config the release
