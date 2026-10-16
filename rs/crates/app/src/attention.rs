@@ -138,8 +138,13 @@ impl Attention {
                 let fresh = self.quiet_mark.is_none_or(|m| out > m);
                 if !self.worked {
                     // Not armed: whatever it prints before it has been asked to do anything
-                    // (a restored pane redrawing, a tool's banner) is not a turn.
+                    // (a restored pane redrawing, a tool's banner) is not a turn. Once that
+                    // first burst has gone quiet, the next one is: input from an agent or the
+                    // control API goes straight to the pty and never reaches `touch`.
                     self.quiet_mark = Some(out);
+                    if t.now_ms.saturating_sub(out) >= t.quiet_ms {
+                        self.worked = true;
+                    }
                 } else if fresh && t.now_ms.saturating_sub(out) >= t.quiet_ms {
                     stopped = true;
                     self.quiet_mark = Some(out);
@@ -189,7 +194,9 @@ impl Attention {
     }
 
     /// Input reached the pane from somewhere other than Bert's keyboard (an agent, the control
-    /// API): the pane is at work, but nobody looked at it.
+    /// API): the pane is at work, but nobody looked at it. Production arms through the first
+    /// quiet spell instead (`step`), since that input never passes through the app.
+    #[cfg(test)]
     pub fn note_work(&mut self) {
         self.worked = true;
     }
@@ -527,6 +534,11 @@ mod tests {
         r.out = Some(r.now_ms());
         r.run(30_000);
         assert!(!r.a.needs, "the timer arms only once the pane has worked");
+        // An orchestrator's input never passes through Bert's keyboard: the tool's answer
+        // after that first quiet spell is a turn.
+        r.out = Some(r.now_ms());
+        r.run(6_000);
+        assert!(r.a.needs, "a later burst that goes quiet is a stop");
     }
 
     #[test]
