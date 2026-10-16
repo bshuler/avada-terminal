@@ -28,12 +28,27 @@ use std::time::UNIX_EPOCH;
 /// (`claude --resume <session>`), which the app does on its own when the pane is safe to
 /// restart (`App::service_update_restarts`).
 ///
-/// Both phrases must be present, on any line, matched case-insensitively; the separator
-/// glyph between them is not relied on. Pass the rendered screen, so a notice that has
-/// since scrolled off or been redrawn away does not count.
+/// Only the footer counts: the lines below the input box's bottom edge (a `╰…` border or a
+/// full-width `───` rule), or the last four non-empty lines when no box is drawn. The same
+/// words in the conversation above (a pane discussing the notice, or a doc quoting it) are
+/// not the notice. Both phrases must be in the footer, matched case-insensitively; the
+/// separator glyph between them is not relied on. Pass the rendered screen, so a notice that
+/// has since been redrawn away does not count.
 #[tracing::instrument(level = "debug", ret, skip(screen))]
 pub fn screen_shows_update_pending(screen: &str) -> bool {
-    let lower = screen.to_lowercase();
+    let lines: Vec<&str> = screen.lines().collect();
+    let is_box_bottom = |l: &&str| {
+        let t = l.trim();
+        t.starts_with('╰') || (t.chars().count() >= 10 && t.chars().all(|c| c == '─'))
+    };
+    let footer: Vec<&str> = match lines.iter().rposition(|l| is_box_bottom(l)) {
+        Some(i) => lines[i + 1..].to_vec(),
+        None => {
+            let full: Vec<&str> = lines.into_iter().filter(|l| !l.trim().is_empty()).collect();
+            full[full.len().saturating_sub(4)..].to_vec()
+        }
+    };
+    let lower = footer.join("\n").to_lowercase();
     lower.contains("update installed") && lower.contains("restart to update")
 }
 
@@ -423,6 +438,24 @@ mod tests {
         ));
         assert!(screen_shows_update_pending("Update installed - restart to update"));
         assert!(screen_shows_update_pending("UPDATE INSTALLED\nRestart to update"));
+    }
+
+    #[test]
+    fn only_the_footer_counts_not_the_conversation_above_it() {
+        let quoted = "⏺ The pane shows \"Update installed · Restart to update\" — that is Claude Code's.\n";
+        let boxed = |footer: &str| {
+            format!("{quoted}\n╭──────────────╮\n│ >            │\n╰──────────────╯\n{footer}\n")
+        };
+        let ruled = |footer: &str| {
+            format!("{quoted}\n────────────────────\n> \n────────────────────\n{footer}\n")
+        };
+        assert!(!screen_shows_update_pending(&boxed("  ? for shortcuts")));
+        assert!(!screen_shows_update_pending(&ruled("  ? for shortcuts")));
+        assert!(screen_shows_update_pending(&boxed("  ? for shortcuts   Update installed · Restart to update")));
+        assert!(screen_shows_update_pending(&ruled("  Update installed · Restart to update")));
+        // No box at all: far-up text is not the footer.
+        let plain = format!("{quoted}{}", "more output\n".repeat(10));
+        assert!(!screen_shows_update_pending(&plain));
     }
 
     #[test]

@@ -212,8 +212,9 @@ is Claude Code's. Avada never shows it about itself.
 
 `App::service_update_restarts` (`crates/app/src/app.rs`) reads every Claude pane's live screen
 every 30 s, the manager's pane included. It tests the screen with
-`claude_recovery::screen_shows_update_pending`, which needs both phrases on screen, in any
-case, with any separator. When the notice is up, it restarts the pane into the same
+`claude_recovery::screen_shows_update_pending`, which needs both phrases in the footer (below
+the input box's bottom edge, or the last four lines when there is no box), in any case, with
+any separator. The same words higher up, in the conversation, do not count. When the notice is up, it restarts the pane into the same
 conversation through `State::restart_monitored_pane` and puts a toast on the new pane. It does
 this only when all of these hold:
 
