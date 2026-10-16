@@ -102,3 +102,4 @@ As of 0.2.48 (`crates/app/src/paneview.rs`, `drive_tab_attention` and the pane i
 | Date | Change | By |
 |---|---|---|
 | 2026-10-16 | Written from Bert's direction and his answers on "seen", stop signal, which panes, already-watching, and restart | Bert |
+| 2026-10-16 | Bert ruling 2026-10-16: helpers glow only on error. A Claude helper / sub-agent pane does not glow when it simply stops; it glows only if it hits an error. The parent pane still glows when its whole turn ends. Settles the §2.3 interpretation. | Bert |
