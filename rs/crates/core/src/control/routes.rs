@@ -2233,6 +2233,8 @@ async fn dictation_command(
                         "text": d.text,
                         "backend": d.backend,
                         "submitted": d.submitted,
+                        // True when a human typed into the pane first, so nothing was typed.
+                        "takenOver": d.taken_over,
                         // Where the audio and this text were kept, so a caller that got a
                         // transcript it does not believe has something to go back to.
                         "kept": d.kept.as_ref().map(|p| p.display().to_string()),

@@ -593,6 +593,12 @@ impl ControlHost {
                 // The word count is in the toast on purpose: it is the one number that
                 // tells the user at a glance whether the pane got what they said, without
                 // reading the log or counting what appeared in the box.
+                // Not retyped on purpose: the human typed (or sent) first, and the pane is
+                // theirs. Said, so a missing correction is not mistaken for lost words.
+                Ok(d) if d.taken_over => format!(
+                    "Dictation left as you sent it ({} words kept in the dictation folder)",
+                    words(&d.text)
+                ),
                 Ok(d) if d.submitted => {
                     format!("Dictated + sent ({}, {} words)", d.backend, words(&d.text))
                 }
@@ -642,7 +648,24 @@ impl ControlHost {
             for t in st.tabs.iter_mut() {
                 for p in t.panes.iter_mut() {
                     let pid = self.pane_id_for(&p.uid);
-                    let on = recording.iter().any(|r| r == &pid);
+                    let mut on = recording.iter().any(|r| r == &pid);
+                    if on && dictation_service::take_sent_during_dictation(&p.uid) {
+                        // Enter went to this pane with the mic still on: the message it was
+                        // for has been sent, so the mic goes off. Stopped (not cancelled) so
+                        // the recording and its transcript are kept; nothing is typed.
+                        let (shared, pid, uid) = (Arc::clone(shared), pid.clone(), p.uid.clone());
+                        let notices = Arc::clone(&self.dictation_notices);
+                        std::thread::spawn(move || {
+                            let msg = match dictation_service::stop_and_deliver(&shared, &pid, &uid) {
+                                Ok(_) => "Mic off: the message was sent".to_string(),
+                                Err(e) => e,
+                            };
+                            if let Ok(mut q) = notices.lock() {
+                                q.push((uid, msg));
+                            }
+                        });
+                        on = false;
+                    }
                     live.insert(pid);
                     if p.recording != on {
                         p.recording = on;

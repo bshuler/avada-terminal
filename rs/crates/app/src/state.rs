@@ -1279,6 +1279,9 @@ pub fn pane_write(mgr: &SessionManager, uid: &str, data: &str, op: &str) {
     let ok = mgr.write(uid, data).is_ok();
     if op == "keystroke" || op == "paste" {
         note_human_input(uid, data);
+        // A dictation still able to edit this pane must stop: its picture of what the pane
+        // holds is now wrong (see `dictation_service::note_human_keystroke`).
+        avada_core::control::dictation_service::note_human_keystroke(uid, data);
     }
     if note_pane_write(uid, ok) && !ok {
         tracing::warn!(uid = %uid, op, "pane write failed; backend is gone, further writes to this pane will be suppressed until it recovers or is closed");

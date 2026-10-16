@@ -7,8 +7,10 @@
 //! it — so there is nothing to poll and an install where nobody ever presses the mic does
 //! no work at all.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::control::input::SUBMIT_DELAY_MS;
@@ -167,6 +169,82 @@ impl DictationService {
     }
 }
 
+/// A human key reached the pane during this dictation (see [`note_human_keystroke`]).
+const TOUCHED: u8 = 1;
+/// …and one of them was Enter: the line, live text and all, has been sent.
+const SENT: u8 = 2;
+
+/// Per-pane-uid record of a human typing into a pane while its dictation is still able to
+/// edit it — from the mic going on until the final transcript has been delivered.
+///
+/// It exists because every edit dictation makes is a diff against what it *believes* the
+/// pane holds ([`Typed`]), and that belief is only true while dictation is the pane's sole
+/// writer. One keystroke from the human and it is false. The case that made this visible:
+/// mic off, "Transcribing…", Enter pressed on the live text — the prompt is now empty, the
+/// reconcile's backspaces have nothing to eat, and the whole transcript is pasted back
+/// into the box a couple of seconds after it was sent. Once a human has typed, dictation
+/// stops editing the pane: what is there is theirs.
+fn watched() -> &'static Mutex<HashMap<String, Arc<AtomicU8>>> {
+    static W: OnceLock<Mutex<HashMap<String, Arc<AtomicU8>>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record that the human typed `data` into pane `uid`. Cheap when nothing is dictating.
+///
+/// Called by the GUI for every human keystroke and paste. The bytes are not kept; only
+/// whether they held an Enter.
+#[tracing::instrument(level = "debug", skip_all)]
+pub fn note_human_keystroke(uid: &str, data: &str) {
+    let w = watched().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(flag) = w.get(uid) {
+        let bits = if data.contains(['\r', '\n']) {
+            TOUCHED | SENT
+        } else {
+            TOUCHED
+        };
+        flag.fetch_or(bits, Ordering::SeqCst);
+    }
+}
+
+/// Whether the human pressed Enter in `uid` during its dictation, answered once: the GUI
+/// stops a mic that is still on when this is true, since the message it was for has gone,
+/// and must not stop it twice. The pane stays marked as typed-into.
+#[tracing::instrument(level = "debug", ret)]
+pub fn take_sent_during_dictation(uid: &str) -> bool {
+    watched()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(uid)
+        .is_some_and(|f| f.fetch_and(!SENT, Ordering::SeqCst) & SENT != 0)
+}
+
+/// Start watching `uid` for human keys, fresh, and return the flag.
+fn watch(uid: &str) -> Arc<AtomicU8> {
+    let flag = Arc::new(AtomicU8::new(0));
+    watched()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(uid.to_string(), Arc::clone(&flag));
+    flag
+}
+
+/// The flag for `uid`'s dictation; a fresh one when it was never watched.
+fn watching(uid: &str) -> Arc<AtomicU8> {
+    watched()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(uid)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn unwatch(uid: &str) {
+    watched()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(uid);
+}
+
 /// Start `pane_id` recording, typing what is heard into `uid`'s pty as it is heard.
 ///
 /// The counterpart of [`stop_and_deliver`], and it exists for the same reason: the sink
@@ -181,6 +259,7 @@ pub fn start_dictation(
 ) -> Result<&'static str, String> {
     let sunk = Arc::clone(shared);
     let target = uid.to_string();
+    let touched = watch(uid);
     shared.dictation.start_live(
         pane_id,
         Some(LiveOptions {
@@ -189,7 +268,13 @@ pub fn start_dictation(
             // that has closed its input, must not take the recording down with it — the
             // words are still going into the WAV, and the transcript at the end is still
             // going to be delivered or reported.
+            //
+            // A pane the human has typed into is no longer dictation's to edit (see
+            // [`watched`]): from then on the live words are only recorded, not typed.
             sink: Box::new(move |edit| {
+                if touched.load(Ordering::SeqCst) != 0 {
+                    return;
+                }
                 let _ = apply(&sunk, &target, &edit);
             }),
         }),
@@ -235,6 +320,9 @@ pub struct Delivered {
     pub text: String,
     pub backend: &'static str,
     pub submitted: bool,
+    /// The human typed into the pane before the transcript was ready, so nothing was typed
+    /// or corrected: the pane holds what they left in it. The transcript is still kept.
+    pub taken_over: bool,
     /// The kept transcript, for a caller that wants to tell the user where their words
     /// are. `None` only when the archive could not be written.
     pub kept: Option<PathBuf>,
@@ -248,12 +336,46 @@ pub struct Delivered {
 /// so a transcript can never reach a pane by two subtly different routes.
 #[tracing::instrument(level = "debug", skip(shared))]
 pub fn stop_and_deliver(shared: &Shared, pane_id: &str, uid: &str) -> Result<Delivered, String> {
-    let transcript = shared.dictation.stop(pane_id)?;
+    // Taken before the stop and checked after the transcriber: the keystroke that matters
+    // most is the Enter pressed while "Transcribing…" is on screen.
+    let touched = watching(uid);
+    let transcript = shared.dictation.stop(pane_id);
+    unwatch(uid);
+    deliver(shared, pane_id, uid, transcript?, touched.load(Ordering::SeqCst) != 0)
+}
+
+/// The second half of [`stop_and_deliver`]: correct the pane into `transcript`, unless the
+/// human has `touched` it since the mic went on.
+#[tracing::instrument(level = "debug", skip(shared, transcript))]
+fn deliver(
+    shared: &Shared,
+    pane_id: &str,
+    uid: &str,
+    transcript: Transcript,
+    touched: bool,
+) -> Result<Delivered, String> {
     let text = sanitize_for_pane(&transcript.text);
     // Not "type the transcript" but "correct the pane into the transcript". With no live
     // typing the pane holds nothing, the edit is the whole text with no backspaces, and
     // this is exactly the delivery it always was. With live typing the pane already holds
     // most of it, and only the tail the recognizer got wrong is taken back.
+    if touched {
+        // Every backspace below would be counted against text the human may already have
+        // sent or changed. Typing nothing is the only edit that cannot be wrong.
+        tracing::info!(
+            pane = %pane_id,
+            transcript_chars = transcript.text.len(),
+            typed_live_chars = transcript.typed_live.len(),
+            "dictation not delivered: the human typed into the pane first"
+        );
+        return Ok(Delivered {
+            text,
+            backend: transcript.backend,
+            submitted: false,
+            taken_over: true,
+            kept: transcript.kept,
+        });
+    }
     let mut typed = Typed::already(&transcript.typed_live);
     let edit = typed.update(&text);
     if text.is_empty() {
@@ -296,6 +418,7 @@ pub fn stop_and_deliver(shared: &Shared, pane_id: &str, uid: &str) -> Result<Del
         text,
         backend: transcript.backend,
         submitted,
+        taken_over: false,
         kept: transcript.kept,
     })
 }
@@ -507,6 +630,67 @@ mod tests {
         );
         assert!(shared.dictation.is_recording("pane-X"));
         shared.dictation.cancel_all();
+    }
+
+    // ---- a human typing during dictation ----
+
+    fn transcript(text: &str, typed_live: &str) -> Transcript {
+        Transcript {
+            text: text.to_string(),
+            backend: "test",
+            kept: None,
+            typed_live: typed_live.to_string(),
+        }
+    }
+
+    /// The reported bug: live text sent with Enter while "Transcribing…" was up, then the
+    /// reconcile pasted the whole transcript back into the empty prompt. With the pane
+    /// typed into, delivery writes nothing — the session table here is empty, so any
+    /// write at all would come back as an `Err`.
+    #[test]
+    fn a_pane_the_human_sent_is_never_retyped_into() {
+        let dir = std::env::temp_dir().join(format!("hp-dictation-svc-{}-sent", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = shared_for(&dir);
+        let d = deliver(&shared, "p", "no-such-uid", transcript("Hello world.", "hello world"), true)
+            .expect("nothing may be written to a pane the human has taken over");
+        assert!(d.taken_over);
+        assert!(!d.submitted);
+        assert_eq!(d.text, "Hello world.", "the transcript is still reported and kept");
+    }
+
+    /// The same delivery to an untouched pane does write — the guard above is the only
+    /// thing that stopped it.
+    #[test]
+    fn an_untouched_pane_still_gets_its_correction() {
+        let dir = std::env::temp_dir().join(format!("hp-dictation-svc-{}-untouched", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = shared_for(&dir);
+        let err = deliver(&shared, "p", "no-such-uid", transcript("Hello world.", "hello world"), false)
+            .err()
+            .expect("an untouched pane is corrected, which here fails on the missing session");
+        assert!(err.contains("correction"), "{err}");
+    }
+
+    #[test]
+    fn enter_marks_the_pane_sent_once_and_other_keys_only_touch_it() {
+        let uid = format!("watch-test-{}", std::process::id());
+        note_human_keystroke(&uid, "\r");
+        assert!(!take_sent_during_dictation(&uid), "an unwatched pane records nothing");
+
+        let flag = watch(&uid);
+        note_human_keystroke(&uid, "x");
+        assert_eq!(flag.load(Ordering::SeqCst), TOUCHED);
+        assert!(!take_sent_during_dictation(&uid));
+        note_human_keystroke(&uid, "\r");
+        assert!(take_sent_during_dictation(&uid));
+        assert!(!take_sent_during_dictation(&uid), "answered once, so the mic stops once");
+        assert_eq!(flag.load(Ordering::SeqCst), TOUCHED, "still typed-into");
+
+        let fresh = watch(&uid);
+        assert_eq!(fresh.load(Ordering::SeqCst), 0, "a new dictation starts clean");
+        unwatch(&uid);
+        assert_eq!(watching(&uid).load(Ordering::SeqCst), 0);
     }
 
     // ---- apply ----

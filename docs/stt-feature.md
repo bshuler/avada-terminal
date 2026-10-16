@@ -134,6 +134,25 @@ Three things make the download defensible rather than a 148 MB act of faith:
 After that one download there is no network path at all: the audio never leaves the machine,
 which is the other reason this is in-process rather than a cloud API.
 
+## Once you type, dictation keeps its hands off
+
+Live typing and the stop-time correction both edit the pane by diff: backspace over what
+dictation believes it typed, then paste the difference. That belief holds only while
+dictation is the pane's only writer. So from the moment the mic goes on until the final
+transcript is delivered, **any key you type or paste into that pane takes it over**:
+
+- live typing stops writing to it (the words are still recorded);
+- the stop-time correction types nothing, and the toast says the dictation was left as you
+  sent it (the transcript is still kept in the dictation folder);
+- Enter with the mic still on also turns the mic off.
+
+This fixes the "my message came back" bug: mic off → "Transcribing…" → Enter sends the live
+text → the prompt is empty → the correction's backspaces erase nothing → the whole
+transcript was pasted back a second or two later. The correction is usually nearly the whole
+text (logged: 1356 backspaces on 1390 live characters), because the whole-file transcript
+and the windowed live one disagree early. (`dictation_service::note_human_keystroke`, fed
+from the GUI's `pane_write`.) The control API's `stopDictation` reports it as `takenOver`.
+
 ## The transcript is untrusted input
 
 Whisper transcribes whatever sound is in the room — a podcast, a colleague, a video call — and
