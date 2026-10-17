@@ -5,8 +5,9 @@
 //! flag plus the bookkeeping that decides when it turns on (a stop: the Claude `Stop` hook, an
 //! awaiting-input / error liveness report, or — for a tool that sends neither — one quiet
 //! period after work) and when it turns off (Bert saw the pane for about two seconds, clicked
-//! or typed in it, or the manager cleared it). The pane frame, the tab chip, the drawer cards
-//! and the status-tray count all read [`Attention::needs`]; none keeps its own timer.
+//! or typed in it, or the manager cleared it). The pane frame, the tab chip, the drawer cards,
+//! the status-tray count and the tab-strip overflow arrows (§4.4, a proxy for an off-screen
+//! glowing tab) all read [`Attention::needs`]; none keeps its own timer.
 //!
 //! The logic is pure: the caller hands it one [`Tick`] of observations per frame, so the
 //! rules are unit-tested here without a window or a pty.
@@ -315,6 +316,38 @@ pub fn tab_needs(state: &crate::state::State) -> Vec<bool> {
     state.tabs.iter().map(|t| on && t.panes.iter().any(|p| p.attention.needs)).collect()
 }
 
+/// Which tab-strip overflow arrows glow (spec §4.4). When the tabs overflow the strip, a
+/// tab that needs attention can be scrolled off one side, hiding its chip glow behind the
+/// chevron; the arrow pointing toward it then glows+pulses as a proxy, reusing the chip's
+/// own gold breath. The arrow has no state of its own — it is derived here from the same
+/// per-tab `needs` flags [`tab_needs`] produces, so it can never get out of step with them.
+///
+/// `needs[i]` is tab `i`'s glow flag; `geom[i]` is its reported strip geometry `(x, width)`
+/// in logical px, as `topbar.slint` writes it through the `tab-geom` callback. A tab
+/// scrolled fully off the left reports a large negative `x` (the `-100000px` sentinel), one
+/// off the right a large positive `x` (`+100000px`); a visible or partially-visible tab
+/// reports its real on-screen `x`, so its own chip glow is on screen and the arrow stays
+/// dark. Returns `(left, right)`: whether the left and/or right arrow should glow. Both can
+/// be true. A tab not present in `geom` (not yet measured) is treated as on-screen.
+pub fn arrow_needs(needs: &[bool], geom: &[(f32, f32)]) -> (bool, bool) {
+    let mut left = false;
+    let mut right = false;
+    for i in 0..needs.len().min(geom.len()) {
+        if !needs[i] {
+            continue;
+        }
+        // Threshold well above any real on-screen x and well below the ±100000px sentinel
+        // `topbar.slint` emits for a tab scrolled fully out of the viewport.
+        let x = geom[i].0;
+        if x < -10_000.0 {
+            left = true;
+        } else if x > 10_000.0 {
+            right = true;
+        }
+    }
+    (left, right)
+}
+
 /// How many panes in `state` glow (the status-tray count reads the sum over windows).
 pub fn count(state: &crate::state::State) -> usize {
     state.tabs.iter().flat_map(|t| t.panes.iter()).filter(|p| p.attention.needs).count()
@@ -353,6 +386,28 @@ fn local_hhmm(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arrow_needs_lights_only_the_offscreen_side() {
+        // The sentinels topbar.slint reports for a tab scrolled fully out of view.
+        let off_l = (-100_000.0, 0.0);
+        let off_r = (100_000.0, 0.0);
+        let visible = (40.0, 120.0);
+
+        // A glowing tab off the left lights only the left arrow; off the right, only right.
+        assert_eq!(arrow_needs(&[true], &[off_l]), (true, false));
+        assert_eq!(arrow_needs(&[true], &[off_r]), (false, true));
+        // Needs-tabs off both sides light both arrows.
+        assert_eq!(arrow_needs(&[true, true], &[off_l, off_r]), (true, true));
+        // A glowing tab that is (partially) visible never lights an arrow — its chip shows.
+        assert_eq!(arrow_needs(&[true], &[visible]), (false, false));
+        // An off-screen tab that does not need attention lights nothing.
+        assert_eq!(arrow_needs(&[false], &[off_l]), (false, false));
+        // geom shorter than needs (a tab not yet measured) must not panic.
+        assert_eq!(arrow_needs(&[true, true], &[off_r]), (false, true));
+        // Empty inputs are inert.
+        assert_eq!(arrow_needs(&[], &[]), (false, false));
+    }
 
     /// A test clock: one AI pane, observed frame by frame.
     struct Rig {

@@ -3049,7 +3049,7 @@ impl App {
         let now_ms = crate::glow::now_epoch_ms() as i64;
         let now = std::time::Instant::now();
         let mut scan = self.tip_scan_at.borrow_mut();
-        let due = scan.map_or(true, |t| now.duration_since(t) >= TIP_SCAN_EVERY);
+        let due = scan.is_none_or(|t| now.duration_since(t) >= TIP_SCAN_EVERY);
         if due {
             *scan = Some(now);
             drop(scan);
@@ -3079,7 +3079,7 @@ impl App {
                         let cool = self.tip_dismissed.borrow().get(&p.uid).copied();
                         if n.input_empty
                             && !crate::state::human_line_pending(&p.uid)
-                            && cool.map_or(true, |t| now.duration_since(t) >= TIP_DISMISS_COOLDOWN)
+                            && cool.is_none_or(|t| now.duration_since(t) >= TIP_DISMISS_COOLDOWN)
                         {
                             self.tip_dismissed.borrow_mut().insert(p.uid.clone(), now);
                             crate::state::pane_write(&self.mgr, &p.uid, crate::tips::DISMISS_KEY, "tip-dismiss");
@@ -3345,6 +3345,23 @@ impl App {
             st.note_pane_focus(&uid, on);
         }
         let out = paneview::pump(&win.app, &mut st, &win.ui, (aw, ah), scale, &self.mgr);
+
+        // Tab-strip overflow arrows glow as a proxy when a tab that needs attention is
+        // scrolled off that side of the strip (attention-glow spec §4.4). Derived here —
+        // after `pump` has refreshed the per-tab flags — from the same `tab_needs` the chips
+        // read and the strip geometry the TopBar reports back through its `tab-geom` callback
+        // (a tab off the left/right carries the ±100000px sentinel `topbar.slint` emits).
+        {
+            let needs = crate::attention::tab_needs(&st);
+            let geom = win.tab_geom.borrow();
+            let (arrow_left, arrow_right) = crate::attention::arrow_needs(&needs, &geom);
+            if win.app.get_arrow_needs_left() != arrow_left {
+                win.app.set_arrow_needs_left(arrow_left);
+            }
+            if win.app.get_arrow_needs_right() != arrow_right {
+                win.app.set_arrow_needs_right(arrow_right);
+            }
+        }
 
         // Offer every settled tier-5 surface its cell size. It lives here rather than inside
         // `pump` because the module runtime hangs off the app, not off a window's state, and

@@ -168,6 +168,7 @@ impl TipStore {
         n
     }
 
+    #[cfg(test)]
     pub fn active(&self) -> impl Iterator<Item = &Tip> {
         self.tips.iter().filter(|t| !t.archived())
     }

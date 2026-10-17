@@ -66,6 +66,24 @@ Nothing else clears a glow. Time passing does not, and output from *other* panes
 3. Looking at a tab clears only the panes on it that meet the §3.1 rule. A pane hidden on that tab
    (behind a zoomed pane, say) keeps glowing, so the tab keeps glowing too.
 
+### 4.4 Off-screen tabs: the overflow arrows
+
+When there are more tabs than fit, the strip scrolls and shows a left/right overflow arrow (‹ ›)
+for the tabs hidden past each edge. A glowing tab scrolled off-screen would otherwise hide its
+glow behind that arrow.
+
+1. When a glowing tab is scrolled off one side of the strip, the overflow arrow on **that** side
+   glows and pulses with the **same** gold breath as the chip — the identical colour and
+   animation, so the arrow reads as "there is a glow this way".
+2. If glowing tabs are hidden off **both** sides, **both** arrows glow.
+3. The arrow has **no glow state of its own**. It is derived from the hidden tabs' flags exactly
+   as a tab is derived from its panes (§4.2), so it can never get out of step with them.
+4. The arrow stops glowing the moment the tab scrolls back into view (its chip then shows the
+   glow directly) or stops needing attention. A tab even partially in view is "in view": its chip
+   is visible, so its arrow stays dark.
+5. The front window's active tab is always kept in view, and §2.4 keeps a front-visible pane from
+   glowing at all, so the arrow is only ever a proxy for a genuinely hidden, still-unseen glow.
+
 ## 5. Restart
 
 Avada **remembers unseen glows** across a restart, whether an upgrade, a crash, or a reboot. A pane that was
@@ -79,6 +97,7 @@ dealt with.
 
 - the pane's glowing frame;
 - the tab chip's glow;
+- the tab-strip overflow arrow, when the glowing tab is scrolled off-screen (§4.4);
 - the bottom drawer's attention cards;
 - the status-tray / menu-bar count.
 
@@ -103,3 +122,4 @@ As of 0.2.48 (`crates/app/src/paneview.rs`, `drive_tab_attention` and the pane i
 |---|---|---|
 | 2026-10-16 | Written from Bert's direction and his answers on "seen", stop signal, which panes, already-watching, and restart | Bert |
 | 2026-10-16 | Bert ruling 2026-10-16: helpers glow only on error. A Claude helper / sub-agent pane does not glow when it simply stops; it glows only if it hits an error. The parent pane still glows when its whole turn ends. Settles the §2.3 interpretation. | Bert |
+| 2026-10-16 | §4.4 added: when a glowing tab is scrolled off the overflowing strip, the overflow arrow on that side glows and pulses with the same gold breath as the chip (both arrows if hidden glows on both sides). The arrow has no state of its own — derived from the hidden tabs' flags, stops when the tab scrolls into view or stops glowing. | Bert direction, relayed |

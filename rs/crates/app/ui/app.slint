@@ -85,6 +85,10 @@ export component AppWindow inherits Window {
     in property <float> subagent-breath: 0;
     // Shared breath of every tab chip flagged `needs` (a pane in that tab waits on the human).
     in property <float> tab-breath: 0;
+    // A `needs` tab is scrolled off that side of the overflowing strip, so the overflow arrow
+    // glows as a proxy for its hidden chip (spec §4.4). Set in Rust from the tab geometry.
+    in property <bool> arrow-needs-left: false;
+    in property <bool> arrow-needs-right: false;
     // True while Esc is held → keeps the hint up and fills its progress bar.
     in property <bool> esc-holding: false;
     // Terminal font zoom factor (current font px / 14px base; 1.0 at default zoom). The
@@ -381,6 +385,8 @@ export component AppWindow inherits Window {
             subagents-hidden: root.subagents-hidden;
             subagent-breath: root.subagent-breath;
             tab-breath: root.tab-breath;
+            arrow-needs-left: root.arrow-needs-left;
+            arrow-needs-right: root.arrow-needs-right;
 
             tab-grab(i) => { root.tab-grab(i); }
             tab-geom(i, x, w) => { root.tab-geom(i, x, w); }

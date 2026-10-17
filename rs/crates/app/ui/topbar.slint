@@ -127,16 +127,24 @@ component ChevronIcon inherits Path {
 component ScrollBtn inherits Rectangle {
     in property <bool> left;
     in property <bool> enabled: true;   // false at that end of the strip — dimmed, inert
+    // A tab that needs attention is scrolled off this side: the arrow glows+pulses as a
+    // proxy for the hidden chip, reusing the chip's exact gold breath (spec §4.4).
+    in property <bool> needs: false;
+    in property <float> breath: 0;
     callback scroll();
     width: 20px;
     height: 24px;
     border-radius: 5px;
-    background: (sa.has-hover && root.enabled) ? Theme.surface2 : transparent;
+    background: root.needs ? Theme.arc-gold.with-alpha(root.breath * 0.30)
+              : (sa.has-hover && root.enabled) ? Theme.surface2 : transparent;
+    border-width: root.needs ? 1px : 0px;
+    border-color: Theme.arc-gold.with-alpha(0.35 + root.breath * 0.65);
     ChevronIcon {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         left: root.left;
-        ink: !root.enabled ? Theme.faint.with-alpha(0.5)
+        ink: root.needs ? Theme.arc-gold
+           : !root.enabled ? Theme.faint.with-alpha(0.5)
            : sa.has-hover ? Theme.text : Theme.subtext;
     }
     sa := TipArea {
@@ -324,6 +332,11 @@ export component TopBar inherits Rectangle {
     in property <[TabItem]> tabs;
     in property <int> editing-tab: -1;
     in property <int> active-tab: -1;      // index of the active tab (the strip keeps it in view)
+    // A tab that needs attention is scrolled off that side of the overflowing strip, so the
+    // overflow arrow glows as a proxy for its hidden chip (spec §4.4). Derived in Rust from
+    // the same per-tab needs flags the chips read; pulsed with the shared `tab-breath`.
+    in property <bool> arrow-needs-left: false;
+    in property <bool> arrow-needs-right: false;
     in property <[LayoutOption]> layouts;
     in property <bool> zoomed: false;
     in property <bool> fullscreen: false;
@@ -596,6 +609,8 @@ export component TopBar inherits Rectangle {
                 y: 6px;                          // centred on the 28px tab band below 4px
                 left: true;
                 enabled: strip.offset > 0px;
+                needs: root.arrow-needs-left;
+                breath: root.tab-breath;
                 scroll => { strip.scroll-to(strip.offset - strip.view-w * 0.75); }
             }
 
@@ -664,6 +679,8 @@ export component TopBar inherits Rectangle {
                 y: 6px;
                 left: false;
                 enabled: strip.offset < strip.max-scroll;
+                needs: root.arrow-needs-right;
+                breath: root.tab-breath;
                 scroll => { strip.scroll-to(strip.offset + strip.view-w * 0.75); }
             }
 
